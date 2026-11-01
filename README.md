@@ -6,7 +6,9 @@
 
 ## 当前版本
 
-**v0.10.154** — 稳定版本
+**v0.13.0** — SMP 4核止血版（AP核安全停机，AP调度临时禁用）
+
+> 源码树内部分文件仍保留旧版本字符串（v0.10.x/v0.12.x），属迭代中未同步，以交付镜像版本为准。
 
 ## 核心特性
 
@@ -83,14 +85,21 @@ bash tools/make_single_img64.sh
 
 ### QEMU测试
 ```bash
+# 需要系统安装 qemu-system-x86_64
+
 # 单核测试
-tools/bin/qemu-system-x86_64 -m 128 -bios tools/firmware/bios-256k.bin \
+qemu-system-x86_64 -m 128 -bios tools/firmware/bios-256k.bin \
   -drive format=raw,file=/tmp/hepu64_single.img -vga std
 
 # 4核SMP测试
-tools/bin/qemu-system-x86_64 -m 128 -smp 4 -bios tools/firmware/bios-256k.bin \
+qemu-system-x86_64 -m 128 -smp 4 -bios tools/firmware/bios-256k.bin \
   -drive format=raw,file=/tmp/hepu64_single.img -vga std
 ```
+
+### 环境要求
+- **编译**：gcc（x86_64交叉编译）、nasm、make
+- **运行**：qemu-system-x86_64（含OVMF固件可测UEFI）
+- **脚本**：python3（镜像构建脚本依赖）
 
 ### 真机启动
 - 使用Rufus **DD模式**写入.img到U盘
@@ -157,6 +166,10 @@ Stage2启动菜单：5秒倒计时，默认64位，可选择32位。
 - ✅ 统一源码树（13个共享模块）
 - ✅ 75个Shell命令
 
+### 进行中 / 已知问题
+- 🔄 SMP AP核 LAPIC 定时器 triple-fault 根因（疑缺内核 GDT/TSS 加载，ap_trampoline 需 lgdt/ltr）
+- 🔄 AP核启用 LAPIC 定时器后的渲染波动（v0.13.0 已临时禁用 AP 调度止血）
+
 ### 版本历史
 - v0.10.146: SMP基础（4核在线，APIC定时器）
 - v0.10.147: 进程迁移与负载均衡
@@ -167,6 +180,14 @@ Stage2启动菜单：5秒倒计时，默认64位，可选择32位。
 - v0.10.152: 统一源码树推进（debug模块）
 - v0.10.153: 32位内核验证
 - v0.10.154: 启动优化
+- v0.10.170: 图形桌面与应用迭代（内核启动输出版本）
+- v0.11.0~0.11.9: 内核持续迭代（VFS/网络/图形完善）
+- v0.12.0: 稳定版本（shell显示版本）
+- v0.12.1: 稳定版本修复
+- **v0.13.0: SMP 4核止血版**
+  - AP核停在安全 hlt，AP调度临时禁用（规避渲染波动）
+  - SMP 4核渲染波动三层根因定位：apic_mode 启动时未切换 / AP核 LAPIC 未使能 / AP核不加载 IDT
+  - TTF渲染 FPU 保护优化（控制中心稳定性）
 
 ## 开源协议
 

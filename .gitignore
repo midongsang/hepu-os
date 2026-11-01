@@ -9,6 +9,9 @@ kernel/arch/x86_64/build_x86_64/
 *.img
 *.img.gz
 *.iso
+# 例外：deliver/ 下的小体积历史产物（<50MB，可推）
+!deliver/*.img
+!deliver/*.iso
 
 # ==== 大型二进制工具（QEMU等，不属源码） ====
 tools/bin/
