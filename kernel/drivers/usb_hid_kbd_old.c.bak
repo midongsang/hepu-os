@@ -1,0 +1,116 @@
+/* ============================================================================
+ * 赫普OS - USB HID 键盘驱动 (V2.62)
+ * Boot 协议: 8 字节报告 [0]=modifier [1]=reserved [2..7]=keycode(6)
+ * 按键码映射基于公开标准 USB HID Usage Tables 1.12 (Keyboard/Keypad 页 0x07)
+ * ========================================================================== */
+
+#include <stdint.h>
+#include "usb.h"
+#include "vga.h"
+#include "serial.h"
+
+/* 无 shift 时的 ASCII 映射 (usage 0x00-0x63) */
+static const char hid_kbd_ascii[0x64] = {
+    0,0,0,0,                                          /* 0x00-0x03: 保留 */
+    'a','b','c','d','e','f','g','h','i','j','k','l','m',   /* 0x04-0x10 */
+    'n','o','p','q','r','s','t','u','v','w','x','y','z',   /* 0x11-0x1D */
+    '1','2','3','4','5','6','7','8','9','0',               /* 0x1E-0x27 */
+    '\n',0x1B,0x08,'\t',' ',                               /* 0x28 Enter,0x29 Esc,0x2A BS,0x2B Tab,0x2C Space */
+    '-','=','[',']','\\',0,0,';','\'','`',',','.','/',     /* 0x2D-0x38 */
+    0,0,0,0,0,0,0,0,0,0,0,0,                            /* 0x39-0x44 非字符键 */
+    0,0,0,0,0,0,0,0,0,0,0,                              /* 0x45-0x4F */
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0               /* 0x50-0x62 */
+};
+
+/* shift 变体 (大写字母 + 符号) */
+static const char hid_kbd_shift[0x64] = {
+    0,0,0,0,
+    'A','B','C','D','E','F','G','H','I','J','K','L','M',
+    'N','O','P','Q','R','S','T','U','V','W','X','Y','Z',
+    '!','@','#','$','%','^','&','*','(',')',
+    '\n',0x1B,0x08,'\t',' ',
+    '_','+','{','}','|',0,0,':','"','~','<','>','?',
+    0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+};
+
+/* 按键名表 (usage 0x28-0x45 特殊键, 供日志显示) */
+static const char *const hid_kbd_names[0x24] = {
+    "ENTER", "ESC", "BACKSPACE", "TAB", "SPACE",     /* 0x28-0x2C */
+    "-", "=", "[", "]", "\\", "NON_US", ";", "'", "`", ",", ".", "/",
+    "CAPSLOCK", "F1", "F2", "F3", "F4", "F5", "F6",   /* 0x39-0x3F */
+    "F7", "F8", "F9", "F10", "F11", "F12",            /* 0x40-0x45 */
+};
+
+void usb_hid_kbd_process_report(const uint8_t *report, int len)
+{
+    if (!report || len < 8) return;
+
+    uint8_t mod = report[0];
+    int shift = (mod & 0x02) || (mod & 0x20);   /* LShift | RShift */
+    int ctrl  = (mod & 0x01) || (mod & 0x10);
+    int alt   = (mod & 0x04) || (mod & 0x40);
+
+    for (int i = 2; i < len; i++) {
+        uint8_t code = report[i];
+        if (code == 0) continue;   /* 无按键 */
+
+        if (code < 0x64) {
+            if (code >= 0x28 && code <= 0x45 && code - 0x28 < 0x24) {
+                /* 特殊键: 打印名称 */
+                vga_printf("<%s%s%s%s>", hid_kbd_names[code - 0x28],
+                           ctrl ? "+CTRL" : "", alt ? "+ALT" : "",
+                           shift ? "" : "");
+                serial_puts(0x3F8, "<");
+                serial_puts(0x3F8, hid_kbd_names[code - 0x28]);
+                serial_puts(0x3F8, ">");
+            } else {
+                char c = shift ? hid_kbd_shift[code] : hid_kbd_ascii[code];
+                if (c) {
+                    if (ctrl) { vga_putc('^'); serial_putc(0x3F8, '^'); }
+                    vga_putc(c);
+                    serial_putc(0x3F8, c);
+                }
+            }
+        }
+    }
+}
+
+void usb_hid_kbd_demo(void)
+{
+    vga_puts("[USB-HID] boot protocol keyboard demo\n");
+    serial_puts(0x3F8, "[USB-HID] demo: ");
+    for (int i = 0; i < 8; i++) serial_puts(0x3F8, "_");
+    serial_puts(0x3F8, "\n");
+    vga_puts("  press sequence: 'a' '!' space HEPU<Enter>\n");
+
+    /* 模拟 boot 协议报告流 (真实格式) */
+    static const uint8_t seq[][8] = {
+        {0x00,0x00,0x04,0,0,0,0,0},   /* a */
+        {0x00,0x00,0x04,0,0,0,0,0},   /* a 重复(按住状态) */
+        {0x00,0x00,0x00,0,0,0,0,0},   /* 松开 */
+        {0x02,0x00,0x1E,0,0,0,0,0},   /* shift+1 -> ! */
+        {0x00,0x00,0x00,0,0,0,0,0},
+        {0x00,0x00,0x2C,0,0,0,0,0},   /* space */
+        {0x02,0x00,0x0B,0,0,0,0,0},   /* shift+h -> H */
+        {0x00,0x00,0x00,0,0,0,0,0},
+        {0x00,0x00,0x08,0,0,0,0,0},   /* e */
+        {0x00,0x00,0x00,0,0,0,0,0},
+        {0x00,0x00,0x13,0,0,0,0,0},   /* p (usage 0x13 = p) */
+        {0x00,0x00,0x00,0,0,0,0,0},
+        {0x00,0x00,0x18,0,0,0,0,0},   /* u (usage 0x18 = u) */
+        {0x00,0x00,0x00,0,0,0,0,0},
+        {0x00,0x00,0x28,0,0,0,0,0},   /* enter */
+        {0x00,0x00,0x00,0,0,0,0,0},
+    };
+
+    for (unsigned int i = 0; i < sizeof(seq) / sizeof(seq[0]); i++) {
+        usb_hid_kbd_process_report(seq[i], 8);
+    }
+    /* V2.78: 清空 demo 模拟按键, 防止污染 shell/桌面启动后的输入流 */
+    extern void input_flush(void);
+    input_flush();
+    vga_puts("\n[USB-HID] demo done\n");
+    serial_puts(0x3F8, "[USB-HID] demo done\n");
+}

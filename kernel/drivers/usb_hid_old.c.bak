@@ -1,0 +1,46 @@
+/* ============================================================================
+ * 赫普OS - USB HID 类驱动
+ * 从 usb.c 拆分（V6.46 代码重构，大文件拆分目标<500行）
+ * 包含：HID设备连接/断开处理、HID驱动注册
+ * ========================================================================== */
+
+#include <stdint.h>
+#include "usb.h"
+#include "vga.h"
+
+static int hid_probe(usb_device_t *dev)
+{
+    vga_printf("[USB-HID] HID device connect: VID=0x%04x PID=0x%04x\n",
+               dev->vendor_id, dev->product_id);
+
+    /* 判断是键盘还是鼠标 */
+    if (dev->num_interfaces > 0) {
+        usb_interface_t *iface = &dev->interfaces[0];
+        if (iface->protocol == 1) {
+            vga_puts("[USB-HID] keyboard \n");
+        } else if (iface->protocol == 2) {
+            vga_puts("[USB-HID] mouse \n");
+        }
+    }
+    return 0;
+}
+
+static int hid_disconnect(usb_device_t *dev)
+{
+    (void)dev;
+    vga_puts("[USB-HID] HID device disconnect \n");
+    return 0;
+}
+
+static usb_driver_t hid_driver = {
+    .name = "HID",
+    .device_class = 0,
+    .interface_class = USB_CLASS_HID,
+    .probe = hid_probe,
+    .disconnect = hid_disconnect,
+};
+
+int usb_hid_init(void)
+{
+    return usb_register_driver(&hid_driver);
+}

@@ -1,0 +1,352 @@
+/* ============================================================================
+ * 赫普OS - 64位汇编入口
+ * V8.88: 初始实现
+ * 长模式入口、系统调用入口、中断入口、上下文切换
+ * ========================================================================== */
+
+.section .text
+.code64
+
+/* ============================================================================
+ * 64位内核入口（从32位引导加载器跳转过来）
+ * ============================================================================ */
+.global x86_64_entry
+x86_64_entry:
+    /* 此时已经在长模式下，CS=0x08, EFER.LME=1, CR0.PG=1 */
+
+    /* 设置段寄存器 */
+    movw $0x10, %ax
+    movw %ax, %ds
+    movw %ax, %es
+    movw %ax, %fs
+    movw %ax, %gs
+    movw %ax, %ss
+
+    /* 设置内核栈 */
+    movq $kernel_stack_top, %rsp
+    movq %rsp, %rbp
+
+    /* 清空RFLAGS */
+    pushq $0
+    popfq
+
+    /* 调用C语言内核主函数 */
+    call x86_64_kernel_main
+
+    /* 如果内核返回，停机 */
+1:
+    hlt
+    jmp 1b
+
+/* ============================================================================
+ * 系统调用入口（SYSCALL指令）
+ * ============================================================================ */
+.global syscall_entry_64
+syscall_entry_64:
+    /* 保存用户态上下文 */
+    /* RCX = 返回地址, R11 = RFLAGS */
+    swapgs
+
+    /* 保存用户栈，切换到内核栈 */
+    movq %rsp, %gs:0x08  /* 保存用户栈 */
+    movq %gs:0x00, %rsp  /* 加载内核栈 */
+
+    /* 保存寄存器 */
+    pushq %rax
+    pushq %rbx
+    pushq %rcx
+    pushq %rdx
+    pushq %rsi
+    pushq %rdi
+    pushq %rbp
+    pushq %r8
+    pushq %r9
+    pushq %r10
+    pushq %r11
+    pushq %r12
+    pushq %r13
+    pushq %r14
+    pushq %r15
+
+    /* 系统调用号在RAX，参数在RDI, RSI, RDX, R10, R8, R9 */
+    movq %r10, %rcx  /* 第四个参数从R10移到RCX（符合C调用约定） */
+
+    /* 调用系统调用处理函数 */
+    call syscall_handler_64
+
+    /* 恢复寄存器 */
+    popq %r15
+    popq %r14
+    popq %r13
+    popq %r12
+    popq %r11
+    popq %r10
+    popq %r9
+    popq %r8
+    popq %rbp
+    popq %rdi
+    popq %rsi
+    popq %rdx
+    popq %rcx
+    popq %rbx
+    /* RAX保存返回值，不恢复 */
+    addq $8, %rsp  /* 跳过保存的RAX */
+
+    /* 恢复用户栈 */
+    movq %gs:0x08, %rsp
+    swapgs
+
+    /* 返回用户态 */
+    sysretq
+
+/* ============================================================================
+ * 中断入口（通用）
+ * ============================================================================ */
+.macro IRQ_ENTRY num
+.global irq_entry_\num
+irq_entry_\num:
+    /* 此时CPU已压入SS, RSP, RFLAGS, CS, RIP */
+    /* 如果没有错误码，压入0 */
+    pushq $0
+    pushq $\num
+
+    /* 保存通用寄存器 */
+    pushq %rax
+    pushq %rbx
+    pushq %rcx
+    pushq %rdx
+    pushq %rsi
+    pushq %rdi
+    pushq %rbp
+    pushq %r8
+    pushq %r9
+    pushq %r10
+    pushq %r11
+    pushq %r12
+    pushq %r13
+    pushq %r14
+    pushq %r15
+
+    /* 保存段寄存器 */
+    movw %ds, %ax
+    pushq %rax
+    movw %es, %ax
+    pushq %rax
+
+    /* 设置内核段寄存器 */
+    movw $0x10, %ax
+    movw %ax, %ds
+    movw %ax, %es
+
+    /* 调用中断处理函数 */
+    movq %rsp, %rdi  /* 第一个参数：栈指针（指向中断帧） */
+    call irq_handler_64
+
+    /* 恢复段寄存器 */
+    popq %rax
+    movw %ax, %es
+    popq %rax
+    movw %ax, %ds
+
+    /* 恢复通用寄存器 */
+    popq %r15
+    popq %r14
+    popq %r13
+    popq %r12
+    popq %r11
+    popq %r10
+    popq %r9
+    popq %r8
+    popq %rbp
+    popq %rdi
+    popq %rsi
+    popq %rdx
+    popq %rcx
+    popq %rbx
+    popq %rax
+
+    /* 跳过错误码和中断号 */
+    addq $16, %rsp
+
+    /* 从中断返回 */
+    iretq
+.endm
+
+/* 生成32个异常入口 */
+IRQ_ENTRY 0
+IRQ_ENTRY 1
+IRQ_ENTRY 2
+IRQ_ENTRY 3
+IRQ_ENTRY 4
+IRQ_ENTRY 5
+IRQ_ENTRY 6
+IRQ_ENTRY 7
+IRQ_ENTRY 8
+IRQ_ENTRY 9
+IRQ_ENTRY 10
+IRQ_ENTRY 11
+IRQ_ENTRY 12
+IRQ_ENTRY 13
+IRQ_ENTRY 14
+IRQ_ENTRY 15
+IRQ_ENTRY 16
+IRQ_ENTRY 17
+IRQ_ENTRY 18
+IRQ_ENTRY 19
+IRQ_ENTRY 20
+IRQ_ENTRY 21
+IRQ_ENTRY 22
+IRQ_ENTRY 23
+IRQ_ENTRY 24
+IRQ_ENTRY 25
+IRQ_ENTRY 26
+IRQ_ENTRY 27
+IRQ_ENTRY 28
+IRQ_ENTRY 29
+IRQ_ENTRY 30
+IRQ_ENTRY 31
+
+/* 生成16个硬件IRQ入口（32-47） */
+IRQ_ENTRY 32
+IRQ_ENTRY 33
+IRQ_ENTRY 34
+IRQ_ENTRY 35
+IRQ_ENTRY 36
+IRQ_ENTRY 37
+IRQ_ENTRY 38
+IRQ_ENTRY 39
+IRQ_ENTRY 40
+IRQ_ENTRY 41
+IRQ_ENTRY 42
+IRQ_ENTRY 43
+IRQ_ENTRY 44
+IRQ_ENTRY 45
+IRQ_ENTRY 46
+IRQ_ENTRY 47
+
+/* ============================================================================
+ * 上下文切换
+ * ============================================================================ */
+
+/* 切换到新进程（保存旧上下文，加载新上下文） */
+.global context_switch_64
+context_switch_64:
+    /* RDI = 旧进程上下文指针, RSI = 新进程上下文指针 */
+
+    /* 保存旧进程寄存器 */
+    movq %rsp, (%rdi)      /* 保存栈指针 */
+    movq %rbp, 8(%rdi)     /* 保存基址指针 */
+    movq %rbx, 16(%rdi)    /* 保存RBX */
+    movq %r12, 24(%rdi)    /* 保存R12 */
+    movq %r13, 32(%rdi)    /* 保存R13 */
+    movq %r14, 40(%rdi)    /* 保存R14 */
+    movq %r15, 48(%rdi)    /* 保存R15 */
+
+    /* 加载新进程寄存器 */
+    movq (%rsi), %rsp      /* 加载栈指针 */
+    movq 8(%rsi), %rbp     /* 加载基址指针 */
+    movq 16(%rsi), %rbx    /* 加载RBX */
+    movq 24(%rsi), %r12    /* 加载R12 */
+    movq 32(%rsi), %r13    /* 加载R13 */
+    movq 40(%rsi), %r14    /* 加载R14 */
+    movq 48(%rsi), %r15    /* 加载R15 */
+
+    ret
+
+/* ============================================================================
+ * 进程启动（新进程第一次运行）
+ * ============================================================================ */
+.global process_start_64
+process_start_64:
+    /* 新进程的入口点在RDI，参数在RSI */
+    movq %rsi, %rdi  /* 设置参数 */
+    call *%rax       /* 调用进程入口（RAX中） */
+
+    /* 进程退出 */
+    call process_exit_64
+
+/* ============================================================================
+ * 内核栈
+ * ============================================================================ */
+.section .bss
+.align 16
+kernel_stack_bottom:
+    .skip 65536  /* 64KB内核栈 */
+kernel_stack_top:
+
+/* ============================================================================
+ * 中断描述符表（64位）
+ * ============================================================================ */
+.section .data
+.global idt_64
+idt_64:
+    .skip 256 * 16  /* 256个门描述符，每个16字节 */
+
+.global idt_64_desc
+idt_64_desc:
+    .word 256 * 16 - 1  /* 限长 */
+    .quad idt_64         /* 基地址 */
+
+/* ============================================================================
+ * 全局描述符表（64位）
+ * ============================================================================ */
+.section .data
+.global gdt_64
+gdt_64:
+    /* 0x00: 空描述符 */
+    .quad 0
+    /* 0x08: 内核代码段 */
+    .quad 0x00AF9A000000FFFF  /* 代码段，DPL=0，长模式 */
+    /* 0x10: 内核数据段 */
+    .quad 0x00CF92000000FFFF  /* 数据段，DPL=0 */
+    /* 0x18: 用户代码段 */
+    .quad 0x00AFFA000000FFFF  /* 代码段，DPL=3，长模式 */
+    /* 0x20: 用户数据段 */
+    .quad 0x00CFF2000000FFFF  /* 数据段，DPL=3 */
+    /* 0x28: TSS段（16字节，需要两个描述符） */
+    .quad 0
+    .quad 0
+
+.global gdt_64_desc
+gdt_64_desc:
+    .word 7 * 8 - 1  /* 限长 */
+    .quad gdt_64     /* 基地址 */
+
+/* ============================================================================
+ * 32位模式远跳转到64位模式
+ * 调用前必须：PAE已启用、EFER.LME已设置、CR3已加载PML4、CR0.PG已启用
+ * 调用后：CS=0x08（64位内核代码段），进入真正的64位模式
+ * ============================================================================ */
+.section .text
+.code32
+.global x86_64_far_jump
+x86_64_far_jump:
+    /* 加载64位GDT */
+    lgdt gdt_64_desc
+
+    /* 远跳转到64位代码段：CS=0x08, EIP=64位入口 */
+    ljmp $0x08, $x86_64_entry_64
+
+/* 64位入口点（远跳转目标） */
+.code64
+.global x86_64_entry_64
+x86_64_entry_64:
+    /* 重新加载数据段寄存器 */
+    movw $0x10, %ax
+    movw %ax, %ds
+    movw %ax, %es
+    movw %ax, %fs
+    movw %ax, %gs
+    movw %ax, %ss
+
+    /* 设置64位内核栈 */
+    movq $0xFFFFFF0000100000, %rsp
+
+    /* 调用64位C语言入口 */
+    call x86_64_kernel_main
+
+    /* 停止 */
+    cli
+1:  hlt
+    jmp 1b
+

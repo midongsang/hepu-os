@@ -1,0 +1,766 @@
+/* ============================================================================
+ * 赫普OS - 极简 Multiboot 引导器 (GAS / AT&T)
+ * 由赫普OS内核工程自研，不依赖GRUB/SYSLINUX等外部引导器
+ *
+ * 双变体（通过 -DISOBoot 区分）：
+ *   - ISO变体：El Torito No-Emulation 引导映像，INT13 AH=42 块=2048字节
+ *   - HDD变体：MBR stage2，INT13 AH=42 块=512字节
+ *
+ * 统一基址 0x7C00（由链接脚本 bootloader.ld 固定）
+ * 功能：读取内核到 0x100000 → 收集E820 → 构造Multiboot info
+ *       → 开A20 → 进保护模式 → 跳转内核 (_start)
+ * ========================================================================== */
+
+/* ---------- 编译期配置（可由-D覆盖） ---------- */
+#ifdef ISOBoot
+#ifndef KERNEL_LBA
+#define KERNEL_LBA      21          /* ISO布局：内核起始LBA(2048字节块) */
+#endif
+#ifndef KERNEL_SECTORS
+#define KERNEL_SECTORS  214         /* 内核占用块数 */
+#endif
+#define SECTOR_SHIFT    11          /* 每块字节数: 2048 */
+#else
+#ifndef KERNEL_LBA
+#define KERNEL_LBA      4           /* HDD布局：内核起始LBA(512字节块) */
+#endif
+#ifndef KERNEL_SECTORS
+#define KERNEL_SECTORS  848         /* 内核占用块数 */
+#endif
+#define SECTOR_SHIFT    9           /* 每块字节数: 512 */
+#endif
+
+#define KERNEL_LOAD_ADDR 0x00100000  /* 内核加载物理地址 */
+#define DAP_BUFFER       0x00007B00  /* 磁盘地址包缓冲区 */
+#define E820_BUFFER      0x00008200  /* E820临时缓冲(24字节条目) */
+#define MMAP_BUFFER      0x00008400  /* Multiboot mmap 区 */
+#define MBINFO_ADDR      0x00008F00  /* Multiboot info 结构 */
+#define GDT_ADDR         0x00008E00  /* GDT(24字节) */
+#define GDTR_ADDR        0x00008E20  /* GDTR 伪描述符 */
+#define STACK_ADDR       0x00007B00  /* 保护模式栈顶(向下增长, 余量~29KB到0x500).
+                                        V2.01: 原0x9000距MBINFO(0x8F00)仅256B, 栈深>256B
+                                        会覆盖Multiboot信息→内核读垃圾. 移到此低地址,
+                                        DAP(0x7B00-0x7B20)在read_stage2后已用毕, 可复用 */
+
+#define MB_BOOT_MAGIC    0x2BADB002  /* 引导器返回给内核的magic(Multiboot boot magic) */
+#define MB_HEADER_MAGIC  0x1BADB002  /* 内核Multiboot头魔数(Multiboot header magic) */
+                                     /* V2.02修复: 验证内核头必须用0x1BADB002.
+                                        原误用MB_BOOT_MAGIC(0x2BADB002)比较[0x100000],
+                                        内核头实为0x1BADB002→永远不匹配→永远走失败路径
+                                        (1声+长停)→误导排错, 且无法验证A20/内核加载 */
+
+/* ---------- 代码 ---------- */
+    .code16
+    .section .text
+    .globl _start
+_start:
+    cli
+    /* 初始化段寄存器 (DS=ES=SS=0) */
+    xorw %ax, %ax
+    movw %ax, %ds
+    movw %ax, %es
+    movw %ax, %ss
+    movw $0x7C00, %sp
+    movb %dl, boot_drive        /* 保存引导驱动器号 */
+
+#ifdef DEBUG_BOOT
+    /* 诊断版: 强制设置80x25彩色文本模式(INT10 AH=0 AL=3)
+       保证VGA文本模式, 使0xB8000直写必然有效 */
+    movw $0x0003, %ax
+    int $0x10
+    /* 清屏 */
+    movw $0xB800, %ax
+    movw %ax, %es
+    xorw %di, %di
+    movw $2000, %cx
+    movw $0x0720, %ax
+    rep stosw
+#endif
+    movw $0, vga_row
+    movw $0, vga_col
+
+    /* 显示启动信息 (VGA直写) */
+    movw $msg_boot, %si
+    call print_str
+
+    /* ---- 读取内核到 0x100000 ---- */
+    call read_kernel
+    testb %al, %al
+    jnz 1f
+    movw $msg_disk_err, %si
+    call print_str
+    jmp halt_loop
+1:
+    movw $msg_kernel_ok, %si
+    call print_str
+#ifdef DEBUG_BOOT
+    /* 诊断模式: 打印内核块数并延时 */
+    movw $msg_blocks, %si
+    call print_str
+    movl $KERNEL_SECTORS, %eax
+    call print_dec32
+    movw $msg_crlf, %si
+    call print_str
+    call delay
+#endif
+    /* ---- V2.09 重入入口修复(关键!) ----
+       根因: MBR读stage2到0x7C00覆盖自身, INT13返回后CPU从stage2中部
+       (0x7C5A, 即打印换行处)进入, 跳过了开头的call read_kernel(0x7C36)
+       → 内核从未加载到0x100000 → 进保护模式跳转空内存 → 执行垃圾
+       → 三重故障 → 黑屏回BIOS. 这正是真机"GD OK后黑屏"且无K0日志的根因.
+       修复: 在collect_e820前检测0x20000内核头魔数, 未加载则补调read_kernel.
+       正常从0x7C00进入时read_kernel已执行, 魔数存在→跳过, 不重复读盘.
+       从0x7C5A进入时魔数不存在→补读, 保证跳转内核前0x100000有真实内核. */
+    movw $0x1000, %ax
+    movw %ax, %es                /* ES:BX = 0x10000 内核加载缓冲区 */
+    cmpw $0xB002, %es:(0)        /* 比较魔数低16位(0x1BADB002→0xB002), 省2字节 */
+    je 9f
+    call read_kernel
+    testb %al, %al
+    jz halt_loop                 /* 读盘失败→停机 */
+    xorw %ax, %ax
+    movw %ax, %es                /* 恢复ES=0 (后续E820/build_mbinfo依赖) */
+9:
+    /* ---- 收集E820内存映射 ---- */
+    call collect_e820
+#ifdef DEBUG_BOOT
+    /* V2.06: E820 map_count显示移除, 腾空间给保护模式VGA标记(行8 K!).
+       内存检测结果由内核multiboot_init消费, 此处不再显示 */
+#endif
+    /* ---- 构造Multiboot info ---- */
+    call build_mbinfo
+
+    /* ---- 开A20线: 组合方法(BIOS最可靠 + Fast A20兜底) ----
+       V2.01修复: 原仅用port 0x92(Fast A20), 现代笔记本芯片组常失效;
+       A20关闭时CPU访问1MB以上(内核0x101000)会回绕到0x00000执行垃圾→崩.
+       先试BIOS INT15 AX=0x2401(返回CF=0即成功), 再无条件Fast A20双保险 */
+    movw $0x2401, %ax
+    int $0x15
+    inb $0x92, %al
+    orb $0x02, %al
+    outb %al, $0x92
+
+#ifdef DEBUG_BOOT
+    /* 诊断模式: 打印跳转信息 */
+    movw $msg_jump, %si
+    call print_str
+    /* 关键: 跳内核前等待按键, 避免诊断信息一闪而过
+       用户看完按任意键(INT16 AH=0阻塞)才继续引导 */
+    movw $msg_presskey, %si
+    call print_str
+    /* V2.12: 去掉INT16阻塞等待(QEMU无键盘输入→SeaBIOS等待卡死).
+       改延时自动继续, 诊断信息仍可读; 真机同样自动. */
+    call delay
+    call delay
+#endif
+    /* ---- 进入保护模式并跳转内核 ---- */
+    call enter_protected
+
+halt_loop:
+    cli
+    hlt
+    jmp halt_loop
+
+/* ==========================================================================
+ * print_str: 直接写VGA显存(0xB8000)打印字符串, 不依赖INT10
+ * 入参: DS:SI
+ * ========================================================================== */
+print_str:
+    pusha
+    push %es
+    movw $0xB800, %ax
+    movw %ax, %es
+1:
+    lodsb
+    testb %al, %al
+    jz 2f
+    cmpb $'\n', %al
+    je 3f
+    cmpb $'\r', %al
+    je 1b
+    /* 先保存字符(避免计算偏移覆盖%al) */
+    movb %al, %cl
+    /* 计算显存偏移: (row*80+col)*2 */
+    movzbl vga_col, %edx
+    movzbl vga_row, %eax
+    imull $80, %eax, %eax
+    addl %edx, %eax
+    shll $1, %eax
+    movl %eax, %edi
+    movb $0x07, %ch          /* 白字黑底 */
+    movw %cx, %es:(%edi)
+    incb vga_col
+    cmpb $80, vga_col
+    jb 1b
+    movb $0, vga_col
+    incb vga_row
+    jmp 1b
+3:
+    movb $0, vga_col
+    incb vga_row
+    jmp 1b
+2:
+    pop %es
+    popa
+    ret
+
+/* ==========================================================================
+ * print_dec32: 打印32位无符号十进制 (INT10)
+ * 入参: EAX
+ * ========================================================================== */
+print_dec32:
+    /* 打印32位无符号十进制到VGA显存。EBP=除数, EDI=被除数。 */
+    pusha
+    push %es
+    movw $0xB800, %ax
+    movw %ax, %es
+    movl $1000000000, %ebp   /* 除数(从10^9到1) */
+    movl %eax, %edi          /* 被除数 */
+    xorl %ecx, %ecx          /* 前导零标志 */
+1:
+    movl %edi, %eax
+    xorl %edx, %edx
+    divl %ebp                /* EAX=商(当前位), EDX=余数 */
+    testl %eax, %eax
+    jnz 2f
+    testl %ecx, %ecx
+    jnz 2f
+    cmpl $1, %ebp            /* 个位必须打印 */
+    je 2f
+    jmp 3f
+2:
+    movl $1, %ecx
+    addb $'0', %al
+    pushl %eax
+    /* 写显存 */
+    movzbl vga_col, %edx
+    movzbl vga_row, %eax
+    imull $80, %eax, %eax
+    addl %edx, %eax
+    shll $1, %eax
+    movl %eax, %edi
+    popl %eax
+    movb %al, %cl
+    movb $0x07, %ch
+    movw %cx, %es:(%edi)
+    incb vga_col
+    cmpb $80, vga_col
+    jb 3f
+    movb $0, vga_col
+    incb vga_row
+3:
+    movl %edx, %edi          /* 新被除数 = 余数 */
+    movl %ebp, %eax
+    xorl %edx, %edx          /* 高32位清零: 除数不能放edx(edx既是被除数高位又当除数→必然溢出#DE) */
+    movl $10, %esi           /* 除数10放esi: 不碰ecx(前导零标志)不碰edx(高位) */
+    divl %esi                /* 0:EAX / 10 → EAX商, EDX余 */
+    movl %eax, %ebp
+    testl %ebp, %ebp
+    jnz 1b
+    pop %es
+    popa
+    ret
+
+/* ==========================================================================
+ * delay: 实模式延时(约0.3-0.5秒), 让调试文字可读
+ * ========================================================================== */
+delay:
+    pusha
+    movl $15000000, %ecx
+1:
+    decl %ecx
+    jnz 1b
+    popa
+    ret
+
+/* ==========================================================================
+ * read_kernel: 分块读内核到低地址 0x20000 (实模式段:偏移可表达, <1MB)
+ * 每次最多127块(INT13 EBIOS安全上限, 所有BIOS可靠支持),
+ * 检查INT13返回的实际块数AL, 确保读盘完整.
+ * V2.01修复: 原一次读853块, BIOS(常见限制127块)可能静默截断→内核不完整
+ * →0x101000无K0→跳转执行垃圾→黑屏. 读低地址0x20000:
+ *   0x20000+440KB=0x6D000<0xA0000, 不覆盖引导器(0x7C00)/GDT区(0x8E00);
+ *   保护模式下再用rep movsl搬移到0x100000(Multiboot内核链接地址).
+ * 返回: AL=1 成功, AL=0 失败
+ * ========================================================================== */
+read_kernel:
+    pusha
+    movl $0x00010000, %edi      /* V3.82: 缓冲基址0x10000——0x20000起664KB达0xC2800超0xC0000 ISA空洞(表区读垃圾); 0x10000起0xB242D全程安全 */
+    movl $KERNEL_SECTORS, %ecx  /* 剩余块数 */
+    /* V2.12修复: LBA计数器用EBP而非EDX. 原用EDX时, INT13参数设置
+       "movb boot_drive,%dl; orb $0x80,%dl"会污染EDX低字节(EDX=LBA),
+       第一块后EDX从LBA被改成0x80→addl 63=191→第二块读LBA191错位
+       →内核数据错位→跳转执行垃圾. EBP不被movb %dl污染. */
+    movl $KERNEL_LBA, %ebp      /* 当前LBA(EBP, 不被DL覆盖) */
+read_loop:
+    testl %ecx, %ecx
+    jz read_done
+    movl %ecx, %eax
+#ifdef ISOBoot
+    /* V2.14修复(ISO兼容性): QEMU SeaBIOS对CD的INT13 AH=42单次读上限实测
+       32块(2048B/块=64KB), 48块即失败(AH=0x00+CF=1). HDD为512B/块, 63块
+       =32KB安全. 故ISO变体单次上限降为32块. */
+    cmpl $32, %eax
+    jbe 1f
+    movl $32, %eax
+1:
+#else
+    /* V3.82: HDD单次读上限16块(8KB), 防BIOS静默截断(读漏尾部→.data残留垃圾) */
+    cmpl $16, %eax
+    jbe 1f
+    movl $16, %eax
+1:
+#endif
+    movl %eax, %ebx                /* V2.12: 保存本次请求块数(成功时用, 不依赖AL) */
+    /* 构造DAP: 段:偏移 = EDI (0x20000 → 段0x2000:偏移0) */
+    movw $DAP_BUFFER, %si
+    movb $0x10, %ds:(%si)          /* DAP size */
+    movb $0x00, %ds:1(%si)         /* 保留 */
+    movw %ax, %ds:2(%si)           /* 块数(<=63, V2.11: 127→63, 兼容QEMU SeaBIOS等实现) */
+    movl %edi, %eax
+    andl $0xF, %eax
+    movw %ax, %ds:4(%si)           /* 偏移 = EDI & 0xF */
+    movl %edi, %eax
+    shrl $4, %eax
+    movw %ax, %ds:6(%si)           /* 段 = EDI >> 4 (<1MB时<0xFFFF合法) */
+    movl %ebp, %ds:8(%si)          /* LBA低32位(EBP) */
+    movl $0, %ds:12(%si)           /* LBA高32位 */
+    /* ES:DI = EDI */
+    movl %edi, %eax
+    movw %ax, %di
+    shrl $4, %eax
+    movw %ax, %es
+    /* SI保持DAP_BUFFER(ES:DI构造未改SI, 冗余movw已删, V2.12省3字节) */
+    movb boot_drive, %dl
+#ifdef ISOBoot
+    /* V2.14修复(ISO兼容性根因): El Torito No-Emulation启动时DL为CD设备号
+       (真机常见0xE0, QEMU SeaBIOS实测0x00), 必须直接使用, 禁止orb $0x80——
+       否则DL从CD号被改成硬盘号0x80, INT13 AH=42读错设备→AH=0x07(介质无效)
+       →H2/ERR黑屏. 测试证实DL=0x00/0xE0直读CD均成功. */
+#else
+    /* V2.12修复: MBR读stage2到0x7C00覆盖自身, INT13返回后CPU从stage2
+       中部0x7C5A重入, 跳过开头"movb %dl,boot_drive"→boot_drive=0(未初始化)
+       →read_kernel DL=0读软盘(无)→失败→死循环. orb $0x80: DL=0→0x80(首个硬盘),
+       DL=0x80/0x81保持不变(多设备兼容), 仅3字节 */
+    orb $0x80, %dl
+#endif
+    movb $0x42, %ah
+    /* V2.12修复: INT13可能破坏通用寄存器, 用栈保护EBP(LBA计数器).
+       (实为movb boot_drive,%dl污染EDX低字节, LBA已改用EBP不受影响;
+        此处保护EBP防BIOS破坏.) */
+    pushl %ebp
+    int $0x13
+    popl %ebp
+    jc read_fail
+    /* V2.12修复: INT13 AH=42成功(CF=0)即表示全部块已传输(规范语义).
+       原V2.09依赖AL=实际块数, 但QEMU SeaBIOS成功时返回AL=0(非块数)
+       → testb %al,%al误判失败→死循环(0x20000已有内核头但read返回0).
+       改为: 成功即按本次请求块数(EBX)更新, 不依赖AL.
+       (EBX在pusha保护内, read_loop内仅此处使用, 安全) */
+    movl %ebx, %eax
+    subl %eax, %ecx
+    addl %eax, %ebp
+    /* V2.13修复: 用SECTOR_SHIFT而非硬编码9.
+       原硬编码"shll $9"(512字节/块)导致ISO变体(2048字节/块, SHIFT=11)
+       读盘后缓冲区只递增512字节→数据错位→内核加载失败.
+       按编译期SECTOR_SHIFT: HDD=9(512B), ISO=11(2048B). */
+    shll $SECTOR_SHIFT, %eax       /* 请求块数*每块字节数 */
+    addl %eax, %edi
+    jmp read_loop
+
+read_fail:
+    xorw %ax, %ax
+    jmp read_ret
+
+read_done:
+    movw $1, %ax
+read_ret:
+    movb %al, read_retval
+    popa
+    movb read_retval, %al
+    ret
+
+read_retval:
+    .byte 0
+
+/* ==========================================================================
+ * collect_e820: 收集内存映射，转Multiboot mmap条目存MMAP_BUFFER
+ * 同时计算mem_upper(KB)
+ * ========================================================================== */
+collect_e820:
+    pusha
+    /* 修复: read_kernel污染了ES(读内核时设为内核段), 必须重置ES=0 */
+    xorw %ax, %ax
+    movw %ax, %es
+    xorl %ebx, %ebx
+    movw $0, map_count
+    movl $0, mem_upper
+e820_loop:
+    /* 修复: 每次循环必须重置E820缓冲地址(上次迭代被mmap转换改掉) */
+    movl $E820_BUFFER, %edi
+    movl $0x534D4150, %edx   /* 'SMAP' */
+    movl $24, %ecx
+    movl $0xE820, %eax       /* 修复: 必须完整设置EAX=0xE820, 不能只movb %ah(AL残留致BIOS异常) */
+    int $0x15
+    jc e820_done
+    cmpl $0x534D4150, %eax
+    jne e820_done
+
+    /* 转成20字节multiboot条目存MMAP_BUFFER */
+    movl $map_count, %eax
+    movl $20, %ebp
+    mull %ebp
+    movl $MMAP_BUFFER, %edi
+    addl %eax, %edi
+    movl $20, %ecx
+    movw %cx, %es:(%edi)          /* size=20 */
+    /* 修复: 用SI指向E820缓冲(0x8200), 之前误用未初始化的SI */
+    movl $E820_BUFFER, %esi
+    movl %es:0(%esi), %eax
+    movl %eax, %es:4(%edi)        /* base low */
+    movl %es:4(%esi), %eax
+    movl %eax, %es:8(%edi)        /* base high */
+    movl %es:8(%esi), %eax
+    movl %eax, %es:12(%edi)       /* length low */
+    movl %es:12(%esi), %eax
+    movl %eax, %es:16(%edi)       /* length high */
+    movl %es:16(%esi), %eax
+    movl %eax, %es:20(%edi)       /* type */
+
+    /* mem_upper: type=1且base>=1MB的最大结束地址(KB) */
+    cmpl $1, %es:16(%esi)
+    jne e820_next
+    cmpl $0x00100000, %es:0(%esi)
+    jb e820_next
+    movl %es:0(%esi), %eax
+    addl %es:8(%esi), %eax
+    shrl $10, %eax
+    cmpl mem_upper, %eax
+    jbe e820_next
+    movl %eax, mem_upper
+e820_next:
+    incw map_count
+    cmpl $32, map_count
+    jae e820_done            /* 保护: 最多32条, 防覆盖GDT区 */
+    cmpl $0, %ebx
+    jne e820_loop
+e820_done:
+    /* 兜底: 若E820未给出1MB以上内存(mem_upper=0),
+       先用INT15 AX=E801(支持大内存), 失败再用AH=88 */
+    cmpl $0, mem_upper
+    jne e820_ret
+    /* E801: 返回 AX=1-16MB(KB), BX=16MB以上(64KB块) */
+    xorw %bx, %bx
+    movw $0xE801, %ax
+    int $0x15
+    jc e801_fail
+    movzwl %ax, %eax
+    movzwl %bx, %edx
+    shll $6, %edx
+    addl %edx, %eax
+    testl %eax, %eax
+    jz e801_fail
+    movl %eax, mem_upper
+    jmp e820_ret
+e801_fail:
+    movb $0x88, %ah
+    int $0x15
+    jc e820_ret
+    movzwl %ax, %eax
+    testl %eax, %eax
+    jz e820_ret
+    movl %eax, mem_upper
+e820_ret:
+    popa
+    ret
+
+map_count:
+    .word 0
+mem_upper:
+    .long 0
+
+/* ==========================================================================
+ * build_mbinfo: 构造Multiboot info (0x8F00)
+ * flags: bit0(mem)+bit6(mmap)=0x41
+ * ========================================================================== */
+build_mbinfo:
+    pusha
+    /* 修复: 重置ES=0 (write到0x8F00必须ES=0) */
+    xorw %ax, %ax
+    movw %ax, %es
+    movl $MBINFO_ADDR, %edi
+    movl $0x41, %es:0(%edi)        /* flags */
+    movl $640, %es:4(%edi)         /* mem_lower */
+    movl mem_upper, %eax
+    movl %eax, %es:8(%edi)         /* mem_upper */
+    movl $0, %es:12(%edi)          /* boot_device */
+    movl $0, %es:16(%edi)          /* cmdline */
+    movl $0, %es:20(%edi)          /* mods_count */
+    movl $0, %es:24(%edi)          /* mods_addr */
+    movl $0, %es:28(%edi)          /* syms[0..3] */
+    movl $0, %es:32(%edi)
+    movl $0, %es:36(%edi)
+    movl $0, %es:40(%edi)
+    movw map_count, %ax
+    movw %ax, %cx
+    movl $20, %ebp
+    mull %ebp
+    movl %eax, %es:44(%edi)        /* mmap_length */
+    movl $MMAP_BUFFER, %eax
+    movl %eax, %es:48(%edi)        /* mmap_addr */
+    popa
+    ret
+
+/* ==========================================================================
+ * enter_protected: 写GDT、进保护模式、跳内核
+ * ========================================================================== */
+enter_protected:
+    /* 防御: 重置DS=ES=0 (写GDT到0x8E00/GDTR到0x8E20必须段基址0).
+       关键: 必须同时重置DS! BIOS中断(INT16按键/INT13读盘/INT15内存)可能修改DS,
+       若DS≠0则GDTR写入/读取用错段→lgdt错误→保护模式立即#GP→三重故障黑屏 */
+    pusha
+    xorw %ax, %ax
+    movw %ax, %ds
+    movw %ax, %es
+    popa
+#ifdef DEBUG_BOOT
+    /* 诊断G0: 进入保护模式设置(段寄存器已重置) */
+    movw $msg_g0, %si
+    call print_str
+#endif
+    /* 写GDT到GDT_ADDR (3个描述符, 24字节), ES=0 */
+    movl $GDT_ADDR, %edi
+    /* null */
+    movl $0, %es:(%edi)
+    movl $0, %es:4(%edi)
+    /* code: 0x00CF9A000000FFFF */
+    movl $0x0000FFFF, %es:8(%edi)
+    movl $0x00CF9A00, %es:12(%edi)
+    /* data: 0x00CF92000000FFFF */
+    movl $0x0000FFFF, %es:16(%edi)
+    movl $0x00CF9200, %es:20(%edi)
+#ifdef DEBUG_BOOT
+    /* 诊断G1: GDT写入完成 */
+    movw $msg_g1, %si
+    call print_str
+#endif
+    /* 写GDTR到GDTR_ADDR: limit=23, base=GDT_ADDR */
+    movl $GDTR_ADDR, %esi
+    movw $23, %ax
+    movw %ax, %ds:(%esi)
+    movl $GDT_ADDR, %eax
+    movl %eax, %ds:2(%esi)
+    lgdtw %ds:(%esi)
+#ifdef DEBUG_BOOT
+    /* 诊断G2: GDTR加载(lgdt)完成 */
+    movw $msg_g2, %si
+    call print_str
+    /* 诊断G3: 进保护模式前按键确认, 让用户看到G0-G2诊断.
+       此时仍是实模式(CR0.PE=0), INT16可用 */
+    movw $msg_press_pm, %si
+    call print_str
+    /* V2.12: 同上, 去INT16阻塞, 延时自动继续 */
+    call delay
+    movw $msg_go_pm, %si
+    call print_str
+    /* V2.01诊断: 读回验证GDT[1]低16位(应为0xFFFF).
+       G1只表示"写入指令执行过", 这里读回确认真机GDT内容真实写入,
+       用于区分"GDT写入失败/被破坏" vs "CR0.PE/ljmp失败" */
+    movw $0, %ax
+    movw %ax, %ds
+    movw %ds:0x8E08, %ax
+    cmpw $0xFFFF, %ax
+    je 1f
+    movw $msg_gd_bad, %si
+    call print_str
+    jmp 2f
+1:  movw $msg_gd_ok, %si
+    call print_str
+2:
+#endif
+#ifdef DEBUG_BOOT
+    /* V2.07: 实模式A20检测移除——A20已在V2.04确认开启(无A20OFF显示),
+       保留检测无增量价值且占35B. A20状态改由保护模式+行8VGA标记+蜂鸣判定:
+       A20关→P0(1)+P1(2)+a20_fail(2)+halt; A20开→P0(1)+P1(2)+P2(4声) */
+#endif
+    /* V2.01防御: 确保IF=0再进保护模式(BIOS的int $0x16可能sti, 且cli过的IF
+       也应被显式确认; 保护模式无IDT, 任何中断=三重故障黑屏) */
+    cli
+    /* 进入保护模式: 先清零EAX再读CR0.
+       关键修复: `mov %cr0,%eax`在16位模式只读低16位到AX, EAX高16位残留垃圾.
+       部分CPU将`mov %eax,%cr0`按32位解析写完整CR0→垃圾bit31(PG)意外置1→
+       无页表开启分页→立即#PF→无IDT→三重故障→黑屏回BIOS(真机实测P0不显示).
+       xor清零后: 16位写只动低16位(PE), 32位写则高16位=0(PG=0), 两种都安全 */
+    xorl %eax, %eax
+    movl %cr0, %eax
+    orl $1, %eax
+    movl %eax, %cr0
+    /* V2.01: 写CR0.PE后立即执行一条jmp flush指令预取队列(Intel推荐) */
+    jmp 1f
+1:
+    /* 远跳转32位: 16位模式下EA指令=offset16+selector16.
+       不能用 .long protected_mode(4字节), 否则CPU按16位读offset低2字节,
+       selector读到offset高2字节=0x0000→GDT[0]null→#GP→三重故障黑屏.
+       用GAS标准far jump, 由汇编器正确编码16位offset+selector */
+    ljmp $0x0008, $protected_mode
+
+    .code32
+protected_mode:
+    movw $0x10, %ax
+    movw %ax, %ds
+    movw %ax, %es
+    movw %ax, %fs
+    movw %ax, %gs
+    movw %ax, %ss
+    movl $STACK_ADDR, %esp
+#ifdef DEBUG_BOOT
+    /* V2.08: 纯文本日志(彻底去蜂鸣) —— 保护模式每步写屏幕文本标签, 多行不覆盖.
+       用户无需数蜂鸣次数, 直接看屏幕卡在哪:
+         行8=P0(进保护模式) 行9=P1(段设置) 行10=A2/AF(A20)
+         行11=P2/PF(内核校验) 行12=J>(跳内核)
+       每步延时: P0/P1各~4秒让用户看清(同时验证保护模式VGA可见性),
+       后续步骤快速推进. 若系统在某步崩溃, 崩溃前日志已显示+停留,
+       用户能看到最后成功的步骤=定位卡点. */
+    /* P0: 进保护模式+段设置成功 */
+    movl $0xB8000+1280, %edi        /* 行8 */
+    movw $('P' | 0x0F00), %es:(%edi)
+    movw $('0' | 0x0F00), %es:2(%edi)
+    movl $0x7FFFFFFF, %ecx          /* P0延时~4秒 */
+1:  loop 1b
+    /* P1: 准备A20检测 */
+    movl $0xB8000+1440, %edi        /* 行9 */
+    movw $('P' | 0x0F00), %es:(%edi)
+    movw $('1' | 0x0F00), %es:2(%edi)
+    movl $0x7FFFFFFF, %ecx          /* P1延时~4秒 */
+2:  loop 2b
+    /* ---- A20检测: 写测试模式到0x000000/0x100000, 读回验证 ----
+       A20关闭时CPU访问1MB以上回绕到0x00000(实模式Wrap-Around).
+       检测: [0x000000]=0x12345678, [0x100000]=0x9ABCDEF0, 读[0x00000]:
+         A20开→0x100000写入不影响0x00000, 读0x00000=0x12345678;
+         A20关→0x100000写入回绕覆盖0x00000, 读0x00000=0x9ABCDEF0 */
+    movl $0x12345678, 0x000000
+    movl $0x9ABCDEF0, 0x100000
+    cmpl $0x12345678, 0x000000
+    je a20_ok                /* A20开: 0x00000未被覆盖 */
+    /* A20关 → 0x92+0xEE开启 → 重新检测.
+       去KBC(8042): 现代Dell无8042, inb $0x64等待循环死循环 */
+    call enable_a20_pm
+    cmpl $0x12345678, 0x000000
+    jne a20_fail            /* 仍被覆盖 → A20关闭 */
+a20_ok:
+    /* A20开: 行10 "A2" */
+    movl $0xB8000+1600, %edi
+    movw $('A' | 0x0F00), %es:(%edi)
+    movw $('2' | 0x0F00), %es:2(%edi)
+    /* 搬移内核: 0x20000 → 0x100000 (rep movsl, DS=ES=0x10 flat base=0).
+       read_kernel分块读到低地址0x20000(实模式段:偏移可表达), 内核链接在
+       1MB(Multiboot), 故保护模式下搬移过去再跳转. */
+    movl $0x00010000, %esi
+    movl $0x00100000, %edi
+    movl $KERNEL_SECTORS, %eax
+    /* V2.13修复: dword数 = 块数*块大小/4 = 块数<<(SECTOR_SHIFT-2).
+       原硬编码$7(512/4=128)在ISO变体(2048/4=512)下搬移长度不足1/4
+       →0x101000无完整内核→跳转执行垃圾. HDD=7, ISO=9. */
+    shll $(SECTOR_SHIFT-2), %eax /* dword数 = 块数*块大小/4 */
+    movl %eax, %ecx
+    cld
+    rep movsl
+    /* P2: 搬移后验证内核头魔数(Multiboot header magic 0x1BADB002).
+       A20已检测/修复, 此处失败=搬移/读盘问题 */
+    movl $0x100000, %edi
+    movl (%edi), %eax
+    cmpl $MB_HEADER_MAGIC, %eax
+    jne 3f
+    /* P2通过: 行11 "P2" + 行12 "J>" */
+    movl $0xB8000+1760, %edi
+    movw $('P' | 0x0F00), %es:(%edi)
+    movw $('2' | 0x0F00), %es:2(%edi)
+    movl $0xB8000+1920, %edi
+    movw $('J' | 0x0F00), %es:(%edi)
+    movw $('>' | 0x0F00), %es:2(%edi)
+    jmp 4f
+3:
+    /* P2校验失败: 行11 "PF" + halt */
+    movl $0xB8000+1760, %edi
+    movw $('P' | 0x0F00), %es:(%edi)
+    movw $('F' | 0x0F00), %es:2(%edi)
+    cli
+    hlt
+a20_fail:
+    /* A20开启失败: 行10 "AF" + halt */
+    movl $0xB8000+1600, %edi
+    movw $('A' | 0x0F00), %es:(%edi)
+    movw $('F' | 0x0F00), %es:2(%edi)
+    cli
+    hlt
+4:
+#endif
+    /* Multiboot约定: EAX=magic, EBX=info地址 */
+    movl $MB_BOOT_MAGIC, %eax
+    movl $MBINFO_ADDR, %ebx
+    /* 修复: 跳转内核真正的入口点_start(KERNEL_ENTRY),
+       而不是文件开头的Multiboot头(数据非代码, 跳过去=垃圾指令→三重故障) */
+    ljmp $0x08, $KERNEL_ENTRY
+
+
+/* ==========================================================================
+ * enable_a20_pm: 保护模式下开启A20线(端口I/O不受模式限制).
+ * V2.02修复: 仅0x92 Fast A20 + 0xEE快速A20口.
+ * 真机实测"3声后长时间停留GD OK"根因: 原含KBC(8042)使能序列, 现代Dell
+ * 笔记本无8042键盘控制器(由EC/SMBus模拟), inb $0x64等待输入缓冲空的
+ * 循环永远死循环→引导器卡死. 去掉KBC后:
+ *   0x92/0xEE为现代Intel/AMD芯片组直接支持的A20切换口, 至少一个有效.
+ * 入参: 无   出参: 无(破坏eax/eflags, 已pusha保护)
+ * ========================================================================== */
+enable_a20_pm:
+    pusha
+    /* ① Fast A20: port 0x92 bit1 */
+    inb $0x92, %al
+    orb $0x02, %al
+    outb %al, $0x92
+    /* ② 快速A20口: port 0xEE 写任意值(现代芯片组A20切换) */
+    movb $0x01, %al
+    outb %al, $0xEE
+    popa
+    ret
+
+/* ========== 只读数据 ========== */
+    .section .rodata
+msg_boot:
+    .asciz "H2\n"
+msg_kernel_ok:
+    .asciz "OK"
+msg_disk_err:
+    .asciz "ERR\n"
+#ifdef DEBUG_BOOT
+msg_blocks:
+    .asciz "b="
+msg_crlf:
+    .asciz "\n"
+msg_jump:
+    .asciz "H5"
+msg_presskey:
+    .asciz "K\n"
+msg_g0:
+    .asciz "G0\n"
+msg_g1:
+    .asciz "G1\n"
+msg_g2:
+    .asciz "G2\n"
+msg_press_pm:
+    .asciz "PM\n"
+msg_go_pm:
+    .asciz ">P\n"
+msg_gd_ok:
+    .asciz "GD OK\n"
+msg_gd_bad:
+    .asciz "GD BAD\n"
+#endif
+
+    .section .bss
+boot_drive:
+    .byte 0
+vga_row:
+    .byte 0
+vga_col:
+    .byte 0

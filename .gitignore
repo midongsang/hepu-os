@@ -1,0 +1,33 @@
+# ==== 构建产物 ====
+build/
+build_v250/
+build_x86_64/
+user/build/
+kernel/arch/x86_64/build_x86_64/
+
+# ==== 磁盘镜像（超GitHub 100MB限制） ====
+*.img
+*.img.gz
+*.iso
+
+# ==== 大型二进制工具（QEMU等，不属源码） ====
+tools/bin/
+tools/share/
+tools/qemu_libs/
+
+# ==== 大型第三方依赖 ====
+user/rust/
+
+# ==== 调试日志 ====
+*.log
+debug_cpu.log
+
+# ==== Python缓存 ====
+__pycache__/
+*.pyc
+
+# ==== 编辑器/系统文件 ====
+.vscode/
+.idea/
+*.swp
+.DS_Store

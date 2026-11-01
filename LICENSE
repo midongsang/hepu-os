@@ -1,0 +1,62 @@
+                    GNU GENERAL PUBLIC LICENSE
+                       Version 3, 29 June 2007
+
+ Copyright (C) 2026 HEPU OS Project
+
+ This program is free software: you can redistribute it and/or modify
+ it under the terms of the GNU General Public License as published by
+ the Free Software Foundation, either version 3 of the License, or
+ (at your option) any later version.
+
+ This program is distributed in the hope that it will be useful,
+ but WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ GNU General Public License for more details.
+
+ You should have received a copy of the GNU General Public License
+ along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+-------------------------------------------------------------------------------
+
+                    HEPU OS ADDITIONAL TERMS
+              (pursuant to GPLv3 Section 7 "Additional Terms")
+
+In addition to the terms of the GNU General Public License version 3,
+the HEPU OS project imposes the following additional terms:
+
+  1. KERNEL FINGERPRINT PRESERVATION
+     The read-only kernel copyright fingerprint structure (HEPU_FINGERPRINT)
+     compiled into the kernel binary MUST NOT be removed, modified, or
+     bypassed. Any distributed version must retain the kernel source
+     attribution in user-visible interfaces.
+
+  2. TRADEMARK RESTRICTION
+     The names "赫普OS", "HEPU OS", "HEPU Hyper Evolve OS", and the
+     official HEPU OS logo are trademarks of the HEPU OS Project.
+     Third-party derivative works MUST NOT use these trademarks without
+     official authorization. Derivative works must use a distinct name
+     and clearly state "based on HEPU OS open-source microkernel".
+
+  3. SANDBOX INTEGRITY
+     You may not remove or bypass the privacy sandbox, permission control
+     mechanisms, or install invisible user-data collection modules into
+     the system.
+
+  4. SOURCE ATTRIBUTION
+     Any OEM or vendor distributing a HEPU OS-based system must display
+     kernel source attribution in at least three locations:
+     (a) the "About Device" settings page,
+     (b) the firmware download / documentation page,
+     (c) the boot-time copyright notice.
+
+These additional terms are enforced under GPLv3 Section 7.
+If any of these terms is held unenforceable, the remaining terms remain
+in full effect.
+
+-------------------------------------------------------------------------------
+
+The full text of the GNU General Public License version 3 is available at:
+https://www.gnu.org/licenses/gpl-3.0.txt
+
+For the complete HEPU OS open-source and vendor distribution policy,
+see: docs/OPEN_SOURCE_POLICY.md

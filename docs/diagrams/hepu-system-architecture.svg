@@ -1,0 +1,244 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 1000" font-family="'PingFang SC','Noto Sans CJK SC','Microsoft YaHei',sans-serif">
+  <style>
+    .title { font-size: 30px; font-weight: 700; fill: #1A365D; }
+    .subtitle { font-size: 14px; fill: #6B7280; }
+    .layer-name { font-size: 17px; font-weight: 700; }
+    .layer-desc { font-size: 11.5px; fill: #6B7280; }
+    .mod-name { font-size: 12.5px; font-weight: 600; }
+    .mod-sub { font-size: 10px; fill: #6B7280; }
+    .side-tag { font-size: 11px; font-weight: 600; }
+    .side-sub { font-size: 9.5px; fill: #6B7280; }
+    .arrow-line { stroke: #9EACEA; stroke-width: 2; }
+    .arrow-head { fill: #9EACEA; }
+    .hw-name { font-size: 12px; font-weight: 600; }
+    .hw-sub { font-size: 9.5px; fill: #6B7280; }
+  </style>
+
+  <!-- 背景 -->
+  <rect x="0" y="0" width="1200" height="1000" fill="#FFFFFF"/>
+
+  <!-- ================= 标题 ================= -->
+  <text x="40" y="52" class="title">赫普OS 系统框架图</text>
+  <text x="40" y="76" class="subtitle">HEPU Hyper Evolve OS · 自研微内核 · 四层分层隔离架构 · 系统版本 V1.02 · 文档版本 V4.64</text>
+  <line x1="40" y1="92" x2="1160" y2="92" stroke="#E4E3DD" stroke-width="1.5"/>
+
+  <!-- ================= 第一层：应用与交互生态层 ================= -->
+  <rect x="40" y="112" width="880" height="140" rx="14" fill="#F5F7FA" stroke="#1A365D" stroke-width="2"/>
+  <rect x="40" y="112" width="880" height="34" rx="14" fill="#1A365D"/>
+  <rect x="40" y="132" width="880" height="14" fill="#1A365D"/>
+  <text x="58" y="135" class="layer-name" fill="#FFFFFF">① 应用与交互生态层</text>
+  <text x="680" y="135" class="layer-desc" fill="#FFFFFF">.hug 原生 / APK 兼容 / 双模式 UI</text>
+
+  <g>
+    <rect x="60" y="158" width="198" height="80" rx="10" fill="#FFFFFF" stroke="#1A365D" stroke-width="1"/>
+    <text x="159" y="184" text-anchor="middle" class="mod-name" fill="#1A365D">.hug 原生应用</text>
+    <text x="159" y="202" text-anchor="middle" class="mod-sub">自带沙盒 · 权限透明 · Ed25519签名</text>
+    <text x="159" y="220" text-anchor="middle" class="mod-sub">极致轻量 · 防篡改</text>
+  </g>
+  <g>
+    <rect x="272" y="158" width="198" height="80" rx="10" fill="#FFFFFF" stroke="#1A365D" stroke-width="1"/>
+    <text x="371" y="184" text-anchor="middle" class="mod-name" fill="#1A365D">APK 兼容沙盒</text>
+    <text x="371" y="202" text-anchor="middle" class="mod-sub">安卓应用隔离运行</text>
+    <text x="371" y="220" text-anchor="middle" class="mod-sub">权限降级 · 高危受限</text>
+  </g>
+  <g>
+    <rect x="484" y="158" width="198" height="80" rx="10" fill="#FFFFFF" stroke="#1A365D" stroke-width="1"/>
+    <text x="583" y="184" text-anchor="middle" class="mod-name" fill="#1A365D">桌面模式（现役）</text>
+    <text x="583" y="202" text-anchor="middle" class="mod-sub">窗口系统 wm / desktop</text>
+    <text x="583" y="220" text-anchor="middle" class="mod-sub">开发驾驶舱 · 鼠标键盘</text>
+  </g>
+  <g>
+    <rect x="696" y="158" width="198" height="80" rx="10" fill="#FFFFFF" stroke="#1A365D" stroke-width="1"/>
+    <text x="795" y="184" text-anchor="middle" class="mod-name" fill="#1A365D">手机模式（目标）</text>
+    <text x="795" y="202" text-anchor="middle" class="mod-sub">mobile.c 触屏UI框架</text>
+    <text x="795" y="220" text-anchor="middle" class="mod-sub">8 应用全可交互</text>
+  </g>
+
+  <!-- 第一层右侧标注 -->
+  <rect x="940" y="112" width="220" height="140" rx="14" fill="#F0F4FB" stroke="#9EACEA" stroke-width="1.5"/>
+  <text x="958" y="142" class="side-tag" fill="#1A365D">生态策略</text>
+  <text x="958" y="166" class="side-sub">· 双生态长期共存</text>
+  <text x="958" y="184" class="side-sub">· 应用统一 app_register()</text>
+  <text x="958" y="202" class="side-sub">· 后台内核级冻结</text>
+  <text x="958" y="220" class="side-sub">· 弹性自由桌面</text>
+
+  <!-- 箭头 1→2 -->
+  <line x1="480" y1="252" x2="480" y2="280" class="arrow-line" marker-end="url(#arw)"/>
+  <text x="492" y="270" class="mod-sub">服务调用 / 事件</text>
+
+  <!-- ================= 第二层：AI 原生系统基座层 ================= -->
+  <rect x="40" y="286" width="880" height="112" rx="14" fill="#E6F7F2" stroke="#0B7A5E" stroke-width="1.5"/>
+  <rect x="40" y="286" width="880" height="30" rx="14" fill="#0B7A5E"/>
+  <rect x="40" y="304" width="880" height="12" fill="#0B7A5E"/>
+  <text x="58" y="307" class="layer-name" fill="#FFFFFF">② AI 原生系统基座层</text>
+  <text x="700" y="307" class="layer-desc" fill="#FFFFFF">AI 是系统底层服务，非外挂 APP</text>
+
+  <g>
+    <rect x="60" y="326" width="278" height="58" rx="10" fill="#FFFFFF" stroke="#0B7A5E" stroke-width="1"/>
+    <text x="199" y="350" text-anchor="middle" class="mod-name" fill="#0B7A5E">本地离线推理</text>
+    <text x="199" y="368" text-anchor="middle" class="mod-sub">默认不上传数据 · 隐私优先</text>
+  </g>
+  <g>
+    <rect x="352" y="326" width="278" height="58" rx="10" fill="#FFFFFF" stroke="#0B7A5E" stroke-width="1"/>
+    <text x="491" y="350" text-anchor="middle" class="mod-name" fill="#0B7A5E">跨应用智能服务</text>
+    <text x="491" y="368" text-anchor="middle" class="mod-sub">信息读取须显式授权</text>
+  </g>
+  <g>
+    <rect x="644" y="326" width="250" height="58" rx="10" fill="#FFFFFF" stroke="#0B7A5E" stroke-width="1"/>
+    <text x="769" y="350" text-anchor="middle" class="mod-name" fill="#0B7A5E">算力调度</text>
+    <text x="769" y="368" text-anchor="middle" class="mod-sub">NPU 自适应 · 无NPU降级</text>
+  </g>
+
+  <rect x="940" y="286" width="220" height="112" rx="14" fill="#F0FBF7" stroke="#94D8C3" stroke-width="1.5"/>
+  <text x="958" y="316" class="side-tag" fill="#0B7A5E">AI 安全约束</text>
+  <text x="958" y="340" class="side-sub">· 独立沙盒运行</text>
+  <text x="958" y="358" class="side-sub">· 读取须显式授权</text>
+  <text x="958" y="376" class="side-sub">· 老设备自动降级/关闭</text>
+
+  <!-- 箭头 2→3 -->
+  <line x1="480" y1="398" x2="480" y2="426" class="arrow-line" marker-end="url(#arw)"/>
+
+  <!-- ================= 第三层：系统基础服务层 ================= -->
+  <rect x="40" y="432" width="880" height="196" rx="14" fill="#EDF1F8" stroke="#1A365D" stroke-width="1.5"/>
+  <rect x="40" y="432" width="880" height="30" rx="14" fill="#33507F"/>
+  <rect x="40" y="450" width="880" height="12" fill="#33507F"/>
+  <text x="58" y="453" class="layer-name" fill="#FFFFFF">③ 系统基础服务层</text>
+  <text x="700" y="453" class="layer-desc" fill="#FFFFFF">全部运行在用户态 · 故障隔离</text>
+
+  <g>
+    <rect x="60" y="474" width="278" height="68" rx="10" fill="#FFFFFF" stroke="#1A365D" stroke-width="1"/>
+    <text x="199" y="498" text-anchor="middle" class="mod-name" fill="#1A365D">H-HAL 硬件抽象层 + H-DPK</text>
+    <text x="199" y="516" text-anchor="middle" class="mod-sub">新老设备通刷 · 机型适配包</text>
+    <text x="199" y="532" text-anchor="middle" class="mod-sub">基础镜像 + H-DPK = 完整系统</text>
+  </g>
+  <g>
+    <rect x="352" y="474" width="278" height="68" rx="10" fill="#FFFFFF" stroke="#1A365D" stroke-width="1"/>
+    <text x="491" y="498" text-anchor="middle" class="mod-name" fill="#1A365D">文件服务</text>
+    <text x="491" y="516" text-anchor="middle" class="mod-sub">ext2/4 · vfat/exFAT/NTFS</text>
+    <text x="491" y="532" text-anchor="middle" class="mod-sub">fscrypt 加密 · quota 配额</text>
+  </g>
+  <g>
+    <rect x="644" y="474" width="250" height="68" rx="10" fill="#FFFFFF" stroke="#1A365D" stroke-width="1"/>
+    <text x="769" y="498" text-anchor="middle" class="mod-name" fill="#1A365D">网络服务</text>
+    <text x="769" y="516" text-anchor="middle" class="mod-sub">TCP 状态机 · QUIC/HTTP3</text>
+    <text x="769" y="532" text-anchor="middle" class="mod-sub">TLS/X.509 · DNS · WebSocket</text>
+  </g>
+  <g>
+    <rect x="60" y="552" width="278" height="66" rx="10" fill="#FFFFFF" stroke="#1A365D" stroke-width="1"/>
+    <text x="199" y="576" text-anchor="middle" class="mod-name" fill="#1A365D">图形合成服务</text>
+    <text x="199" y="594" text-anchor="middle" class="mod-sub">compositor · 双缓冲 · VBE</text>
+  </g>
+  <g>
+    <rect x="352" y="552" width="278" height="66" rx="10" fill="#FFFFFF" stroke="#1A365D" stroke-width="1"/>
+    <text x="491" y="576" text-anchor="middle" class="mod-name" fill="#1A365D">电源管理</text>
+    <text x="491" y="594" text-anchor="middle" class="mod-sub">休眠/唤醒 · RTC闹钟 · 省电等级</text>
+  </g>
+  <g>
+    <rect x="644" y="552" width="250" height="66" rx="10" fill="#FFFFFF" stroke="#1A365D" stroke-width="1"/>
+    <text x="769" y="576" text-anchor="middle" class="mod-name" fill="#1A365D">隐私沙盒 / 数据金库</text>
+    <text x="769" y="594" text-anchor="middle" class="mod-sub">零收集 · 零追踪 · 权限总控</text>
+  </g>
+
+  <rect x="940" y="432" width="220" height="196" rx="14" fill="#F0F4FB" stroke="#9EACEA" stroke-width="1.5"/>
+  <text x="958" y="462" class="side-tag" fill="#1A365D">安全体系（横贯）</text>
+  <text x="958" y="486" class="side-sub">· MAC 强制访问控制</text>
+  <text x="958" y="504" class="side-sub">· 统一沙盒 · 权限门控</text>
+  <text x="958" y="522" class="side-sub">· 密码学全套</text>
+  <text x="958" y="540" class="side-sub">  AES/RSA/ECDHE/SHA/HMAC</text>
+  <text x="958" y="558" class="side-sub">· 双模式安全系统</text>
+  <text x="958" y="576" class="side-sub">  安全模式 / 创变自由模式</text>
+  <text x="958" y="600" class="side-sub">· 应用沙箱 per-app 隔离</text>
+
+  <!-- 箭头 3→4 -->
+  <line x1="480" y1="628" x2="480" y2="656" class="arrow-line" marker-end="url(#arw)"/>
+
+  <!-- ================= 第四层：核心微内核层 ================= -->
+  <rect x="40" y="662" width="880" height="140" rx="14" fill="#1A365D" stroke="#1A365D" stroke-width="2"/>
+  <text x="58" y="693" class="layer-name" fill="#FFFFFF">④ 核心微内核层（自研纯微内核 · 非 Linux）</text>
+  <text x="700" y="693" class="layer-desc" fill="#B8C7DE">内核仅四件事 · 攻击面极小</text>
+
+  <g>
+    <rect x="60" y="708" width="198" height="78" rx="10" fill="#24406E" stroke="#9EACEA" stroke-width="1"/>
+    <text x="159" y="734" text-anchor="middle" class="mod-name" fill="#FFFFFF">进程调度</text>
+    <text x="159" y="752" text-anchor="middle" class="mod-sub" fill="#B8C7DE">O(1) · 亲和性 · 抢占</text>
+    <text x="159" y="770" text-anchor="middle" class="mod-sub" fill="#B8C7DE">后台冻结</text>
+  </g>
+  <g>
+    <rect x="272" y="708" width="198" height="78" rx="10" fill="#24406E" stroke="#9EACEA" stroke-width="1"/>
+    <text x="371" y="734" text-anchor="middle" class="mod-name" fill="#FFFFFF">内存隔离</text>
+    <text x="371" y="752" text-anchor="middle" class="mod-sub" fill="#B8C7DE">分页 · COW · 交换 · 大页</text>
+    <text x="371" y="770" text-anchor="middle" class="mod-sub" fill="#B8C7DE">Slab · kheap</text>
+  </g>
+  <g>
+    <rect x="484" y="708" width="198" height="78" rx="10" fill="#24406E" stroke="#9EACEA" stroke-width="1"/>
+    <text x="583" y="734" text-anchor="middle" class="mod-name" fill="#FFFFFF">硬件中断</text>
+    <text x="583" y="752" text-anchor="middle" class="mod-sub" fill="#B8C7DE">IDT/IRQ · softirq 底半部</text>
+    <text x="583" y="770" text-anchor="middle" class="mod-sub" fill="#B8C7DE">异常自恢复</text>
+  </g>
+  <g>
+    <rect x="696" y="708" width="198" height="78" rx="10" fill="#24406E" stroke="#9EACEA" stroke-width="1"/>
+    <text x="795" y="734" text-anchor="middle" class="mod-name" fill="#FFFFFF">权限总控 + IPC</text>
+    <text x="795" y="752" text-anchor="middle" class="mod-sub" fill="#B8C7DE">63 系统调用 · 沙盒边界</text>
+    <text x="795" y="770" text-anchor="middle" class="mod-sub" fill="#B8C7DE">版权指纹只读</text>
+  </g>
+
+  <rect x="940" y="662" width="220" height="140" rx="14" fill="#E8EDF7" stroke="#9EACEA" stroke-width="1.5"/>
+  <text x="958" y="692" class="side-tag" fill="#1A365D">微内核特性</text>
+  <text x="958" y="716" class="side-sub">· 单应用崩溃不影响整机</text>
+  <text x="958" y="734" class="side-sub">· 内核 334KB · 精简</text>
+  <text x="958" y="752" class="side-sub">· 图形/网络/文件/AI</text>
+  <text x="958" y="770" class="side-sub">  全部用户态，不入内核</text>
+  <text x="958" y="794" class="side-sub">· 63 系统调用 · KUnit 358+</text>
+
+  <!-- 箭头 4→硬件 -->
+  <line x1="480" y1="802" x2="480" y2="830" class="arrow-line" marker-end="url(#arw)"/>
+
+  <!-- ================= 硬件与引导层 ================= -->
+  <rect x="40" y="836" width="880" height="120" rx="14" fill="#F5F7FA" stroke="#6B7280" stroke-width="1.5"/>
+  <rect x="40" y="836" width="880" height="30" rx="14" fill="#6B7280"/>
+  <rect x="40" y="854" width="880" height="12" fill="#6B7280"/>
+  <text x="58" y="857" class="layer-name" fill="#FFFFFF">⑤ 硬件与引导链</text>
+  <text x="700" y="857" class="layer-desc" fill="#FFFFFF">x86 · 全设备引导兼容（最高准则）</text>
+
+  <g>
+    <rect x="60" y="878" width="172" height="66" rx="10" fill="#FFFFFF" stroke="#6B7280" stroke-width="1"/>
+    <text x="146" y="902" text-anchor="middle" class="hw-name" fill="#1A1B1C">引导链</text>
+    <text x="146" y="920" text-anchor="middle" class="hw-sub">MBR → stage2 → 内核</text>
+    <text x="146" y="936" text-anchor="middle" class="hw-sub">LBA/CHS 双读盘 · A20 · E820</text>
+  </g>
+  <g>
+    <rect x="246" y="878" width="172" height="66" rx="10" fill="#FFFFFF" stroke="#6B7280" stroke-width="1"/>
+    <text x="332" y="902" text-anchor="middle" class="hw-name" fill="#1A1B1C">存储</text>
+    <text x="332" y="920" text-anchor="middle" class="hw-sub">IDE · AHCI · NVMe</text>
+    <text x="332" y="936" text-anchor="middle" class="hw-sub">MBR/GPT · ext2 数据盘</text>
+  </g>
+  <g>
+    <rect x="432" y="878" width="172" height="66" rx="10" fill="#FFFFFF" stroke="#6B7280" stroke-width="1"/>
+    <text x="518" y="902" text-anchor="middle" class="hw-name" fill="#1A1B1C">输入输出</text>
+    <text x="518" y="920" text-anchor="middle" class="hw-sub">PS/2 键鼠 · USB(UHCI)</text>
+    <text x="518" y="936" text-anchor="middle" class="hw-sub">触屏(touch_hw) · 串口</text>
+  </g>
+  <g>
+    <rect x="618" y="878" width="172" height="66" rx="10" fill="#FFFFFF" stroke="#6B7280" stroke-width="1"/>
+    <text x="704" y="902" text-anchor="middle" class="hw-name" fill="#1A1B1C">网络外设</text>
+    <text x="704" y="920" text-anchor="middle" class="hw-sub">以太网 · WiFi · 蓝牙</text>
+    <text x="704" y="936" text-anchor="middle" class="hw-sub">RTC · 传感器 · 音频</text>
+  </g>
+
+  <rect x="940" y="836" width="220" height="120" rx="14" fill="#F5F5F5" stroke="#E4E3DD" stroke-width="1.5"/>
+  <text x="958" y="866" class="side-tag" fill="#1A1B1C">开源与分发</text>
+  <text x="958" y="890" class="side-sub">· GPLv3 + 附加条款</text>
+  <text x="958" y="908" class="side-sub">· 内核只读版权指纹</text>
+  <text x="958" y="926" class="side-sub">· OEM 三处强制标注</text>
+  <text x="958" y="944" class="side-sub">· 商标授权隔离</text>
+
+  <!-- 底部说明 -->
+  <text x="40" y="982" class="mod-sub">示意图：基于 DESIGN.md 四层架构与当前代码实现（kernel/ · services/ · hug-sdk/）绘制 · 2026-09-20</text>
+
+  <!-- 箭头定义 -->
+  <defs>
+    <marker id="arw" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#9EACEA"/>
+    </marker>
+  </defs>
+</svg>

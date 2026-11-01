@@ -1,0 +1,1409 @@
+/* ============================================================================
+ * 赫普OS - 64位内核专用Stage2引导器（带串口调试输出）
+ *
+ * 功能：
+ *   1. 从磁盘加载64位内核到0x100000
+ *   2. 切换到保护模式
+ *   3. 构建4级页表
+ *   4. 切换到长模式
+ *   5. 跳转到64位内核入口（multiboot_entry @ 0x10000c）
+ *
+ * 版本: v0.02 (添加串口输出)
+ * 日期: 2026-10-10
+ * ========================================================================== */
+
+.code16
+.section .text
+.global _start
+
+/* 串口输出宏（实模式和保护模式通用，直接写0x3F8端口） */
+.macro SERIAL_PUTC char
+    movb $\char, %al
+    call serial_putc
+.endm
+
+.macro SERIAL_PUTS str
+    movw $\str, %si
+    call serial_puts
+.endm
+
+.macro SERIAL_PUTS32 str
+    movl $\str, %esi
+    call serial_puts32
+.endm
+
+_start:
+    /* 远跳转，确保CS=0, IP=0x8000（兼容CD-ROM和硬盘引导）
+     * CD-ROM引导时BIOS可能设置CS=0x0800,IP=0，硬盘引导时CS=0,IP=0x8000
+     * 统一跳转到0:0x8000确保代码地址引用正确 */
+    ljmp $0, $stage2_entry
+stage2_entry:
+    /* 此时在实模式，CS=0, IP=0x8000 */
+    cli
+    xorw %ax, %ax
+    movw %ax, %ds
+    movw %ax, %es
+    movw %ax, %ss
+    movw $0x7C00, %sp
+
+    /* 保存引导驱动器号 */
+    movb %dl, boot_drive
+
+    /* 初始化串口 */
+    call serial_init
+
+    /* 串口输出：Stage2启动 */
+    SERIAL_PUTS msg_start
+
+    /* VGA输出 "64" */
+    movw $0xB800, %ax
+    movw %ax, %es
+    movw $160*2, %di
+    movw $0x1F36, %ax
+    stosw
+    movw $0x1F34, %ax
+    stosw
+
+    /* ===== 启动菜单 ===== */
+    call show_boot_menu
+    movb %al, boot_choice
+
+    /* 设置VBE图形模式（32位和64位共用） */
+    jmp vbe_setup_common
+
+    /* 根据选择加载内核 */
+after_vbe_setup:
+    cmpb $2, boot_choice
+    je load_32bit_kernel
+    jmp load_64bit_kernel
+
+load_32bit_kernel:
+    SERIAL_PUTS msg_load_32bit
+    /* 进入unreal mode（实模式下访问4GB内存） */
+    call enter_unreal_mode
+    SERIAL_PUTS msg_unreal_ok
+    /* 检测引导设备类型：CD-ROM使用2048字节扇区，硬盘使用512字节 */
+    movb boot_drive, %al
+    cmpb $0xE0, %al
+    jl 1f
+    /* CD-ROM模式：LBA=750(3000/4)，每次32扇区，总2058扇区(4.1MB) */
+    movl $750, %ebx          /* 当前LBA */
+    movl $2058, %ecx         /* 剩余扇区数 */
+    movl $11, %ebp           /* 扇区->字节移位：2^11=2048 */
+    jmp 2f
+1:
+    /* 硬盘模式：LBA=3000，每次128扇区，总8231扇区(4.1MB) */
+    movl $3000, %ebx         /* 当前LBA */
+    movl $8231, %ecx         /* 剩余扇区数 */
+    movl $9, %ebp            /* 扇区->字节移位：2^9=512 */
+2:
+    movl $0x100000, %edi     /* 目标高内存地址 */
+load_32bit_loop:
+    cmpl $0, %ecx
+    jle load_32bit_done
+    /* 本次读取扇区数：CD-ROM用32，硬盘用128 */
+    movl $128, %eax
+    cmpl $0xE0, boot_drive
+    jl 3f
+    movl $32, %eax           /* CD-ROM每次32扇区(64KB) */
+3:
+    cmpl %eax, %ecx
+    jg load_32bit_read
+    movl %ecx, %eax
+load_32bit_read:
+    pushl %ebx
+    pushl %ecx
+    pushl %edx
+    pushl %edi
+    pushl %ebp
+    /* 读取到低内存0x10000 */
+    movw $0x7B00, %si
+    movb $0x10, %ds:(%si)
+    movb $0x00, %ds:1(%si)
+    movw %ax, %ds:2(%si)
+    movw $0x0000, %ds:4(%si)
+    movw $0x1000, %ds:6(%si)  /* 段0x1000 -> 0x10000 */
+    movl %ebx, %ds:8(%si)
+    movl $0, %ds:12(%si)
+    movb boot_drive, %dl
+    movb $0x42, %ah
+    int $0x13
+    popl %ebp
+    popl %edi
+    popl %edx
+    popl %ecx
+    popl %ebx
+    jc read_error_32
+    /* 从低内存0x10000复制到高内存edi（使用FS:32位偏移） */
+    pushl %ecx
+    pushl %esi
+    pushl %eax              /* 保存扇区数 */
+    pushl %edi
+    pushw %ds               /* 保存DS */
+    movw $0x1000, %ax       /* DS=0x1000 -> 物理地址0x10000 */
+    movw %ax, %ds
+    xorl %esi, %esi         /* esi=0，DS:0 = 0x10000 */
+    movl %ebp, %ecx         /* 移位值 */
+    shll %cl, %eax          /* 字节数 = 扇区 * 2^shift */
+    shrl $2, %eax           /* 双字数 */
+    cld
+copy_high_loop:
+    movl (%esi), %edx
+    movl %edx, %fs:(%edi)
+    addl $4, %esi
+    addl $4, %edi
+    decl %eax
+    jnz copy_high_loop
+    popw %ds               /* 恢复DS */
+    popl %edi
+    popl %eax              /* 恢复扇区数 */
+    popl %esi
+    popl %ecx
+    /* 更新 */
+    pushl %eax              /* 保存扇区数 */
+    pushl %ecx
+    movl %ebp, %ecx
+    shll %cl, %eax          /* 字节数 = 扇区 * 2^shift */
+    addl %eax, %edi
+    popl %ecx
+    popl %eax              /* 恢复扇区数 */
+    addl %eax, %ebx
+    subl %eax, %ecx
+    jmp load_32bit_loop
+read_error_32:
+    SERIAL_PUTS msg_read_fail
+    jmp load_64bit_kernel
+load_32bit_done:
+    SERIAL_PUTS msg_32bit_loaded
+    /* 搜索multiboot头（前8192字节，使用FS访问高内存） */
+    movl $0x100000, %esi
+    movl $2048, %ecx
+search_multiboot:
+    cmpl $0x1BADB002, %fs:(%esi)
+    je multiboot_found
+    addl $4, %esi
+    loop search_multiboot
+    SERIAL_PUTS msg_no_multiboot
+    jmp load_64bit_kernel
+multiboot_found:
+    SERIAL_PUTS msg_multiboot_found
+    movl %esi, multiboot_header_ptr
+    /* 进入32位保护模式 */
+    cli
+    lgdt gdt32_ptr
+    movl %cr0, %eax
+    orl $1, %eax
+    movl %eax, %cr0
+    ljmp $0x08, $protected_mode_32
+
+/* 进入unreal mode（只设置FS/GS为32位，DS/ES保持实模式） */
+enter_unreal_mode:
+    cli
+    pushw %ds
+    lgdt gdt32_ptr
+    movl %cr0, %eax
+    orl $1, %eax
+    movl %eax, %cr0           /* 保护模式 */
+    movw $0x10, %ax
+    movw %ax, %fs             /* FS=32位数据段（隐藏部分） */
+    movw %ax, %gs             /* GS=32位数据段（隐藏部分） */
+    movl %cr0, %eax
+    andl $~1, %eax
+    movl %eax, %cr0           /* 回到实模式 */
+    xorw %ax, %ax
+    movw %ax, %fs             /* FS=0，但隐藏部分仍是32位 */
+    movw %ax, %gs             /* GS=0，但隐藏部分仍是32位 */
+    popw %ds                  /* 恢复DS（实模式） */
+    sti
+    ret
+
+load_64bit_kernel:
+    /* 从磁盘加载64位内核（分4次，每次64KB，共256KB） */
+    SERIAL_PUTS msg_load_kernel
+
+    /* 检测CD-ROM: DL>=0xE0使用AH=42h(2048字节扇区), 否则使用AH=42h(512字节扇区) */
+    cmpb $0xE0, boot_drive
+    jl load_64bit_hdd
+
+    /* ===== CD-ROM模式: 使用AH=42h扩展读取(2048字节/扇区) ===== */
+    /* 内核在512字节扇区LBA2000，对应2048字节扇区LBA500 */
+    /* 每次读取32个2048字节扇区=64KB */
+
+    /* 第1次: LBA500, 32扇区(64KB), 到0x10000 */
+    movw $0x7B00, %si
+    movb $0x10, %ds:(%si)
+    movb $0x00, %ds:1(%si)
+    movw $32, %ds:2(%si)        /* 32个2048字节扇区=64KB */
+    movw $0x0000, %ds:4(%si)    /* 偏移 */
+    movw $0x1000, %ds:6(%si)    /* 段=0x1000 -> 地址0x10000 */
+    movl $500, %ds:8(%si)       /* LBA=500 (2048字节扇区) */
+    movl $0, %ds:12(%si)
+    movb boot_drive, %dl
+    movb $0x42, %ah
+    int $0x13
+    jc read_error
+
+    /* 第2次: LBA532, 32扇区, 到0x20000 */
+    movw $0x7B00, %si
+    movb $0x10, %ds:(%si)
+    movb $0x00, %ds:1(%si)
+    movw $32, %ds:2(%si)
+    movw $0x0000, %ds:4(%si)
+    movw $0x2000, %ds:6(%si)    /* 段=0x2000 -> 地址0x20000 */
+    movl $532, %ds:8(%si)       /* LBA=500+32=532 */
+    movl $0, %ds:12(%si)
+    movb boot_drive, %dl
+    movb $0x42, %ah
+    int $0x13
+    jc read_error
+
+    /* 第3次: LBA564, 32扇区, 到0x30000 */
+    movw $0x7B00, %si
+    movb $0x10, %ds:(%si)
+    movb $0x00, %ds:1(%si)
+    movw $32, %ds:2(%si)
+    movw $0x0000, %ds:4(%si)
+    movw $0x3000, %ds:6(%si)
+    movl $564, %ds:8(%si)
+    movl $0, %ds:12(%si)
+    movb boot_drive, %dl
+    movb $0x42, %ah
+    int $0x13
+    /* 第3次失败不致命 */
+
+    /* 第4次: LBA596, 32扇区, 到0x40000 */
+    movw $0x7B00, %si
+    movb $0x10, %ds:(%si)
+    movb $0x00, %ds:1(%si)
+    movw $32, %ds:2(%si)
+    movw $0x0000, %ds:4(%si)
+    movw $0x4000, %ds:6(%si)
+    movl $596, %ds:8(%si)
+    movl $0, %ds:12(%si)
+    movb boot_drive, %dl
+    movb $0x42, %ah
+    int $0x13
+    /* 第4次失败不致命 */
+
+    /* 第5次: LBA628, 32扇区, 到0x50000 */
+    movw $0x7B00, %si
+    movb $0x10, %ds:(%si)
+    movb $0x00, %ds:1(%si)
+    movw $32, %ds:2(%si)
+    movw $0x0000, %ds:4(%si)
+    movw $0x5000, %ds:6(%si)
+    movl $628, %ds:8(%si)
+    movl $0, %ds:12(%si)
+    movb boot_drive, %dl
+    movb $0x42, %ah
+    int $0x13
+    /* 第5次失败不致命 */
+
+    jmp load_64bit_done
+
+load_64bit_hdd:
+    /* ===== 硬盘模式: 使用AH=42h读取(512字节/扇区) ===== */
+
+    /* 第一次：加载前64KB到0x10000 */
+    movw $0x7B00, %si
+    movb $0x10, %ds:(%si)
+    movb $0x00, %ds:1(%si)
+    movw $128, %ds:2(%si)       /* 128扇区=64KB */
+    movw $0x0000, %ds:4(%si)
+    movw $0x1000, %ds:6(%si)    /* 段=0x1000 -> 地址0x10000 */
+    movl $2000, %ds:8(%si)      /* LBA=2000 */
+    movl $0, %ds:12(%si)
+
+    movb boot_drive, %dl
+    movb $0x42, %ah
+    int $0x13
+    jc read_error
+
+    /* 第二次：加载后64KB到0x20000 */
+    movw $0x7B00, %si
+    movb $0x10, %ds:(%si)
+    movb $0x00, %ds:1(%si)
+    movw $128, %ds:2(%si)       /* 128扇区=64KB */
+    movw $0x0000, %ds:4(%si)
+    movw $0x2000, %ds:6(%si)    /* 段=0x2000 -> 地址0x20000 */
+    movl $2128, %ds:8(%si)      /* LBA=2000+128=2128 */
+    movl $0, %ds:12(%si)
+
+    movb boot_drive, %dl
+    movb $0x42, %ah
+    int $0x13
+    jc read_error
+
+    /* 第三次：加载第三个64KB到0x30000（内核可能超过128KB） */
+    movw $0x7B00, %si
+    movb $0x10, %ds:(%si)
+    movb $0x00, %ds:1(%si)
+    movw $128, %ds:2(%si)       /* 128扇区=64KB */
+    movw $0x0000, %ds:4(%si)
+    movw $0x3000, %ds:6(%si)    /* 段=0x3000 -> 地址0x30000 */
+    movl $2256, %ds:8(%si)      /* LBA=2000+256=2256 */
+    movl $0, %ds:12(%si)
+
+    movb boot_drive, %dl
+    movb $0x42, %ah
+    int $0x13
+    /* 第三次加载失败不致命（内核可能小于192KB） */
+
+    /* 第四次：加载第四个64KB到0x40000（内核可能超过192KB） */
+    movw $0x7B00, %si
+    movb $0x10, %ds:(%si)
+    movb $0x00, %ds:1(%si)
+    movw $128, %ds:2(%si)       /* 128扇区=64KB */
+    movw $0x0000, %ds:4(%si)
+    movw $0x4000, %ds:6(%si)    /* 段=0x4000 -> 地址0x40000 */
+    movl $2384, %ds:8(%si)      /* LBA=2000+384=2384 */
+    movl $0, %ds:12(%si)
+
+    movb boot_drive, %dl
+    movb $0x42, %ah
+    int $0x13
+    /* 第四次加载失败不致命（内核可能小于256KB） */
+
+    /* 第五次：加载第五个64KB到0x50000（内核可能超过256KB） */
+    movw $0x7B00, %si
+    movb $0x10, %ds:(%si)
+    movb $0x00, %ds:1(%si)
+    movw $128, %ds:2(%si)       /* 128扇区=64KB */
+    movw $0x0000, %ds:4(%si)
+    movw $0x5000, %ds:6(%si)    /* 段=0x5000 -> 地址0x50000 */
+    movl $2512, %ds:8(%si)      /* LBA=2000+512=2512 */
+    movl $0, %ds:12(%si)
+
+    movb boot_drive, %dl
+    movb $0x42, %ah
+    int $0x13
+    /* 第五次加载失败不致命（内核可能小于320KB） */
+
+    /* 第六次：加载第六个64KB到0x60000 */
+    movw $0x7B00, %si
+    movb $0x10, %ds:(%si)
+    movb $0x00, %ds:1(%si)
+    movw $128, %ds:2(%si)
+    movw $0x0000, %ds:4(%si)
+    movw $0x6000, %ds:6(%si)
+    movl $2640, %ds:8(%si)
+    movl $0, %ds:12(%si)
+    movb boot_drive, %dl
+    movb $0x42, %ah
+    int $0x13
+
+    /* 第七次：加载第七个64KB到0x70000 */
+    movw $0x7B00, %si
+    movb $0x10, %ds:(%si)
+    movb $0x00, %ds:1(%si)
+    movw $128, %ds:2(%si)
+    movw $0x0000, %ds:4(%si)
+    movw $0x7000, %ds:6(%si)
+    movl $2768, %ds:8(%si)
+    movl $0, %ds:12(%si)
+    movb boot_drive, %dl
+    movb $0x42, %ah
+    int $0x13
+
+    /* 第八次：加载第八个64KB到0x80000 */
+    movw $0x7B00, %si
+    movb $0x10, %ds:(%si)
+    movb $0x00, %ds:1(%si)
+    movw $128, %ds:2(%si)
+    movw $0x0000, %ds:4(%si)
+    movw $0x8000, %ds:6(%si)
+    movl $2896, %ds:8(%si)
+    movl $0, %ds:12(%si)
+    movb boot_drive, %dl
+    movb $0x42, %ah
+    int $0x13
+
+    /* 第九次：加载第九个64KB到0x90000 */
+    movw $0x7B00, %si
+    movb $0x10, %ds:(%si)
+    movb $0x00, %ds:1(%si)
+    movw $128, %ds:2(%si)
+    movw $0x0000, %ds:4(%si)
+    movw $0x9000, %ds:6(%si)
+    movl $3024, %ds:8(%si)
+    movl $0, %ds:12(%si)
+    movb boot_drive, %dl
+    movb $0x42, %ah
+    int $0x13
+
+    /* 第十次：加载第十个64KB到0xA0000 */
+    movw $0x7B00, %si
+    movb $0x10, %ds:(%si)
+    movb $0x00, %ds:1(%si)
+    movw $128, %ds:2(%si)
+    movw $0x0000, %ds:4(%si)
+    movw $0xA000, %ds:6(%si)
+    movl $3152, %ds:8(%si)
+    movl $0, %ds:12(%si)
+    movb boot_drive, %dl
+    movb $0x42, %ah
+    int $0x13
+
+load_64bit_done:
+    SERIAL_PUTS msg_load_ok
+
+    /* VGA输出 "OK" */
+    movw $0xB800, %ax
+    movw %ax, %es
+    movw $160*2 + 4, %di
+    movw $0x2F4F, %ax
+    stosw
+    movw $0x2F4B, %ax
+    stosw
+
+    jmp enter_pm_64
+
+    /* 1.5 设置VBE图形模式（多模式降级） */
+vbe_setup_common:
+    SERIAL_PUTS msg_vbe_start
+
+    /* 确保实模式段寄存器正确（之前的VGA输出可能修改了ES） */
+    xorw %ax, %ax
+    movw %ax, %ds
+    movw %ax, %es
+
+    /* 先检查VBE是否存在 */
+    movw $0x4F00, %ax
+    movw $0x7000, %di
+    movw %di, %es
+    xor %di, %di
+    int $0x10
+    cmpw $0x004F, %ax
+    jne vbe_failed
+
+    /* 尝试多个VBE模式（从高到低） */
+    movw $0, vbe_width  /* 标记未设置 */
+
+    /* 模式1: 1024x768x32 (0x144) */
+    movw $0x144, %cx
+    call vbe_try_mode
+    cmpw $0, vbe_width
+    jne vbe_set_ok
+
+    /* 模式2: 800x600x32 (0x143) */
+    movw $0x143, %cx
+    call vbe_try_mode
+    cmpw $0, vbe_width
+    jne vbe_set_ok
+
+    /* 模式3: 640x480x32 (0x141) */
+    movw $0x141, %cx
+    call vbe_try_mode
+    cmpw $0, vbe_width
+    jne vbe_set_ok
+
+    /* 模式4: 1024x768x16 (0x117) */
+    movw $0x117, %cx
+    call vbe_try_mode
+    cmpw $0, vbe_width
+    jne vbe_set_ok
+
+    /* 模式5: 800x600x16 (0x114) */
+    movw $0x114, %cx
+    call vbe_try_mode
+    cmpw $0, vbe_width
+    jne vbe_set_ok
+
+    /* 模式6: 1024x768x8 (0x105) */
+    movw $0x105, %cx
+    call vbe_try_mode
+    cmpw $0, vbe_width
+    jne vbe_set_ok
+
+    /* 模式7: 800x600x8 (0x103) */
+    movw $0x103, %cx
+    call vbe_try_mode
+    cmpw $0, vbe_width
+    jne vbe_set_ok
+
+    jmp vbe_failed
+
+vbe_try_mode:
+    /* 保存模式号（CX可能被INT 0x10破坏） */
+    pushw %cx
+
+    /* 获取模式信息 */
+    movw $0x4F01, %ax
+    movw $0x7000, %di
+    movw %di, %es
+    xor %di, %di
+    int $0x10
+    cmpw $0x004F, %ax
+    jne vbe_try_fail_pop
+
+    /* 检查是否支持线性帧缓冲（模式属性位7） */
+    pushw %ds
+    movw $0x7000, %ax
+    movw %ax, %ds
+    movb 0x00, %al           /* 模式属性 */
+    testb $0x80, %al
+    jz vbe_try_fail_pop2
+
+    /* 读取模式信息（先保存到临时寄存器，恢复DS后再写入变量） */
+    movw 0x12, %ax           /* X分辨率 */
+    movw %ax, %bx            /* 临时保存 */
+    movw 0x14, %ax           /* Y分辨率 */
+    movw %ax, %cx            /* 临时保存 */
+    movb 0x19, %al           /* 每像素位数 */
+    movb %al, %dl            /* 临时保存 */
+    movw 0x10, %ax           /* pitch */
+    movw %ax, %si            /* 临时保存 */
+    movw 0x28, %ax           /* 帧缓冲低16位 */
+    movw %ax, %di            /* 临时保存 */
+    movw 0x2A, %ax           /* 帧缓冲高16位 */
+    movw %ax, %bp            /* 临时保存 */
+    popw %ds                 /* 恢复DS=0 */
+
+    /* 现在DS=0，正确写入变量 */
+    movw %bx, vbe_width
+    movw %cx, vbe_height
+    movb %dl, vbe_bpp
+    movw %si, vbe_pitch
+    movw %di, vbe_fb
+    movw %bp, vbe_fb+2
+
+    /* 设置VBE模式 */
+    popw %cx                 /* 恢复模式号 */
+    movw %cx, vbe_current_mode  /* 保存当前模式号 */
+    movw $0x4F02, %ax
+    movw %cx, %bx
+    orw $0x4000, %bx         /* 使用线性帧缓冲 */
+    int $0x10
+    cmpw $0x004F, %ax
+    jne vbe_try_fail
+
+    ret
+
+vbe_try_fail_pop2:
+    popw %ds
+vbe_try_fail_pop:
+    popw %cx
+vbe_try_fail:
+    movw $0, vbe_width
+    ret
+
+vbe_set_ok:
+    SERIAL_PUTS msg_vbe_ok
+    jmp vbe_done
+
+vbe_failed:
+    SERIAL_PUTS msg_vbe_fail
+    movw $0, vbe_width
+
+vbe_done:
+    jmp after_vbe_setup
+
+enter_pm_64:
+    /* 2. 加载GDT并切换到保护模式 */
+    SERIAL_PUTS msg_pm
+    lgdt gdt32_ptr
+
+    movl %cr0, %eax
+    orl $1, %eax
+    movl %eax, %cr0
+
+    ljmp $0x08, $protected_mode
+
+read_error:
+    SERIAL_PUTS msg_read_err
+    movw $0xB800, %ax
+    movw %ax, %es
+    movw $160*2 + 4, %di
+    movw $0x4F45, %ax
+    stosw
+    movw $0x4F52, %ax
+    stosw
+1:
+    hlt
+    jmp 1b
+
+/* 串口初始化（115200 8N1） */
+serial_init:
+    movw $0x3F8, %dx
+    addw $3, %dx          /* LCR */
+    movb $0x80, %al       /* DLAB=1 */
+    outb %al, %dx
+    subw $3, %dx          /* 回到数据端口 */
+    movb $0x01, %al       /* 除数低字节=1 -> 115200 */
+    outb %al, %dx
+    incw %dx
+    movb $0x00, %al       /* 除数高字节=0 */
+    outb %al, %dx
+    addw $2, %dx          /* LCR */
+    movb $0x03, %al       /* 8N1, DLAB=0 */
+    outb %al, %dx
+    ret
+
+/* 串口输出一个字符（AL=字符） */
+serial_putc:
+    pushw %ax
+    pushw %dx
+    movb %al, %ah         /* 保存字符到AH */
+    movw $0x3F8+5, %dx    /* LSR */
+1:
+    inb %dx, %al
+    testb $0x20, %al      /* THRE */
+    jz 1b
+    movb %ah, %al         /* 恢复字符 */
+    movw $0x3F8, %dx
+    outb %al, %dx
+    popw %dx
+    popw %ax
+    ret
+
+/* 串口输出字符串（DS:SI=字符串） */
+serial_puts:
+    pushw %ax
+    pushw %si
+1:
+    lodsb
+    testb %al, %al
+    jz 2f
+    call serial_putc
+    jmp 1b
+2:
+    popw %si
+    popw %ax
+    ret
+
+/* 输出AL中的8位十六进制值 */
+serial_put_hex8:
+    pushw %ax
+    pushw %cx
+    movb %al, %cl
+    /* 高4位 */
+    shrb $4, %al
+    call hex_digit
+    call serial_putc
+    /* 低4位 */
+    movb %cl, %al
+    andb $0x0F, %al
+    call hex_digit
+    call serial_putc
+    /* 换行 */
+    movb $'\r', %al
+    call serial_putc
+    movb $'\n', %al
+    call serial_putc
+    popw %cx
+    popw %ax
+    ret
+
+hex_digit:
+    cmpb $10, %al
+    jl 1f
+    addb $'A'-10, %al
+    ret
+1:
+    addb $'0', %al
+    ret
+
+/* ============================================================
+ * cdrom_read_lba: 使用AH=02h从CD-ROM读取扇区(2048字节/扇区)
+ * 输入: EBX=LBA, AL=扇区数(<=32), ES:BX=目标缓冲区
+ * 输出: CF=0成功, CF=1失败
+ * CHS参数: H=64, S=32 (isohybrid默认)
+ * ============================================================ */
+cdrom_read_lba:
+    pushl %ebx
+    pushl %ecx
+    pushl %edx
+    pushw %es
+    pushw %di
+
+    movb %al, %bh            /* BH=扇区数 */
+
+    /* LBA转CHS: C=LBA>>11, H=(LBA>>5)&0x3F, S=(LBA&0x1F)+1 */
+    movl %ebx, %eax
+    movb %al, %cl            /* CL = LBA低8位 */
+    andb $0x1F, %cl          /* CL = LBA & 0x1F */
+    incb %cl                 /* CL = S = (LBA&0x1F)+1 */
+
+    movl %ebx, %eax
+    shrl $5, %eax
+    andb $0x3F, %al          /* AL = H = (LBA>>5)&0x3F */
+    movb %al, %dh            /* DH = H */
+
+    movl %ebx, %eax
+    shrl $11, %eax           /* AL = C = LBA>>11 */
+    movb %al, %ch            /* CH = C(低8位) */
+    /* C的高2位放到CL的位6-7 */
+    movb %al, %ah
+    shrb $2, %ah
+    andb $0xC0, %ah
+    orb %ah, %cl
+
+    movb %bh, %al            /* AL=扇区数 */
+    movb boot_drive, %dl
+    movb $0x02, %ah
+    int $0x13
+    jc 1f
+    popw %di
+    popw %es
+    popl %edx
+    popl %ecx
+    popl %ebx
+    ret
+
+1:  /* 读取失败，输出错误码 */
+    pushw %ax
+    SERIAL_PUTS msg_cdrom_err
+    popw %ax
+    call serial_put_hex8
+    SERIAL_PUTS msg_crlf2
+    stc  /* 保持CF=1表示失败 */
+    popw %di
+    popw %es
+    popl %edx
+    popl %ecx
+    popl %ebx
+    ret
+
+/* ============================================================
+ * show_boot_menu: 显示启动菜单，等待选择或倒计时
+ * 返回: AL=1 (64bit), AL=2 (32bit)
+ * ============================================================ */
+show_boot_menu:
+    pushw %ax
+    pushw %bx
+    pushw %cx
+    pushw %dx
+
+    SERIAL_PUTS msg_menu_start
+
+    /* 清屏 */
+    movw $0x0600, %ax
+    movb $0x07, %bh
+    xorw %cx, %cx
+    movw $0x184F, %dx
+    int $0x10
+
+    /* 设置光标到(0,0) */
+    movw $0x0200, %ax
+    xorw %bx, %bx
+    xorw %dx, %dx
+    int $0x10
+
+    /* 显示菜单 */
+    movw $menu_title, %si
+    call vga_puts
+    movw $menu_64, %si
+    call vga_puts
+    movw $menu_32, %si
+    call vga_puts
+    movw $menu_hint, %si
+    call vga_puts
+
+    SERIAL_PUTS msg_menu_wait
+
+    /* 倒计时5秒，支持键盘选择 */
+    movb $5, %bl
+menu_countdown:
+    /* 显示倒计时数字（保存bl到栈） */
+    pushw %bx
+    movb %bl, %al
+    addb $'0', %al
+    movb $0x0E, %ah
+    xorw %bx, %bx
+    int $0x10
+    movb $' ', %al
+    int $0x10
+    popw %bx
+
+    /* 检查键盘输入（直接读PS/2控制器） */
+    inb $0x64, %al          /* 读状态寄存器 */
+    testb $0x01, %al        /* bit0=输出缓冲区满？ */
+    jz no_key_pressed
+    inb $0x60, %al          /* 读扫描码 */
+    /* 转换扫描码到ASCII（简化版，只处理1和2） */
+    cmpb $0x02, %al         /* 扫描码2 = '1'键按下 */
+    je select_64bit
+    cmpb $0x03, %al         /* 扫描码3 = '2'键按下 */
+    je select_32bit
+no_key_pressed:
+
+    /* 延时（QEMU TCG下约0.5秒） */
+    movl $0x10000, %ecx
+menu_delay_loop:
+    nop
+    loop menu_delay_loop
+
+    decb %bl
+    jnz menu_countdown
+
+    /* 默认选择32位（测试）*/
+    jmp select_64bit
+
+select_64bit:
+    SERIAL_PUTS msg_menu_64
+
+    popw %dx
+    popw %cx
+    popw %bx
+    popw %ax
+    movb $1, %al              /* 设置返回值（在所有pop之后） */
+    ret
+
+select_32bit:
+    SERIAL_PUTS msg_menu_32
+
+    popw %dx
+    popw %cx
+    popw %bx
+    popw %ax
+    movb $2, %al              /* 设置返回值（在所有pop之后） */
+    ret
+
+/* VGA文本输出（实模式，DS:SI=字符串） */
+vga_puts:
+    pushw %ax
+    pushw %bx
+1:
+    lodsb
+    testb %al, %al
+    jz 2f
+    movb $0x0E, %ah
+    movw $0x0007, %bx
+    int $0x10
+    jmp 1b
+2:
+    popw %bx
+    popw %ax
+    ret
+
+.code32
+protected_mode:
+    /* 设置数据段 */
+    movw $0x10, %ax
+    movw %ax, %ds
+    movw %ax, %es
+    movw %ax, %fs
+    movw %ax, %gs
+    movw %ax, %ss
+    movl $0x90000, %esp
+
+    /* 串口输出：进入保护模式 */
+    movl $msg_pm_ok, %esi
+    call serial_puts32
+
+    /* VGA输出 "PM" */
+    movl $0xB8000 + 160*3, %edi
+    movb $'P', %al
+    movb $0x1F, %ah
+    stosw
+    movb $'M', %al
+    stosw
+
+    /* 把内核从0x10000、0x20000、0x30000、0x40000和0x50000复制到0x100000（共320KB） */
+    movl $0x10000, %esi
+    movl $0x100000, %edi
+    movl $16384, %ecx        /* 前64KB = 16384双字 */
+    rep movsl
+
+    movl $0x20000, %esi      /* 第二个64KB在0x20000 */
+    movl $16384, %ecx
+    rep movsl
+
+    movl $0x30000, %esi      /* 第三个64KB在0x30000 */
+    movl $16384, %ecx
+    rep movsl
+
+    movl $0x40000, %esi      /* 第四个64KB在0x40000 */
+    movl $16384, %ecx
+    rep movsl
+
+    movl $0x50000, %esi      /* 第五个64KB在0x50000 */
+    movl $16384, %ecx
+    rep movsl
+
+    movl $0x60000, %esi      /* 第六个64KB在0x60000 */
+    movl $16384, %ecx
+    rep movsl
+
+    movl $0x70000, %esi      /* 第七个64KB在0x70000 */
+    movl $16384, %ecx
+    rep movsl
+
+    movl $0x80000, %esi      /* 第八个64KB在0x80000 */
+    movl $16384, %ecx
+    rep movsl
+
+    movl $0x90000, %esi      /* 第九个64KB在0x90000 */
+    movl $16384, %ecx
+    rep movsl
+
+    movl $0xA0000, %esi      /* 第十个64KB在0xA0000 */
+    movl $16384, %ecx
+    rep movsl
+
+    /* 串口输出：内核复制完成 */
+    movl $msg_copy_ok, %esi
+    call serial_puts32
+
+    /* 3. 检测CPU是否支持长模式 */
+    movl $0x80000000, %eax
+    cpuid
+    cmpl $0x80000001, %eax
+    jb no_long_mode
+
+    movl $0x80000001, %eax
+    cpuid
+    testl $(1 << 29), %edx
+    jz no_long_mode
+
+    movl $msg_lm_support, %esi
+    call serial_puts32
+
+    /* 4. 构建4级页表（放在0x600000，避开内核BSS段0x131000-0x592140） */
+    movl $0x600000, %edi
+    movl $0, %eax
+    movl $8192, %ecx          /* 清零8个页（32KB），包含PML4/PDPT/PD/PDPT_HI/PD_HI/PDPT_FB/PD_FB */
+    rep stosl
+
+    /* PML4[0] -> PDPT */
+    movl $0x601000, %eax
+    orl $0x03, %eax
+    movl %eax, 0x600000
+
+    /* PDPT[0] -> PD */
+    movl $0x602000, %eax
+    orl $0x03, %eax
+    movl %eax, 0x601000
+
+    /* PD: 使用2MB大页映射前8MB（低地址 0x00000000-0x00800000） */
+    movl $0x602000, %edi
+    movl $0x00000083, %eax   /* PS=1(2MB大页), R/W=1, P=1 */
+    movl $4, %ecx
+1:
+    movl %eax, (%edi)
+    addl $0x200000, %eax     /* 下一个2MB页 */
+    addl $8, %edi
+    loop 1b
+
+    /* 高地址映射：0xFFFFFF0000000000 -> 0x00000000（内核高半核） */
+    /* PML4[511] -> PDPT_HI (0x604000) */
+    movl $0x604000, %eax
+    orl $0x03, %eax
+    movl %eax, 0x600000 + 511*8
+
+    /* PDPT_HI[510] -> PD_HI (0x605000) */
+    movl $0x605000, %eax
+    orl $0x03, %eax
+    movl %eax, 0x604000 + 510*8
+
+    /* PD_HI: 使用2MB大页映射前8MB到高地址 */
+    movl $0x605000, %edi
+    movl $0x00000083, %eax   /* PS=1(2MB大页), R/W=1, P=1 */
+    movl $4, %ecx
+2:
+    movl %eax, (%edi)
+    addl $0x200000, %eax
+    addl $8, %edi
+    loop 2b
+
+    /* 帧缓冲映射：如果VBE模式设置成功，映射帧缓冲到页表 */
+    cmpw $0, vbe_width
+    je no_fb_map
+    /* 帧缓冲地址0xFD000000: PML4索引=0, PDPT索引=3, PD索引=488 */
+    /* 使用现有的PML4[0]->PDPT(0x601000)，添加PDPT[3]->PD_FB(0x607000) */
+    movl $0x607003, 0x601000 + 3*8
+    /* PD_FB[488] -> fb物理地址（2MB大页） */
+    movl vbe_fb, %eax
+    orl $0x00000083, %eax   /* PS=1, R/W=1, P=1 */
+    movl %eax, 0x607000 + 488*8
+    /* PD_FB[489] -> fb+2MB */
+    addl $0x200000, %eax
+    movl %eax, 0x607000 + 489*8
+no_fb_map:
+
+    movl $msg_paging, %esi
+    call serial_puts32
+
+    /* 5. 加载PML4到CR3 */
+    movl $0x600000, %eax
+    movl %eax, %cr3
+
+    /* 6. 启用PAE */
+    movl %cr4, %eax
+    orl $(1 << 5), %eax
+    movl %eax, %cr4
+
+    /* 7. 启用长模式 */
+    movl $0xC0000080, %ecx
+    rdmsr
+    orl $(1 << 8), %eax
+    wrmsr
+
+    /* 8. 启用分页 */
+    movl %cr0, %eax
+    orl $(1 << 31), %eax
+    movl %eax, %cr0
+
+    /* 9. 加载64位GDT并远跳转 */
+    lgdt gdt64_ptr
+    ljmp $0x08, $long_mode
+
+no_long_mode:
+    movl $msg_no_lm, %esi
+    call serial_puts32
+    movl $0xB8000 + 160*3, %edi
+    movb $'N', %al
+    movb $0x4F, %ah
+    stosw
+    movb $'O', %al
+    stosw
+1:
+    hlt
+    jmp 1b
+
+/* 32位串口输出字符串 */
+serial_puts32:
+    pushl %eax
+    pushl %edx
+1:
+    movb (%esi), %al
+    testb %al, %al
+    jz 2f
+    /* 等待THRE */
+    movw $0x3F8+5, %dx
+3:
+    inb %dx, %al
+    testb $0x20, %al
+    jz 3b
+    /* 输出字符 */
+    movb (%esi), %al
+    movw $0x3F8, %dx
+    outb %al, %dx
+    incl %esi
+    jmp 1b
+2:
+    popl %edx
+    popl %eax
+    ret
+
+.code64
+long_mode:
+    /* 成功进入64位长模式 */
+    movw $0x10, %ax
+    movw %ax, %ds
+    movw %ax, %es
+    movw %ax, %fs
+    movw %ax, %gs
+    movw %ax, %ss
+    movq $0x70000, %rsp
+
+    /* 直接输出"LM>"，不调用函数 */
+    movb $'L', %al
+    call outc64
+    movb $'M', %al
+    call outc64
+    movb $'>', %al
+    call outc64
+    movb $'\r', %al
+    call outc64
+    movb $'\n', %al
+    call outc64
+
+    /* VGA输出 "LM" */
+    movq $0xB8000 + 160*4, %rdi
+    movb $'L', %al
+    movb $0x2F, %ah
+    stosw
+    movb $'M', %al
+    stosw
+
+    /* 设置Multiboot约定 */
+    movl $0x2BADB002, %eax
+    movl $0, %ebx
+
+    /* 把VBE信息复制到固定地址0x6000（内核从这里读取） */
+    /* 结构: width(2), height(2), pitch(2), bpp(1), fb(4) = 11字节 */
+    movq $0x6000, %rdi
+    movzwl vbe_width(%rip), %eax
+    movw %ax, (%rdi)
+    movzwl vbe_height(%rip), %eax
+    movw %ax, 2(%rdi)
+    movzwl vbe_pitch(%rip), %eax
+    movw %ax, 4(%rdi)
+    movzbl vbe_bpp(%rip), %eax
+    movb %al, 6(%rdi)
+    movl vbe_fb(%rip), %eax
+    movl %eax, 8(%rdi)
+
+    /* 输出"JMP>"然后跳转 */
+    movb $'J', %al
+    call outc64
+    movb $'M', %al
+    call outc64
+    movb $'P', %al
+    call outc64
+    movb $'>', %al
+    call outc64
+    movb $'\r', %al
+    call outc64
+    movb $'\n', %al
+    call outc64
+
+    /* 验证0x100000地址的内容（应该是0xb0 0x4b = mov $0x4b,%al） */
+    movabsq $0x100000, %rbx
+    movb (%rbx), %al
+    call outc64
+    movb $'-', %al
+    call outc64
+    movb 1(%rbx), %al
+    call outc64
+    movb $'\r', %al
+    call outc64
+    movb $'\n', %al
+    call outc64
+
+    /* 跳转到64位内核入口：x86_64_entry_64 @ 0x100000（固定地址） */
+    movabsq $0x100000, %rax
+    jmp *%rax
+
+/* 简单的64位串口输出（AL=字符） */
+outc64:
+    pushq %rax
+    pushq %rdx
+    movb %al, %ah         /* 保存字符到AH */
+1:
+    movw $0x3F8+5, %dx
+    inb %dx, %al
+    testb $0x20, %al
+    jz 1b
+    movb %ah, %al         /* 恢复字符 */
+    movw $0x3F8, %dx
+    outb %al, %dx
+    popq %rdx
+    popq %rax
+    ret
+
+1:
+    hlt
+    jmp 1b
+
+/* 64位串口输出字符串 */
+serial_puts64:
+    pushq %rax
+    pushq %rdx
+1:
+    movb (%rsi), %al
+    testb %al, %al
+    jz 2f
+    movw $0x3F8+5, %dx
+3:
+    inb %dx, %al
+    testb $0x20, %al
+    jz 3b
+    movb (%rsi), %al
+    movw $0x3F8, %dx
+    outb %al, %dx
+    incq %rsi
+    jmp 1b
+2:
+    popq %rdx
+    popq %rax
+    ret
+
+/* 64位串口输出一个字符（AL=字符） */
+serial_putc64:
+    pushq %rax
+    pushq %rdx
+    movb %al, %ah
+1:
+    movw $0x3F8+5, %dx
+    inb %dx, %al
+    testb $0x20, %al
+    jz 1b
+    movb %ah, %al
+    movw $0x3F8, %dx
+    outb %al, %dx
+    popq %rdx
+    popq %rax
+    ret
+
+/* 字符串常量 */
+msg_start:      .asciz "[Stage2_64] Starting...\r\n"
+msg_load_kernel:.asciz "[Stage2_64] Loading kernel...\r\n"
+msg_load_ok:    .asciz "[Stage2_64] Kernel loaded OK\r\n"
+msg_copy_ok:    .asciz "[Stage2_64] Kernel copied to 0x100000\r\n"
+msg_read_err:   .asciz "[Stage2_64] ERROR: Disk read failed!\r\n"
+msg_cdrom_err:  .asciz "[Stage2_64] CD-ROM AH=02h error code: 0x"
+msg_crlf2:      .asciz "\r\n"
+msg_pm:         .asciz "[Stage2_64] Entering protected mode...\r\n"
+msg_pm_ok:      .asciz "[Stage2_64] Protected mode OK\r\n"
+msg_lm_support: .asciz "[Stage2_64] CPU supports long mode\r\n"
+msg_no_lm:      .asciz "[Stage2_64] ERROR: CPU does NOT support long mode!\r\n"
+msg_paging:     .asciz "[Stage2_64] Page tables built, enabling paging...\r\n"
+msg_lm_ok:      .asciz "[Stage2_64] LONG MODE OK!\r\n"
+msg_jump:       .asciz "[Stage2_64] Jumping to kernel @ 0x103f40...\r\n"
+msg_32bit_unsupported: .asciz "[Stage2_64] 32-bit kernel not supported yet, using 64-bit\r\n"
+msg_load_32bit: .asciz "[Stage2_64] Loading 32-bit kernel from LBA 500...\r\n"
+msg_unreal_ok:  .asciz "[Stage2_64] Unreal mode enabled, accessing 4GB memory\r\n"
+msg_debug_read: .asciz "[Stage2_64] DEBUG: About to read disk...\r\n"
+msg_debug_after_read: .asciz "[Stage2_64] DEBUG: Disk read returned\r\n"
+msg_debug_copy: .asciz "[Stage2_64] DEBUG: Copying to high memory...\r\n"
+msg_debug_copy_done: .asciz "[Stage2_64] DEBUG: Copy done, next loop\r\n"
+msg_read_fail:  .asciz "[Stage2_64] ERROR: Disk read failed, fallback to 64-bit\r\n"
+msg_32bit_loaded: .asciz "[Stage2_64] 32-bit kernel loaded OK\r\n"
+msg_no_multiboot: .asciz "[Stage2_64] ERROR: No multiboot header found, fallback to 64-bit\r\n"
+msg_multiboot_found: .asciz "[Stage2_64] Multiboot header found, entering 32-bit mode...\r\n"
+msg_jump_32bit: .asciz "[Stage2_64] Jumping to 32-bit kernel...\r\n"
+
+/* 启动菜单字符串 */
+menu_title: .asciz "========================================\r\n  HepuBoot v0.10.73 Hybrid\r\n========================================\r\n\r\n"
+menu_64:    .asciz "  1. HepuOS 64-bit (default)\r\n     New arch | Large memory | TrueType\r\n\r\n"
+menu_32:    .asciz "  2. HepuOS 32-bit (stable)\r\n     Mature | Full desktop | 36 apps\r\n\r\n"
+menu_hint:  .asciz "  [1/2] Select | [Enter] Boot | Auto: "
+msg_menu_start: .asciz "[Stage2_64] Boot menu starting...\r\n"
+msg_menu_wait:  .asciz "[Stage2_64] Waiting for selection...\r\n"
+msg_menu_key:   .asciz "[Stage2_64] Key pressed\r\n"
+msg_menu_64:    .asciz "[Stage2_64] Selected: 64-bit\r\n"
+msg_menu_32:    .asciz "[Stage2_64] Selected: 32-bit\r\n"
+
+/* 变量 */
+boot_drive: .byte 0x80
+boot_choice: .byte 1
+msg_vbe_start:  .asciz "[Stage2_64] Setting VBE mode 1024x768x32...\r\n"
+msg_vbe_exists: .asciz "[Stage2_64] VBE controller detected\r\n"
+msg_vbe_ok:     .asciz "[Stage2_64] VBE mode set OK\r\n"
+msg_debug_vbe_return: .asciz "[Stage2_64] DEBUG: VBE setup returned\r\n"
+msg_vbe_fail:   .asciz "[Stage2_64] VBE mode set FAILED, using text mode\r\n"
+
+/* VBE模式信息（传递给内核） */
+.align 4
+.global vbe_width
+vbe_width:      .word 0
+.global vbe_height
+vbe_height:     .word 0
+.global vbe_pitch
+vbe_pitch:      .word 0
+.global vbe_bpp
+vbe_bpp:        .byte 0
+.global vbe_fb
+vbe_fb:         .long 0
+.global vbe_current_mode
+vbe_current_mode: .word 0
+
+/* 32位保护模式入口（multiboot启动） */
+.code32
+protected_mode_32:
+    /* 设置数据段 */
+    movw $0x10, %ax
+    movw %ax, %ds
+    movw %ax, %es
+    movw %ax, %fs
+    movw %ax, %gs
+    movw %ax, %ss
+    movl $0x90000, %esp
+
+    /* 设置multiboot信息结构 */
+    movl $0x2BADB002, %eax    /* multiboot magic */
+    movl $multiboot_info, %ebx /* multiboot info指针 */
+
+    /* 设置VBE/framebuffer信息（如果VBE模式设置成功） */
+    cmpw $0, vbe_width
+    je no_vbe_info
+    /* 设置VBE信息（bit 11） */
+    movl $0x4030, multiboot_info + 72   /* vbe_control_info */
+    movl $0x4130, multiboot_info + 76   /* vbe_mode_info */
+    movw vbe_current_mode, %ax
+    movw %ax, multiboot_info + 80       /* vbe_mode */
+    /* 设置framebuffer信息（bit 12） */
+    movl vbe_fb, %eax
+    movl %eax, multiboot_info + 88      /* framebuffer_addr低32位 */
+    movl $0, multiboot_info + 92        /* framebuffer_addr高32位 */
+    movw vbe_pitch, %ax
+    movl %eax, multiboot_info + 96      /* framebuffer_pitch */
+    movw vbe_width, %ax
+    movl %eax, multiboot_info + 100     /* framebuffer_width */
+    movw vbe_height, %ax
+    movl %eax, multiboot_info + 104     /* framebuffer_height */
+    movb vbe_bpp, %al
+    movb %al, multiboot_info + 108      /* framebuffer_bpp */
+    movb $1, multiboot_info + 109       /* framebuffer_type=1 (RGB) */
+    /* 设置flags: bit0(内存) + bit11(VBE) + bit12(framebuffer) */
+    movl multiboot_info, %eax
+    orl $0x1801, %eax                   /* bit0 + bit11 + bit12 */
+    movl %eax, multiboot_info
+    /* 设置内存信息 */
+    movl $640, multiboot_info + 4       /* mem_lower */
+    movl $256 * 1024, multiboot_info + 8 /* mem_upper = 256MB */
+no_vbe_info:
+
+    /* 从multiboot头获取入口地址 */
+    movl multiboot_header_ptr, %esi
+    movl 4(%esi), %eax       /* flags */
+    testl $0x10000, %eax     /* 检查bit16（地址信息） */
+    jz use_default_entry
+    movl 28(%esi), %edi      /* entry_addr */
+    testl %edi, %edi
+    jnz jump_32bit_kernel
+use_default_entry:
+    movl $0x101000, %edi     /* 默认入口点（.text段，4K对齐） */
+jump_32bit_kernel:
+    SERIAL_PUTS32 msg_jump_32bit
+    jmp *%edi                 /* 跳转到32位内核 */
+
+/* multiboot信息结构（简化版） */
+.align 4
+multiboot_info:
+    .long 0                    /* flags */
+    .long 0                    /* mem_lower */
+    .long 0                    /* mem_upper */
+    .long 0                    /* boot_device */
+    .long 0                    /* cmdline */
+    .long 0                    /* mods_count */
+    .long 0                    /* mods_addr */
+    .long 0, 0, 0, 0           /* syms */
+    .long 0                    /* mmap_length */
+    .long 0                    /* mmap_addr */
+    .long 0                    /* drives_length */
+    .long 0                    /* drives_addr */
+    .long 0                    /* config_table */
+    .long 0                    /* boot_loader_name */
+    .long 0                    /* apm_table */
+    .long 0                    /* vbe_control_info */
+    .long 0                    /* vbe_mode_info */
+    .word 0                    /* vbe_mode */
+    .word 0                    /* vbe_interface_seg */
+    .word 0                    /* vbe_interface_off */
+    .word 0                    /* vbe_interface_len */
+    .long 0, 0                 /* framebuffer_addr (64位) */
+    .long 0                    /* framebuffer_pitch */
+    .long 0                    /* framebuffer_width */
+    .long 0                    /* framebuffer_height */
+    .byte 0                    /* framebuffer_bpp */
+    .byte 1                    /* framebuffer_type (1=RGB) */
+    .word 0                    /* 保留 */
+
+multiboot_header_ptr: .long 0
+
+/* 32位GDT */
+.align 16
+gdt32:
+    .quad 0
+    .quad 0x00CF9A000000FFFF
+    .quad 0x00CF92000000FFFF
+gdt32_ptr:
+    .word gdt32_ptr - gdt32 - 1
+    .long gdt32
+
+/* 64位GDT */
+.align 16
+gdt64:
+    .quad 0
+    .quad 0x00AF9A000000FFFF
+    .quad 0x00AF92000000FFFF
+gdt64_ptr:
+    .word gdt64_ptr - gdt64 - 1
+    .long gdt64
+    .long 0
+
+/* 填充到16KB */
+.org 32768
