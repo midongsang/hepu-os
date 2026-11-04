@@ -29,16 +29,43 @@ dd if=$PROJECT/tools/hepboot/hepboot_mbr.bin of=$IMG bs=512 count=1 conv=notrunc
 echo "[2/6] MBR引导桩写入完成"
 
 # 3. 创建MBR分区表（ext2从LBA9000开始）
+#    ⚠️ CHS 字段不能留 0 —— 部分 BIOS 混合模式下查 CHS 确认分区边界
 python3 << PYEOF
 import struct
-with open('$IMG', 'r+b') as f:
+IMG='$IMG'
+EXT2_LBA=$EXT2_LBA
+SYS_SECTORS=$SYS_SECTORS
+END_LBA=EXT2_LBA+SYS_SECTORS-1
+
+# MBR CHS 公式（LBA 转 1023/255/63 兼容表示法）
+# sector 从 1 起，cylinder 10 bit，sector 6 bit，head 8 bit
+def lba_to_chs(lba):
+    if lba >= 1023*255*63:   # 超出 CHS 上限，填 1023/254/63（LBA 标记）
+        return (254, 63, 1023)
+    hpc, spt = 255, 63
+    cylinder = lba // (hpc * spt)
+    head     = (lba % (hpc * spt)) // spt
+    sector   = (lba % spt) + 1
+    return (head, sector, cylinder)
+
+def pack_chs(head, sector, cylinder):
+    # byte[1]=head, byte[2]=sector低6bit | cylinder高2bit, byte[3]=cylinder低8bit
+    return bytes([head, ((sector & 0x3F) | ((cylinder & 0x300) >> 2)), (cylinder & 0xFF)])
+
+sh, ss, sc = lba_to_chs(EXT2_LBA)
+eh, es, ec = lba_to_chs(END_LBA)
+chs_start = pack_chs(sh, ss, sc)
+chs_end   = pack_chs(eh, es, ec)
+
+print(f"  MBR PTE CHS: start=H{sh} S{ss} C{sc}  end=H{eh} S{es} C{ec}  LBA={EXT2_LBA}..{END_LBA}")
+
+with open(IMG, 'r+b') as f:
     f.seek(446)
-    # 分区1: ext2, 可引导, LBA=$EXT2_LBA
-    entry = bytes([0x80, 0x00, 0x00, 0x00, 0x83, 0x00, 0x00, 0x00])
-    entry += struct.pack('<I', $EXT2_LBA)
-    entry += struct.pack('<I', $SYS_SECTORS)
+    entry = bytes([0x80]) + chs_start + bytes([0x83]) + chs_end \
+          + struct.pack('<I', EXT2_LBA) + struct.pack('<I', SYS_SECTORS)
+    assert len(entry) == 16
     f.write(entry)
-    f.write(b'\x00' * 48)
+    f.write(b'\x00' * 48)   # PTE 2-4 空
     f.seek(510)
     f.write(b'\x55\xAA')
 PYEOF
