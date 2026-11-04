@@ -225,16 +225,34 @@ OOBE_KEYS = ["1", "1", "1",                 # 语言=中文 时区=北京 类型
              "space"]                       # 欢迎屏 -> 桌面
 
 
+def _oobe_wizard_active(g, tag):
+    """截屏探测 OOBE 向导是否仍显示 (蓝色标题栏 0x2C5F8D, 区域 y 128..190)。
+    返回 None 表示无法探测 (无 PIL), 调用方按激活处理 (退回盲发)。 """
+    png = g.shot("oobe_probe_%02d" % tag)
+    px = _px(png, 700, 140)
+    if px is None:
+        return None
+    return abs(px[0] - 44) < 24 and abs(px[1] - 95) < 24 and abs(px[2] - 141) < 24
+
+
 def oobe_setup(g):
     """全新镜像首启会弹出图形化 OOBE 向导; 自动走完后进入桌面.
-    V0.55 P3-GUI: 向导以窗口形式绘制在桌面上, TCG 软件渲染较慢, 按键间隔需放大. """
+    V0.55 P3-GUI: 向导以窗口形式绘制在桌面上, TCG 软件渲染较慢, 按键间隔需放大.
+    逐键探测向导激活态: 镜像残留导致 OOBE 已完成后, 盲发的按键会泄漏进桌面
+    (数字键切工作区/空格开启动器), 造成后续场景偶发失败; 向导消失即停止发键. """
     old_delay = g.key_delay
     g.key_delay = max(g.key_delay, 2.0)
-    for k in OOBE_KEYS:
+    sent = 0
+    for i, k in enumerate(OOBE_KEYS):
+        active = _oobe_wizard_active(g, i)
+        if active is False:
+            print("[INFO] OOBE 向导已结束, 跳过剩余 %d 个按键" % (len(OOBE_KEYS) - i))
+            break
         g.key(k)
+        sent += 1
     g.key_delay = old_delay
     time.sleep(20)              # 等桌面加载完 (含设置窗口自动打开)
-    print("[PASS] OOBE 向导自动完成 (账户 hepu/1234)")
+    print("[PASS] OOBE 向导自动完成 (账户 hepu/1234, 发键 %d/%d)" % (sent, len(OOBE_KEYS)))
 
 
 def scenario_files(g):
@@ -272,17 +290,22 @@ def _px(png, x, y):
 
 def scenario_theme(g):
     """鼠标点击链路 + 主题取色器: 点 Appearance 菜单, 再点第 3 个色板圆点"""
-    g.shot("05a_pre_click")     # 诊断: 点击前桌面状态
+    pre = g.shot("05a_pre_click")     # 诊断: 点击前桌面状态
     # 设置窗口开机即在级联位 (300,100), 左侧菜单行高 32: 首行 136-164
+    # 采样点取 (400,y): 行中段, 避开 (340,150) 处点击后的鼠标指针像素
+    before_row = _px(pre, 400, 150)
     g.q.click(340, 150)
-    time.sleep(0.7)
+    time.sleep(1.6)          # TCG 下桌面轮询周期接近 1s, 0.7s 会拍到处理前的画面
     page = g.shot("05_settings_appearance")
+    after_row = _px(page, 400, 150)
+    if before_row and after_row and before_row == after_row:
+        raise RuntimeError("点击 Appearance 后选中行底色未变化: %s" % (after_row,))
     print("[PASS] 点击 Appearance 菜单 -> 05_settings_appearance")
 
     # 选中菜单项底色即 accent; 色板圆点起始 (w->x+156, w->y+112)
     before = _px(page, 390, 150)
     g.q.click(522, 222)          # 第 3 个预设 (Orange)
-    time.sleep(0.7)
+    time.sleep(1.6)
     after_png = g.shot("06_theme_orange")
     after = _px(after_png, 390, 150)
     if before and after and before == after:
