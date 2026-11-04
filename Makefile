@@ -11,7 +11,14 @@ OBJCOPY = objcopy
 # V2.25: 诊断与正式合并为单一版本——默认开启 HEPU_BOOT_DEBUG,
 # 使 KLOG启动标记/IDE自测/Shell自测等诊断能力无条件编译进正式内核,
 # 不再区分诊断版与正式版双镜像.
-CFLAGS  = -m32 -Wno-implicit-function-declaration -ffreestanding -fno-builtin -fno-stack-protector \
+# gcc 14 默认把 implicit-function-declaration / int-conversion / incompatible-pointer-types
+# 都升级为 error。32-bit legacy 内核源码风格是传统 K&R 风（缺 include、参数类型不严格）。
+# 本地 gcc 13 只 warning，CI gcc 14 直接 error。TODO(V0.55): 给 32-bit 内核补头文件。
+CFLAGS  = -m32 \
+          -Wno-implicit-function-declaration \
+          -Wno-int-conversion \
+          -Wno-incompatible-pointer-types \
+          -ffreestanding -fno-builtin -fno-stack-protector \
           -nostdlib -nodefaultlibs -Wall -Wextra -O2 -fomit-frame-pointer \
           -fno-strict-aliasing -fno-tree-vectorize \
           -fno-strict-aliasing -ffunction-sections -fdata-sections -MMD -MP \
