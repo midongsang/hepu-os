@@ -32,7 +32,12 @@ jobs:
         run: make -C tools/hepboot/x86_64
 
       - name: Build 64-bit kernel
-        run: make -C kernel/arch/x86_64 -j$(nproc)
+        run: |
+          # 调试：确认源文件齐全
+          ls -la kernel/shared/debug/debug_shared.c || { echo "MISSING debug_shared.c"; exit 1; }
+          # clean 再 make，排除缓存问题
+          make -C kernel/arch/x86_64 clean
+          make -C kernel/arch/x86_64 -j$(nproc)
 
       - name: Build 32-bit kernel + user apps
         run: make -j$(nproc)
