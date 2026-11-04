@@ -11,7 +11,7 @@ OBJCOPY = objcopy
 # V2.25: 诊断与正式合并为单一版本——默认开启 HEPU_BOOT_DEBUG,
 # 使 KLOG启动标记/IDE自测/Shell自测等诊断能力无条件编译进正式内核,
 # 不再区分诊断版与正式版双镜像.
-CFLAGS  = -m32 -ffreestanding -fno-builtin -fno-stack-protector \
+CFLAGS  = -m32 -Wno-implicit-function-declaration -ffreestanding -fno-builtin -fno-stack-protector \
           -nostdlib -nodefaultlibs -Wall -Wextra -O2 -fomit-frame-pointer \
           -fno-strict-aliasing -fno-tree-vectorize \
           -fno-strict-aliasing -ffunction-sections -fdata-sections -MMD -MP \
