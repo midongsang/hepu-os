@@ -154,7 +154,7 @@ static const char *default_config =
 "    bar_height: 36\n"
 "    island_width: 120\n"
 "    island_height: 28\n"
-"    island_y: 6\n"
+"    island_y: 12\n"
 "    island_font_size: 20\n"
 "    dock_width: 400\n"
 "    dock_height: 64\n"
@@ -364,20 +364,20 @@ void hs_theme_init(hs_theme_colors_t *colors, hs_theme_t theme)
         colors->workspace_active = 0xFFFFFF;
         colors->workspace_inactive = 0x555555;
     } else if (theme == HS_THEME_DARK) {
-        /* 深色主题 — 对齐 quickshell/Clavis: Material Design 3 tonal-spot dark */
-        colors->bg = 0x1C1B1F;              /* M3 background */
-        colors->panel_bg = 0x211F26;         /* M3 surface_container */
-        colors->panel_fg = 0xE6E1E5;         /* M3 on_surface */
-        colors->border = 0x49454F;           /* M3 outline_variant */
-        colors->border_strong = 0x938F99;    /* M3 outline */
-        colors->accent = 0xD0BCFF;           /* M3 primary */
-        colors->accent_pressed = 0x4F378B;   /* M3 primary_container */
-        colors->window_bg = 0x1C1B1F;        /* M3 surface */
-        colors->window_fg = 0xE6E1E5;        /* M3 on_surface */
-        colors->text_secondary = 0xCAC4D0;   /* M3 on_surface_variant */
-        colors->titlebar_bg = 0x2B2930;      /* M3 surface_container_high */
-        colors->workspace_active = 0xD0BCFF; /* M3 primary */
-        colors->workspace_inactive = 0xCAC4D0; /* M3 on_surface_variant */
+        /* 深色主题 — 对齐 Clavis (StatIndet/quickshell) 默认 tonal-spot 青蓝色板 */
+        colors->bg = 0x0F1416;              /* m3background */
+        colors->panel_bg = 0x1B2023;         /* m3surfaceContainer */
+        colors->panel_fg = 0xDEE3E6;         /* m3onSurface */
+        colors->border = 0x40484C;           /* m3outlineVariant */
+        colors->border_strong = 0x8A9296;    /* m3outline */
+        colors->accent = 0x88D0EC;           /* m3primary */
+        colors->accent_pressed = 0x004D61;   /* m3primaryContainer */
+        colors->window_bg = 0x171C1F;        /* m3surfaceContainerLow */
+        colors->window_fg = 0xDEE3E6;        /* m3onSurface */
+        colors->text_secondary = 0xBFC8CC;   /* m3onSurfaceVariant */
+        colors->titlebar_bg = 0x252B2D;      /* m3surfaceContainerHigh */
+        colors->workspace_active = 0x88D0EC; /* m3primary */
+        colors->workspace_inactive = 0xBFC8CC; /* m3onSurfaceVariant */
     } else {
         /* 浅色主题（Quickshell风格：浅米色+金色） */
         colors->bg = 0xF0EBE0;          /* 浅米色背景 */
@@ -397,6 +397,16 @@ void hepushell_set_theme(hs_theme_t theme)
 {
     g_shell.theme = theme;
     hs_theme_init(&g_shell.colors, theme);
+}
+
+/* 强调色上的前景色：亮底用深青字，暗底用亮字（对齐 Clavis onPrimary） */
+static uint32_t hs_on_accent(void)
+{
+    if (g_shell.theme == HS_THEME_MONO) return 0x000000;
+    uint32_t c = g_shell.colors.accent;
+    int r = (c >> 16) & 0xFF, g = (c >> 8) & 0xFF, b = c & 0xFF;
+    int lum = (r * 77 + g * 151 + b * 28) >> 8;
+    return (lum > 140) ? 0x003544 : 0xF2F5F7;
 }
 
 /* ============================================================================
@@ -746,7 +756,7 @@ void hs_launcher_render(void)
         uint32_t bg = (i == g_shell.selected_app) ?
                       g_shell.colors.accent : g_shell.colors.window_bg;
         uint32_t fg = (i == g_shell.selected_app) ?
-                      0x5C4A32 : g_shell.colors.window_fg;
+                      hs_on_accent() : g_shell.colors.window_fg;
 
         if (i == g_shell.selected_app) {
             gfx64_fill_rounded_rect(x + 16, list_y - 2, w - 32, 30, 6, bg);
@@ -1258,7 +1268,7 @@ static void hs_settings_window_render(hs_window_t *w)
     const char *menu[] = {"Appearance", "Panels", "System", "About"};
     for (int i = 0; i < 4; i++) {
         uint32_t bg = (i == g_settings_page) ? g_shell.colors.accent : g_shell.colors.panel_bg;
-        uint32_t fg = (i == g_settings_page) ? 0x5C4A32 : g_shell.colors.panel_fg;
+        uint32_t fg = (i == g_settings_page) ? hs_on_accent() : g_shell.colors.panel_fg;
         gfx64_fill_rounded_rect(cx, cy + i * 32, 120, 28, 6, bg);
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            cx + 10, cy + i * 32 + 7, menu[i], fg, 13);
@@ -1548,7 +1558,10 @@ static void hs_dynamic_island_render(void)
         island_x = (g_shell.screen_width - island_w) / 2;
     }
 
-    gfx64_fill_rounded_rect(island_x, island_y, island_w, island_h, hs_s(15), 0x2A2520);
+    gfx64_fill_rounded_rect(island_x, island_y, island_w, island_h, hs_s(15),
+                            g_shell.colors.titlebar_bg);
+    gfx64_draw_rounded_rect(island_x, island_y, island_w, island_h, hs_s(15),
+                            g_shell.colors.border);
 
     uint8_t h = rtc64_get_hours();
     uint8_t m = rtc64_get_minutes();
@@ -1564,24 +1577,24 @@ static void hs_dynamic_island_render(void)
         /* 收起状态：只显示时间 */
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            island_x + (island_w - text_w) / 2, island_y + (island_h - font_size) / 2,
-                           time, 0xE8DCC8, font_size);
+                           time, g_shell.colors.panel_fg, font_size);
     } else {
         /* 展开状态：时间+日期+天气+系统状态 */
         int cy = island_y + hs_sy(12);
         /* 时间（大字号） */
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           island_x + hs_sx(20), cy, time, 0xE8DCC8, hs_s(28));
+                           island_x + hs_sx(20), cy, time, g_shell.colors.panel_fg, hs_s(28));
         cy += hs_sy(36);
         /* 日期 */
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           island_x + hs_sx(20), cy, "October 15, Thursday", 0xC9B89A, hs_s(14));
+                           island_x + hs_sx(20), cy, "October 15, Thursday", g_shell.colors.text_secondary, hs_s(14));
         /* 右侧天气 */
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           island_x + island_w - hs_sx(100), cy, "26C Cloudy", 0xC9B89A, hs_s(14));
+                           island_x + island_w - hs_sx(100), cy, "26C Cloudy", g_shell.colors.text_secondary, hs_s(14));
         cy += hs_sy(28);
         /* 系统状态条 */
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           island_x + hs_sx(20), cy, "CPU 35%  MEM 60%  WiFi On", 0xA89880, hs_s(12));
+                           island_x + hs_sx(20), cy, "CPU 35%  MEM 60%  WiFi On", g_shell.colors.text_secondary, hs_s(12));
     }
 }
 
@@ -1783,18 +1796,23 @@ void hs_icon_file(int x, int y, int size, uint32_t color)
 /* 顶部Bar：左侧工作区+右侧状态图标 */
 static void hs_top_bar_render(void)
 {
+    /* 对齐 Clavis: 悬浮圆角胶囊顶栏(外边距 10, 高 36, 圆角 18) */
+    int margin = hs_sx(10);
+    int bar_top = hs_sy(8);
     int bar_h = hs_sy(g_shell.ui.bar_height);
+    int bar_w = g_shell.screen_width - 2 * margin;
 
-    /* 半透明背景条 */
-    gfx64_fill_rect(0, 0, g_shell.screen_width, bar_h, g_shell.colors.panel_bg);
-    gfx64_fill_rect(0, bar_h - 1, g_shell.screen_width, 1, g_shell.colors.border);
+    gfx64_fill_rounded_rect(margin, bar_top, bar_w, bar_h, hs_s(18),
+                            g_shell.colors.panel_bg);
+    gfx64_draw_rounded_rect(margin, bar_top, bar_w, bar_h, hs_s(18),
+                            g_shell.colors.border);
 
     /* 左侧工作区指示 */
-    int ws_x = hs_sx(20);
+    int ws_x = margin + hs_sx(16);
     for (int i = 0; i < 4; i++) {
         int dot_w = (i == g_shell.current_workspace) ? hs_sx(20) : hs_sx(8);
         int dot_h = hs_sy(8);
-        int dot_y = (bar_h - dot_h) / 2;
+        int dot_y = bar_top + (bar_h - dot_h) / 2;
         uint32_t color = (i == g_shell.current_workspace) ?
                          g_shell.colors.accent : g_shell.colors.border;
         gfx64_fill_rounded_rect(ws_x, dot_y, dot_w, dot_h, hs_s(4), color);
@@ -1803,8 +1821,8 @@ static void hs_top_bar_render(void)
 
     /* 右侧状态栏矢量图标（替换文字"WiFi Bat Vol Set Pwr"） */
     int icon_size = hs_s(16);
-    int icon_y = (bar_h - icon_size) / 2;
-    int icon_x = g_shell.screen_width - hs_sx(16);
+    int icon_y = bar_top + (bar_h - icon_size) / 2;
+    int icon_x = g_shell.screen_width - margin - hs_sx(14);
     uint32_t fg = g_shell.colors.panel_fg;
 
     /* 从右到左排列：电源、设置、音量、电池、WiFi */
@@ -1850,10 +1868,10 @@ static void hs_weather_widget_render(void)
     void *fb = gfx64_get_framebuffer();
 
     font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                       wx + hs_sx(20), wy + hs_sy(15), g_weather_temp, 0x5C4A32, hs_s(g_shell.ui.weather_temp_font));
+                       wx + hs_sx(20), wy + hs_sy(15), g_weather_temp, hs_on_accent(), hs_s(g_shell.ui.weather_temp_font));
 
     font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                       wx + hs_sx(15), wy + hs_sy(70), g_weather_desc, 0x5C4A32, hs_s(g_shell.ui.weather_desc_font));
+                       wx + hs_sx(15), wy + hs_sy(70), g_weather_desc, hs_on_accent(), hs_s(g_shell.ui.weather_desc_font));
 }
 
 /* 左侧三标签侧边栏 */
@@ -1918,7 +1936,7 @@ static void hs_login_screen_render(void)
     gfx64_fill_rounded_rect(avatar_x, avatar_y, avatar_size, avatar_size, hs_s(48), 0xC9A96E);
     /* 头像中的用户图标 */
     font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                       avatar_x + hs_sx(30), avatar_y + hs_sy(25), "U", 0x5C4A32, hs_s(48));
+                       avatar_x + hs_sx(30), avatar_y + hs_sy(25), "U", hs_on_accent(), hs_s(48));
 
     /* 用户名 */
     char username[32] = "hepu";
@@ -1948,7 +1966,7 @@ static void hs_login_screen_render(void)
     int btn_y = input_y + input_h + hs_sy(20);
     gfx64_fill_rounded_rect(btn_x, btn_y, btn_w, btn_h, hs_s(8), 0xC9A96E);
     font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                       btn_x + hs_sx(28), btn_y + hs_sy(8), l10n64_tr(L10N_STR_LOGIN_BTN), 0x5C4A32, hs_s(16));
+                       btn_x + hs_sx(28), btn_y + hs_sy(8), l10n64_tr(L10N_STR_LOGIN_BTN), hs_on_accent(), hs_s(16));
 
     /* 提示 */
     font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
@@ -2022,7 +2040,7 @@ static void hs_sidebar_render(void)
     for (int i = 0; i < 3; i++) {
         int tx = sx + hs_sx(12) + i * tab_w;
         uint32_t bg = (i == g_sidebar_tab) ? g_shell.colors.accent : g_shell.colors.panel_bg;
-        uint32_t fg = (i == g_sidebar_tab) ? 0x5C4A32 : g_shell.colors.panel_fg;
+        uint32_t fg = (i == g_sidebar_tab) ? hs_on_accent() : g_shell.colors.panel_fg;
         gfx64_fill_rounded_rect(tx, tab_y, tab_w - hs_sx(4), hs_sy(28), hs_s(8), bg);
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            tx + (tab_w - hs_sx(4) - hs_sx(32)) / 2, tab_y + hs_sy(7),
@@ -2186,7 +2204,7 @@ static void hs_control_center_render(void)
         int tx = cx + 20 + (i % 3) * 84;
         int ty = toggle_y + (i / 3) * 60;
         uint32_t bg = g_shell.cc.toggles[i] ? g_shell.colors.accent : g_shell.colors.border;
-        uint32_t fg = g_shell.cc.toggles[i] ? 0x5C4A32 : g_shell.colors.panel_fg;
+        uint32_t fg = g_shell.cc.toggles[i] ? hs_on_accent() : g_shell.colors.panel_fg;
         gfx64_fill_rounded_rect(tx, ty, 72, 48, 10, bg);
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            tx + 20, ty + 16, toggles[i], fg, 14);
@@ -2704,7 +2722,7 @@ static void hs_dock_render(void)
 
         /* 图标符号 */
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           ix + (icon_size - hs_sx(12)) / 2, iy + hs_sy(10), icons[i], 0x5C4A32, hs_s(20));
+                           ix + (icon_size - hs_sx(12)) / 2, iy + hs_sy(10), icons[i], hs_on_accent(), hs_s(20));
     }
 }
 
