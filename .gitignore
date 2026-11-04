@@ -1,0 +1,78 @@
+# ============================================================
+# HepuOS 仓库 .gitignore
+# ============================================================
+
+# ---- 构建输出目录 ----
+build_x86_64/
+build_v250/
+user/build/
+user/rust/target/
+
+# ---- 通用构建产物 ----
+*.o
+*.obj
+*.elf
+*.bin
+*.img
+*.iso
+*.a
+*.so
+*.so.*
+*.hex
+
+# ---- P1-7 动态链接 glibc 运行时（必需，make_single_img64.sh 直接引用） ----
+!user/apps/dynhello/ld-linux-x86-64.so.2
+!user/apps/dynhello/libc.so.6
+!user/apps/dynhello/hello_dyn.elf
+
+# ---- Python ----
+__pycache__/
+*.pyc
+*.pyo
+
+# ---- 编辑器/IDE ----
+.vscode/
+.idea/
+.trae/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ---- 调试/日志 ----
+debug/
+*.log
+*.dmp
+*.core
+
+# ---- Rust 构建缓存 ----
+CACHEDIR.TAG
+
+# ---- 临时文件 ----
+*.bak
+*.orig
+*.tmp
+
+# ---- QEMU 运行产物（本地测试生成） ----
+*.qcow2
+*.raw
+mon.sock
+qmp.sock
+serial.log
+
+# ---- 本地安装的 QEMU 二进制（~60MB，由用户自行安装） ----
+tools/bin/
+tools/qemu_libs/
+
+# ---- Trae 生成的 HTML 运行时报告（本地工具输出） ----
+hepu-kernel-runtime/
+hepu-os-runtime-report/
+
+# ---- PPM / splash 截图（保留 splash_v3_*.ppm 启动画面源文件） ----
+*.ppm
+!splash_v3_*.ppm
+
+# ---- Windows PE 测试程序（示例用，主机 gcc 产出） ----
+winargs.exe
+winhello.exe

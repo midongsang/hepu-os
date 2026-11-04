@@ -1,0 +1,11 @@
+[package]
+name = "socket-test"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+hepu-sys = { path = "../hepu-sys" }
+
+[[bin]]
+name = "socket-test"
+path = "src/main.rs"

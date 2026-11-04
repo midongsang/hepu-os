@@ -1,0 +1,1017 @@
+/* ============================================================================
+ * 赫普OS - 极简 Multiboot 引导器 (GAS / AT&T)
+ * 由赫普OS内核工程自研，不依赖GRUB/SYSLINUX等外部引导器
+ *
+ * 双变体（通过 -DISOBoot 区分）：
+ *   - ISO变体：El Torito No-Emulation 引导映像，INT13 AH=42 块=2048字节
+ *   - HDD变体：MBR stage2，INT13 AH=42 块=512字节
+ *
+ * 统一基址 0x7C00（由链接脚本 bootloader.ld 固定）
+ * 功能：读取内核到 0x100000 → 收集E820 → 构造Multiboot info
+ *       → 开A20 → 进保护模式 → 跳转内核 (_start)
+ * ========================================================================== */
+
+/* ---------- 编译期配置（可由-D覆盖） ---------- */
+#ifdef ISOBoot
+#ifndef KERNEL_LBA
+#define KERNEL_LBA      21          /* ISO布局：内核起始LBA(2048字节块) */
+#endif
+#ifndef KERNEL_SECTORS
+#define KERNEL_SECTORS  214         /* 内核占用块数 */
+#endif
+#define SECTOR_SHIFT    11          /* 每块字节数: 2048 */
+#else
+#ifndef KERNEL_LBA
+#define KERNEL_LBA      5           /* HDD布局：内核起始LBA(512字节块, stage2占LBA1-4) */
+#endif
+#ifndef KERNEL_SECTORS
+#define KERNEL_SECTORS  848         /* 内核占用块数 */
+#endif
+#define SECTOR_SHIFT    9           /* 每块字节数: 512 */
+#endif
+
+#define KERNEL_LOAD_ADDR 0x00100000  /* 内核加载物理地址 */
+#define DAP_BUFFER       0x00007B00  /* 磁盘地址包缓冲区 */
+#define E820_BUFFER      0x00009000  /* E820临时缓冲(24字节条目) V4.59-E104 */
+#define MMAP_BUFFER      0x00009400  /* Multiboot mmap 区 (原0x9200在E820范围内!) */
+#define GDT_ADDR         0x00009800  /* GDT(264字节, 33描述符). V4.99扩大, 索引32@0x9900. 避开MBINFO(0x9700) */
+#define GDTR_ADDR        0x00009908  /* GDTR 伪描述符(GDT之后) */
+#define RM16_STUB_ADDR   0x00001000  /* 清PE+IRET低地址桩代码区 */
+#define MBINFO_ADDR      0x00009700  /* Multiboot info 结构 */
+#define STACK_ADDR       0x00008F00  /* 保护模式栈顶(向下增长) 原0x8800覆盖stage2! */
+
+#define MB_BOOT_MAGIC    0x2BADB002  /* 引导器返回给内核的magic(Multiboot boot magic) */
+#define MB_HEADER_MAGIC  0x1BADB002  /* 内核Multiboot头魔数(Multiboot header magic) */
+                                     /* V2.02修复: 验证内核头必须用0x1BADB002.
+                                        原误用MB_BOOT_MAGIC(0x2BADB002)比较[0x100000],
+                                        内核头实为0x1BADB002→永远不匹配→永远走失败路径
+                                        (1声+长停)→误导排错, 且无法验证A20/内核加载 */
+
+/* ---------- 代码 ---------- */
+    .code16
+    .section .text
+    .globl _start
+_start:
+    cli
+    /* 初始化段寄存器 (DS=ES=SS=0) */
+    xorw %ax, %ax
+    movw %ax, %ds
+    movw %ax, %es
+    movw %ax, %ss
+    movw $0x7C00, %sp       /* V6.37: 栈移到0x7C00(BIOS/DOS常用栈区域, 避免BIOS切换栈) */
+    movb %dl, boot_drive        /* 保存引导驱动器号 */
+    /* V6.41: 初始化递归检测变量(0x4000自由内存初始值不确定, 必须清零):
+       0x4000=ret_ip, 0x4002=saved_sp, 0x4004=in_int13 */
+    xorw %ax, %ax
+    movw %ax, %ds
+    movw %ax, 0x4000
+    movw %ax, 0x4002
+    movb %al, 0x4004
+
+#ifdef DEBUG_BOOT
+    /* 诊断版: 强制设置80x25彩色文本模式(INT10 AH=0 AL=3)
+       保证VGA文本模式, 使0xB8000直写必然有效 */
+    movw $0x0003, %ax
+    int $0x10
+    /* 清屏 */
+    movw $0xB800, %ax
+    movw %ax, %es
+    xorw %di, %di
+    movw $2000, %cx
+    movw $0x0720, %ax
+    rep stosw
+#endif
+    movw $0, vga_row
+    movw $0, vga_col
+
+    /* 显示启动信息 (VGA直写) */
+    movw $msg_boot, %si
+    call print_str
+    /* 状态标记 G(加载GDT) */
+    movw $msg_gdt, %si
+    call print_str
+    /* 状态标记 A(启用A20) */
+    movw $msg_a20, %si
+    call print_str
+    /* 状态标记 R(开始读盘) */
+    movw $msg_reading, %si
+    call print_str
+
+    /* ---- 读取内核到 0x100000 ---- */
+    call read_kernel
+    testb %al, %al
+    jnz 1f
+    cli
+    hlt
+1:
+    /* 诊断: read_kernel成功返回, 写"R1"到行6 */
+    pushw %es
+    movw $0xB800, %ax
+    movw %ax, %es
+    movw $0x600, %di
+    movw $('R' | 0x0F00), %es:(%di)
+    movw $('1' | 0x0F00), %es:2(%di)
+    popw %es
+    /* V5.13: 跳过print_str(可能vga_row异常导致越界写), 直接进collect_e820 */
+#ifdef DEBUG_BOOT
+    /* 诊断模式: 打印内核块数并延时(V4.94c: print_hex8已修复) */
+    movw $msg_blocks, %si
+    call print_str
+    movl $KERNEL_SECTORS, %eax
+    call print_dec32
+    movw $msg_crlf, %si
+    call print_str
+    call delay
+#endif
+    /* ---- V2.09 重入入口修复(关键!) ----
+       根因: MBR读stage2到0x7C00覆盖自身, INT13返回后CPU从stage2中部
+       (0x7C5A, 即打印换行处)进入, 跳过了开头的call read_kernel(0x7C36)
+       → 内核从未加载到0x100000 → 进保护模式跳转空内存 → 执行垃圾
+       → 三重故障 → 黑屏回BIOS. 这正是真机"GD OK后黑屏"且无K0日志的根因.
+       修复: 在collect_e820前检测0x20000内核头魔数, 未加载则补调read_kernel.
+       正常从0x7C00进入时read_kernel已执行, 魔数存在→跳过, 不重复读盘.
+       从0x7C5A进入时魔数不存在→补读, 保证跳转内核前0x100000有真实内核. */
+    /* V5.12: 跳过魔数检测(第一次读盘已确认成功) */
+    /* V5.12诊断: 标记'E'=执行到collect_e820前 */
+    movw $0xB800, %ax
+    movw %ax, %es
+    movw $('E' | 0x0F00), %es:160*0+2*12
+    xorw %ax, %ax
+    movw %ax, %es
+    /* ---- 收集E820内存映射 ---- */
+    call collect_e820
+#ifdef DEBUG_BOOT
+    /* V2.06: E820 map_count显示移除, 腾空间给保护模式VGA标记(行8 K!).
+       内存检测结果由内核multiboot_init消费, 此处不再显示 */
+#endif
+    /* ---- 构造Multiboot info ---- */
+    call build_mbinfo
+
+    /* ---- 开A20线: 组合方法(BIOS最可靠 + Fast A20兜底) ----
+       V2.01修复: 原仅用port 0x92(Fast A20), 现代笔记本芯片组常失效;
+       A20关闭时CPU访问1MB以上(内核0x101000)会回绕到0x00000执行垃圾→崩.
+       先试BIOS INT15 AX=0x2401(返回CF=0即成功), 再无条件Fast A20双保险 */
+    movw $0x2401, %ax
+    int $0x15
+    inb $0x92, %al
+    orb $0x02, %al
+    outb %al, $0x92
+
+#ifdef DEBUG_BOOT
+    /* 诊断模式: 打印跳转信息 */
+    movw $msg_jump, %si
+    call print_str
+    /* 关键: 跳内核前等待按键, 避免诊断信息一闪而过
+       用户看完按任意键(INT16 AH=0阻塞)才继续引导 */
+    movw $msg_presskey, %si
+    call print_str
+    /* V2.12: 去掉INT16阻塞等待(QEMU无键盘输入→SeaBIOS等待卡死).
+       改延时自动继续, 诊断信息仍可读; 真机同样自动. */
+    call delay
+    call delay
+#endif
+    /* 状态标记 P(进保护模式) */
+    movw $msg_prot, %si
+    call print_str
+    /* 诊断: 即将调用enter_protected, 写"GO"到行6 */
+    pushw %es
+    movw $0xB800, %ax
+    movw %ax, %es
+    movw $0x600, %di
+    movw $('G' | 0x0F00), %es:(%di)
+    movw $('O' | 0x0F00), %es:2(%di)
+    popw %es
+    /* ---- 进入保护模式并跳转内核 ---- */
+    call enter_protected
+
+halt_loop:
+    cli
+    hlt
+    jmp halt_loop
+
+/* ==========================================================================
+ * print_str: 直接写VGA显存(0xB8000)打印字符串, 不依赖INT10
+ * 入参: DS:SI
+ * ========================================================================== */
+print_str:
+    pusha
+    push %es
+    movw $0xB800, %ax
+    movw %ax, %es
+1:
+    lodsb
+    testb %al, %al
+    jz 2f
+    cmpb $'\n', %al
+    je 3f
+    cmpb $'\r', %al
+    je 1b
+    /* 先保存字符(避免计算偏移覆盖%al) */
+    movb %al, %cl
+    /* 计算显存偏移: (row*80+col)*2 */
+    movzbl vga_col, %edx
+    movzbl vga_row, %eax
+    imull $80, %eax, %eax
+    addl %edx, %eax
+    shll $1, %eax
+    movl %eax, %edi
+    movb $0x07, %ch          /* 白字黑底 */
+    movw %cx, %es:(%edi)
+    incb vga_col
+    cmpb $80, vga_col
+    jb 1b
+    movb $0, vga_col
+    incb vga_row
+    jmp 1b
+3:
+    movb $0, vga_col
+    incb vga_row
+    jmp 1b
+2:
+    pop %es
+    popa
+    ret
+
+/* ==========================================================================
+ * print_hex8: 打印AL的两位hex (实模式VGA直写)
+ * 入参: AL
+ * ========================================================================== */
+print_hex8:
+    pusha
+    push %es
+    movw $0xB800, %dx
+    movw %dx, %es
+    /* V4.94c修复: 原movb %al,%ah后依赖AH跨hex_digit调用保持,
+       但hex_digit内部用EAX计算VGA偏移(movzbl vga_row,%eax等)
+       →AH被破坏→低4位打印错误(实测0x12→"10", 0xC6→"C0").
+       改用CL保存原值(hex_digit不碰ECX), 两次调用间恢复AH. */
+    movb %al, %cl
+    movb %cl, %ah
+    /* 高4位 */
+    movb %ah, %dl
+    shrb $4, %dl
+    call hex_digit
+    /* 低4位 */
+    movb %cl, %ah
+    movb %ah, %dl
+    andb $0x0F, %dl
+    call hex_digit
+    pop %es
+    popa
+    ret
+hex_digit:
+    cmpb $10, %dl
+    jb 1f
+    addb $('A' - '0' - 10), %dl
+1:
+    addb $'0', %dl
+    movzbl vga_col, %edi
+    movzbl vga_row, %eax
+    imull $80, %eax, %eax
+    addl %edi, %eax
+    shll $1, %eax
+    movb %dl, %es:(%eax)
+    movb $0x07, %es:1(%eax)
+    incb vga_col
+    cmpb $80, vga_col
+    jb 2f
+    movb $0, vga_col
+    incb vga_row
+2:
+    ret
+
+/* ==========================================================================
+ * print_hex16: 打印AX的四位hex
+ * 入参: AX
+ * ========================================================================== */
+print_hex16:
+    push %eax
+    movb %ah, %al
+    call print_hex8
+    pop %eax
+    push %eax
+    movb %al, %ah
+    /* V4.94c: 删冗余movb %al,%al(无操作), 省2字节stage2空间 */
+    call print_hex8
+    pop %eax
+    ret
+
+/* ==========================================================================
+ * nibble_to_char: AL的低4位转hex字符
+ * 入参: AL (低4位)
+ * 出参: AL (hex字符)
+ * ========================================================================== */
+nibble_to_char:
+    andb $0x0F, %al
+    cmpb $10, %al
+    jb 1f
+    addb $('A' - '0' - 10), %al
+1:
+    addb $'0', %al
+    ret
+
+/* ==========================================================================
+ * print_dec32: 打印32位无符号十进制 (INT10)
+ * 入参: EAX
+ * ========================================================================== */
+print_dec32:
+    /* 打印32位无符号十进制到VGA显存。EBP=除数, EDI=被除数。 */
+    pusha
+    push %es
+    movl %eax, %edi          /* V4.94d: 必须先保存被除数! 原代码先movw $0xB800,%ax会覆盖AX */
+    movw $0xB800, %ax
+    movw %ax, %es
+    movl $1000000000, %ebp   /* 除数(从10^9到1) */
+    xorl %ecx, %ecx          /* 前导零标志 */
+1:
+    movl %edi, %eax
+    xorl %edx, %edx
+    divl %ebp                /* EAX=商(当前位), EDX=余数 */
+    movl %edx, %ebx          /* V4.94d: 余数存EBX(所有路径都执行, 前导零跳过路径也需更新) */
+    testl %eax, %eax
+    jnz 2f
+    testl %ecx, %ecx
+    jnz 2f
+    cmpl $1, %ebp            /* 个位必须打印 */
+    je 2f
+    jmp 3f
+2:
+    movb $1, %cl             /* V4.94d: 原movl $1,%ecx(6B)精简为movb(2B), ECX已在入口xor清零 */
+    addb $'0', %al
+    pushl %eax
+    /* 写显存 */
+    movzbl vga_col, %edx
+    movzbl vga_row, %eax
+    imull $80, %eax, %eax
+    addl %edx, %eax
+    shll $1, %eax
+    movl %eax, %edi
+    popl %eax
+    movb %al, %cl
+    movb $0x07, %ch
+    movw %cx, %es:(%edi)
+    incb vga_col
+    cmpb $80, vga_col
+    jb 3f
+    movb $0, vga_col
+    incb vga_row
+3:
+    movl %ebx, %edi          /* V4.94d: 新被除数=余数(EBX保存), 原用%edx已被vga_col覆盖 */
+    movl %ebp, %eax
+    xorl %edx, %edx          /* 高32位清零: 除数不能放edx(edx既是被除数高位又当除数→必然溢出#DE) */
+    movl $10, %esi           /* 除数10放esi: 不碰ecx(前导零标志)不碰edx(高位) */
+    divl %esi                /* 0:EAX / 10 → EAX商, EDX余 */
+    movl %eax, %ebp
+    testl %ebp, %ebp
+    jnz 1b
+    pop %es
+    popa
+    ret
+
+/* ==========================================================================
+ * delay: 实模式延时(约0.3-0.5秒), 让调试文字可读
+ * ========================================================================== */
+delay:
+    pusha
+    movl $600000, %ecx
+1:
+    decl %ecx
+    jnz 1b
+    popa
+    ret
+
+/* ==========================================================================
+ * read_slice: 分块读内核到低地址缓冲 (实模式段:偏移可表达, <1MB)
+ * 入参: EBP=起始LBA, ECX=块数, EDI=目标缓冲地址
+ * 每次最多16块(HDD)/32块(ISO), 防BIOS静默截断.
+ * V3.82分段: 内核673KB>低区缓冲576KB(0x10000-0xA0000), 读两段:
+ *   段1(SEG1_SEC块)读0x10000→保护模式搬0x100000→回实模式读段2→再搬.
+ * 返回: AL=1 成功, AL=0 失败
+ * ========================================================================== */
+/* V3.82分段宏: 段1=低区缓冲上限(576KB)/块大小; 段2=剩余; 段2搬移目标=0x100000+段1字节 */
+#if (KERNEL_SECTORS) < ((0x00090000) >> SECTOR_SHIFT)
+#define SEG1_SEC   (KERNEL_SECTORS)
+#else
+#define SEG1_SEC   ((0x00090000) >> SECTOR_SHIFT)
+#endif
+#define SEG2_SEC   ((KERNEL_SECTORS) - (SEG1_SEC))
+#define SEG2_LBA   ((KERNEL_LBA) + (SEG1_SEC))
+#define SEG2_DEST  (0x00100000 + ((SEG1_SEC) << SECTOR_SHIFT))
+
+read_kernel:
+    /* 读段1: 低区缓冲0x10000起, 最多576KB(0x10000+576KB=0xA0000=VGA起点, 安全) */
+    movl $0x00010000, %edi      /* 缓冲基址 */
+    movl $SEG1_SEC, %ecx        /* 段1块数 */
+    movl $KERNEL_LBA, %ebp      /* 段1起始LBA */
+    /* V4.94e回退: call read_slice会使SEG2配置可达, 但(1)SeaBIOS检测磁盘仅2016扇区,
+       SEG2的LBA 1157-2250越界(AH=01); (2)当前架构是"全读完再搬", SEG2覆盖0x10000
+       缓冲后保护模式搬移源数据已错. 正确架构需"读一段→搬一段→回实模式读下一段"
+       (源码注释375行已写明), 或改用INT13 AH=42 LBA扩展直接读高位内存.
+       V5.16: call+ret正常栈帧 + INT13独立栈. */
+    call read_slice
+    ret
+
+read_seg2:
+    /* 读段2: 内核剩余部分(段1搬移后复用0x10000缓冲) */
+    movl $0x00010000, %edi
+    movl $SEG2_SEC, %ecx
+    movl $SEG2_LBA, %ebp
+    call read_slice              /* V5.16: call */
+    ret
+
+read_slice:
+    .code16                 /* V6.14: 回退.code16, code16gcc导致movl缺0x66前缀 */
+    /* V6.44: 递归检测 - BIOS切换栈致IRET弹出垃圾CS:IP(CS=0,IP碰巧在stage2内)→递归到此处。
+       先设DS=0, 恢复SS=0+SP, 远跳转到0x0800:int13_ret。
+       变量在0x4000: 0x4000=ret_ip, 0x4002=saved_sp, 0x4004=in_int13。 */
+    xorw %ax, %ax
+    movw %ax, %ds
+    cmpb $1, 0x4004
+    jne 1f
+    movb $0, 0x4004
+    movw %ax, %ss              /* SS=0 */
+    movw 0x4002, %sp            /* 恢复SP */
+    pushw $0x0800
+    pushw 0x4000                 /* ret_ip(=int13_ret-0x8000) */
+    lret
+1:
+    pushal
+    cli
+    /* 初始化DAP: size=16, sectors=1(每次读1扇区) */
+    movb $0x10, dap_packet
+    movw $1, dap_sectors
+    /* V6.13: 循环入口移到最前, 防入口落在jz指令中间导致解码错位 */
+3:
+    cli
+    /* 设置DAP缓冲区地址: segment=EDI>>4, offset=EDI&0xF (低4位!)
+       V5.22修复: 原offset=EDI&0xFFFF致物理地址=段*16+偏移重复计算,
+       EDI=0x10200时算出0x10400(错), 第一次EDI=0x10000碰巧正确(低16位=0). */
+    movl %edi, %eax
+    movl %eax, %edx
+    andl $0xF, %edx
+    movw %dx, dap_offset
+    shrl $4, %eax
+    movw %ax, dap_segment
+    /* 设置DAP LBA(64位): 低32位=EBP, 高32位=0 */
+    movl %ebp, dap_lba
+    movl $0, dap_lba+4
+    /* DS:SI = dap_packet (DS=0, SI=偏移) */
+    xorw %ax, %ax
+    movw %ax, %ds
+    movw $dap_packet, %si
+    /* 设置驱动器号和功能号 */
+    movb boot_drive, %dl
+    orb $0x80, %dl
+    movb $0x42, %ah
+    /* V5.21: 全寄存器+段寄存器保护(INT13 BIOS可能破坏任何寄存器) */
+    pushl %ecx
+    pushl %ebp
+    pushl %edi
+    pushl %ebx
+    pushl %esi
+    pushl %edx
+    pushw %gs
+    pushw %fs
+    pushw %es
+    pushw %ds
+    /* V6.44: 保存SP+返回地址到0x4000, 设置递归标志 */
+    movw %sp, 0x4002
+    movw $int13_ret - 0x8000, 0x4000
+    movb $1, 0x4004
+    int $0x13
+int13_ret:
+    cli
+    movb $0, 0x4004
+    /* V6.37: 不切换独立栈, 无需恢复SP */
+    pushfw                  /* 保存FLAGS(含CF) */
+    popw %ax
+    popw %ds
+    popw %es
+    popw %fs
+    popw %gs
+    popl %edx
+    popl %esi
+    popl %ebx
+    popl %edi
+    popl %ebp
+    popl %ecx
+    jc read_fail               /* V6.44: 修复错误检测! 原testw $1,%ax测试AL位0而非CF。
+                                  INT13 AH=42成功时CF=0, 失败时CF=1。必须用jc。 */
+    cli
+    movl $1, %ebx
+    addl %ebx, %ebp
+    movl %ebx, %eax
+    shll $9, %eax
+    addl %eax, %edi
+    subl %ebx, %ecx
+    /* V6.13: jnz代替手动jmp, 循环入口在最前不会被覆盖 */
+    jnz 3b
+2:
+    sti                      /* V5.00: 恢复中断 */
+    /* 诊断: read_slice成功返回, 写"RS"到行6 */
+    pushw %es
+    movw $0xB800, %ax
+    movw %ax, %es
+    movw $0x600, %di
+    movw $('R' | 0x0F00), %es:(%di)
+    movw $('S' | 0x0F00), %es:2(%di)
+    popw %es
+    popal
+    movb $1, %al
+    ret
+
+read_fail:
+    /* 诊断: INT13失败, 写"F"到行5列2 */
+    pushw %es
+    pushw %ax
+    movw $0xB800, %ax
+    movw %ax, %es
+    movb $('F' | 0x0F), %es:0x504
+    popw %ax
+    popw %es
+    /* 详细错误显示:
+       Line1: E AH=xx D=xx LBA=xxxx
+       Line2: C=xx H=xx S=xx
+       Line3: BUF=xxxxxxxx REM=xxxx
+    */
+    pushw %es
+    movw $0xB800, %bx
+    movw %bx, %es
+    movb $1, vga_row
+    movb $0, vga_col
+    /* Line1: E AH=xx D=xx LBA=xxxx */
+    movw $msg_err_ah, %si
+    call print_str
+    movb %ah, %al
+    call print_hex8
+    movw $msg_err_dl, %si
+    call print_str
+    movb %dl, %al
+    call print_hex8
+    movw $msg_err_lba, %si
+    call print_str
+    movl %ebp, %eax
+    call print_hex16
+    /* Line2: C=xx H=xx S=xx */
+    movw $msg_err_c, %si
+    call print_str
+    movb %ch, %al
+    call print_hex8
+    movw $msg_err_h, %si
+    call print_str
+    movb %dh, %al
+    call print_hex8
+    movw $msg_err_s, %si
+    call print_str
+    movb %cl, %al
+    call print_hex8
+    /* Line3: BUF=xxxxxxxx REM=xxxx */
+    movw $msg_err_buf, %si
+    call print_str
+    movl %edi, %eax
+    call print_hex16
+    movw $msg_err_rem, %si
+    call print_str
+    movl %ecx, %eax
+    call print_hex16
+    popw %es
+    cli
+    hlt
+
+read_done:
+    movw $1, %ax
+read_ret:
+    movb %al, read_retval
+    popa
+    movb read_retval, %al
+    ret
+
+read_retval:
+    .byte 0
+
+/* V4.66: 读盘重试计数器 */
+retry_count:
+    .word 3
+
+/* ==========================================================================
+ * collect_e820: 收集内存映射，转Multiboot mmap条目存MMAP_BUFFER
+ * 同时计算mem_upper(KB)
+ * ========================================================================== */
+collect_e820:
+    pusha
+    /* 修复: read_kernel污染了ES(读内核时设为内核段), 必须重置ES=0 */
+    xorw %ax, %ax
+    movw %ax, %es
+    xorl %ebx, %ebx
+    movw $0, map_count
+    movl $0, mem_upper
+e820_loop:
+    /* 修复: 每次循环必须重置E820缓冲地址(上次迭代被mmap转换改掉) */
+    movl $E820_BUFFER, %edi
+    movl $0x534D4150, %edx   /* 'SMAP' */
+    movl $24, %ecx
+    movl $0xE820, %eax       /* 修复: 必须完整设置EAX=0xE820, 不能只movb %ah(AL残留致BIOS异常) */
+    int $0x15
+    jc e820_done
+    cmpl $0x534D4150, %eax
+    jne e820_done
+
+    /* 转成20字节multiboot条目存MMAP_BUFFER */
+    movl $map_count, %eax
+    movl $20, %ebp
+    mull %ebp
+    movl $MMAP_BUFFER, %edi
+    addl %eax, %edi
+    movl $20, %ecx
+    movw %cx, %es:(%edi)          /* size=20 */
+    /* 修复: 用SI指向E820缓冲(0x8200), 之前误用未初始化的SI */
+    movl $E820_BUFFER, %esi
+    movl %es:0(%esi), %eax
+    movl %eax, %es:4(%edi)        /* base low */
+    movl %es:4(%esi), %eax
+    movl %eax, %es:8(%edi)        /* base high */
+    movl %es:8(%esi), %eax
+    movl %eax, %es:12(%edi)       /* length low */
+    movl %es:12(%esi), %eax
+    movl %eax, %es:16(%edi)       /* length high */
+    movl %es:16(%esi), %eax
+    movl %eax, %es:20(%edi)       /* type */
+
+    /* mem_upper: type=1且base>=1MB的最大结束地址(KB) */
+    cmpl $1, %es:16(%esi)
+    jne e820_next
+    cmpl $0x00100000, %es:0(%esi)
+    jb e820_next
+    movl %es:0(%esi), %eax
+    addl %es:8(%esi), %eax
+    shrl $10, %eax
+    cmpl mem_upper, %eax
+    jbe e820_next
+    movl %eax, mem_upper
+e820_next:
+    incw map_count
+    cmpl $32, map_count
+    jae e820_done            /* 保护: 最多32条, 防覆盖GDT区 */
+    cmpl $0, %ebx
+    jne e820_loop
+e820_done:
+    /* 兜底: 若E820未给出1MB以上内存(mem_upper=0),
+       先用INT15 AX=E801(支持大内存), 失败再用AH=88 */
+    cmpl $0, mem_upper
+    jne e820_ret
+    /* E801: 返回 AX=1-16MB(KB), BX=16MB以上(64KB块) */
+    xorw %bx, %bx
+    movw $0xE801, %ax
+    int $0x15
+    jc e801_fail
+    movzwl %ax, %eax
+    movzwl %bx, %edx
+    shll $6, %edx
+    addl %edx, %eax
+    testl %eax, %eax
+    jz e801_fail
+    movl %eax, mem_upper
+    jmp e820_ret
+e801_fail:
+    movb $0x88, %ah
+    int $0x15
+    jc e820_ret
+    movzwl %ax, %eax
+    testl %eax, %eax
+    jz e820_ret
+    movl %eax, mem_upper
+e820_ret:
+    popa
+    ret
+
+map_count:
+    .word 0
+mem_upper:
+    .long 0
+
+/* ==========================================================================
+ * build_mbinfo: 构造Multiboot info (0x8F00)
+ * flags: bit0(mem)+bit6(mmap)=0x41
+ * ========================================================================== */
+build_mbinfo:
+    pusha
+    /* 修复: 重置ES=0 (write到0x8F00必须ES=0) */
+    xorw %ax, %ax
+    movw %ax, %es
+    movl $MBINFO_ADDR, %edi
+    movl $0x41, %es:0(%edi)        /* flags */
+    movl $640, %es:4(%edi)         /* mem_lower */
+    movl mem_upper, %eax
+    movl %eax, %es:8(%edi)         /* mem_upper */
+    movl $0, %es:12(%edi)          /* boot_device */
+    movl $0, %es:16(%edi)          /* cmdline */
+    movl $0, %es:20(%edi)          /* mods_count */
+    movl $0, %es:24(%edi)          /* mods_addr */
+    movl $0, %es:28(%edi)          /* syms[0..3] */
+    movl $0, %es:32(%edi)
+    movl $0, %es:36(%edi)
+    movl $0, %es:40(%edi)
+    movw map_count, %ax
+    movw %ax, %cx
+    movl $20, %ebp
+    mull %ebp
+    movl %eax, %es:44(%edi)        /* mmap_length */
+    movl $MMAP_BUFFER, %eax
+    movl %eax, %es:48(%edi)        /* mmap_addr */
+    popa
+    ret
+
+/* ==========================================================================
+ * enter_protected: 写GDT、进保护模式、跳内核
+ * ========================================================================== */
+enter_protected:
+    /* 实模式诊断: 写"EP"到行7, 确认执行到enter_protected */
+    pushw %es
+    movw $0xB800, %ax
+    movw %ax, %es
+    movw $0x700, %di
+    movw $('E' | 0x0F00), %es:(%di)
+    movw $('P' | 0x0F00), %es:2(%di)
+    popw %es
+    /* V6.0重写: 精简标准流程, 移除A20检测(写0x0破坏IVT)、桩代码自修改、诊断延时 */
+    pusha
+    xorw %ax, %ax
+    movw %ax, %ds
+    movw %ax, %es
+    popa
+    /* 写GDT: null(0), code32(0x08), data32(0x10), code16(0x18,D=0用于回实模式) */
+    movl $GDT_ADDR, %edi
+    movl $0, %es:(%edi)
+    movl $0, %es:4(%edi)
+    movl $0x0000FFFF, %es:8(%edi)
+    movl $0x00CF9A00, %es:12(%edi)
+    movl $0x0000FFFF, %es:16(%edi)
+    movl $0x00CF9200, %es:20(%edi)
+    /* V6.36: 16位代码段(D=0), 回实模式前刷新CS.D */
+    movl $0x0000FFFF, %es:24(%edi)
+    movl $0x00009A00, %es:28(%edi)
+    /* GDTR: limit=31(4描述符=32字节), base=GDT_ADDR */
+    movl $GDTR_ADDR, %esi
+    movw $31, %ax
+    movw %ax, %ds:(%esi)
+    movl $GDT_ADDR, %eax
+    movl %eax, %ds:2(%esi)
+    lgdtw %ds:(%esi)
+    cli
+    /* V6.4修复: .code16段下xorl/movl不自动加0x66前缀, EAX高16位残留垃圾
+       → mov %eax,%cr0可能写完整CR0→PG位垃圾→#PF→三重故障. 手动加0x66. */
+    .byte 0x66
+    xor %eax, %eax
+    .byte 0x66
+    mov %cr0, %eax
+    .byte 0x66
+    or $1, %eax
+    .byte 0x66
+    mov %eax, %cr0
+    jmp 1f
+1:
+    ljmp $0x0008, $protected_mode
+
+    .code32
+protected_mode:
+    movw $0x10, %ax
+    movw %ax, %ds
+    movw %ax, %es
+    movw %ax, %fs
+    movw %ax, %gs
+    movw %ax, %ss
+    movl $STACK_ADDR, %esp
+    /* P0: 进保护模式成功 (行8) */
+    movl $0xB8000+1280, %edi
+    movw $('P' | 0x0F00), %es:(%edi)
+    movw $('0' | 0x0F00), %es:2(%edi)
+    /* 搬移SEG1: 0x10000 -> 0x100000 */
+    movl $0x00010000, %esi
+    movl $0x00100000, %edi
+    movl $SEG1_SEC, %eax
+    shll $(SECTOR_SHIFT-2), %eax
+    movl %eax, %ecx
+    cld
+    rep movsl
+    /* M1: SEG1搬移完成 (行9) */
+    movl $0xB8000+1440, %edi
+    movw $('M' | 0x0F00), %es:(%edi)
+    movw $('1' | 0x0F00), %es:2(%edi)
+    /* V6.36: 回实模式读SEG2: 先远跳转到16位代码段(0x18)刷新CS.D=0, 再清PE, 再远跳转实模式 */
+    cli
+    /* 远跳转到GDT 16位代码段(选择子0x18,D=0), 刷新CS缓存D位为0 */
+    ljmp $0x0018, $code16_switch
+    .code16
+code16_switch:
+    /* 在16位代码段(CS.D=0)中清PE */
+    movl %cr0, %eax
+    andl $0xFFFFFFFE, %eax
+    movl %eax, %cr0
+    /* 远跳转实模式(0x0800:rm_read_seg2). CS.D=0时0xEA是16位远跳转(offset16+selector16).
+       偏移必须是rm_read_seg2-0x8000(相对段基址), 不能用绝对地址(否则物理地址=0x8000+绝对地址) */
+    .byte 0xEA
+    .word rm_read_seg2 - 0x8000
+    .word 0x0800
+    .code16
+rm_read_seg2:
+    movw $0x7C00, %sp       /* V6.37: 栈移到0x7C00(BIOS/DOS常用栈区域, 避免BIOS切换栈) */
+    /* V6.43: 清零ESP/EFLAGS高16位(保护模式残留值可能导致BIOS INT13使用32位栈指针时地址错误,
+       这可能是SEG1不递归而SEG2递归的根本原因: SEG1在进保护模式前调用, ESP干净) */
+    xorl %eax, %eax
+    movw %sp, %ax
+    movl %eax, %esp           /* ESP高16位清零 */
+    pushfw
+    popw %ax
+    pushw %ax
+    popfw                      /* EFLAGS高16位清零(只恢复低16位) */
+    xorw %ax, %ax
+    movw %ax, %ds
+    movw %ax, %es
+    movw %ax, %fs              /* V6.41: 回实模式后必须清零FS/GS(保护模式时FS=0x10) */
+    movw %ax, %gs
+    /* V6.45: 显式加载IDTR为BIOS IVT(base=0,limit=0x3FF), 确保INT13调用正确处理程序 */
+    movw $0x03FF, 0x9910
+    movl $0x00000000, 0x9912
+    lidt 0x9910
+    /* V6.45: INT13 AH=00磁盘重置, 让BIOS重新初始化内部状态(保护模式切换可能扰乱BIOS状态) */
+    movb $0x00, %ah
+    movb boot_drive, %dl
+    orb $0x80, %dl
+    int $0x13
+    cli
+    /* R1: 回实模式成功 (行10) */
+    movw $0xB800, %ax
+    movw %ax, %es
+    movw $0x820, %di
+    movw $('R' | 0x0F00), %es:(%di)
+    xorw %ax, %ax
+    movw %ax, %es
+    call read_seg2
+    testb %al, %al
+    jz halt_loop
+    /* 再进保护模式 */
+    cli
+    movl %cr0, %eax
+    orl $1, %eax
+    movl %eax, %cr0
+    jmp 1f
+1:
+    /* V6.15: 再进保护模式用32位ljmp(不用0x66前缀), 确保EIP高16位清零 */
+    ljmp $0x0008, $pm_read_seg2
+
+    .code32
+pm_read_seg2:
+    movw $0x10, %ax
+    movw %ax, %ds
+    movw %ax, %es
+    movw %ax, %fs
+    movw %ax, %gs
+    movw %ax, %ss
+    movl $STACK_ADDR, %esp
+    /* P1: 再进保护模式成功 (行11) */
+    movl $0xB8000+1760, %edi
+    movw $('P' | 0x0F00), %es:(%edi)
+    movw $('1' | 0x0F00), %es:2(%edi)
+    /* 搬移SEG2: 0x10000 -> SEG2_DEST */
+    movl $0x00010000, %esi
+    movl $SEG2_DEST, %edi
+    movl $SEG2_SEC, %eax
+    shll $(SECTOR_SHIFT-2), %eax
+    movl %eax, %ecx
+    cld
+    rep movsl
+    /* 校验内核头魔数 */
+    movl $0x100000, %edi
+    movl (%edi), %eax
+    cmpl $MB_HEADER_MAGIC, %eax
+    jne halt_loop
+    /* P2: 魔数校验通过 (行12) */
+    movl $0xB8000+1920, %edi
+    movw $('P' | 0x0F00), %es:(%edi)
+    movw $('2' | 0x0F00), %es:2(%edi)
+    /* Multiboot约定: EAX=magic, EBX=info地址 */
+    movl $MB_BOOT_MAGIC, %eax
+    movl $MBINFO_ADDR, %ebx
+    /* 跳转内核入口 */
+    ljmp $0x08, $KERNEL_ENTRY
+
+
+/* ==========================================================================
+ * enable_a20_pm: 保护模式下开启A20线(端口I/O不受模式限制).
+ * V2.02修复: 仅0x92 Fast A20 + 0xEE快速A20口.
+ * 真机实测"3声后长时间停留GD OK"根因: 原含KBC(8042)使能序列, 现代Dell
+ * 笔记本无8042键盘控制器(由EC/SMBus模拟), inb $0x64等待输入缓冲空的
+ * 循环永远死循环→引导器卡死. 去掉KBC后:
+ *   0x92/0xEE为现代Intel/AMD芯片组直接支持的A20切换口, 至少一个有效.
+ * 入参: 无   出参: 无(破坏eax/eflags, 已pusha保护)
+ * ========================================================================== */
+enable_a20_pm:
+    pusha
+    /* ① Fast A20: port 0x92 bit1 */
+    inb $0x92, %al
+    orb $0x02, %al
+    outb %al, $0x92
+    /* ② 快速A20口: port 0xEE 写任意值(现代芯片组A20切换) */
+    movb $0x01, %al
+    outb %al, $0xEE
+    popa
+    ret
+
+/* ========== 只读数据 ========== */
+    
+.section .rodata
+msg_boot:
+    .asciz "H2"
+msg_gdt:
+    .asciz "G"
+msg_a20:
+    .asciz "A"
+msg_reading:
+    .asciz "R"
+msg_readok:
+    .asciz "K"
+msg_move:
+    .asciz "M"
+msg_prot:
+    .asciz "P"
+/* 详细错误显示 */
+msg_err_ah:
+    .asciz "E AH="
+msg_err_dl:
+    .asciz " D="
+msg_err_lba:
+    .asciz " LBA="
+msg_err_c:
+    .asciz "\nC="
+msg_err_h:
+    .asciz " H="
+msg_err_s:
+    .asciz " S="
+msg_err_buf:
+    .asciz "\nBUF="
+msg_err_rem:
+    .asciz " REM="
+#ifdef DEBUG_BOOT
+msg_blocks:
+    .asciz "b="
+msg_crlf:
+    .asciz "\n"
+msg_jump:
+    .asciz "H5"
+msg_presskey:
+    .asciz "K\n"
+msg_g0:
+    .asciz "G0\n"
+msg_g1:
+    .asciz "G1\n"
+msg_g2:
+    .asciz "G2\n"
+msg_press_pm:
+    .asciz "PM\n"
+msg_go_pm:
+    .asciz ">P\n"
+msg_gd_ok:
+    .asciz "GD OK\n"
+msg_gd_bad:
+    .asciz "GD BAD\n"
+#endif
+
+    .section .bss
+boot_drive:
+    .byte 0
+vga_row:
+    .byte 0
+vga_col:
+    .byte 0
+/* V4.95: INT13 AH=42 LBA扩展磁盘地址包(DAP), 替换CHS以支持>2016扇区.
+   size字段(0x10)在read_slice运行时设置, 故整体放.bss */
+dap_packet:
+    .byte 0                 /* DAP大小=16(运行时设置) */
+    .byte 0                 /* 保留 */
+dap_sectors:
+    .word 0                 /* 要读的扇区数 */
+dap_offset:
+    .word 0                 /* 缓冲偏移 */
+dap_segment:
+    .word 0                 /* 缓冲段 */
+dap_lba:
+    .quad 0                 /* 64位LBA */
+saved_ret_ip:
+    .word 0                 /* V5.06: read_slice返回地址(BIOS可能破坏FS,改用内存) */
+saved_sp:
+    .word 0                 /* V6.36: INT13前原栈指针(BIOS可能破坏BP,不依赖BP寄存器) */
+/* V6.38: INT13包装器 - BIOS切换栈导致IRET返回地址错误, 用包装器保护 */
+orig_int13_ip:
+    .word 0
+orig_int13_cs:
+    .word 0
+wrapper_saved_sp:
+    .word 0
+/* V6.39: INT13递归检测 - BIOS切换栈导致IRET返回错误地址→递归到read_slice。
+   在INT13前保存返回地址和栈指针, read_slice入口检测递归, 若递归则恢复栈并跳回正确地址 */
+int13_ret_ip:
+    .word 0
+int13_saved_sp:
+    .word 0
+in_int13:
+    .byte 0

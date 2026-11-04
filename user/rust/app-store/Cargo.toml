@@ -1,0 +1,19 @@
+[package]
+name = "app-store"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+hepu-sys = { path = "../hepu-sys" }
+
+[profile.dev]
+opt-level = "z"
+lto = false
+panic = "abort"
+codegen-units = 1
+
+[profile.release]
+opt-level = "z"
+lto = false
+panic = "abort"
+codegen-units = 1

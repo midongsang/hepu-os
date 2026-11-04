@@ -1,0 +1,11 @@
+[package]
+name = "hepu-sys"
+version = "0.1.0"
+edition = "2021"
+description = "赫普OS系统调用Rust绑定库"
+license = "GPL-3.0"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]

@@ -1,0 +1,22 @@
+{
+  "app_id": "com.hepu.hello",
+  "app_name": "你好赫普",
+  "version": "1.0.0",
+  "version_code": 1,
+  "author": "赫普OS示例",
+  "entry": "bin/hello",
+  "min_os_version": "0.0.1",
+  "target_arch": ["x86_64", "aarch64"],
+  "permissions": [
+    {"name": "notifications", "reason": "显示欢迎通知", "required": false}
+  ],
+  "sandbox": {
+    "network": "deny",
+    "filesystem": "isolated",
+    "ipc": "filtered"
+  },
+  "icons": {
+    "192": "res/icon-192.png",
+    "512": "res/icon-512.png"
+  }
+}

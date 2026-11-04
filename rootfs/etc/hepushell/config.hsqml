@@ -1,0 +1,66 @@
+// HepuShell 默认配置 - Quickshell风格
+Theme {
+    name: "quickshell"
+    background: #F0EBE0
+    panel_bg: #E8DFD0
+    panel_fg: #5C4A32
+    border: #D4C8B0
+    accent: #C9A96E
+    window_bg: #FAF6EE
+    window_fg: #3D3226
+    titlebar_bg: #E8DFD0
+}
+UI {
+    clock_x: 380
+    clock_y: 200
+    clock_font_size: 48
+    date_font_size: 20
+    weather_margin_right: 140
+    weather_margin_bottom: 160
+    weather_width: 120
+    weather_height: 120
+    weather_temp_font: 36
+    weather_desc_font: 16
+    sidebar_x: 12
+    sidebar_y: 50
+    sidebar_width: 280
+    sidebar_height: 500
+    cc_margin_right: 300
+    cc_y: 50
+    cc_width: 280
+    cc_height: 380
+    bar_height: 40
+    island_width: 120
+    island_height: 28
+    island_y: 6
+    island_font_size: 20
+    dock_width: 400
+    dock_height: 64
+    dock_margin_bottom: 12
+    dock_icon_size: 44
+    corner_radius: 16
+    font_small: 12
+    font_normal: 14
+    font_large: 18
+}
+Panel {
+    position: top
+    height: 32
+    Widget { type: workspaces align: left }
+    Widget { type: clock align: right }
+}
+Panel {
+    position: bottom
+    height: 28
+    Widget { type: tasks align: left }
+    Widget { type: systray align: right }
+}
+Panels {
+    top_bar: true
+    dock: true
+    sidebar: true
+    control_center: true
+    desktop_clock: true
+    weather: true
+    dynamic_island: true
+}

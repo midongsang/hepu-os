@@ -1,0 +1,8 @@
+[build]
+target = "hepu-i686.json"
+
+[unstable]
+build-std = ["core", "alloc"]
+
+[target.hepu-i686]
+rustflags = ["-C", "link-arg=-Thepu-i686.ld"]

@@ -1,0 +1,35 @@
+{
+  "arch": "x86",
+  "cpu": "i686",
+  "data-layout": "e-m:e-p:32:32-p270:32:32-p271:32:32-p272:64:64-i128:128-f64:32:64-f80:32-n8:16:32-S128",
+  "dynamic-linking": false,
+  "executables": true,
+  "has-thread-local": false,
+  "linker": "gcc",
+  "linker-flavor": "gcc",
+  "llvm-target": "i686-unknown-unknown",
+  "max-atomic-width": 64,
+  "os": "none",
+  "panic-strategy": "abort",
+  "position-independent-executables": false,
+  "relocation-model": "static",
+  "relro-level": "off",
+  "stack-probes": {
+    "kind": "inline"
+  },
+  "target-c-int-width": 32,
+  "target-endian": "little",
+  "target-family": "unix",
+  "target-pointer-width": 32,
+  "trap-unreachable": false,
+  "vendor": "hepu",
+  "pre-link-args": {
+    "gcc": [
+      "-m32",
+      "-static",
+      "-nostdlib",
+      "-Wl,--no-dynamic-linker",
+      "-znoexecstack"
+    ]
+  }
+}

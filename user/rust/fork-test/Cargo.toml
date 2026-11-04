@@ -1,0 +1,10 @@
+[package]
+name = "fork-test"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+hepu-sys = { path = "../hepu-sys" }
+
+[profile.dev]
+panic = "abort"

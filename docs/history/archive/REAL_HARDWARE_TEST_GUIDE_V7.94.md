@@ -1,0 +1,103 @@
+---
+title: REAL_HARDWARE_TEST_GUIDE_V7.94
+status: frozen
+sys_version: 0.13.65
+updated: 2026-10-24
+owner: history
+source_of_truth: null
+supersedes: null
+---
+
+# 赫普OS 真机高分辨率验证指南（V7.94）
+
+## 概述
+
+本文档描述赫普OS在真机上进行高分辨率显示验证的步骤和注意事项。
+
+## 引导器GOP分辨率自动选择
+
+HepuBoot UEFI引导器已实现GOP模式自动选择（hepboot_uefi.c:274-365）：
+
+1. 遍历所有可用的GOP模式（`gop->Mode->MaxMode`）
+2. 对每个模式评分：
+   - 分辨率越高得分越高（优先1920x1080、2560x1440）
+   - 32位色深优先
+   - 当前模式加分（避免不必要的模式切换）
+3. 选择得分最高的模式
+4. 如最佳模式与当前模式不同，调用`SetMode`切换
+
+## 内核帧缓冲映射
+
+内核GOP驱动（gfx_gop.c）支持任意分辨率的帧缓冲：
+- 帧缓冲物理地址从引导器传递（`g_gop_info.framebuffer_base`）
+- 内核启动时通过`paging_map`映射帧缓冲到虚拟地址
+- 支持超过4GB的帧缓冲地址（64位地址映射）
+
+## UI缩放
+
+桌面渲染器（desktop_render.c）支持UI缩放：
+- `calc_ui_scale()`根据分辨率自动计算缩放因子
+- 图标大小、间距、字体大小随缩放因子调整
+- 状态栏、Dock栏、窗口均支持缩放
+
+## 真机测试步骤
+
+### 1. 准备启动介质
+
+```bash
+# 将IMG镜像写入U盘（替换/dev/sdX为实际设备）
+sudo dd if=build/hepu-os-uefi-v0.08.img of=/dev/sdX bs=4M status=progress
+sync
+```
+
+### 2. BIOS设置
+
+- 禁用Secure Boot（或导入HEPU_DB.crt证书）
+- 设置UEFI启动模式（非Legacy/CSM）
+- 将U盘设为第一启动项
+
+### 3. 启动验证
+
+观察引导菜单和内核启动画面：
+- [ ] 引导菜单正常显示（HepuBoot UEFI v0.08）
+- [ ] 内核加载成功（显示内核大小和加载地址）
+- [ ] 内核启动画面显示正确分辨率
+- [ ] 桌面渲染正常（图标、文字、状态栏）
+- [ ] 中文显示正常（无乱码、无重影）
+
+### 4. 分辨率检查
+
+在Shell中执行：
+```
+gfxinfo
+```
+记录输出的分辨率、色深、帧缓冲地址。
+
+### 5. 常见问题
+
+| 问题 | 可能原因 | 解决方案 |
+|------|---------|---------|
+| 黑屏无显示 | GOP模式不兼容 | 引导菜单按3进入Recovery Mode（使用当前模式） |
+| 分辨率过低 | GOP默认模式低 | 检查引导器GOP自动选择逻辑 |
+| 画面偏移 | 帧缓冲未正确映射 | 检查paging_map映射范围 |
+| 文字过小 | UI缩放未生效 | 检查calc_ui_scale函数 |
+| 中文乱码 | 字体未加载 | 检查TTF初始化日志 |
+
+## 支持的分辨率
+
+| 分辨率 | 比例 | 状态 |
+|--------|------|------|
+| 1024x768 | 4:3 | QEMU验证通过 |
+| 1280x720 | 16:9 | 待真机验证 |
+| 1920x1080 | 16:9 | 待真机验证 |
+| 2560x1440 | 16:9 | 待真机验证 |
+| 3840x2160 | 16:9 | 待真机验证（需UI缩放优化） |
+
+## 日志收集
+
+启动时添加`debug`参数，或在Shell中执行`dmesg`，收集以下日志：
+- `[GOP] mode: WxH`
+- `[PAGING] framebuffer mapped`
+- `[GFX] backend initialized`
+- `[TTF] font loaded`
+- `[DESKTOP] render done`
