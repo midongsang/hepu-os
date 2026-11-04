@@ -52,6 +52,8 @@ C_SOURCES = \
     $(ARCH_DIR)/devfs64.c \
     $(ARCH_DIR)/hepu_fs64.c \
     $(ARCH_DIR)/security64.c \
+    $(ARCH_DIR)/auth64.c \
+    $(ARCH_DIR)/oobe64.c \
     $(ARCH_DIR)/hepua.c \
     $(ARCH_DIR)/hepu_dev.c \
     $(ARCH_DIR)/shell64.c \
