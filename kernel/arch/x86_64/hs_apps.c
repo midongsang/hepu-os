@@ -143,6 +143,7 @@ static void t_exec(const char *line)
         t_put("  reg  - registry (get/set/list)");
         t_put("  disk - disk info/fsck");
         t_put("  lang - language (get/set zh|en)");
+        t_put("  devmode <password> - become developer (off to revert)");
         t_put("  kmod - kernel modules");
         t_put("  ps ifconfig uname mkdir touch rm rmdir cp mv head wc");
         t_put("  Tab=complete  Up/Dn=history  PgUp/PgDn=scroll");
@@ -374,6 +375,40 @@ static void t_exec(const char *line)
         } else {
             t_put("usage: disk fsck");
         }
+        return;
+    }
+    /* V0.55 P4: devmode 普通用户 <-> 开发者 (角色持久化到 /account.conf)
+     * GUI 终端不阻塞取键, 密码走参数: devmode <password> | devmode off */
+    if (strcmp(cmd, "devmode") == 0) {
+        extern int auth64_is_configured(void);
+        extern int auth64_current_role(void);
+        extern int auth64_elevate(const char *pass);
+        extern int auth64_deelevate(void);
+        if (!auth64_is_configured()) {
+            t_put("devmode: no account (complete first-boot setup first)");
+            return;
+        }
+        if (strcmp(arg, "off") == 0) {
+            if (auth64_current_role() != 2) {
+                t_put("devmode: not in developer mode");
+            } else {
+                t_put(auth64_deelevate() == 0 ?
+                      "devmode: switched back to normal user" :
+                      "devmode: failed to save");
+            }
+            return;
+        }
+        if (auth64_current_role() == 2) {
+            t_put("devmode: already in developer mode");
+            return;
+        }
+        if (!arg[0]) {
+            t_put("usage: devmode <password> | devmode off");
+            return;
+        }
+        t_put(auth64_elevate(arg) == 0 ?
+              "devmode: developer mode enabled (persistent)" :
+              "devmode: wrong password");
         return;
     }
     t_put("Unknown command. Type 'help' for list.");

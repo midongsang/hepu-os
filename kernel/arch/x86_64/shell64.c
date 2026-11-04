@@ -302,7 +302,7 @@ static void shell_cmd_help(int argc, char **argv)
     vga_puts("  usertest exec sleep cal md5sum\n\n");
 
     vga_puts("--- System Control ---\n");
-    vga_puts("  clear reboot poweroff\n\n");
+    vga_puts("  clear reboot poweroff devmode\n\n");
 
     vga_puts("--- Hepu Native Management ---\n");
     vga_puts("  hepu ps       process isolation view\n");
@@ -2877,10 +2877,65 @@ static void shell_cmd_usb(int argc, char **argv)
     }
 }
 
+/* ===== V0.55 P4: devmode 普通用户 <-> 开发者 角色切换 ===== */
+static void shell_read_pass(char *buf, int max)
+{
+    int pos = 0;
+    while (pos < max - 1) {
+        if (keyboard64_haschar()) {
+            char c = keyboard64_getchar();
+            if (c == '\n' || c == '\r') { vga_putchar('\n'); break; }
+            if (c == '\b' || c == 0x7F) {
+                if (pos > 0) { pos--; vga_puts("\b \b"); }
+            } else if (c >= 0x20 && c < 0x7F) {
+                buf[pos++] = c;
+                vga_putchar('*');
+            }
+        }
+    }
+    buf[pos] = 0;
+}
+
+static void shell_cmd_devmode(int argc, char **argv)
+{
+    extern int auth64_is_configured(void);
+    extern int auth64_current_role(void);
+    extern int auth64_elevate(const char *pass);
+    extern int auth64_deelevate(void);
+
+    if (!auth64_is_configured()) {
+        vga_puts("devmode: no account (complete first-boot setup first)\n");
+        return;
+    }
+    int role = auth64_current_role();
+
+    if (argc > 1 && shell_strcmp(argv[1], "off") == 0) {
+        if (role != 2) { vga_puts("devmode: not in developer mode\n"); return; }
+        vga_puts(auth64_deelevate() == 0 ?
+                 "devmode: switched back to normal user\n" :
+                 "devmode: failed to save\n");
+        return;
+    }
+    if (role == 2) { vga_puts("devmode: already in developer mode\n"); return; }
+
+    /* 提权确认: 普通用户在 OOBE 中未设管理员密码, 以账户密码验证.
+     * 成功后角色持久化到 /account.conf, 重启后仍为开发者. */
+    vga_puts("Password: ");
+    char pass[64];
+    shell_read_pass(pass, sizeof(pass));
+    int rc = auth64_elevate(pass);
+    if (rc == 0) {
+        vga_puts("devmode: developer mode enabled (persistent)\n");
+    } else {
+        vga_puts("devmode: wrong password\n");
+    }
+}
+
 /* 命令表 */
 static shell_command_t shell_commands[] = {
     {"help", shell_cmd_help},
     {"hepu", shell_cmd_hepu},
+    {"devmode", shell_cmd_devmode},
     {"history", shell_cmd_history},
     {"which", shell_cmd_which},
     {"drv", shell_cmd_drv},
