@@ -1007,11 +1007,11 @@ void x86_64_kernel_main(void)
     vga_puts("[INIT] Initializing 64-bit RTC...\n");
     rtc64_init();
 
-    /* V0.55 P2/P3: 加载账户; 首次启动运行 OOBE 向导 */
+    /* V0.55 P2/P3: 加载账户; 首启向导延迟到桌面/文本通道确定后运行 */
     auth64_init();
-    if (!auth64_is_configured()) {
-        vga_puts("\n[HepuOS] First boot detected, running setup wizard...\n\n");
-        oobe64_run();
+    int need_oobe = !auth64_is_configured();
+    if (need_oobe) {
+        vga_puts("\n[HepuOS] First boot detected, setup wizard pending...\n\n");
     }
 
     /* 显示内存信息 */
@@ -1047,6 +1047,11 @@ void x86_64_kernel_main(void)
         desktop64_run();
     } else {
         vga_puts("[INIT] Falling back to text shell\n");
+        /* 图形化不可用: 文本模式作为首启向导兜底通道 */
+        if (need_oobe) {
+            vga_puts("[HepuOS] Text-mode setup wizard (GUI unavailable)\n");
+            oobe64_run();
+        }
         shell64_run();
     }
 }

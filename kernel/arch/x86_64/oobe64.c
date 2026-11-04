@@ -110,7 +110,7 @@ static int oobe_choice(int min, int max)
 }
 
 /* ===== 系统配置持久化 ===== */
-static void save_system_conf(int lang, int tz_min)
+void oobe64_save_system_conf(int lang, int tz_min)
 {
     char buf[128];
     const char *lang_s = (lang == 2) ? "en" : "zh";   /* lang: 1=中文 2=English */
@@ -212,7 +212,7 @@ void oobe64_run(void)
     }
 
     /* 7. 系统配置 + 欢迎屏 */
-    save_system_conf(lang, tz_min);
+    oobe64_save_system_conf(lang, tz_min);
     vga_puts(S[S_WELCOME]);
     while (!oobe_haskey()) { }
     oobe_getkey();

@@ -226,9 +226,13 @@ OOBE_KEYS = ["1", "1", "1",                 # 语言=中文 时区=北京 类型
 
 
 def oobe_setup(g):
-    """全新镜像首启会停在 OOBE 文本向导; 自动走完后桌面才启动."""
+    """全新镜像首启会弹出图形化 OOBE 向导; 自动走完后进入桌面.
+    V0.55 P3-GUI: 向导以窗口形式绘制在桌面上, TCG 软件渲染较慢, 按键间隔需放大. """
+    old_delay = g.key_delay
+    g.key_delay = max(g.key_delay, 2.0)
     for k in OOBE_KEYS:
         g.key(k)
+    g.key_delay = old_delay
     time.sleep(20)              # 等桌面加载完 (含设置窗口自动打开)
     print("[PASS] OOBE 向导自动完成 (账户 hepu/1234)")
 
