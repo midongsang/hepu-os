@@ -18,6 +18,7 @@
 - **ext2文件系统**：完整文件/目录操作（创建/读写/删除）
 - **完整网络协议栈**：ARP/IP/ICMP/UDP/TCP/DHCP/DNS/HTTP
 - **用户态程序支持**：ELF64加载，ulib C库，104个已实现系统调用（详见 `docs/specs/SYSCALL_ABI.md`）
+- **glibc 动态链接**：PT_INTERP 引导 glibc 的 `ld-linux-x86-64.so.2`，DT_NEEDED/RELR/TLS 由用户态 ld.so 完成；`gcc -O2` 编译的 Linux PIE 程序可直接 `exec`
 - **统一源码树**：13个共享模块（驱动/文件系统/图形/库/调试/安全）
 - **70个Shell命令**：完整的命令行界面
 
