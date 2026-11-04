@@ -1153,24 +1153,39 @@ void hs_window_render_all(void)
         if (w->type == HS_WINDOW_FLOATING) {
             gfx64_fill_rect(w->x, w->y, w->width, 24,
                             g_shell.colors.titlebar_bg);
-            /* V0.13.16: 三按钮无背景细线(最小化/最大化/关闭), Windows风格 */
+            /* V0.55: 标题栏前景跟随主题, 深色主题下不再不可见 */
+            uint32_t tb_fg = g_shell.colors.window_fg;
             int by = w->y + 5;
             int cmin = w->x + w->width - 68;
             int cmax = w->x + w->width - 44;
             int cclo = w->x + w->width - 20;
-            uint32_t btnc = 0x2A2520;  /* 与标题文字同色, 无背景块 */
-            /* 最小化: 水平粗线(硬边, 不用AA避免在浅色栏上淡化) */
-            gfx64_fill_rect(cmin + 3, by + 11, 11, 2, btnc);
+            int mx = g_shell.mouse_x, my = g_shell.mouse_y;
+            int hov_min = (my >= w->y && my < w->y + 24 &&
+                           mx >= cmin && mx < cmin + 24);
+            int hov_max = (my >= w->y && my < w->y + 24 &&
+                           mx >= cmax && mx < cmax + 24);
+            int hov_clo = (my >= w->y && my < w->y + 24 &&
+                           mx >= cclo && mx < cclo + 20);
+            /* 悬停底色(关闭键红色) */
+            if (hov_min)
+                gfx64_fill_rounded_rect(cmin, w->y + 2, 24, 20, 4, g_shell.colors.panel_bg);
+            if (hov_max)
+                gfx64_fill_rounded_rect(cmax, w->y + 2, 24, 20, 4, g_shell.colors.panel_bg);
+            if (hov_clo)
+                gfx64_fill_rounded_rect(cclo, w->y + 2, 20, 20, 4, 0xE5484D);
+            uint32_t btnc = hov_clo ? 0xFFFFFF : tb_fg;
+            /* 最小化: 水平粗线 */
+            gfx64_fill_rect(cmin + 6, by + 6, 11, 2, btnc);
             /* 最大化: 方框; 已最大化时画双层表示还原 */
-            gfx64_draw_rect(cmax + 3, by + 2, 10, 10, btnc);
+            gfx64_draw_rect(cmax + 6, by + 2, 10, 10, btnc);
             if (w->state == HS_WINDOW_STATE_MAXIMIZED) {
-                gfx64_draw_rect(cmax + 5, by + 4, 10, 10, btnc);
-                gfx64_draw_rect(cmax + 7, by + 6, 6, 6, btnc);
+                gfx64_draw_rect(cmax + 8, by + 4, 10, 10, btnc);
+                gfx64_draw_rect(cmax + 10, by + 6, 6, 6, btnc);
             }
             /* 关闭: ×(硬边对角线, 逐像素) */
             for (int i = 0; i <= 10; i++) {
-                gfx64_put_pixel(cclo + 3 + i, by + 2 + i, btnc);
-                gfx64_put_pixel(cclo + 13 - i, by + 2 + i, btnc);
+                gfx64_put_pixel(cclo + 4 + i, by + 2 + i, btnc);
+                gfx64_put_pixel(cclo + 14 - i, by + 2 + i, btnc);
             }
         }
 
@@ -1179,13 +1194,13 @@ void hs_window_render_all(void)
                           g_shell.colors.accent : w->border_color;
         gfx64_draw_rect(w->x, w->y, w->width, w->height, border);
 
-        /* 标题（使用深色文字确保可见） */
+        /* 标题（跟随主题前景色） */
         if (w->type != HS_WINDOW_POPUP || w->title[0]) {
             void *fb = gfx64_get_framebuffer();
+            uint32_t tc = g_shell.colors.window_fg;
             int tx = w->x + 8;
-            /* V0.13.14: 浮动窗口标题栏左侧应用图标(单色矢量) */
+            /* 浮动窗口标题栏左侧应用图标(单色矢量) */
             if (w->type == HS_WINDOW_FLOATING) {
-                uint32_t tc = 0x2A2520;
                 if (strcmp(w->title, "Terminal") == 0)
                     hs_icon_terminal(w->x + 5, w->y + 4, 16, tc);
                 else if (strcmp(w->title, "Files") == 0)
@@ -1194,11 +1209,35 @@ void hs_window_render_all(void)
                     hs_icon_task(w->x + 5, w->y + 4, 16, tc);
                 else if (strcmp(w->title, "Settings") == 0)
                     hs_icon_settings(w->x + 5, w->y + 4, 16, tc);
+                else if (strcmp(w->title, "Device Manager") == 0)
+                    hs_icon_info(w->x + 5, w->y + 4, 16, tc);
+                else if (strcmp(w->title, "Disk Manager") == 0)
+                    hs_icon_store(w->x + 5, w->y + 4, 16, tc);
+                else if (strcmp(w->title, "Log Viewer") == 0)
+                    hs_icon_doc(w->x + 5, w->y + 4, 16, tc);
+                else if (strcmp(w->title, "Calculator") == 0)
+                    hs_icon_calc(w->x + 5, w->y + 4, 16, tc);
+                else if (strcmp(w->title, "Editor") == 0)
+                    hs_icon_editor(w->x + 5, w->y + 4, 16, tc);
+                else if (strcmp(w->title, "Browser") == 0)
+                    hs_icon_browser(w->x + 5, w->y + 4, 16, tc);
+                else if (strcmp(w->title, "App Store") == 0)
+                    hs_icon_store(w->x + 5, w->y + 4, 16, tc);
+                else if (strcmp(w->title, "About") == 0)
+                    hs_icon_info(w->x + 5, w->y + 4, 16, tc);
                 tx = w->x + 26;
             }
+            /* 标题过长时截断, 避免压住右侧窗口按钮 */
+            char tbuf[40];
+            int maxc = (w->width - 150) / 7;
+            if (maxc < 4) maxc = 4;
+            int n = 0;
+            while (w->title[n] && n < maxc && n < 39) { tbuf[n] = w->title[n]; n++; }
+            if (w->title[n] && n > 1) { tbuf[n - 1] = '.'; tbuf[n] = '.'; n++; }
+            tbuf[n] = 0;
             font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                               tx, w->y + 6, w->title,
-                               0x2A2520, 12);
+                               tx, w->y + 6, tbuf,
+                               tc, 12);
         }
 
         /* 自定义渲染回调 */
@@ -3186,7 +3225,7 @@ void hs_tray_init(void)
     /* 创建设置浮动窗口 */
     hs_window_manager_init();
     hs_window_t *settings_win = hs_window_create(HS_WINDOW_FLOATING, "Settings",
-                                                  -1, -1, 460, 300);
+                                                  -1, -1, 460, 430);
     if (settings_win) {
         settings_win->render = hs_settings_window_render;
     }
