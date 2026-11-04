@@ -51,8 +51,8 @@ typedef struct {
 #define HS_SP_5 24
 #define HS_RD_BTN   4   /* 按钮/勾选 */
 #define HS_RD_INPUT 8   /* 输入框/滚动条滑块 */
-#define HS_RD_WIN   12  /* 窗口 */
-#define HS_RD_CARD  16  /* 卡片/启动器 */
+#define HS_RD_WIN   10  /* 窗口/浮层(对齐 Clavis cornerRadius=10) */
+#define HS_RD_CARD  12  /* 卡片/启动器 */
 #define HS_FS_10 10     /* 角标 */
 #define HS_FS_12 12     /* 次要文本 */
 #define HS_FS_14 14     /* 正文 */
