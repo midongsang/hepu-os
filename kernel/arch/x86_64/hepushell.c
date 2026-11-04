@@ -52,6 +52,8 @@ extern void gfx64_draw_rect(int x, int y, int w, int h, uint32_t color);
 extern void gfx64_fill_rounded_rect(int x, int y, int w, int h, int radius, uint32_t color);
 extern void gfx64_draw_rounded_rect(int x, int y, int w, int h, int radius, uint32_t color);
 extern void gfx64_blur_region(int x, int y, int w, int h, int blur_radius, uint32_t overlay_color, int overlay_alpha);
+extern void gfx64_fill_circle_gradient(int cx, int cy, int r, uint32_t c1, uint32_t c2);
+extern uint32_t gfx64_get_pixel(int x, int y);
 extern void font64_draw_string(void *fb, int fw, int fh,
                                int x, int y, const char *str,
                                uint32_t color, uint16_t size);
@@ -107,6 +109,13 @@ int g_pending_app;
 /* V0.55: 侧栏滚动 (对齐 Clavis SidebarFlickable: 垂直滚动+细滚动条)
  * 基准单位(1024x768), 渲染时经 hs_sy 缩放; 仅内容溢出的标签页生效 */
 static int g_sidebar_scroll = 0;
+
+/* V0.56: 程序化壁纸 (对齐 Clavis Wallpaper 切换 + matugen 壁纸取色)
+ * 0=Classic 纯色(默认, 保回归稳定) 1=Dusk 紫橙落日 2=Ocean 青蓝渐变;
+ * 切换到非 Classic 后下一帧壁纸绘制完成即采样网格提取源色并应用主题 */
+static int g_wallpaper_style = 0;
+static int g_wallpaper_dirty = 0;
+static const char *g_wallpaper_names[] = {"Classic", "Dusk", "Ocean"};
 
 /* 右键菜单状态 */
 static int g_context_menu_visible = 0;
@@ -525,6 +534,80 @@ static const uint32_t g_theme_presets[] = {
     0xF1B6E2, /* Pink */
 };
 #define HS_THEME_PRESET_COUNT (int)(sizeof(g_theme_presets) / sizeof(g_theme_presets[0]))
+
+/* ============================================================================
+ * V0.56: 程序化壁纸 + matugen 式壁纸取色
+ * ========================================================================== */
+static void hs_wallpaper_vgradient(uint32_t c1, uint32_t c2)
+{
+    /* 垂直渐变: 逐扫描线 fill_rect (行填充优化, 避免全屏逐像素 put_pixel 开销) */
+    int w = g_shell.screen_width, h = g_shell.screen_height;
+    int r1 = (c1 >> 16) & 0xFF, g1 = (c1 >> 8) & 0xFF, b1 = c1 & 0xFF;
+    int r2 = (c2 >> 16) & 0xFF, g2 = (c2 >> 8) & 0xFF, b2 = c2 & 0xFF;
+    int den = h - 1;
+    if (den <= 0) den = 1;
+    for (int y = 0; y < h; y++) {
+        int a = (y * 255) / den, ia = 255 - a;
+        uint32_t c = ((uint32_t)((r1 * ia + r2 * a) >> 8) << 16) |
+                     ((uint32_t)((g1 * ia + g2 * a) >> 8) << 8) |
+                     (uint32_t)((b1 * ia + b2 * a) >> 8);
+        gfx64_fill_rect(0, y, w, 1, c);
+    }
+}
+
+static void hs_wallpaper_render(void)
+{
+    int w = g_shell.screen_width, h = g_shell.screen_height;
+    if (g_wallpaper_style == 1) {
+        /* Dusk: 紫→橙渐变天空 + 径向渐变落日 */
+        hs_wallpaper_vgradient(0x2B1B3D, 0xE8834A);
+        gfx64_fill_circle_gradient(w / 2, h * 3 / 4, hs_s(120), 0xFFD680, 0xE85D4A);
+    } else if (g_wallpaper_style == 2) {
+        /* Ocean: 青→蓝渐变 */
+        hs_wallpaper_vgradient(0x0B3B4F, 0x123E7C);
+    } else {
+        gfx64_fill_rect(0, 0, w, h, g_shell.colors.bg);
+    }
+}
+
+/* matugen 式取色: 采样网格 6x4 (边距 12.5%), 取饱和度最高的像素为源色 */
+static void hs_wallpaper_sample_theme(void)
+{
+    int w = g_shell.screen_width, h = g_shell.screen_height;
+    uint32_t best = 0;
+    int best_s = 40;                 /* 饱和度门槛: 近中性色不取 */
+    for (int gy = 0; gy < 4; gy++) {
+        for (int gx = 0; gx < 6; gx++) {
+            int x = w / 8 + (w * gx) / 8 + w / 16;
+            int y = h / 8 + (3 * h * gy) / 16 + (3 * h) / 32;
+            uint32_t px = gfx64_get_pixel(x, y);
+            int hh, ss, ll;
+            rgb_to_hsl(px, &hh, &ss, &ll);
+            if (ss > best_s) { best_s = ss; best = px; }
+        }
+    }
+    hepushell_set_theme(g_shell.theme);  /* 重置默认色板再取色, 避免叠加旋转 */
+    if (best) {
+        hs_theme_apply_source_color(best);
+        g_shell.theme_source = best;
+        vga_printf("[WALLPAPER] source color #%06x applied\n", best);
+    } else {
+        g_shell.theme_source = 0xD0BCFF;
+    }
+}
+
+static void hs_wallpaper_cycle(void)
+{
+    g_wallpaper_style = (g_wallpaper_style + 1) % 3;
+    if (g_wallpaper_style == 0) {
+        /* 回 Classic: 恢复默认色板, 无需采样 */
+        hepushell_set_theme(g_shell.theme);
+        g_shell.theme_source = 0xD0BCFF;
+    } else {
+        g_wallpaper_dirty = 1;      /* 下一帧壁纸绘制完成后采样 */
+    }
+    vga_printf("[WALLPAPER] style=%s\n", g_wallpaper_names[g_wallpaper_style]);
+}
 
 /* ============================================================================
  * 小部件
@@ -1368,6 +1451,13 @@ static void hs_settings_window_render(hs_window_t *w)
         ry += 24;
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            rx, ry, "Clock Size: 40px", g_shell.colors.panel_fg, 12);
+        ry += 24;
+        /* V0.56: 壁纸切换行 (点击循环 Classic/Dusk/Ocean) */
+        font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                           rx, ry, "Wallpaper:", g_shell.colors.panel_fg, 12);
+        font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                           rx + 84, ry, g_wallpaper_names[g_wallpaper_style],
+                           g_shell.colors.accent, 12);
     } else if (g_settings_page == 1) {
         /* Panels */
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
@@ -2865,6 +2955,14 @@ void hepushell_handle_click(int x, int y)
                         return;
                     }
                 }
+                /* V0.56: Wallpaper 行点击循环壁纸 (Clock Size 后 ry = w->y+188) */
+                {
+                    int wp_y = w->y + 188;
+                    if (x >= sw_x && x <= sw_x + 150 && y >= wp_y && y <= wp_y + 20) {
+                        hs_wallpaper_cycle();
+                        return;
+                    }
+                }
             }
         }
     }
@@ -3119,8 +3217,12 @@ void hepushell_render(void)
         return;
     }
 
-    gfx64_fill_rect(0, 0, g_shell.screen_width, g_shell.screen_height,
-                    g_shell.colors.bg);
+    hs_wallpaper_render();
+    /* V0.56: 切壁纸后首帧 — 壁纸绘制完成即采样提取源色 (窗口/面板尚未绘制) */
+    if (g_wallpaper_dirty) {
+        g_wallpaper_dirty = 0;
+        hs_wallpaper_sample_theme();
+    }
 
 
     /* 通过面板注册表渲染所有启用的面板 */
@@ -3283,6 +3385,12 @@ void hepushell_handle_key(int key)
         hs_theme_apply_source_color(g_theme_presets[preset_idx]);
         g_shell.theme_source = g_theme_presets[preset_idx];
         vga_printf("[THEME] source color preset %d applied\n", preset_idx);
+        return;
+    }
+
+    /* W键循环切换程序化壁纸 (Dusk/Ocean 触发壁纸取色, Classic 恢复默认) */
+    if (key == 'w' || key == 'W') {
+        hs_wallpaper_cycle();
         return;
     }
 
