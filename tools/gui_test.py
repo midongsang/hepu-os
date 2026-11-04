@@ -313,6 +313,45 @@ def scenario_dyn(g):
     print("[PASS] 动态链接 hello 输出 Hello, World!")
 
 
+def scenario_systools(g):
+    """V0.55: 系统工具三窗口 (设备管理器/磁盘管理/日志查看器)"""
+    # 设备管理器: 启动器搜索 dev
+    g.key("space")
+    time.sleep(0.8)
+    g.type_text("dev")
+    g.key("enter")
+    time.sleep(2.5)
+    g.shot("08_devmgr_pci")
+    g.key("tab")                     # 切到 USB 页
+    time.sleep(1.0)
+    g.shot("09_devmgr_usb")
+    g.key("tab")                     # 切到 驱动 页
+    time.sleep(1.0)
+    g.shot("10_devmgr_drivers")
+    # 关闭窗口 (级联位 1: 330,126; 关闭按钮在右上角)
+    g.q.click(878, 136)
+    time.sleep(1.0)
+
+    # 磁盘管理: 启动器搜索 disk
+    g.key("space")
+    time.sleep(0.8)
+    g.type_text("disk")
+    g.key("enter")
+    time.sleep(2.5)
+    g.shot("11_diskmgr")
+    g.q.click(908, 162)              # 关闭 (级联位 2: 360,152)
+    time.sleep(1.0)
+
+    # 日志查看器: 启动器搜索 log
+    g.key("space")
+    time.sleep(0.8)
+    g.type_text("log")
+    g.key("enter")
+    time.sleep(2.0)
+    g.shot("12_logview")
+    print("[PASS] 系统工具三窗口截图 08-12")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--image", default="/tmp/hepu64_single.img")
@@ -321,7 +360,7 @@ def main():
     ap.add_argument("--boot-wait", type=float, default=18.0)
     ap.add_argument("--key-delay", type=float, default=0.4,
                     help="按键间隔; 过小会丢键")
-    ap.add_argument("--scenario", choices=["boot", "files", "fsck", "theme", "dyn", "all"],
+    ap.add_argument("--scenario", choices=["boot", "files", "fsck", "theme", "dyn", "systools", "all"],
                     default="all")
     ap.add_argument("--oobe", action="store_true",
                     help="镜像为全新盘时先自动完成首启向导再跑场景")
@@ -334,8 +373,8 @@ def main():
 
     steps = {"boot": scenario_boot, "fsck": scenario_term_fsck,
              "files": scenario_files, "theme": scenario_theme,
-             "dyn": scenario_dyn}
-    names = ["boot", "fsck", "files", "theme", "dyn"] if args.scenario == "all" else [args.scenario]
+             "dyn": scenario_dyn, "systools": scenario_systools}
+    names = ["boot", "fsck", "files", "theme", "dyn", "systools"] if args.scenario == "all" else [args.scenario]
     # 每个场景独立启动: 窗口焦点/输入状态互不干扰
     # --oobe 只需做一次: 首场景完成向导后账户写入镜像, 后续场景直接进桌面
     # (若每个场景都发向导按键, 第二次起这些键会落到桌面: 数字切工作区、

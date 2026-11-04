@@ -10,6 +10,9 @@
 extern int uart64_init(int com);
 extern int uart64_puts(int com, const char *str);
 
+/* V0.55: 内核环形日志 (日志查看器数据源) */
+extern void klog64_log(const char *s);
+
 /* 本地基础库函数 */
 extern void vga_clear(void);
 extern void vga_puts(const char *str);
@@ -260,6 +263,7 @@ void x86_64_kernel_main(void)
     /* 初始化统一驱动框架 */
     extern void drv_init(void);
     drv_init();
+    klog64_log("[BOOT] driver framework initialized");
     vga_puts("[BOOT] step2 done (drv_init)\n");
 
     uint64_t mem_total, mem_used, mem_free;
@@ -517,6 +521,7 @@ void x86_64_kernel_main(void)
     /* 提前初始化存储HAL（ext2需要通过它读取磁盘） */
     extern int storage_hal_init(void);
     storage_hal_init();
+    klog64_log("[BOOT] storage HAL initialized");
 
     /* V0.20.10: AHCI 提前到 ext2 之前初始化，真机 SATA 盘直接走 AHCI */
     vga_puts("[INIT] Early AHCI/SATA init...\n");
@@ -560,6 +565,7 @@ void x86_64_kernel_main(void)
     /* 初始化ext2文件系统 */
     vga_puts("[INIT] Initializing 64-bit ext2 filesystem...\n");
     ext2_64_init();
+    klog64_log("[BOOT] ext2 root mounted");
     vga_puts("[BOOT] step6 done (ext2)\n");
 
     /* V0.13.54: 根分区 ext2 自动扩展 (分区表 > 文件系统时扩展到全分区) */
@@ -960,8 +966,10 @@ void x86_64_kernel_main(void)
         /* V0.13.9: 静态 IP (10.0.2.15/24) — 测试环境无 DHCP 服务器 */
         eth64_set_ip(0x0A00020F, 0xFFFFFF00, 0x0A000202);  /* 10.0.2.15 / 10.0.2.2 */
         vga_puts("[OK] Network up (RTL8139 + TCP/IP, static 10.0.2.15)\n");
+        klog64_log("[BOOT] network up (RTL8139, static IP)");
     } else {
         vga_puts("[NET] No NIC found, network stack idle\n");
+        klog64_log("[BOOT] no NIC found, network idle");
     }
 
     /* 初始化存储硬件抽象层（已在前面初始化，这里跳过） */
@@ -1012,6 +1020,9 @@ void x86_64_kernel_main(void)
     int need_oobe = !auth64_is_configured();
     if (need_oobe) {
         vga_puts("\n[HepuOS] First boot detected, setup wizard pending...\n\n");
+        klog64_log("[OOBE] first boot, wizard pending");
+    } else {
+        klog64_log("[ACCOUNT] configured, skip OOBE");
     }
 
     /* 显示内存信息 */
@@ -1036,6 +1047,7 @@ void x86_64_kernel_main(void)
     /* 尝试启动桌面环境，失败则启动Shell */
     if (desktop64_init() == 0) {
         vga_puts("[INIT] Desktop environment ready\n");
+        klog64_log("[GUI] desktop environment ready");
 
         /* Crypto 完整懒加载 + TLS (延迟到桌面后，启动更快) */
         extern void crypto_init_full_lazy(void);
