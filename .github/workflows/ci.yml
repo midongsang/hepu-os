@@ -34,20 +34,12 @@ jobs:
       - name: Build 64-bit kernel
         run: make -C kernel/arch/x86_64 -j$(nproc)
 
-      # 32-bit legacy 内核（2008 年 K&R 风格）在 gcc 14 上不 build（bool typedef
-      # 冲突、隐式声明、参数类型不匹配）。QEMU smoke-test 用 64-bit 内核，32-bit
-      # 只作为 legacy 备用塞进镜像，不在 CI 阻塞路径上。本地 gcc 13 仍能编。
-      - name: Build 32-bit legacy kernel (skip on CI)
-        run: echo "SKIP: 32-bit legacy kernel 不支持 gcc 14，本地 gcc 13 可编"
-        continue-on-error: true
-
       - name: Build user apps (ulib + static ELFs)
         run: make -C user -j$(nproc) || true
 
       - name: Package single-IMG (ext2 + MBR + kernels)
         run: bash tools/make_single_img64.sh
         env:
-          # 宿主 glibc 回退路径（fresh clone 时 dynhello/ 目录里没有 .so）
           LD_SRC_FALLBACK: 1
 
       - name: Smoke-test with QEMU (headless boot)
@@ -58,10 +50,7 @@ jobs:
             -drive format=raw,file=/tmp/hepu64_single.img \
             -serial file:/tmp/serial.log \
             -monitor none || true
-          echo "=== serial.log (last 40 lines) ==="
           tail -40 /tmp/serial.log
-          echo "=== boot marker check ==="
-          grep -c "HepuOS" /tmp/serial.log && echo "BOOT_MARKER_FOUND" || echo "BOOT_MARKER_MISSING"
           test -s /tmp/serial.log && echo "QEMU_STARTED" || (echo "QEMU_FAILED"; exit 1)
 
       - name: Upload artifacts
@@ -74,5 +63,4 @@ jobs:
             /tmp/serial.log
             build_x86_64/hepu-kernel64.bin
             build_x86_64/hepu-kernel64.elf
-            build_v250/hepu-kernel.bin
           retention-days: 7
