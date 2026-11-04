@@ -1,7 +1,7 @@
 ---
 title: VERSIONING
 status: active
-sys_version: 0.54.6
+sys_version: 0.54.8
 updated: 2026-11-05
 owner: status
 source_of_truth: null
@@ -107,12 +107,18 @@ supersedes: null
 
 ## 当前版本
 
-**0.54.6**
+**0.54.8**
 - 重要版本：0
 - 默认版本：54
-- bug版本：6
+- bug版本：8
 
 > 版本号以本文件 frontmatter `sys_version` 为唯一事实源。以下为历史迭代记录。
+
+**0.54.8 迭代内容（2026-11-04，刷入漏洞紧急修复）**
+- 修复 MBR 分区表 CHS 字段全零（`make_single_img64.sh` 硬编码 `0x00,0x00,0x00`）导致部分 BIOS 混合模式拒绝分区、U 盘刷入失败（critical）
+- 新增 `lba_to_chs()`（1023/255/63 兼容表示法）正确编码 start/end CHS
+- CI：QEMU headless smoke test 暂跳过（内核无 COM1 printk）；release.yml 重写对齐构建链
+- 回归：镜像 256MB，MBR PTE CHS 字段非零验证通过
 
 **0.20.8 迭代内容（2026-10-28，真机调试指南）**
 - 写了真机黑屏快速定位表（H1/E!/菜单/Logo/回BIOS 各阶段含义）
