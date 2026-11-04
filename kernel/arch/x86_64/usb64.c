@@ -221,6 +221,7 @@ typedef struct {
     uint8_t report[16];
     uint8_t report_len;
     int abs_x, abs_y, left, right;
+    int wheel;              /* V0.55: 滚轮累积 (QEMU 3.1+ tablet 报告第 6 字节) */
     int click_latch;        /* 快速点击: 按下沿在两次轮询间完成时保留, 防止点击丢失 */
 } usb_tablet_t;
 static usb_tablet_t g_usb_tablets[USB_MAX_TABLETS];
@@ -1453,6 +1454,9 @@ void usb64_poll(void)
                 if ((buttons & 0x01) && !t->left) t->click_latch = 1;
                 t->left = buttons & 0x01;
                 t->right = buttons & 0x02;
+                /* V0.55: 滚轮字节 (报告带 wheel 时 len = off+6) */
+                if (t->report_len >= off + 6)
+                    t->wheel += (int8_t)t->report[off + 5];
             }
             continue;
         }
@@ -1475,6 +1479,9 @@ void usb64_poll(void)
                 if ((buttons & 0x01) && !t->left) t->click_latch = 1;
                 t->left = buttons & 0x01;
                 t->right = buttons & 0x02;
+                /* V0.55: 滚轮字节 (同 EHCI 分支) */
+                if (t->report_len >= off + 6)
+                    t->wheel += (int8_t)t->report[off + 5];
             }
         }
         t->td->status = TD_STATUS_ACTIVE;
@@ -1757,6 +1764,17 @@ int usb64_tablet_take_click(void)
 
 /* V0.13.8 P6: tablet 绝对定位 API (hsinput 优先使用; 多平板取最近插入) */
 int usb64_tablet_available(void) { return g_usb_tablets_count > 0; }
+
+/* V0.55: tablet 滚轮 (读取并清零累积值, 语义同 usb64_mouse_get_wheel) */
+int usb64_tablet_get_wheel(void)
+{
+    usb_tablet_t *t = (g_usb_tablets_count > 0) ?
+        &g_usb_tablets[g_usb_tablets_count - 1] : 0;
+    if (!t) return 0;
+    int w = t->wheel;
+    t->wheel = 0;
+    return w;
+}
 void usb64_tablet_get(int *x, int *y, int *left, int *right)
 {
     usb_tablet_t *t = (g_usb_tablets_count > 0) ?

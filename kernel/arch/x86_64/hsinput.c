@@ -291,13 +291,15 @@ void hs_input_poll(void)
     if (right && !last_right) hepushell_handle_right_click(mx, my);
     last_right = right;
 
-    /* V0.13.9: 滚轮 → 桌面 (USB 鼠标优先, PS/2 兜底; tablet 无滚轮) */
+    /* V0.13.9: 滚轮 → 桌面 (USB 鼠标优先, tablet 次之, PS/2 兜底) */
     {
         extern int usb64_mouse_get_wheel(void);
         extern int mouse64_get_wheel(void);
+        extern int usb64_tablet_get_wheel(void);
         int wheel = 0;
         if (usb64_mouse_available()) wheel = usb64_mouse_get_wheel();
-        else if (!usb64_tablet_available()) wheel = mouse64_get_wheel();
+        else if (usb64_tablet_available()) wheel = usb64_tablet_get_wheel();
+        else wheel = mouse64_get_wheel();
         wheel += g_wheel_acc;   /* 兼容外部 hs_input_wheel 注入 */
         g_wheel_acc = 0;
         if (wheel != 0) {

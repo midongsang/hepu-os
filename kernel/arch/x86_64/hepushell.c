@@ -104,6 +104,10 @@ static int g_sidebar_tab;
 static int g_island_expanded;
 int g_pending_app;
 
+/* V0.55: 侧栏滚动 (对齐 Clavis SidebarFlickable: 垂直滚动+细滚动条)
+ * 基准单位(1024x768), 渲染时经 hs_sy 缩放; 仅内容溢出的标签页生效 */
+static int g_sidebar_scroll = 0;
+
 /* 右键菜单状态 */
 static int g_context_menu_visible = 0;
 static int g_context_menu_x = 0;
@@ -2079,6 +2083,43 @@ static void hs_login_screen_render(void)
     }
 }
 
+/* V0.55: 侧栏内容高度(基准单位) — 内容超出可视区的高度即可滚动量 */
+static int hs_sidebar_max_scroll(int tab)
+{
+    int content;
+    if (tab == 1) {
+        /* Apps: 标题 35 + 行数*88 (行高对齐 Clavis cell 间距) */
+        int rows = (g_shell.app_count + 2) / 3;
+        content = 35 + rows * 88;
+    } else if (tab == 0) {
+        content = 35 + 28 + 28 + 40 + 24 + 20 + 20 + 20;  /* Info 固定行 */
+    } else {
+        content = 40 + 70 + 24 + 18 + 30 + 40;            /* Weather 固定行 */
+    }
+    int visible = g_shell.ui.sidebar_height - 52 - 12;    /* 内容顶 52, 底留 12 */
+    int maxs = content - visible;
+    return maxs > 0 ? maxs : 0;
+}
+
+/* V0.55: 侧栏滚轮 — 指针在侧栏内且当前页可滚动时消费, 返回 1 */
+static int hs_sidebar_handle_wheel(int wheel)
+{
+    if (!hs_panel_is_enabled("sidebar")) return 0;
+    int sx = hs_sx(g_shell.ui.sidebar_x);
+    int sy = hs_sy(g_shell.ui.sidebar_y);
+    int sw = hs_sx(g_shell.ui.sidebar_width);
+    int sh = hs_sy(g_shell.ui.sidebar_height);
+    if (g_shell.mouse_x < sx || g_shell.mouse_x > sx + sw ||
+        g_shell.mouse_y < sy || g_shell.mouse_y > sy + sh)
+        return 0;
+    int maxs = hs_sidebar_max_scroll(g_sidebar_tab);
+    if (maxs <= 0) return 0;
+    g_sidebar_scroll += (wheel < 0) ? 24 : -24;
+    if (g_sidebar_scroll > maxs) g_sidebar_scroll = maxs;
+    if (g_sidebar_scroll < 0) g_sidebar_scroll = 0;
+    return 1;
+}
+
 static void hs_sidebar_render(void)
 {
     int sx = hs_sx(g_shell.ui.sidebar_x);
@@ -2174,17 +2215,20 @@ static void hs_sidebar_render(void)
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            sx + hs_sx(20), content_y, "Memory: 2GB", g_shell.colors.panel_fg, hs_s(12));
     } else if (g_sidebar_tab == 1) {
-        /* 应用抽屉 */
+        /* 应用抽屉 (V0.55: 真实注册应用列表 + Clavis 式垂直滚动) */
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            sx + hs_sx(20), content_y, "Applications", g_shell.colors.panel_fg, hs_s(18));
         content_y += hs_sy(35);
 
-        const char *apps[] = {"Terminal", "Files", "Browser", "Settings",
-                              "Editor", "Calculator", "Notes", "Task Mgr",
-                              "App Store", "About"};
-        for (int i = 0; i < 10; i++) {
+        int scroll = hs_sy(g_sidebar_scroll);
+        int clip_top = content_y;                 /* 网格视口顶 (标题固定) */
+        int clip_bot = sy + sh - hs_sy(8);        /* 侧栏底内边距 */
+        int row_h = hs_sy(88);
+        for (int i = 0; i < g_shell.app_count; i++) {
             int ax = sx + hs_sx(20) + (i % 3) * hs_sx(80);
-            int ay = content_y + (i / 3) * hs_sy(70);
+            int ay = content_y + (i / 3) * row_h - scroll;
+            /* 无裁剪原语: 整行剔除 — 行不完全落在视口内时跳过 */
+            if (ay < clip_top || ay + hs_sy(70) > clip_bot) continue;
             /* V0.13.15: 应用矢量图标(白, 透明底) */
             gfx64_fill_rounded_rect(ax, ay, hs_s(48), hs_s(48), hs_s(10), g_shell.colors.accent);
             uint32_t ic = 0xFDF8EF;
@@ -2198,11 +2242,32 @@ static void hs_sidebar_render(void)
                 case 6: hs_icon_doc(ax + hs_s(8), ay + hs_s(8), hs_s(32), ic); break;
                 case 7: hs_icon_task(ax + hs_s(8), ay + hs_s(8), hs_s(32), ic); break;
                 case 8: hs_icon_store(ax + hs_s(8), ay + hs_s(8), hs_s(32), ic); break;
-                default: hs_icon_info(ax + hs_s(8), ay + hs_s(8), hs_s(32), ic); break;
+                case 9: hs_icon_info(ax + hs_s(8), ay + hs_s(8), hs_s(32), ic); break;
+                case 10: hs_icon_settings(ax + hs_s(8), ay + hs_s(8), hs_s(32), ic); break;
+                case 11: hs_icon_task(ax + hs_s(8), ay + hs_s(8), hs_s(32), ic); break;
+                default: hs_icon_doc(ax + hs_s(8), ay + hs_s(8), hs_s(32), ic); break;
             }
-            /* 名称 */
+            /* 名称 (截断至 10 字符, 对齐单元格宽) */
+            char nm[11];
+            int nl = 0;
+            while (g_shell.apps[i].name[nl] && nl < 10) { nm[nl] = g_shell.apps[i].name[nl]; nl++; }
+            nm[nl] = 0;
             font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                               ax + hs_sx(2), ay + hs_sy(54), apps[i], g_shell.colors.panel_fg, hs_s(10));
+                               ax + hs_sx(2), ay + hs_sy(54), nm, g_shell.colors.panel_fg, hs_s(10));
+        }
+
+        /* Clavis StyledScrollBar: 内容溢出时右缘细 accent 滑块 */
+        {
+            int maxs = hs_sidebar_max_scroll(1);
+            if (maxs > 0) {
+                int track_y = clip_top;
+                int track_h = clip_bot - clip_top;
+                int tx = sx + sw - hs_sx(6);
+                gfx64_fill_rounded_rect(tx, track_y, hs_sx(3), track_h, hs_s(2), g_shell.colors.border);
+                int thumb_h = track_h * track_h / (track_h + hs_sy(maxs));
+                int thumb_y = track_y + (track_h - thumb_h) * g_sidebar_scroll / maxs;
+                gfx64_fill_rounded_rect(tx, thumb_y, hs_sx(3), thumb_h, hs_s(2), g_shell.colors.accent);
+            }
         }
     } else {
         /* 天气标签 */
@@ -2825,6 +2890,7 @@ void hepushell_handle_click(int x, int y)
             int tx = sx + hs_sx(12) + i * tab_w;
             if (x >= tx && x <= tx + tab_w - hs_sx(4)) {
                 g_sidebar_tab = i;
+                g_sidebar_scroll = 0;   /* V0.55: 切页重置滚动 */
                 return;
             }
         }
@@ -3223,6 +3289,7 @@ void hepushell_handle_key(int key)
     /* Tab键切换侧边栏标签 */
     if (key == 0x0F || key == '\t') {
         g_sidebar_tab = (g_sidebar_tab + 1) % 3;
+        g_sidebar_scroll = 0;   /* V0.55: 切页重置滚动 */
         return;
     }
 
@@ -4532,6 +4599,8 @@ void hepushell_update_wheel(int wheel)
 {
     /* 应用窗口滚动优先(系统工具/终端等), 否则保留 UI 缩放 */
     if (!hs_systools_handle_wheel(wheel)) hs_apps_handle_wheel(wheel);
+    /* V0.55: 侧栏滚动 (指针在侧栏内且内容溢出时消费) */
+    if (hs_sidebar_handle_wheel(wheel)) return;
     if (wheel > 0 && g_ui_scale_v < 150) g_ui_scale_v += 5;
     else if (wheel < 0 && g_ui_scale_v > 50) g_ui_scale_v -= 5;
 }
