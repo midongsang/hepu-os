@@ -6,6 +6,10 @@
 #include <stdint.h>
 #include <stddef.h>
 
+/* V0.54.8: COM1 serial (headless CI boot test) */
+extern int uart64_init(int com);
+extern int uart64_puts(int com, const char *str);
+
 /* 本地基础库函数 */
 extern void vga_clear(void);
 extern void vga_puts(const char *str);
@@ -24,6 +28,7 @@ extern void irq64_init(void);
 
 /* GDT/TSS初始化 */
 extern void gdt64_init(void);
+extern void tss64_init(void);
 
 /* 系统调用 */
 extern void syscall64_init(void);
@@ -42,6 +47,7 @@ extern void vmm64_load_cr3(uint64_t pml4_addr);
 extern void ide64_init(void);
 extern void ide64_test(void);
 extern uint64_t ide64_get_capacity(int drive);
+extern int ide64_read_sector(int drive, uint8_t *buf);
 
 /* ext2文件系统 */
 extern int ext2_64_init(void);
@@ -165,6 +171,11 @@ void x86_64_kernel_main(void)
     /* 最早期启用FPU/SSE，防止编译器生成的SSE指令在启用前触发#UD */
     extern void x86_64_enable_fpu_early(void);
     x86_64_enable_fpu_early();
+
+    /* V0.54.8: 尽早初始化COM1串口 —— headless CI QEMU smoke test 只有 serial.log 非空才算过
+     * 16550 UART (uart64_init 在 kernel/arch/x86_64/uart64.c)，纯 IO port 访问, 不依赖 paging/FPU. */
+    uart64_init(0);
+    uart64_puts(0, "=== HepuOS 64-bit Kernel booting ===\n");
 
     /* 显示启动信息 */
     vga_puts("========================================\n");
