@@ -62,7 +62,8 @@ __pycache__/
 Thumbs.db
 
 # ---- 调试/日志 ----
-debug/
+build*/debug/
+kernel/debug/
 *.log
 *.dmp
 *.core
