@@ -3592,6 +3592,7 @@ int hs_notification_send(const char *title, const char *body, int urgency, int t
     n->timeout = timeout;
     n->visible = 1;
     n->timestamp = 0;  /* TODO: 使用RTC */
+    n->born_frame = g_frame_no;
 
     int i = 0;
     while (title && title[i] && i < 63) { n->title[i] = title[i]; i++; }
@@ -3615,46 +3616,81 @@ void hs_notification_render(void)
 {
     void *fb = gfx64_get_framebuffer();
 
-    /* V0.13.39: 渲染弹出通知(位置可配置) */
-    int w = 280;
-    int h = 60;
+    /* V0.55: Clavis 风格通知卡片栈 (Keystone NotificationContent):
+       圆角卡片 + 应用图标圆 + 到期进度条 + 滑入动效, 位置可配置 */
+    int w = 288;
+    int h = 64;
+    int gap = 10;
     int popup_count = 0;
 
     for (int i = g_shell.notifications.count - 1; i >= 0 && popup_count < 3; i--) {
         hs_notification_t *n = &g_shell.notifications.notifications[i];
         if (!n->visible) continue;
 
+        /* 到期隐藏 (timeout 毫秒, 桌面循环约 60fps) */
+        uint32_t age = g_frame_no - n->born_frame;
+        uint32_t life = (uint32_t)n->timeout * 60 / 1000;
+        if (n->timeout > 0 && age > life) { n->visible = 0; continue; }
+
         int x, y;
+        int right_side = (g_notif_pos == 0 || g_notif_pos == 2);
         if (g_notif_pos == 0) {      /* 右上: 向下堆叠 */
             x = g_shell.screen_width - w - 8;
-            y = HS_PANEL_HEIGHT + 8 + popup_count * (h + 8);
+            y = HS_PANEL_HEIGHT + 8 + popup_count * (h + gap);
         } else if (g_notif_pos == 1) { /* 左上 */
             x = 8;
-            y = HS_PANEL_HEIGHT + 8 + popup_count * (h + 8);
+            y = HS_PANEL_HEIGHT + 8 + popup_count * (h + gap);
         } else if (g_notif_pos == 2) { /* 右下: 向上堆叠 */
             x = g_shell.screen_width - w - 8;
-            y = g_shell.screen_height - 40 - (popup_count + 1) * (h + 8);
+            y = g_shell.screen_height - 40 - (popup_count + 1) * (h + gap);
         } else {                       /* 左下 */
             x = 8;
-            y = g_shell.screen_height - 40 - (popup_count + 1) * (h + 8);
+            y = g_shell.screen_height - 40 - (popup_count + 1) * (h + gap);
         }
 
-        /* 背景 */
-        uint32_t bg = n->urgency == 2 ? 0xCC3333 : g_shell.colors.window_bg;
-        gfx64_fill_rect(x, y, w, h, bg);
-        gfx64_draw_rect(x, y, w, h, g_shell.colors.accent);
+        /* 滑入动效: 前 10 帧从锚定边缘滑入 (二次缓出) */
+        if (age < 10) {
+            int t = 10 - (int)age;
+            int slide = t * t * (w + 16) / 100;
+            x += right_side ? slide : -slide;
+        }
 
-        /* 标题 */
+        /* 卡片底: surfaceContainerHigh + 细描边, 圆角 10 */
+        gfx64_fill_rounded_rect(x, y, w, h, HS_RD_WIN, g_shell.colors.titlebar_bg);
+        gfx64_draw_rounded_rect(x, y, w, h, HS_RD_WIN, g_shell.colors.border);
+
+        /* 图标: 普通=accent 圆形, 紧急=红色圆角方块, 内绘标题首字母 */
+        uint32_t icon_bg = (n->urgency == 2) ? 0xE5484D : g_shell.colors.accent;
+        uint32_t icon_fg = (n->urgency == 2) ? 0xFFFFFF : hs_on_accent();
+        int icx = x + 28, icy = y + 30, ir = 15;
+        if (n->urgency == 2)
+            gfx64_fill_rounded_rect(icx - ir, icy - ir, ir * 2, ir * 2, 8, icon_bg);
+        else
+            gfx64_fill_circle(icx, icy, ir, icon_bg);
+        if (n->title[0]) {
+            char ch[2] = { n->title[0], 0 };
+            if (ch[0] >= 'a' && ch[0] <= 'z') ch[0] -= 32;
+            font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                               icx - 4, icy - 7, ch, icon_fg, 14);
+        }
+
+        /* 标题 (12px) 与正文 (10px), 按宽度截断 */
+        int tx = x + 52;
+        int max_chars = (w - 52 - 12) / 7;
+        char tb[64];
+        int ti = 0;
+        while (n->title[ti] && ti < max_chars && ti < 62) { tb[ti] = n->title[ti]; ti++; }
+        tb[ti] = 0;
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           x + 8, y + 6, n->title,
-                           g_shell.colors.window_fg, 12);
-
-        /* 内容 */
+                           tx, y + 10, tb, g_shell.colors.window_fg, 12);
+        max_chars = (w - 52 - 12) / 6;
+        ti = 0;
+        while (n->body[ti] && ti < max_chars && ti < 62) { tb[ti] = n->body[ti]; ti++; }
+        tb[ti] = 0;
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           x + 8, y + 24, n->body,
-                           g_shell.colors.panel_fg, 10);
+                           tx, y + 30, tb, g_shell.colors.panel_fg, 10);
 
-        /* V0.13.39: 通知时间戳 (RTC 真实时间) */
+        /* 时间戳 (RTC 真实时间), 卡片右上角 */
         {
             uint8_t th = rtc64_get_hours();
             uint8_t tm = rtc64_get_minutes();
@@ -3662,7 +3698,18 @@ void hs_notification_render(void)
             ts[0] = '0' + th / 10; ts[1] = '0' + th % 10; ts[2] = ':';
             ts[3] = '0' + tm / 10; ts[4] = '0' + tm % 10; ts[5] = 0;
             font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                               x + w - 40, y + 44, ts, g_shell.colors.panel_fg, 10);
+                               x + w - 40, y + 8, ts, g_shell.colors.panel_fg, 9);
+        }
+
+        /* 到期进度条: 底部 2px, accent 剩余比例 (对齐 Clavis progressTrack) */
+        if (n->timeout > 0 && life > 0) {
+            int track_w = w - 16;
+            int remain = (int)((life - age) * track_w / life);
+            gfx64_fill_rounded_rect(x + 8, y + h - 5, track_w, 2, 1,
+                                    g_shell.colors.border);
+            if (remain > 2)
+                gfx64_fill_rounded_rect(x + 8, y + h - 5, remain, 2, 1,
+                                        g_shell.colors.accent);
         }
 
         popup_count++;

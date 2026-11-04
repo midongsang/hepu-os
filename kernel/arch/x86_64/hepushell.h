@@ -124,6 +124,7 @@ typedef struct {
     int timestamp;
     int visible;
     int timeout;  /* 0=persistent */
+    uint32_t born_frame; /* 发送时的渲染帧号 (到期/滑入/进度条时基) */
 } hs_notification_t;
 
 /* 通知中心 */
