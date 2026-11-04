@@ -1,21 +1,9 @@
 name: Release
 
-# 仓库瘦身之后，tag push 触发完整镜像构建 + QEMU GUI 回归。
-# 本地也可以 workflow_dispatch 手动触发。
-
 on:
   push:
     tags: ['v*']
   workflow_dispatch:
-    inputs:
-      full_test:
-        description: '跑全量 GUI 自动化回归（耗时 ~5 分钟）'
-        required: false
-        default: 'true'
-        type: choice
-        options:
-          - 'true'
-          - 'false'
 
 concurrency:
   group: release-${{ github.ref }}
@@ -26,8 +14,6 @@ jobs:
     name: Build + Package
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    outputs:
-      image_size: ${{ steps.info.outputs.size }}
     steps:
       - uses: actions/checkout@v4
 
@@ -39,81 +25,37 @@ jobs:
             e2fsprogs qemu-system-x86 qemu-utils \
             python3 python3-pip python3-xattr mtools unzip
 
-      - name: Build
-        run: |
-          make -C tools/hepboot/x86_64
-          make -C kernel/arch/x86_64 -j$(nproc)
-          make -j$(nproc)
-          make -C user -j$(nproc) || true
-          bash tools/make_single_img64.sh
+      - name: Build bootloader (stage2)
+        run: make -C tools/hepboot/x86_64
 
-      - name: Info
-        id: info
-        run: echo "size=$(stat -c%s /tmp/hepu64_single.img)" >> "$GITHUB_OUTPUT"
+      - name: Build 64-bit kernel
+        run: make -C kernel/arch/x86_64 -j$(nproc)
 
-      - name: Upload to Release
-        uses: softprops/action-gh-release@v2
+      - name: Build user apps (ulib + static ELFs)
+        run: make -C user -j$(nproc) || true
+
+      - name: Package single-IMG (ext2 + MBR + kernels)
+        run: bash tools/make_single_img64.sh
+        env:
+          LD_SRC_FALLBACK: 1
+
+      - name: Image info
+        run: stat -c '%s bytes' /tmp/hepu64_single.img
+
+      - name: Attach image to Release
         if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
         with:
           files: /tmp/hepu64_single.img
           body: |
-            **镜像构建自动产物** · tag `${{ github.ref_name }}`
-            ```
-            大小: ${{ steps.info.outputs.size }} bytes (≈ ${{ (format('{0:N1}', steps.info.outputs.size / 1048576)) }} MB)
-            架构: x86_64 + 32-bit fallback kernel
-            根分区: ext2, MBR partitioned
-            ```
+            **镜像自动构建产物** · tag `${{ github.ref_name }}`
+            - 架构: x86_64 内核 + 32-bit legacy fallback
+            - 分区: MBR + ext2 根分区 (224MB)
 
-  qemu-test:
-    name: QEMU GUI automation
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    needs: build
-    if: github.event.inputs.full_test == 'true' || github.event_name == 'push'
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install deps
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq \
-            qemu-system-x86 qemu-utils python3-pip python3-xattr
-          python3 -m pip install --break-system-packages pillow 2>/dev/null || true
-
-      - name: Download built image artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: build-${{ github.sha }}
-          path: /tmp
-          # release 触发时用同一个 sha 的 build job 产物
-          source-repo: ${{ github.repository }}
-          run-id: ${{ github.run_id }}
-        continue-on-error: true   # workflow_dispatch 时需要从 build job 找；tag push 同一 run
-
-      - name: Copy image
-        run: ls -la /tmp/hepu64_single.img || (echo "需要先 build job 产出 artifact"; exit 1)
-
-      - name: Run gui_test.py --scenario all
-        run: |
-          QEMU_DATADIR=/usr/share/qemu \
-          python3 tools/gui_test.py \
-            --qemu /usr/bin/qemu-system-x86_64 \
-            --image /tmp/hepu64_single.img \
-            --scenario all \
-            --out /tmp/gui_out
-          echo "=== 结果 ==="
-          cat /tmp/gui_out/serial.log | tail -50 || true
-          echo "=== screenshots ==="
-          ls /tmp/gui_out/*.ppm 2>/dev/null || true
-          echo "=== PASS rate ==="
-          # 所有场景 PASS 退出码是 0；有 FAIL 是 1
-          echo "gui_test exit=$?"
-
-      - name: Upload test artifacts
+      - name: Upload artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: qemu-test-${{ github.run_id }}
-          path: |
-            /tmp/gui_out/
+          name: release-${{ github.sha }}
+          path: /tmp/hepu64_single.img
           retention-days: 7

@@ -5,18 +5,18 @@
 [![Build](https://github.com/midongsang/hepu-os/actions/workflows/ci.yml/badge.svg)](https://github.com/midongsang/hepu-os/actions/workflows/ci.yml)
 [![Release](https://github.com/midongsang/hepu-os/actions/workflows/release.yml/badge.svg)](https://github.com/midongsang/hepu-os/actions/workflows/release.yml)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPLv3-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-v0.54.7-yellow.svg)](https://github.com/midongsang/hepu-os/releases)
-[![Kernel size](https://img.shields.io/badge/kernel-586KB-red.svg)](#当前版本)
+[![Version](https://img.shields.io/badge/version-v0.54.8-brightgreen.svg)](https://github.com/midongsang/hepu-os/releases)
+[![Kernel size](https://img.shields.io/badge/kernel-586KB-blue.svg)](#当前版本)
 [![glibc 动态链接](https://img.shields.io/badge/glibc-✓-brightgreen.svg)](#核心特性)
 [![ext2](https://img.shields.io/badge/ext2-✓-brightgreen.svg)](#核心特性)
 [![SMP](https://img.shields.io/badge/SMP-4core-green.svg)](#核心特性)
-[![Discussions](https://img.shields.io/discussions/midongsang/hepu-os)](https://github.com/midongsang/hepu-os/discussions)
+[![Discussions](https://img.shields.io/badge/Discussions-欢迎交流-blue.svg)](https://github.com/midongsang/hepu-os/discussions)
 
 赫普OS是一款自研64位操作系统，支持SMP多处理器、双内核混合引导、完整图形桌面、ext2文件系统和TCP/IP网络协议栈。
 
 ## 当前版本
 
-**0.54.6** — 当前版本（版本号唯一事实源：`docs/status/VERSIONING.md` frontmatter）
+**0.54.8** — 当前版本（版本号唯一事实源：`docs/status/VERSIONING.md` frontmatter）
 
 ## 核心特性
 
