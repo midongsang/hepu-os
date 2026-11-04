@@ -88,13 +88,20 @@ if [ -n "$LOOPDEV" ]; then
             echo "  32位内核已复制到ext2 (/boot/kernel32.bin)"
         fi
         # P1-7: glibc 动态链接运行时 + 动态 hello（宿主 gcc 默认产物）
+        # glibc 运行时优先级：1) dynhello/ 目录（可离线）  2) 宿主系统 glibc（自动 fallback）
         DYN=$PROJECT/user/apps/dynhello
-        if [ -f "$DYN/hello_dyn.elf" ]; then
+        HOST_LD=$(ldconfig -p 2>/dev/null | grep "ld-linux-x86-64\.so\.2$" | awk '{print $NF; exit}')
+        HOST_LIBC=$(ldconfig -p 2>/dev/null | grep "libc\.so\.6$" | awk '{print $NF; exit}')
+        LD_SRC="$DYN/ld-linux-x86-64.so.2"
+        LIBC_SRC="$DYN/libc.so.6"
+        [ -f "$LD_SRC" ] || LD_SRC="$HOST_LD"
+        [ -f "$LIBC_SRC" ] || LIBC_SRC="$HOST_LIBC"
+        if [ -f "$DYN/hello_dyn.elf" ] && [ -n "$LD_SRC" ] && [ -n "$LIBC_SRC" ]; then
             mkdir -p /tmp/hepu_root_mnt/lib64 /tmp/hepu_root_mnt/lib/x86_64-linux-gnu /tmp/hepu_root_mnt/bin
-            cp "$DYN/ld-linux-x86-64.so.2" /tmp/hepu_root_mnt/lib64/ 2>/dev/null
-            cp "$DYN/libc.so.6" /tmp/hepu_root_mnt/lib/x86_64-linux-gnu/ 2>/dev/null
-            cp "$DYN/hello_dyn.elf" /tmp/hepu_root_mnt/bin/glibchello.elf 2>/dev/null
-            echo "  动态链接运行时已复制 (/lib64/ld-linux-x86-64.so.2, /lib/x86_64-linux-gnu/libc.so.6)"
+            cp "$LD_SRC"   /tmp/hepu_root_mnt/lib64/ld-linux-x86-64.so.2            2>/dev/null && echo "  ld-linux-x86-64.so.2  ($LD_SRC)"
+            cp "$LIBC_SRC" /tmp/hepu_root_mnt/lib/x86_64-linux-gnu/libc.so.6       2>/dev/null && echo "  libc.so.6            ($LIBC_SRC)"
+            cp "$DYN/hello_dyn.elf" /tmp/hepu_root_mnt/bin/glibchello.elf          2>/dev/null
+            echo "  动态链接运行时已复制（glibc 动态 hello: /bin/glibchello.elf）"
         fi
         sync
         umount /tmp/hepu_root_mnt 2>/dev/null
@@ -174,15 +181,21 @@ else
                     fi
                 done
             fi
-            # P1-7: glibc 动态链接运行时 + 动态 hello（宿主 gcc 默认产物）
+            # P1-7: glibc 动态链接运行时 + 动态 hello（debugfs fallback 路径）
             DYN="$PROJECT/user/apps/dynhello"
-            if [ -f "$DYN/hello_dyn.elf" ]; then
+            HOST_LD=$(ldconfig -p 2>/dev/null | grep "ld-linux-x86-64\.so\.2$" | awk '{print $NF; exit}')
+            HOST_LIBC=$(ldconfig -p 2>/dev/null | grep "libc\.so\.6$" | awk '{print $NF; exit}')
+            LD_SRC="$DYN/ld-linux-x86-64.so.2"
+            LIBC_SRC="$DYN/libc.so.6"
+            [ -f "$LD_SRC" ] || LD_SRC="$HOST_LD"
+            [ -f "$LIBC_SRC" ] || LIBC_SRC="$HOST_LIBC"
+            if [ -f "$DYN/hello_dyn.elf" ] && [ -n "$LD_SRC" ] && [ -n "$LIBC_SRC" ]; then
                 echo "mkdir /lib64" | debugfs -w $TMPDIR/rootfs.ext2 2>/dev/null
                 echo "mkdir /lib/x86_64-linux-gnu" | debugfs -w $TMPDIR/rootfs.ext2 2>/dev/null
-                echo "write $DYN/ld-linux-x86-64.so.2 /lib64/ld-linux-x86-64.so.2" | debugfs -w $TMPDIR/rootfs.ext2 2>/dev/null
-                echo "write $DYN/libc.so.6 /lib/x86_64-linux-gnu/libc.so.6" | debugfs -w $TMPDIR/rootfs.ext2 2>/dev/null
-                echo "write $DYN/hello_dyn.elf /bin/glibchello.elf" | debugfs -w $TMPDIR/rootfs.ext2 2>/dev/null
-                echo "  动态链接运行时已写入 ext2"
+                echo "write $LD_SRC /lib64/ld-linux-x86-64.so.2"            | debugfs -w $TMPDIR/rootfs.ext2 2>/dev/null
+                echo "write $LIBC_SRC /lib/x86_64-linux-gnu/libc.so.6"     | debugfs -w $TMPDIR/rootfs.ext2 2>/dev/null
+                echo "write $DYN/hello_dyn.elf /bin/glibchello.elf"        | debugfs -w $TMPDIR/rootfs.ext2 2>/dev/null
+                echo "  动态链接运行时已写入 ext2（glibc 动态 hello: /bin/glibchello.elf）"
             fi
             # V0.13.43: 兼容层测试程序写入 /bin/ (ELF32/PE/Mach-O, 供 run 命令加载)
             for f in linuxhello.elf winhello.exe winargs.exe macho_demo; do

@@ -20,10 +20,31 @@ user/rust/target/
 *.so.*
 *.hex
 
-# ---- P1-7 动态链接 glibc 运行时（必需，make_single_img64.sh 直接引用） ----
-!user/apps/dynhello/ld-linux-x86-64.so.2
-!user/apps/dynhello/libc.so.6
-!user/apps/dynhello/hello_dyn.elf
+# ---- 二进制运行时（Tier 1 迁出，tools/prepare_binaries.sh 拉取）----
+# glibc 动态链接运行时（宿主 glibc 提供，make_single_img64.sh 自动 fallback）
+user/apps/dynhello/ld-linux-x86-64.so.2
+user/apps/dynhello/libc.so.6
+
+# Secure Boot 密钥（安全敏感，部署前本地 generate_keys.sh 生成）
+tools/hepboot/uefi/secureboot/*.key
+tools/hepboot/uefi/secureboot/*.crt
+tools/hepboot/uefi/secureboot/*.auth
+tools/hepboot/uefi/secureboot/*.esl
+tools/hepboot/uefi/secureboot/*.csr
+
+# QEMU UEFI 固件（EDK2 官方发布，~11MB，从 OVMF 仓库下载）
+tools/datadir/OVMF_CODE.fd
+tools/datadir/OVMF_CODE_4M.fd
+tools/datadir/OVMF_VARS.fd
+tools/datadir/OVMF_VARS_4M.fd
+
+# Shim 引导器（外部二进制，Fedora shim 项目）
+tools/hepboot/uefi/shim/shimx64.efi
+tools/hepboot/uefi/shim/mmx64.efi
+tools/hepboot/uefi/shim/fbx64.efi
+
+# Hepboot UEFI 引导器（构建产物，由 hepboot_gop.c + jump_kernel_64.S 编译）
+tools/hepboot/uefi/hepboot_uefi.efi
 
 # ---- Python ----
 __pycache__/
