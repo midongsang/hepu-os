@@ -218,6 +218,21 @@ def scenario_boot(g):
     print("[PASS] 桌面启动截图 01_desktop")
 
 
+OOBE_KEYS = ["1", "1", "1",                 # 语言=中文 时区=北京 类型=普通用户
+             "h", "e", "p", "u", "enter",   # 用户名 hepu
+             "1", "2", "3", "4", "enter",   # 密码
+             "1", "2", "3", "4", "enter",   # 确认
+             "space"]                       # 欢迎屏 -> 桌面
+
+
+def oobe_setup(g):
+    """全新镜像首启会停在 OOBE 文本向导; 自动走完后桌面才启动."""
+    for k in OOBE_KEYS:
+        g.key(k)
+    time.sleep(20)              # 等桌面加载完 (含设置窗口自动打开)
+    print("[PASS] OOBE 向导自动完成 (账户 hepu/1234)")
+
+
 def scenario_files(g):
     g.key("f11")
     time.sleep(1.5)
@@ -253,6 +268,7 @@ def _px(png, x, y):
 
 def scenario_theme(g):
     """鼠标点击链路 + 主题取色器: 点 Appearance 菜单, 再点第 3 个色板圆点"""
+    g.shot("05a_pre_click")     # 诊断: 点击前桌面状态
     # 设置窗口开机即在级联位 (300,100), 左侧菜单行高 32: 首行 136-164
     g.q.click(340, 150)
     time.sleep(0.7)
@@ -303,6 +319,8 @@ def main():
                     help="按键间隔; 过小会丢键")
     ap.add_argument("--scenario", choices=["boot", "files", "fsck", "theme", "dyn", "all"],
                     default="all")
+    ap.add_argument("--oobe", action="store_true",
+                    help="镜像为全新盘时先自动完成首启向导再跑场景")
     args = ap.parse_args()
 
     qemu = args.qemu or find_qemu()
@@ -315,9 +333,16 @@ def main():
              "dyn": scenario_dyn}
     names = ["boot", "fsck", "files", "theme", "dyn"] if args.scenario == "all" else [args.scenario]
     # 每个场景独立启动: 窗口焦点/输入状态互不干扰
+    # --oobe 只需做一次: 首场景完成向导后账户写入镜像, 后续场景直接进桌面
+    # (若每个场景都发向导按键, 第二次起这些键会落到桌面: 数字切工作区、
+    #  空格开启动器, 场景断言全部错位)
+    did_oobe = False
     for name in names:
         g = Guest(args.image, args.out, qemu, args.boot_wait, args.key_delay)
         try:
+            if args.oobe and not did_oobe:
+                oobe_setup(g)
+                did_oobe = True
             steps[name](g)
         finally:
             g.close()
