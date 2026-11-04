@@ -132,6 +132,11 @@ extern void keyboard64_test(void);
 /* RTC驱动 */
 extern void rtc64_init(void);
 
+/* V0.55 P2/P3: 账户权限 + 首启向导 */
+extern void auth64_init(void);
+extern int  auth64_is_configured(void);
+extern void oobe64_run(void);
+
 /* 物理内存管理 */
 extern void pmm64_init(uint64_t memory_size, uint64_t bitmap_addr);
 extern void pmm64_get_stats(uint64_t *total, uint64_t *used, uint64_t *free);
@@ -1001,6 +1006,13 @@ void x86_64_kernel_main(void)
     /* 初始化RTC */
     vga_puts("[INIT] Initializing 64-bit RTC...\n");
     rtc64_init();
+
+    /* V0.55 P2/P3: 加载账户; 首次启动运行 OOBE 向导 */
+    auth64_init();
+    if (!auth64_is_configured()) {
+        vga_puts("\n[HepuOS] First boot detected, running setup wizard...\n\n");
+        oobe64_run();
+    }
 
     /* 显示内存信息 */
     vga_puts("\n[INFO] Kernel stack: ");
