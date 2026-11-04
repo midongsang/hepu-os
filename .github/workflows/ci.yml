@@ -35,7 +35,10 @@ jobs:
         run: make -C kernel/arch/x86_64 -j$(nproc)
 
       - name: Build 32-bit kernel + user apps
-        run: make -j$(nproc)
+        # 顶层 Makefile 的 $(dirs) 目标先建 build_v250 再编译，但 -j 会让子目录
+        # .o 规则并行触发、在 mkdir 完成前就 try 写入（32-bit Makefile 没有
+        # order-only prereq，64-bit 那个有）。这里用串行构建避免竞态。
+        run: make dirs && make
 
       - name: Build user apps (ulib + static ELFs)
         run: make -C user -j$(nproc) || true
