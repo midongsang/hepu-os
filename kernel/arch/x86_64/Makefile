@@ -200,6 +200,12 @@ ifneq ($(USER_ISOLATION),0)
 CFLAGS += -DHEPU_USER_ISOLATION=1
 endif
 
+# gcc 14 默认把 implicit-function-declaration 升级为 error（C99+ 标准要求）。
+# kernel_main_64.c 里有上百个项目内函数调用但没有显式 #include，全靠隐式声明。
+# 这些函数都是 int/void 返回、无复杂结构体参数，链接器能正确处理类型匹配。
+# TODO(V0.55): 给 kernel_main_64.c 补全各模块头文件，移除这条 flag。
+CFLAGS += -Wno-implicit-function-declaration
+
 ASFLAGS = \
     -m64 \
     -mno-red-zone \
