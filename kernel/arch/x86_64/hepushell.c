@@ -153,10 +153,10 @@ static const char *default_config =
 "    sidebar_y: 50\n"
 "    sidebar_width: 280\n"
 "    sidebar_height: 500\n"
-"    cc_margin_right: 300\n"
-"    cc_y: 50\n"
-"    cc_width: 280\n"
-"    cc_height: 380\n"
+"    cc_margin_right: 384\n"
+"    cc_y: 108\n"
+"    cc_width: 360\n"
+"    cc_height: 440\n"
 "    bar_height: 36\n"
 "    island_width: 120\n"
 "    island_height: 28\n"
@@ -238,10 +238,10 @@ static void load_ui_from_config(hsqml_node_t *ui)
     g_shell.ui.sidebar_y = hsqml_get_number(ui, "sidebar_y", 50);
     g_shell.ui.sidebar_width = hsqml_get_number(ui, "sidebar_width", 280);
     g_shell.ui.sidebar_height = hsqml_get_number(ui, "sidebar_height", 500);
-    g_shell.ui.cc_margin_right = hsqml_get_number(ui, "cc_margin_right", 300);
-    g_shell.ui.cc_y = hsqml_get_number(ui, "cc_y", 50);
-    g_shell.ui.cc_width = hsqml_get_number(ui, "cc_width", 280);
-    g_shell.ui.cc_height = hsqml_get_number(ui, "cc_height", 380);
+    g_shell.ui.cc_margin_right = hsqml_get_number(ui, "cc_margin_right", 384);
+    g_shell.ui.cc_y = hsqml_get_number(ui, "cc_y", 108);
+    g_shell.ui.cc_width = hsqml_get_number(ui, "cc_width", 360);
+    g_shell.ui.cc_height = hsqml_get_number(ui, "cc_height", 440);
     g_shell.ui.bar_height = hsqml_get_number(ui, "bar_height", 40);
     g_shell.ui.island_width = hsqml_get_number(ui, "island_width", 120);
     g_shell.ui.island_height = hsqml_get_number(ui, "island_height", 28);
@@ -1580,17 +1580,17 @@ int hs_panel_is_enabled(const char *name)
 
 void hs_panel_render_all(void)
 {
-    /* 按层级顺序渲染所有启用的面板（顶部面板优先，避免累积corruption） */
+    /* 按层级顺序渲染所有启用的面板（顶部面板优先，避免累积corruption）
+     * 控制中心是常驻侧栏，绘制在窗口之上，见 hepushell_render */
     int order[] = {
         HS_PANEL_TOP_BAR,
         HS_PANEL_DYNAMIC_ISLAND,
         HS_PANEL_DOCK,
         HS_PANEL_DESKTOP_CLOCK,
         HS_PANEL_WEATHER,
-        HS_PANEL_SIDEBAR,
-        HS_PANEL_CONTROL_CENTER
+        HS_PANEL_SIDEBAR
     };
-    for (int i = 0; i < HS_PANEL_COUNT; i++) {
+    for (int i = 0; i < 6; i++) {
         int idx = order[i];
         if (g_shell.panel_registry[idx].enabled && g_shell.panel_registry[idx].render) {
             g_shell.panel_registry[idx].render();
@@ -2240,90 +2240,229 @@ static void hs_sidebar_render(void)
     }
 }
 
-/* 右侧控制中心 */
+/* 右侧控制中心（对照 Clavis ControlCenterWindow 的导航栏 + 分页结构） */
+static int g_cc_page = 0;
+
+#define CC_RAIL_W 104        /* 导航栏宽度 */
+#define CC_PAD    16         /* 内容区内边距 */
+
+static void cc_geometry(int *cx, int *cy, int *cw, int *ch)
+{
+    int w = g_shell.ui.cc_width;
+    int h = g_shell.ui.cc_height;
+    if (w < 300) w = 360;
+    if (h < 320) h = 440;
+    *cw = w;
+    *ch = h;
+    *cx = g_shell.screen_width - g_shell.ui.cc_margin_right;
+    if (*cx < 0) *cx = 0;
+    if (*cx + w > g_shell.screen_width) *cx = g_shell.screen_width - w - 8;
+    *cy = g_shell.ui.cc_y;
+    if (*cy + h > g_shell.screen_height) *cy = g_shell.screen_height - h - 8;
+}
+
+/* 开关卡片：开启态用强调色填充，关闭态用次要表面 */
+static void cc_toggle_card(void *fb, int x, int y, int w, int h,
+                           int on, const char *label, const char *sub)
+{
+    uint32_t bg = on ? g_shell.colors.accent : g_shell.colors.titlebar_bg;
+    uint32_t fg = on ? hs_on_accent() : g_shell.colors.panel_fg;
+    uint32_t fg2 = on ? hs_on_accent() : g_shell.colors.text_secondary;
+    gfx64_fill_rounded_rect(x, y, w, h, 10, bg);
+    if (!on) gfx64_draw_rounded_rect(x, y, w, h, 10, g_shell.colors.border);
+    int lx = x + (w - (int)strlen(label) * 7) / 2;
+    if (lx < x + 6) lx = x + 6;
+    font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                       lx, y + 14, label, fg, 13);
+    int sx = x + (w - (int)strlen(sub) * 5) / 2;
+    if (sx < x + 6) sx = x + 6;
+    font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                       sx, y + 36, sub, fg2, 11);
+}
+
+/* 滑块卡片：标题 + 百分比 + 轨道 */
+static void cc_slider_card(void *fb, int x, int y, int w, int h,
+                           const char *label, int val)
+{
+    gfx64_fill_rounded_rect(x, y, w, h, 10, g_shell.colors.titlebar_bg);
+    gfx64_draw_rounded_rect(x, y, w, h, 10, g_shell.colors.border);
+
+    char vb[8];
+    int p = 0;
+    if (val >= 100) {
+        vb[p++] = '1'; vb[p++] = '0'; vb[p++] = '0';
+    } else if (val >= 10) {
+        vb[p++] = '0' + val / 10; vb[p++] = '0' + val % 10;
+    } else {
+        vb[p++] = '0' + val;
+    }
+    vb[p++] = '%';
+    vb[p] = 0;
+
+    font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                       x + 14, y + 12, label, g_shell.colors.panel_fg, 13);
+    font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                       x + w - 52, y + 12, vb, g_shell.colors.text_secondary, 12);
+
+    int tx = x + 14;
+    int tw = w - 28;
+    int ty = y + h - 22;
+    int fill = tw * val / 100;
+    gfx64_fill_rounded_rect(tx, ty, tw, 8, 4, g_shell.colors.border);
+    if (fill > 8)
+        gfx64_fill_rounded_rect(tx, ty, fill, 8, 4, g_shell.colors.accent);
+    gfx64_fill_circle(tx + fill - 8, ty + 4, 7, g_shell.colors.accent);
+}
+
 static void hs_control_center_render(void)
 {
-    int cx = 724;
-    int cy = 50;
-    int cw = 280;
-    int ch = 380;
+    int cx, cy, cw, ch;
+    cc_geometry(&cx, &cy, &cw, &ch);
 
-    gfx64_fill_rounded_rect(cx, cy, cw, ch, 16, g_shell.colors.window_bg);
-    gfx64_draw_rounded_rect(cx, cy, cw, ch, 16, g_shell.colors.border);
+    gfx64_fill_rounded_rect(cx, cy, cw, ch, 12, g_shell.colors.window_bg);
+    gfx64_draw_rounded_rect(cx, cy, cw, ch, 12, g_shell.colors.border);
 
     void *fb = gfx64_get_framebuffer();
 
-    font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                       cx + 20, cy + 16, "Control Center", g_shell.colors.panel_fg, 18);
-
-    /* 快捷开关网格（状态来自g_shell.cc，可交互） */
-    int toggle_y = cy + 50;
-    const char *toggles[] = {"WiFi", "BT", "Air", "DND", "Loc", "Torch"};
-    for (int i = 0; i < 6; i++) {
-        int tx = cx + 20 + (i % 3) * 84;
-        int ty = toggle_y + (i / 3) * 60;
-        uint32_t bg = g_shell.cc.toggles[i] ? g_shell.colors.accent : g_shell.colors.border;
-        uint32_t fg = g_shell.cc.toggles[i] ? hs_on_accent() : g_shell.colors.panel_fg;
-        gfx64_fill_rounded_rect(tx, ty, 72, 48, 10, bg);
+    /* 导航栏（Clavis NavigationRail） */
+    const char *nav[] = {"Quick", "Devices", "Audio"};
+    for (int i = 0; i < 3; i++) {
+        int nx = cx + 8;
+        int ny = cy + 14 + i * 46;
+        int nw = CC_RAIL_W - 16;
+        int nh = 38;
+        uint32_t bg = (i == g_cc_page) ? g_shell.colors.accent : g_shell.colors.window_bg;
+        uint32_t fg = (i == g_cc_page) ? hs_on_accent() : g_shell.colors.panel_fg;
+        if (i != g_cc_page)
+            gfx64_fill_rounded_rect(nx, ny, nw, nh, 8, g_shell.colors.titlebar_bg);
+        else
+            gfx64_fill_rounded_rect(nx, ny, nw, nh, 8, bg);
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           tx + 20, ty + 16, toggles[i], fg, 14);
+                           nx + 12, ny + 12, nav[i], fg, 13);
     }
 
-    /* 音量滑块（状态来自g_shell.cc.volume） */
-    int slider_y = toggle_y + 140;
-    font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                       cx + 20, slider_y, "Volume", g_shell.colors.panel_fg, 14);
-    int vol_fill = 240 * g_shell.cc.volume / 100;
-    int vol_thumb = cx + 20 + vol_fill - 8;
-    gfx64_fill_rounded_rect(cx + 20, slider_y + 22, 240, 8, 4, g_shell.colors.border);
-    gfx64_fill_rounded_rect(cx + 20, slider_y + 22, vol_fill, 8, 4, g_shell.colors.accent);
-    gfx64_fill_rounded_rect(vol_thumb, slider_y + 18, 16, 16, 8, g_shell.colors.accent);
+    int rx = cx + CC_RAIL_W + CC_PAD;
+    int rw = cw - CC_RAIL_W - CC_PAD * 2;
+    const char *toggles[] = {"WiFi", "BT", "Air", "DND", "Loc", "Torch"};
 
-    /* 亮度滑块（状态来自g_shell.cc.brightness） */
-    slider_y += 50;
-    font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                       cx + 20, slider_y, "Brightness", g_shell.colors.panel_fg, 14);
-    int bri_fill = 240 * g_shell.cc.brightness / 100;
-    int bri_thumb = cx + 20 + bri_fill - 8;
-    gfx64_fill_rounded_rect(cx + 20, slider_y + 22, 240, 8, 4, g_shell.colors.border);
-    gfx64_fill_rounded_rect(cx + 20, slider_y + 22, bri_fill, 8, 4, g_shell.colors.accent);
-    gfx64_fill_rounded_rect(bri_thumb, slider_y + 18, 16, 16, 8, g_shell.colors.accent);
+    if (g_cc_page == 0) {
+        font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                           rx, cy + 18, "Quick Controls", g_shell.colors.panel_fg, 16);
+        int card_w = (rw - 8) / 2;
+        int card_h = 60;
+        for (int i = 0; i < 6; i++) {
+            int tx = rx + (i % 2) * (card_w + 8);
+            int ty = cy + 48 + (i / 2) * (card_h + 8);
+            cc_toggle_card(fb, tx, ty, card_w, card_h, g_shell.cc.toggles[i],
+                           toggles[i], g_shell.cc.toggles[i] ? "On" : "Off");
+        }
+        cc_slider_card(fb, rx, cy + 258, rw, 58, "Volume", g_shell.cc.volume);
+        cc_slider_card(fb, rx, cy + 322, rw, 58, "Brightness", g_shell.cc.brightness);
+    } else if (g_cc_page == 1) {
+        font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                           rx, cy + 18, "Devices", g_shell.colors.panel_fg, 16);
+        for (int i = 0; i < 6; i++) {
+            int ry = cy + 48 + i * 54;
+            gfx64_fill_rounded_rect(rx, ry, rw, 48, 10, g_shell.colors.titlebar_bg);
+            gfx64_draw_rounded_rect(rx, ry, rw, 48, 10, g_shell.colors.border);
+            font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                               rx + 14, ry + 16, toggles[i], g_shell.colors.panel_fg, 13);
+            const char *st = g_shell.cc.toggles[i] ? "On" : "Off";
+            uint32_t stc = g_shell.cc.toggles[i] ? g_shell.colors.accent
+                                                : g_shell.colors.text_secondary;
+            font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                               rx + rw - 44, ry + 16, st, stc, 12);
+            gfx64_fill_circle(rx + rw - 16, ry + 24, 5, stc);
+        }
+    } else {
+        font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                           rx, cy + 18, "Audio & Display", g_shell.colors.panel_fg, 16);
+        cc_slider_card(fb, rx, cy + 52, rw, 96, "Volume", g_shell.cc.volume);
+        cc_slider_card(fb, rx, cy + 160, rw, 96, "Brightness", g_shell.cc.brightness);
+        const char *note = "Adjust output level and panel backlight.";
+        font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                           rx, cy + 276, note, g_shell.colors.text_secondary, 11);
+        cc_toggle_card(fb, rx, cy + 300, rw, 60, g_shell.cc.toggles[3], "DND",
+                       g_shell.cc.toggles[3] ? "Do Not Disturb on" : "Do Not Disturb off");
+        cc_toggle_card(fb, rx, cy + 368, rw, 60, g_shell.cc.toggles[5], "Torch",
+                       g_shell.cc.toggles[5] ? "Light on" : "Light off");
+    }
 }
 
-/* 控制中心点击处理 */
-static void hs_control_center_handle_click(int x, int y)
+/* 把点击横坐标换算成滑块百分比 */
+static void cc_slider_set(int x, int tx, int tw, int *dst)
 {
-    int cx = 724, cy = 50, cw = 280, ch = 380;
-    if (x < cx || x > cx + cw || y < cy || y > cy + ch) return;
+    int v = (x - tx) * 100 / tw;
+    if (v < 0) v = 0;
+    if (v > 100) v = 100;
+    *dst = v;
+}
 
-    /* 检查toggle点击 */
-    int toggle_y = cy + 50;
-    for (int i = 0; i < 6; i++) {
-        int tx = cx + 20 + (i % 3) * 84;
-        int ty = toggle_y + (i / 3) * 60;
-        if (x >= tx && x <= tx + 72 && y >= ty && y <= ty + 48) {
-            g_shell.cc.toggles[i] = !g_shell.cc.toggles[i];
-            return;
+/* 控制中心点击处理；命中面板区域即消费点击（面板绘制在窗口之上） */
+static int hs_control_center_handle_click(int x, int y)
+{
+    int cx, cy, cw, ch;
+    cc_geometry(&cx, &cy, &cw, &ch);
+    if (x < cx || x > cx + cw || y < cy || y > cy + ch) return 0;
+
+    /* 导航栏切页 */
+    for (int i = 0; i < 3; i++) {
+        int nx = cx + 8;
+        int ny = cy + 14 + i * 46;
+        if (x >= nx && x <= nx + CC_RAIL_W - 16 && y >= ny && y <= ny + 38) {
+            g_cc_page = i;
+            return 1;
         }
     }
 
-    /* 检查音量滑块点击 */
-    int slider_y = toggle_y + 140;
-    if (x >= cx + 20 && x <= cx + 260 && y >= slider_y + 18 && y <= slider_y + 34) {
-        g_shell.cc.volume = (x - cx - 20) * 100 / 240;
-        if (g_shell.cc.volume < 0) g_shell.cc.volume = 0;
-        if (g_shell.cc.volume > 100) g_shell.cc.volume = 100;
-        return;
-    }
+    int rx = cx + CC_RAIL_W + CC_PAD;
+    int rw = cw - CC_RAIL_W - CC_PAD * 2;
+    int card_w = (rw - 8) / 2;
 
-    /* 检查亮度滑块点击 */
-    slider_y += 50;
-    if (x >= cx + 20 && x <= cx + 260 && y >= slider_y + 18 && y <= slider_y + 34) {
-        g_shell.cc.brightness = (x - cx - 20) * 100 / 240;
-        if (g_shell.cc.brightness < 0) g_shell.cc.brightness = 0;
-        if (g_shell.cc.brightness > 100) g_shell.cc.brightness = 100;
-        return;
+    if (g_cc_page == 0) {
+        for (int i = 0; i < 6; i++) {
+            int tx = rx + (i % 2) * (card_w + 8);
+            int ty = cy + 48 + (i / 2) * 68;
+            if (x >= tx && x <= tx + card_w && y >= ty && y <= ty + 60) {
+                g_shell.cc.toggles[i] = !g_shell.cc.toggles[i];
+                return 1;
+            }
+        }
+        if (y >= cy + 294 && y <= cy + 312) {
+            cc_slider_set(x, rx + 14, rw - 28, &g_shell.cc.volume);
+            return 1;
+        }
+        if (y >= cy + 358 && y <= cy + 376) {
+            cc_slider_set(x, rx + 14, rw - 28, &g_shell.cc.brightness);
+            return 1;
+        }
+    } else if (g_cc_page == 1) {
+        for (int i = 0; i < 6; i++) {
+            int ry = cy + 48 + i * 54;
+            if (x >= rx && x <= rx + rw && y >= ry && y <= ry + 48) {
+                g_shell.cc.toggles[i] = !g_shell.cc.toggles[i];
+                return 1;
+            }
+        }
+    } else {
+        if (y >= cy + 124 && y <= cy + 138) {
+            cc_slider_set(x, rx + 14, rw - 28, &g_shell.cc.volume);
+            return 1;
+        }
+        if (y >= cy + 232 && y <= cy + 246) {
+            cc_slider_set(x, rx + 14, rw - 28, &g_shell.cc.brightness);
+            return 1;
+        }
+        if (y >= cy + 300 && y <= cy + 360) {
+            g_shell.cc.toggles[3] = !g_shell.cc.toggles[3];
+            return 1;
+        }
+        if (y >= cy + 368 && y <= cy + 428) {
+            g_shell.cc.toggles[5] = !g_shell.cc.toggles[5];
+            return 1;
+        }
     }
+    return 1;
 }
 
 /* 右键菜单渲染 */
@@ -2415,6 +2554,11 @@ void hepushell_handle_click(int x, int y)
         extern int hs_oobe_active(void);
         extern int hs_oobe_handle_click(int x, int y);
         if (hs_oobe_active()) { hs_oobe_handle_click(x, y); return; }
+    }
+
+    /* 控制中心绘制在窗口之上，优先接管该区域点击 */
+    if (!g_locked && g_shell.panel_registry[HS_PANEL_CONTROL_CENTER].enabled && !g_context_menu_visible) {
+        if (hs_control_center_handle_click(x, y)) return;
     }
 
     /* V0.13.39: 登录界面点击(虚拟键盘/关机/登录) */
@@ -2708,9 +2852,7 @@ void hepushell_handle_click(int x, int y)
         }
     }
 
-    hs_control_center_handle_click(x, y);
 }
-
 /* HepuShell右键点击处理（显示上下文菜单） */
 void hepushell_handle_right_click(int x, int y)
 {
@@ -2919,6 +3061,9 @@ void hepushell_render(void)
     hs_panel_render_all();
 
     hs_window_render_all();
+    /* 控制中心绘制在窗口之上，避免被最大化窗口遮挡 */
+    if (g_shell.panel_registry[HS_PANEL_CONTROL_CENTER].enabled)
+        hs_control_center_render();
     /* V0.13.40: USB存储自动挂载(启动检测 + 热插拔事件) */
     {
         extern int usb64_hotplug_pending(void);
@@ -3176,10 +3321,10 @@ int hepushell_init(int width, int height)
     g_shell.ui.sidebar_y = 50;
     g_shell.ui.sidebar_width = 280;
     g_shell.ui.sidebar_height = 500;
-    g_shell.ui.cc_margin_right = 300;
-    g_shell.ui.cc_y = 50;
-    g_shell.ui.cc_width = 280;
-    g_shell.ui.cc_height = 380;
+    g_shell.ui.cc_margin_right = 384;
+    g_shell.ui.cc_y = 108;
+    g_shell.ui.cc_width = 360;
+    g_shell.ui.cc_height = 440;
     g_shell.ui.bar_height = 40;
     g_shell.ui.island_width = 120;
     g_shell.ui.island_height = 28;

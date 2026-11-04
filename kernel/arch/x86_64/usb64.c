@@ -221,6 +221,7 @@ typedef struct {
     uint8_t report[16];
     uint8_t report_len;
     int abs_x, abs_y, left, right;
+    int click_latch;        /* 快速点击: 按下沿在两次轮询间完成时保留, 防止点击丢失 */
 } usb_tablet_t;
 static usb_tablet_t g_usb_tablets[USB_MAX_TABLETS];
 static int g_usb_tablets_count = 0;
@@ -1449,6 +1450,7 @@ void usb64_poll(void)
                 t->abs_y = ay;
                 if (t->abs_x > 1023) t->abs_x = 1023;
                 if (t->abs_y > 767) t->abs_y = 767;
+                if ((buttons & 0x01) && !t->left) t->click_latch = 1;
                 t->left = buttons & 0x01;
                 t->right = buttons & 0x02;
             }
@@ -1470,6 +1472,7 @@ void usb64_poll(void)
                 t->abs_y = ay;
                 if (t->abs_x > 1023) t->abs_x = 1023;
                 if (t->abs_y > 767) t->abs_y = 767;
+                if ((buttons & 0x01) && !t->left) t->click_latch = 1;
                 t->left = buttons & 0x01;
                 t->right = buttons & 0x02;
             }
@@ -1739,6 +1742,17 @@ int usb64_mouse_get_wheel(void)
         g_usb_mice[i].wheel = 0;
     }
     return w;
+}
+
+/* tablet 快速点击兜底: 取走并清除按下沿锁存 */
+int usb64_tablet_take_click(void)
+{
+    usb_tablet_t *t = (g_usb_tablets_count > 0) ?
+        &g_usb_tablets[g_usb_tablets_count - 1] : 0;
+    if (!t) return 0;
+    int v = t->click_latch;
+    t->click_latch = 0;
+    return v;
 }
 
 /* V0.13.8 P6: tablet 绝对定位 API (hsinput 优先使用; 多平板取最近插入) */
