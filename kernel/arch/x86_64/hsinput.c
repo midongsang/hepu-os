@@ -274,7 +274,8 @@ void hs_input_poll(void)
     right |= mouse64_get_right();
     /* 快速点击兜底: 按下沿与释放可能落在同一次轮询批次内, 由驱动锁存 */
     extern int mouse64_take_click(void);
-    int fast_click = mouse64_take_click();
+    extern int usb64_tablet_take_click(void);
+    int fast_click = mouse64_take_click() | usb64_tablet_take_click();
     if (left && !last_left) hepushell_mouse_down(mx, my);
     if (!left && last_left) {
         hepushell_mouse_up(mx, my);

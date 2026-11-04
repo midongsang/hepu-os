@@ -25,10 +25,10 @@ UI {
     sidebar_y: 50
     sidebar_width: 280
     sidebar_height: 500
-    cc_margin_right: 300
-    cc_y: 50
-    cc_width: 280
-    cc_height: 380
+    cc_margin_right: 384
+    cc_y: 108
+    cc_width: 360
+    cc_height: 440
     bar_height: 40
     island_width: 120
     island_height: 28
