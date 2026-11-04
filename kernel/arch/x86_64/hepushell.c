@@ -733,10 +733,10 @@ void hs_launcher_render(void)
     int cursor_x = x + 52 + strlen_hs(g_shell.launcher_input) * 10;
     gfx64_fill_rect(cursor_x, y + 26, 2, 18, g_shell.colors.accent);
 
-    /* 应用列表 (V0.55: 支持滚动, 选中项始终可见) */
+    /* 应用网格 (对齐 Clavis SpotlightAppGrid: 6列, cell≈98x96, 图标44+标签, 滚动) */
     int list_y = y + 68;
     int match_idx[HS_MAX_APPS];
-    int nm = 0, sel_pos = 0, r;
+    int nm = 0, sel_pos = 0;
     for (int i = 0; i < g_shell.app_count; i++) {
         if (g_shell.launcher_input[0] != 0 &&
             !hs_app_match(g_shell.apps[i].name, g_shell.launcher_input))
@@ -744,37 +744,66 @@ void hs_launcher_render(void)
         if (i == g_shell.selected_app) sel_pos = nm;
         match_idx[nm++] = i;
     }
-    if (sel_pos >= 8) {
-        if (g_launcher_scroll < sel_pos - 7) g_launcher_scroll = sel_pos - 7;
-    }
-    if (sel_pos < g_launcher_scroll) g_launcher_scroll = sel_pos;
+    const int cols = 6;
+    const int rows_vis = 3;
+    int pad = hs_sx(18);
+    int cell_w = (w - 2 * pad) / cols;
+    int cell_h = hs_sy(92);
+    int rows = (nm + cols - 1) / cols;
+    int sel_row = sel_pos / cols;
+    if (sel_row < g_launcher_scroll) g_launcher_scroll = sel_row;
+    if (sel_row >= g_launcher_scroll + rows_vis)
+        g_launcher_scroll = sel_row - rows_vis + 1;
     {
-        int maxs = nm - 8;
+        int maxs = rows - rows_vis;
         if (maxs < 0) maxs = 0;
         if (g_launcher_scroll > maxs) g_launcher_scroll = maxs;
         if (g_launcher_scroll < 0) g_launcher_scroll = 0;
     }
 
-    for (r = 0; r < 8 && g_launcher_scroll + r < nm; r++) {
-        int i = match_idx[g_launcher_scroll + r];
-        hs_app_t *app = &g_shell.apps[i];
+    for (int r = 0; r < rows_vis; r++) {
+        int row = g_launcher_scroll + r;
+        if (row >= rows) break;
+        for (int c = 0; c < cols; c++) {
+            int pos = row * cols + c;
+            if (pos >= nm) break;
+            int i = match_idx[pos];
+            hs_app_t *app = &g_shell.apps[i];
+            int cx = x + pad + c * cell_w;
+            int cy = list_y + r * cell_h;
+            int sel = (i == g_shell.selected_app);
 
-        uint32_t bg = (i == g_shell.selected_app) ?
-                      g_shell.colors.accent : g_shell.colors.window_bg;
-        uint32_t fg = (i == g_shell.selected_app) ?
-                      hs_on_accent() : g_shell.colors.window_fg;
+            /* 选中高亮: primaryContainer 底 + primary 描边 */
+            if (sel) {
+                gfx64_fill_rounded_rect(cx + 2, cy + 2, cell_w - 4, cell_h - 4, 10,
+                                        g_shell.colors.accent_pressed);
+                gfx64_draw_rounded_rect(cx + 2, cy + 2, cell_w - 4, cell_h - 4, 10,
+                                        g_shell.colors.accent);
+            }
 
-        if (i == g_shell.selected_app) {
-            gfx64_fill_rounded_rect(x + 16, list_y - 2, w - 32, 30, 6, bg);
+            /* 图标块 */
+            int isz = hs_s(44);
+            int ix = cx + (cell_w - isz) / 2;
+            int iy = cy + hs_sy(10);
+            gfx64_fill_rounded_rect(ix, iy, isz, isz, hs_s(10), g_shell.colors.accent);
+            int tl = 0; while (app->icon[tl] && tl < 3) tl++;
+            font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                               ix + (isz - tl * hs_sx(9)) / 2, iy + hs_sy(12),
+                               app->icon, hs_on_accent(), hs_s(18));
+
+            /* 名称标签 (居中, 截断) */
+            char label[16];
+            int maxc = (cell_w - 8) / hs_sx(7);
+            if (maxc > 15) maxc = 15;
+            int ln = 0;
+            while (app->name[ln] && ln < maxc) { label[ln] = app->name[ln]; ln++; }
+            if (app->name[ln] && ln > 2) { label[ln - 2] = '.'; label[ln - 1] = '.'; }
+            label[ln] = 0;
+            int lw = ln * hs_sx(7);
+            font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                               cx + (cell_w - lw) / 2, cy + cell_h - hs_sy(24),
+                               label, g_shell.colors.window_fg, hs_s(12));
         }
-
-        /* 应用图标 */
-        gfx64_fill_rounded_rect(x + 24, list_y + 2, 24, 24, 6, g_shell.colors.accent);
-
-        /* 应用名称 */
-        font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           x + 58, list_y + 6, app->name, fg, 16);
-        list_y += 34;
     }
 }
 
@@ -784,8 +813,12 @@ void hs_launcher_handle_key(int key)
         g_shell.launcher_visible = 0;
         return;
     }
-    if (key == KEY_EXT_UP || key == KEY_EXT_DOWN) {   /* V0.55: 上下选择 */
-        int dir = (key == KEY_EXT_UP) ? -1 : 1;
+    if (key == KEY_EXT_UP || key == KEY_EXT_DOWN ||
+        key == KEY_EXT_LEFT || key == KEY_EXT_RIGHT) {
+        /* 网格导航: 左右 ±1, 上下 ±6 (对齐 SpotlightAppGrid 列数) */
+        int dir = (key == KEY_EXT_LEFT) ? -1 :
+                  (key == KEY_EXT_RIGHT) ? 1 :
+                  (key == KEY_EXT_UP) ? -6 : 6;
         int i = g_shell.selected_app + dir;
         while (i >= 0 && i < g_shell.app_count) {
             if (g_shell.launcher_input[0] == 0 ||
@@ -2719,7 +2752,23 @@ static void hs_dock_render(void)
         dock_x = (g_shell.screen_width - dock_w) / 2;
     }
 
-    /* Dock背景（毛玻璃效果） */
+    /* Dock背景（毛玻璃效果; 悬停放大时同步变高, 对齐 Clavis bandThickness） */
+    int icon_count = 8;
+    int base_size = hs_s(g_shell.ui.dock_icon_size);
+    int spacing = (dock_w - icon_count * base_size) / (icon_count + 1);
+    int range = hs_sx(110);
+    int max_extra = 0;
+    if (dock_visible) {
+        for (int i = 0; i < icon_count; i++) {
+            int slot_cx = dock_x + spacing + i * (base_size + spacing) + base_size / 2;
+            int d = g_shell.mouse_x - slot_cx;
+            if (d < 0) d = -d;
+            int extra = (d < range) ? (range - d) * (base_size / 2) / range : 0;
+            if (extra > max_extra) max_extra = extra;
+        }
+        dock_y -= max_extra;
+        dock_h += max_extra;
+    }
     gfx64_fill_rounded_rect(dock_x, dock_y, dock_w, dock_h, hs_s(g_shell.ui.corner_radius), g_shell.colors.window_bg);
     gfx64_draw_rounded_rect(dock_x, dock_y, dock_w, dock_h, hs_s(g_shell.ui.corner_radius), g_shell.colors.border);
 
@@ -2733,22 +2782,28 @@ static void hs_dock_render(void)
 
     void *fb = gfx64_get_framebuffer();
 
-    /* 应用图标 */
+    /* 应用图标 (对齐 Clavis DockSurface: 悬停放大, 线性衰减, 底边对齐) */
     const char *icons[] = {"T", "F", "B", "S", "E", "C", "N", "A"};
-    int icon_count = 8;
-    int icon_size = hs_s(g_shell.ui.dock_icon_size);
-    int spacing = (dock_w - icon_count * icon_size) / (icon_count + 1);
+    int baseline = dock_y + dock_h - hs_sy(8);
 
     for (int i = 0; i < icon_count; i++) {
-        int ix = dock_x + spacing + i * (icon_size + spacing);
-        int iy = dock_y + (dock_h - icon_size) / 2;
+        int slot_cx = dock_x + spacing + i * (base_size + spacing) + base_size / 2;
+        int d = g_shell.mouse_x - slot_cx;
+        if (d < 0) d = -d;
+        int extra = (d < range) ? (range - d) * (base_size / 2) / range : 0;
+        int sz = base_size + extra;
+        int ix = slot_cx - sz / 2;
+        int iy = baseline - sz;
 
         /* 图标背景 */
-        gfx64_fill_rounded_rect(ix, iy, icon_size, icon_size, hs_s(10), g_shell.colors.accent);
+        gfx64_fill_rounded_rect(ix, iy, sz, sz, hs_s(10), g_shell.colors.accent);
 
-        /* 图标符号 */
+        /* 图标符号 (字号随放大) */
+        int fs = hs_s(20) * sz / base_size;
+        int gw = hs_sx(12) * sz / base_size;
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           ix + (icon_size - hs_sx(12)) / 2, iy + hs_sy(10), icons[i], hs_on_accent(), hs_s(20));
+                           ix + (sz - gw) / 2, iy + (sz - fs) / 2 + hs_sy(2),
+                           icons[i], hs_on_accent(), fs);
     }
 }
 
