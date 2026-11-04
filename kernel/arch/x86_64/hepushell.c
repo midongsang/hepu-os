@@ -8,6 +8,8 @@
 #include "l10n64.h"
 #include "hsqml.h"
 #include "hs_apps.h"
+#include "hs_systools.h"
+#include "hsinput.h"
 
 /* V0.13.10: 缺失接口恢复 — 切换器渲染前向声明 */
 static void hs_switcher_render(void);
@@ -679,6 +681,9 @@ static int hs_launcher_first_match(void)
     return -1;
 }
 
+/* V0.55: 启动器滚动窗口 (应用数超过 8 行时跟随选中项) */
+static int g_launcher_scroll = 0;
+
 void hs_launcher_render(void)
 {
     if (!g_shell.launcher_visible) return;
@@ -712,16 +717,31 @@ void hs_launcher_render(void)
     int cursor_x = x + 52 + strlen_hs(g_shell.launcher_input) * 10;
     gfx64_fill_rect(cursor_x, y + 26, 2, 18, g_shell.colors.accent);
 
-    /* 应用列表 */
+    /* 应用列表 (V0.55: 支持滚动, 选中项始终可见) */
     int list_y = y + 68;
-    int visible = 0;
-    for (int i = 0; i < g_shell.app_count && visible < 8; i++) {
-        hs_app_t *app = &g_shell.apps[i];
-
-        /* 过滤 (大小写不敏感前缀匹配) */
+    int match_idx[HS_MAX_APPS];
+    int nm = 0, sel_pos = 0, r;
+    for (int i = 0; i < g_shell.app_count; i++) {
         if (g_shell.launcher_input[0] != 0 &&
-            !hs_app_match(app->name, g_shell.launcher_input))
+            !hs_app_match(g_shell.apps[i].name, g_shell.launcher_input))
             continue;
+        if (i == g_shell.selected_app) sel_pos = nm;
+        match_idx[nm++] = i;
+    }
+    if (sel_pos >= 8) {
+        if (g_launcher_scroll < sel_pos - 7) g_launcher_scroll = sel_pos - 7;
+    }
+    if (sel_pos < g_launcher_scroll) g_launcher_scroll = sel_pos;
+    {
+        int maxs = nm - 8;
+        if (maxs < 0) maxs = 0;
+        if (g_launcher_scroll > maxs) g_launcher_scroll = maxs;
+        if (g_launcher_scroll < 0) g_launcher_scroll = 0;
+    }
+
+    for (r = 0; r < 8 && g_launcher_scroll + r < nm; r++) {
+        int i = match_idx[g_launcher_scroll + r];
+        hs_app_t *app = &g_shell.apps[i];
 
         uint32_t bg = (i == g_shell.selected_app) ?
                       g_shell.colors.accent : g_shell.colors.window_bg;
@@ -739,7 +759,6 @@ void hs_launcher_render(void)
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            x + 58, list_y + 6, app->name, fg, 16);
         list_y += 34;
-        visible++;
     }
 }
 
@@ -749,6 +768,19 @@ void hs_launcher_handle_key(int key)
         g_shell.launcher_visible = 0;
         return;
     }
+    if (key == KEY_EXT_UP || key == KEY_EXT_DOWN) {   /* V0.55: 上下选择 */
+        int dir = (key == KEY_EXT_UP) ? -1 : 1;
+        int i = g_shell.selected_app + dir;
+        while (i >= 0 && i < g_shell.app_count) {
+            if (g_shell.launcher_input[0] == 0 ||
+                hs_app_match(g_shell.apps[i].name, g_shell.launcher_input)) {
+                g_shell.selected_app = i;
+                return;
+            }
+            i += dir;
+        }
+        return;
+    }
     if (key == '\n' || key == '\r') {  /* Enter */
         /* 启动选中的应用 */
         if (g_shell.selected_app < g_shell.app_count) {
@@ -756,12 +788,14 @@ void hs_launcher_handle_key(int key)
             vga_puts(g_shell.apps[g_shell.selected_app].name);
             vga_puts("\n");
             /* 映射到g_pending_app，由desktop64主循环启动 */
-            int app_map[] = {HS_APP_TERMINAL, HS_APP_FILES, HS_APP_BROWSER,
-                             HS_APP_SETTINGS, HS_APP_EDITOR, HS_APP_CALCULATOR,
-                             HS_APP_NOTES, HS_APP_ABOUT, HS_APP_ABOUT, HS_APP_ABOUT};
-            if (g_shell.selected_app < 10) {
-                g_pending_app = app_map[g_shell.selected_app];
-            }
+            static const int app_map[HS_MAX_APPS] = {
+                HS_APP_TERMINAL, HS_APP_FILES, HS_APP_BROWSER,
+                HS_APP_SETTINGS, HS_APP_EDITOR, HS_APP_CALCULATOR,
+                HS_APP_NOTES, HS_APP_TASK, HS_APP_ABOUT, HS_APP_ABOUT,
+                HS_APP_DEVMGR, HS_APP_DISKMGR, HS_APP_LOGVIEW
+            };
+            g_pending_app = (g_shell.selected_app < 13) ?
+                            app_map[g_shell.selected_app] : HS_APP_ABOUT;
         }
         g_shell.launcher_visible = 0;
         return;
@@ -2380,6 +2414,10 @@ void hepushell_handle_click(int x, int y)
             w->visible = 0;
             return;
         }
+        /* 系统工具窗口点击 (标签切换/挂载/fsck) — 仅最顶层窗口 */
+        if (w == top_win) {
+            if (hs_systools_click(x, y)) return;
+        }
         /* V0.13.39: 文件管理器窗口点击 (选中/双击) — 仅最顶层窗口 */
         if (w == top_win) {
             extern int hs_files_hit(int x, int y);
@@ -2863,6 +2901,9 @@ void hepushell_handle_key(int key)
         return;
     }
 
+    /* 系统工具窗口 (设备/磁盘/日志) 优先消费按键 */
+    if (hs_systools_handle_key(key)) return;
+
     /* 聚焦的应用窗口优先消费按键(终端/文件管理器等) */
     if (hs_apps_handle_key(key)) return;
 
@@ -3059,6 +3100,10 @@ int hepushell_init(int width, int height)
     hepushell_add_app("Task Manager", "taskmgr", "[!]");
     hepushell_add_app("App Store", "store", "[$]");
     hepushell_add_app("About", "about", "[?]");
+    /* V0.55: 系统工具 */
+    hepushell_add_app("Device Manager", "devmgr", "[D]");
+    hepushell_add_app("Disk Manager", "diskmgr", "[S]");
+    hepushell_add_app("Log Viewer", "logview", "[L]");
 
     g_shell.initialized = 1;
 
@@ -4154,8 +4199,8 @@ void hepushell_show_desktop(void)
 static int g_ui_scale_v = 100;
 void hepushell_update_wheel(int wheel)
 {
-    /* 应用窗口滚动优先(终端等), 否则保留 UI 缩放 */
-    hs_apps_handle_wheel(wheel);
+    /* 应用窗口滚动优先(系统工具/终端等), 否则保留 UI 缩放 */
+    if (!hs_systools_handle_wheel(wheel)) hs_apps_handle_wheel(wheel);
     if (wheel > 0 && g_ui_scale_v < 150) g_ui_scale_v += 5;
     else if (wheel < 0 && g_ui_scale_v > 50) g_ui_scale_v -= 5;
 }
@@ -4189,6 +4234,9 @@ void hepushell_handle_pending_app(void)
         case HS_APP_NOTES: title = "Notes"; break;
         case HS_APP_ABOUT: title = "About"; break;
         case HS_APP_TASK: title = "Task Manager"; break;
+        case HS_APP_DEVMGR: title = "Device Manager"; break;
+        case HS_APP_DISKMGR: title = "Disk Manager"; break;
+        case HS_APP_LOGVIEW: title = "Log Viewer"; break;
         default: return;
     }
     /* V0.13.16: Dock/启动器点击 → 若该应用已有最小化/隐藏窗口则恢复, 否则新建 */
@@ -4213,6 +4261,9 @@ void hepushell_handle_pending_app(void)
     if (app == HS_APP_TERMINAL) { hs_terminal_create(); return; }
     if (app == HS_APP_FILES) { hs_files_create(); return; }
     if (app == HS_APP_TASK) { hs_taskmgr_create(); return; }
+    if (app == HS_APP_DEVMGR) { hs_devmgr_create(); return; }
+    if (app == HS_APP_DISKMGR) { hs_diskmgr_create(); return; }
+    if (app == HS_APP_LOGVIEW) { hs_logview_create(); return; }
     if (app == HS_APP_EDITOR) { hs_editor_create(); return; }
     hs_window_t *w = hs_window_create(HS_WINDOW_FLOATING, title,
                                       -1, -1, 480, 320);

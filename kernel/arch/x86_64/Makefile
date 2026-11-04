@@ -130,6 +130,8 @@ C_SOURCES = \
     $(ARCH_DIR)/uart64.c \
     $(ARCH_DIR)/ac9764.c \
     $(ARCH_DIR)/hs_apps.c \
+    $(ARCH_DIR)/hs_systools64.c \
+    $(ARCH_DIR)/klog64.c \
     $(ARCH_DIR)/hs_oobe64.c \
     $(ARCH_DIR)/hepushell.c \
     $(ARCH_DIR)/icons_win_data.c \

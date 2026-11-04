@@ -356,6 +356,9 @@ void hepushell_pinch_resize(int dir);  /* V0.13.8 P5: 触摸捏合缩放 */
 #define HS_APP_NOTES 7
 #define HS_APP_ABOUT 8
 #define HS_APP_TASK 9    /* V0.13.9: 任务管理器 */
+#define HS_APP_DEVMGR 10   /* V0.55: 设备管理器 */
+#define HS_APP_DISKMGR 11  /* V0.55: 磁盘管理 */
+#define HS_APP_LOGVIEW 12  /* V0.55: 日志查看器 */
 extern int g_pending_app;
 void hepushell_set_theme(hs_theme_t theme);
 void hepushell_add_widget(hs_panel_pos_t panel, hs_widget_type_t type);
