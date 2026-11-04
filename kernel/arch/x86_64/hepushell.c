@@ -81,6 +81,9 @@ extern void pmm64_get_stats(uint64_t *total, uint64_t *used, uint64_t *free);
 /* SMP */
 extern uint32_t smp_get_cpu_count(void);
 
+/* PIT 毫秒计数 (窗口打开动画, 对齐 Clavis 200ms) */
+extern uint64_t pit64_get_ticks(void);
+
 /* 自适应缩放辅助函数（基准1024x768，纯整数运算避免FPU状态问题） */
 static int hs_sx(int v) { return (v * g_shell.screen_width) / 1024; }
 static int hs_sy(int v) { return (v * g_shell.screen_height) / 768; }
@@ -92,6 +95,9 @@ static int hs_s(int v)  {
 
 /* 全局实例 */
 hepushell_t g_shell;
+
+/* 渲染帧计数 (动画时基, 桌面循环约 60fps) */
+static uint32_t g_frame_no;
 
 /* 前向声明（定义在后面） */
 static int g_sidebar_tab;
@@ -912,6 +918,8 @@ hs_window_t *hs_window_create(hs_window_type_t type, const char *title,
     win->border_color = g_shell.colors.border;
     win->dragging = 0;
     win->render = NULL;
+    win->anim_start = g_frame_no;
+    win->anim_dur = 12;  /* ≈200ms @60fps, Clavis durations.small */
 
     /* 添加到z_order */
     g_wm.z_order[g_wm.z_count++] = win->id;
@@ -1156,6 +1164,20 @@ void hs_window_render_all(void)
         /* 面板窗口不渲染（由面板系统渲染） */
         if (w->type == HS_WINDOW_PANEL) continue;
 
+        /* Clavis 动效: 新窗口 ≈200ms (12帧) cubic-out 滑入 */
+        int save_x = w->x, save_y = w->y;
+        if (w->anim_dur) {
+            uint32_t elapsed = g_frame_no - (uint32_t)w->anim_start;
+            if (elapsed >= w->anim_dur) {
+                w->anim_dur = 0;
+            } else {
+                int remain = (int)((w->anim_dur - elapsed) * 100 / w->anim_dur);
+                int ease = 100 - remain * remain * remain / 10000;
+                w->x -= hs_sx(24) * (100 - ease) / 100;
+                w->y += hs_sy(16) * (100 - ease) / 100;
+            }
+        }
+
         /* 窗口背景 */
         gfx64_fill_rect(w->x, w->y, w->width, w->height, w->bg_color);
 
@@ -1254,6 +1276,10 @@ void hs_window_render_all(void)
         if (w->render) {
             w->render(w);
         }
+
+        /* 还原动画临时偏移, 保证命中测试用持久坐标 */
+        w->x = save_x;
+        w->y = save_y;
     }
 }
 
@@ -1888,7 +1914,7 @@ static int g_vkb_shift = 0;    /* 保留: shift状态 */
 static void hs_lock_screen_render(void)
 {
     /* 深色半透明背景（模拟模糊效果） */
-    gfx64_fill_rect(0, 0, g_shell.screen_width, g_shell.screen_height, 0x2A2520);
+    gfx64_fill_rect(0, 0, g_shell.screen_width, g_shell.screen_height, g_shell.colors.bg);
 
     void *fb = gfx64_get_framebuffer();
 
@@ -1903,13 +1929,13 @@ static void hs_lock_screen_render(void)
     time[3] = '0' + m / 10; time[4] = '0' + m % 10; time[5] = 0;
 
     font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                       clock_x, clock_y, time, 0xF0EBE0, hs_s(64));
+                       clock_x, clock_y, time, g_shell.colors.panel_fg, hs_s(64));
 
     /* 日期 */
     char date[32] = "October 15, Thursday";
     int date_w = hs_sx(17 * 10);
     font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                       clock_x + (hs_sx(360) - date_w) / 2, clock_y + hs_sy(110), date, 0xC9A96E, hs_s(20));
+                       clock_x + (hs_sx(360) - date_w) / 2, clock_y + hs_sy(110), date, g_shell.colors.accent, hs_s(20));
 
     /* 底部提示 */
     extern const char *l10n64_tr(int id);
@@ -1924,7 +1950,7 @@ static void hs_lock_screen_render(void)
 static void hs_login_screen_render(void)
 {
     /* 深色半透明背景 */
-    gfx64_fill_rect(0, 0, g_shell.screen_width, g_shell.screen_height, 0x2A2520);
+    gfx64_fill_rect(0, 0, g_shell.screen_width, g_shell.screen_height, g_shell.colors.bg);
 
     void *fb = gfx64_get_framebuffer();
     int center_x = g_shell.screen_width / 2;
@@ -1933,7 +1959,7 @@ static void hs_login_screen_render(void)
     int avatar_size = hs_s(96);
     int avatar_x = center_x - avatar_size / 2;
     int avatar_y = hs_sy(180);
-    gfx64_fill_rounded_rect(avatar_x, avatar_y, avatar_size, avatar_size, hs_s(48), 0xC9A96E);
+    gfx64_fill_rounded_rect(avatar_x, avatar_y, avatar_size, avatar_size, hs_s(48), g_shell.colors.accent);
     /* 头像中的用户图标 */
     font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                        avatar_x + hs_sx(30), avatar_y + hs_sy(25), "U", hs_on_accent(), hs_s(48));
@@ -1943,20 +1969,20 @@ static void hs_login_screen_render(void)
     int name_w = hs_sx(4 * 12);
     font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                        center_x - name_w / 2, avatar_y + avatar_size + hs_sy(20),
-                       username, 0xF0EBE0, hs_s(20));
+                       username, g_shell.colors.panel_fg, hs_s(20));
 
     /* 密码输入框 */
     int input_w = hs_sx(240);
     int input_h = hs_sy(36);
     int input_x = center_x - input_w / 2;
     int input_y = avatar_y + avatar_size + hs_sy(60);
-    gfx64_fill_rounded_rect(input_x, input_y, input_w, input_h, hs_s(8), 0x3A3530);
-    gfx64_draw_rounded_rect(input_x, input_y, input_w, input_h, hs_s(8), 0xC9A96E);
+    gfx64_fill_rounded_rect(input_x, input_y, input_w, input_h, hs_s(8), g_shell.colors.titlebar_bg);
+    gfx64_draw_rounded_rect(input_x, input_y, input_w, input_h, hs_s(8), g_shell.colors.accent);
 
     /* 密码圆点 */
     int dot_y = input_y + (input_h - hs_sy(10)) / 2;
     for (int i = 0; i < g_password_len; i++) {
-        gfx64_fill_rounded_rect(input_x + hs_sx(20) + i * hs_sx(18), dot_y, hs_s(10), hs_s(10), hs_s(5), 0xF0EBE0);
+        gfx64_fill_rounded_rect(input_x + hs_sx(20) + i * hs_sx(18), dot_y, hs_s(10), hs_s(10), hs_s(5), g_shell.colors.panel_fg);
     }
 
     /* 登录按钮 */
@@ -1964,7 +1990,7 @@ static void hs_login_screen_render(void)
     int btn_h = hs_sy(32);
     int btn_x = center_x - btn_w / 2;
     int btn_y = input_y + input_h + hs_sy(20);
-    gfx64_fill_rounded_rect(btn_x, btn_y, btn_w, btn_h, hs_s(8), 0xC9A96E);
+    gfx64_fill_rounded_rect(btn_x, btn_y, btn_w, btn_h, hs_s(8), g_shell.colors.accent);
     font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                        btn_x + hs_sx(28), btn_y + hs_sy(8), l10n64_tr(L10N_STR_LOGIN_BTN), hs_on_accent(), hs_s(16));
 
@@ -1977,15 +2003,15 @@ static void hs_login_screen_render(void)
     {
         int kb_x = g_shell.screen_width - hs_sx(200);
         int kb_y = g_shell.screen_height - hs_sy(120);
-        gfx64_fill_rounded_rect(kb_x, kb_y, hs_sx(88), hs_sy(34), hs_s(8), 0x3A3530);
-        gfx64_draw_rounded_rect(kb_x, kb_y, hs_sx(88), hs_sy(34), hs_s(8), 0xC9A96E);
+        gfx64_fill_rounded_rect(kb_x, kb_y, hs_sx(88), hs_sy(34), hs_s(8), g_shell.colors.titlebar_bg);
+        gfx64_draw_rounded_rect(kb_x, kb_y, hs_sx(88), hs_sy(34), hs_s(8), g_shell.colors.accent);
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           kb_x + hs_sx(14), kb_y + hs_sy(8), "VKB", 0xF0EBE0, hs_s(16));
+                           kb_x + hs_sx(14), kb_y + hs_sy(8), "VKB", g_shell.colors.panel_fg, hs_s(16));
         int po_x = kb_x + hs_sx(104);
         gfx64_fill_rounded_rect(po_x, kb_y, hs_sx(88), hs_sy(34), hs_s(8), 0x6E3A3A);
-        gfx64_draw_rounded_rect(po_x, kb_y, hs_sx(88), hs_sy(34), hs_s(8), 0xC9A96E);
+        gfx64_draw_rounded_rect(po_x, kb_y, hs_sx(88), hs_sy(34), hs_s(8), g_shell.colors.accent);
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           po_x + hs_sx(20), kb_y + hs_sy(8), "PWR", 0xF0EBE0, hs_s(16));
+                           po_x + hs_sx(20), kb_y + hs_sy(8), "PWR", g_shell.colors.panel_fg, hs_s(16));
     }
 
     /* V0.13.39: 虚拟键盘渲染 */
@@ -2003,10 +2029,10 @@ static void hs_login_screen_render(void)
             for (int c = 0; c < vkb_row_n[r]; c++) {
                 int kx = row_x + c * (key_w + hs_sx(4));
                 int ky = kb_y + r * hs_sy(38);
-                gfx64_fill_rounded_rect(kx, ky, key_w, hs_sy(32), hs_s(6), 0x3A3530);
+                gfx64_fill_rounded_rect(kx, ky, key_w, hs_sy(32), hs_s(6), g_shell.colors.titlebar_bg);
                 font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                                    kx + (key_w - hs_sx(14)) / 2, ky + hs_sy(7),
-                                   vkb_rows[r] + c, 0xF0EBE0, hs_s(16));
+                                   vkb_rows[r] + c, g_shell.colors.panel_fg, hs_s(16));
             }
         }
         /* Backspace 键(第4行右侧) */
@@ -2014,9 +2040,9 @@ static void hs_login_screen_render(void)
         int bsw = hs_sx(76);
         int bsx = kb_x + kb_w - bsw;
         int bsy = kb_y + 3 * hs_sy(38);
-        gfx64_fill_rounded_rect(bsx, bsy, bsw, hs_sy(32), hs_s(6), 0x6E5A3A);
+        gfx64_fill_rounded_rect(bsx, bsy, bsw, hs_sy(32), hs_s(6), g_shell.colors.accent_pressed);
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           bsx + hs_sx(8), bsy + hs_sy(7), "DEL", 0xF0EBE0, hs_s(16));
+                           bsx + hs_sx(8), bsy + hs_sy(7), "DEL", g_shell.colors.panel_fg, hs_s(16));
     }
 }
 
@@ -2805,6 +2831,7 @@ extern void gfx64_present(void);
 void hepushell_render(void)
 {
     /* V0.13.11: 双缓冲原子帧 — 全部绘制到后台缓冲, 帧末一次性提交(消除撕裂/半帧) */
+    g_frame_no++;
     gfx64_set_target_back();
 
     /* 检测g_shell是否被野指针写入破坏 */

@@ -200,6 +200,8 @@ typedef struct hs_window {
     int visible;
     int focus;
     int focus_seq;    /* P17.2: LRU 时间戳 (窗口切换器排序) */
+    uint64_t anim_start;  /* 打开动画起始 tick (PIT, 1ms) */
+    uint32_t anim_dur;    /* 打开动画时长(ms), 200=Clavis small */
     int workspace;
     int always_on_top;
     uint32_t bg_color;
