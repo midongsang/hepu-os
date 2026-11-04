@@ -55,6 +55,10 @@ stage2_entry:
     /* 串口输出：Stage2启动 */
     SERIAL_PUTS msg_start
 
+    /* V0.55 P1: 检测CPU长模式能力（菜单灰显用）+ 读取持久化启动配置 */
+    call detect_lm_cap
+    call load_boot_config
+
     /* VGA输出 "64" */
     movw $0xB800, %ax
     movw %ax, %es
@@ -897,6 +901,8 @@ cdrom_read_lba:
 /* ============================================================
  * show_boot_menu: 显示启动菜单，等待选择或倒计时
  * 返回: AL=1 (64bit), AL=2 (32bit)
+ * V0.55 P1: 已有持久化默认选择时跳过菜单直接引导（ESC 进菜单）；
+ *           CPU 不支持 64 位时 64-bit 选项灰显、按键无效、默认 32-bit
  * ============================================================ */
 show_boot_menu:
     pushw %ax
@@ -906,6 +912,41 @@ show_boot_menu:
 
     SERIAL_PUTS msg_menu_start
 
+    /* 已有保存的默认选择 → 快速引导路径（2秒 ESC 窗口） */
+    cmpb $0, saved_choice
+    je full_menu
+    /* V0.55: CPU 不支持 64 位时，保存的 64-bit 选择强制改 32-bit */
+    cmpb $1, saved_choice
+    jne sm_cap_ok
+    cmpb $0, lm_capable
+    jne sm_cap_ok
+    movb $2, saved_choice
+sm_cap_ok:
+    SERIAL_PUTS msg_saved_boot
+    movb $4, %bl               /* 4 x ~0.5s ≈ 2s */
+quick_countdown:
+    inb $0x64, %al
+    testb $0x01, %al
+    jz quick_no_key
+    inb $0x60, %al
+    cmpb $0x01, %al            /* ESC 扫描码 → 回完整菜单 */
+    je full_menu
+quick_no_key:
+    movl $0x10000, %ecx
+quick_delay:
+    nop
+    loop quick_delay
+    decb %bl
+    jnz quick_countdown
+    /* 返回保存的默认选择 */
+    popw %dx
+    popw %cx
+    popw %bx
+    popw %ax
+    movb saved_choice, %al
+    ret
+
+full_menu:
     /* 清屏 */
     movw $0x0600, %ax
     movb $0x07, %bh
@@ -919,11 +960,23 @@ show_boot_menu:
     xorw %dx, %dx
     int $0x10
 
-    /* 显示菜单 */
+    /* 显示标题 */
     movw $menu_title, %si
     call vga_puts
+
+    /* 64-bit 选项：记录起始行，CPU 不支持时该行灰显 */
+    movb $0x03, %ah
+    xorw %bx, %bx
+    int $0x10                  /* DH=当前行 */
+    movb %dh, %ch              /* CH=64-bit 选项起始行 */
     movw $menu_64, %si
     call vga_puts
+    cmpb $0, lm_capable
+    jne menu_show_32
+    call gray_vga_rows         /* 灰显 CH 与 CH+1 两行 */
+    movw $menu_64_na, %si
+    call vga_puts
+menu_show_32:
     movw $menu_32, %si
     call vga_puts
     movw $menu_hint, %si
@@ -966,27 +1019,182 @@ menu_delay_loop:
     decb %bl
     jnz menu_countdown
 
-    /* 默认选择 64 位（生产配置）*/
+    /* 超时默认：CPU 支持长模式→64位，否则→32位 */
+    cmpb $0, lm_capable
+    je timeout_to_32
     jmp select_64bit
+timeout_to_32:
+    jmp select_32bit
 
 select_64bit:
     SERIAL_PUTS msg_menu_64
-
     popw %dx
     popw %cx
     popw %bx
     popw %ax
-    movb $1, %al              /* 设置返回值（在所有pop之后） */
+    movb $1, %al
+    call save_boot_config      /* V0.55 P1: 持久化默认选择 */
     ret
 
 select_32bit:
     SERIAL_PUTS msg_menu_32
-
     popw %dx
     popw %cx
     popw %bx
     popw %ax
-    movb $2, %al              /* 设置返回值（在所有pop之后） */
+    movb $2, %al
+    call save_boot_config
+    ret
+
+/* ============================================================
+ * V0.55 P1: CPU 长模式能力检测 + 启动配置持久化（LBA33）
+ * 配置扇区布局: [0..3]='HPCF' 魔数, [4]=选择(1/2), [5..511]=0
+ * 缓冲区用低内存 0x7900（MBR 0x7C00 之下, DAP 0x7B00 之下, 互不冲突）
+ * ============================================================ */
+
+/* detect_lm_cap: CPUID 0x80000001 EDX bit29 → lm_capable */
+detect_lm_cap:
+    pushfl
+    popl %eax
+    movl %eax, %ecx
+    xorl $0x200000, %eax       /* 翻转 EFLAGS.ID(bit21) 探测 CPUID */
+    pushl %eax
+    popfl
+    pushfl
+    popl %edx
+    cmpl %ecx, %edx            /* 与原始 EFLAGS 比：bit21 能置位→有 CPUID */
+    je dlm_done                /* 没变 → 无 CPUID → 不支持 */
+    pushl %ecx
+    popfl                      /* 恢复原 EFLAGS */
+    movl $0x80000000, %eax
+    cpuid
+    cmpl $0x80000001, %eax
+    jb dlm_done
+    movl $0x80000001, %eax
+    cpuid
+    testl $(1 << 29), %edx
+    jz dlm_done
+    movb $1, lm_capable
+    SERIAL_PUTS msg_dbg_lm_yes
+    ret
+dlm_done:
+    SERIAL_PUTS msg_dbg_lm_no
+    ret
+
+/* load_boot_config: 读 LBA33 → 校验魔数 → saved_choice（失败静默） */
+load_boot_config:
+    pushw %si
+    pushw %ax
+    movw $0x7B00, %si          /* EDD 读包 */
+    movb $0x10, %ds:(%si)
+    movb $0x00, %ds:1(%si)
+    movw $1, %ds:2(%si)        /* 1 扇区 */
+    movw $0x7900, %ds:4(%si)   /* 缓冲 0x7900 */
+    movw $0, %ds:6(%si)
+    movl $33, %ds:8(%si)       /* LBA 33 */
+    movl $0, %ds:12(%si)
+    movb boot_drive, %dl
+    movb $0x42, %ah
+    int $0x13
+    jc lbc_fail                /* 读失败（如 CD-ROM）→ 无保存 */
+    cmpl $0x46435048, %ds:0x7900   /* 'HPCF' */
+    jne lbc_fail
+    movb %ds:0x7904, %al
+    cmpb $1, %al
+    je lbc_ok
+    cmpb $2, %al
+    jne lbc_fail
+lbc_ok:
+    movb %al, saved_choice
+    SERIAL_PUTS msg_dbg_cfg_found
+    popw %ax
+    popw %si
+    ret
+lbc_fail:
+    SERIAL_PUTS msg_dbg_cfg_none
+lbc_done:
+    popw %ax
+    popw %si
+    ret
+
+/* save_boot_config: AL=选择(1/2) → 写 LBA33（CD-ROM/写失败静默忽略） */
+save_boot_config:
+    pushw %si
+    pushw %ax
+    pushw %cx
+    pushw %di
+    movb %al, %cl              /* CL=choice */
+    movb boot_drive, %al
+    cmpb $0xE0, %al
+    jae sbc_done               /* CD-ROM 不写 */
+    /* 填充配置扇区 @0x7900（stosl 写 ES:DI，需临时置 ES=0） */
+    pushw %es
+    xorw %ax, %ax
+    movw %ax, %es
+    movw $0x7900, %di
+    movl $0x46435048, %eax     /* 'HPCF' */
+    stosl
+    movb %cl, %al
+    stosb
+    movb $0, %al
+    movw $507, %cx
+sbc_fill:
+    stosb
+    loop sbc_fill
+    popw %es
+    /* EDD 写包 @0x7B00 */
+    movw $0x7B00, %si
+    movb $0x10, %ds:(%si)
+    movb $0x00, %ds:1(%si)
+    movw $1, %ds:2(%si)
+    movw $0x7900, %ds:4(%si)
+    movw $0, %ds:6(%si)
+    movl $33, %ds:8(%si)
+    movl $0, %ds:12(%si)
+    movb boot_drive, %dl
+    movb $0x43, %ah            /* EDD 写扇区 */
+    int $0x13
+    jnc sbc_wr_ok
+    SERIAL_PUTS msg_dbg_cfg_wrfail
+    jmp sbc_done
+sbc_wr_ok:
+    SERIAL_PUTS msg_dbg_cfg_wr
+sbc_done:
+    popw %di
+    popw %cx
+    popw %ax
+    popw %si
+    ret
+
+/* gray_vga_rows: VGA 文本模式灰显 CH 行与 CH+1 行（属性 0x08 暗灰） */
+gray_vga_rows:
+    pushw %es
+    pushw %ax
+    pushw %cx
+    pushw %di
+    movw $0xB800, %ax
+    movw %ax, %es
+    movb %ch, %al
+    movb $160, %dl
+    mulb %dl                   /* AX = CH*160（行内字节偏移） */
+    movw %ax, %di
+    movb $0x08, %ah
+    movb $80, %cl
+gvr_row1:
+    movb %ah, %es:1(%di)
+    addw $2, %di
+    decb %cl
+    jnz gvr_row1
+    movb $80, %cl              /* DI 已自然对齐到 CH+1 行首 */
+gvr_row2:
+    movb %ah, %es:1(%di)
+    addw $2, %di
+    decb %cl
+    jnz gvr_row2
+    popw %di
+    popw %cx
+    popw %ax
+    popw %es
     ret
 
 /* VGA文本输出（实模式，DS:SI=字符串） */
@@ -1393,6 +1601,7 @@ msg_jump_32bit: .asciz "[Stage2_64] Jumping to 32-bit kernel...\r\n"
 /* 启动菜单字符串 */
 menu_title: .asciz "========================================\r\n  HepuBoot v0.10.73 Hybrid\r\n========================================\r\n\r\n"
 menu_64:    .asciz "  1. HepuOS 64-bit (default)\r\n     New arch | Large memory | TrueType\r\n\r\n"
+menu_64_na: .asciz "     [CPU does not support 64-bit]\r\n\r\n"
 menu_32:    .asciz "  2. HepuOS 32-bit (stable)\r\n     Mature | Full desktop | 36 apps\r\n\r\n"
 menu_hint:  .asciz "  [1/2] Select | [Enter] Boot | Auto: "
 msg_menu_start: .asciz "[Stage2_64] Boot menu starting...\r\n"
@@ -1400,10 +1609,20 @@ msg_menu_wait:  .asciz "[Stage2_64] Waiting for selection...\r\n"
 msg_menu_key:   .asciz "[Stage2_64] Key pressed\r\n"
 msg_menu_64:    .asciz "[Stage2_64] Selected: 64-bit\r\n"
 msg_menu_32:    .asciz "[Stage2_64] Selected: 32-bit\r\n"
+msg_saved_boot: .asciz "[Stage2_64] Saved boot choice found (ESC=menu, 2s)\r\n"
+msg_dbg_lm_yes:  .asciz "[Stage2_64] DBG: LM capable=YES\r\n"
+msg_dbg_lm_no:   .asciz "[Stage2_64] DBG: LM capable=NO\r\n"
+msg_dbg_cfg_found: .asciz "[Stage2_64] DBG: cfg sector valid\r\n"
+msg_dbg_cfg_none:  .asciz "[Stage2_64] DBG: cfg sector absent\r\n"
+msg_dbg_cfg_wr:    .asciz "[Stage2_64] DBG: cfg sector written\r\n"
+msg_dbg_cfg_wrfail:.asciz "[Stage2_64] DBG: cfg sector WRITE FAILED\r\n"
 
 /* 变量 */
 boot_drive: .byte 0x80
 boot_choice: .byte 1
+/* V0.55 P1: 启动配置持久化 + CPU 能力标记 */
+lm_capable: .byte 0        /* 1=CPU 支持长模式 */
+saved_choice: .byte 0      /* 非零=LBA33 已保存的默认选择(1/2) */
 msg_vbe_start:  .asciz "[Stage2_64] Setting VBE mode 1024x768x32...\r\n"
 msg_vbe_exists: .asciz "[Stage2_64] VBE controller detected\r\n"
 msg_vbe_ok:     .asciz "[Stage2_64] VBE mode set OK\r\n"
