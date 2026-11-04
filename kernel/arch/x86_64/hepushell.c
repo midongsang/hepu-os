@@ -2260,6 +2260,13 @@ static void hs_context_menu_handle_click(int x, int y)
 /* HepuShell鼠标点击处理（由desktop64主循环调用） */
 void hepushell_handle_click(int x, int y)
 {
+    /* V0.55 P3-GUI: 首启向导模态拦截点击 */
+    {
+        extern int hs_oobe_active(void);
+        extern int hs_oobe_handle_click(int x, int y);
+        if (hs_oobe_active()) { hs_oobe_handle_click(x, y); return; }
+    }
+
     /* V0.13.39: 登录界面点击(虚拟键盘/关机/登录) */
     if (g_locked == 2) {
         /* 虚拟键盘键 */
@@ -2553,6 +2560,11 @@ void hepushell_handle_click(int x, int y)
 /* HepuShell右键点击处理（显示上下文菜单） */
 void hepushell_handle_right_click(int x, int y)
 {
+    /* V0.55 P3-GUI: 首启向导期间不弹桌面右键菜单 */
+    {
+        extern int hs_oobe_active(void);
+        if (hs_oobe_active()) return;
+    }
     extern int hs_files_hit(int x, int y);
     g_context_menu_x = x;
     g_context_menu_y = y;
@@ -2631,6 +2643,11 @@ void hepushell_update_mouse(int x, int y)
 /* 鼠标按下：检测窗口标题栏启动拖拽 */
 void hepushell_mouse_down(int x, int y)
 {
+    /* V0.55 P3-GUI: 首启向导期间禁止拖拽桌面窗口 */
+    {
+        extern int hs_oobe_active(void);
+        if (hs_oobe_active()) return;
+    }
     for (int zi = g_wm.z_count - 1; zi >= 0; zi--) {
         int id = g_wm.z_order[zi];
         if (id < 0 || id >= g_wm.window_count) continue;
@@ -2775,6 +2792,16 @@ void hepushell_render(void)
         hs_switcher_render();
     }
 
+    /* V0.55 P3-GUI: 首启图形向导覆盖在桌面之上 (模态, 独占输入) */
+    {
+        extern int hs_oobe_active(void);
+        extern void hs_oobe_render(void *fb, int w, int h);
+        if (hs_oobe_active()) {
+            hs_oobe_render(gfx64_get_framebuffer(),
+                           g_shell.screen_width, g_shell.screen_height);
+        }
+    }
+
     /* V0.13.62: 渲染鼠标指针 (此前桌面从未绘制指针 — 多鼠标/无线输入可见性修复) */
     extern void gfx64_draw_mouse_cursor(int x, int y, uint32_t color);
     gfx64_draw_mouse_cursor(g_shell.mouse_x, g_shell.mouse_y, 0x303030);
@@ -2789,6 +2816,13 @@ void hepushell_render(void)
 
 void hepushell_handle_key(int key)
 {
+    /* V0.55 P3-GUI: 首启向导优先消费全部按键 */
+    {
+        extern int hs_oobe_active(void);
+        extern int hs_oobe_handle_key(int key);
+        if (hs_oobe_active()) { hs_oobe_handle_key(key); return; }
+    }
+
     /* 锁屏状态：任意键进入登录界面 */
     if (g_locked == 1) {
         g_locked = 2;

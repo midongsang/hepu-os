@@ -130,6 +130,7 @@ C_SOURCES = \
     $(ARCH_DIR)/uart64.c \
     $(ARCH_DIR)/ac9764.c \
     $(ARCH_DIR)/hs_apps.c \
+    $(ARCH_DIR)/hs_oobe64.c \
     $(ARCH_DIR)/hepushell.c \
     $(ARCH_DIR)/icons_win_data.c \
     $(ARCH_DIR)/hsqml.c \
@@ -152,6 +153,8 @@ vpath %.c $(KERNEL_DIR) $(ARCH_DIR) $(KERNEL_DIR)/shared/gfx $(KERNEL_DIR)/share
 vpath %.S $(ARCH_DIR)
 
 # 编译选项
+# -Os: stage2 低端内存只留 640KB 内核区(0x10000-0x9FFFF), 必须控制内核体积;
+#      -Os 相比 -O2 约省 78KB (V0.55 P3-GUI 新增向导后仍留有安全余量)
 CFLAGS = \
     -m64 \
     -mcmodel=small \
@@ -167,7 +170,7 @@ CFLAGS = \
     -fcf-protection=none \
     -fno-strict-aliasing \
     -fwrapv \
-    -O2 \
+    -Os \
     -ffunction-sections     -fdata-sections \
     -Wall \
     -Wextra \

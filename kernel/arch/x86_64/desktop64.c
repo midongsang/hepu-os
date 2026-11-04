@@ -131,6 +131,14 @@ void desktop64_run(void)
         usb64_kbd_flush();
     }
 
+    /* V0.55 P3-GUI: 首次启动 → 桌面内弹出图形化首启向导
+     * (图形化不可用时由 kernel_main 走 oobe64_run 文本兜底) */
+    {
+        extern int auth64_is_configured(void);
+        extern void hs_oobe_begin(void);
+        if (!auth64_is_configured()) hs_oobe_begin();
+    }
+
     /* 事件循环 */
     while (1) {
         /* V0.13.9: 网络轮询 (网卡收发) */
