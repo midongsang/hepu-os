@@ -1,0 +1,11 @@
+---
+name: 📝 其他
+about: 不属于 bug / feature 的任何事（文档、构建、CI、清理等）
+title:
+labels:
+body:
+  - type: textarea
+    id: body
+    attributes:
+      label: 描述
+      placeholder: 这里写你想说的

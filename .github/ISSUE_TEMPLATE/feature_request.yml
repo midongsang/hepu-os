@@ -1,0 +1,21 @@
+---
+name: 💡 功能建议
+about: 想加什么新东西
+title: "[FEATURE] "
+labels: enhancement
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: 要什么
+      placeholder: "一个 swap 机制，按需换出空闲进程的匿名页"
+  - type: textarea
+    id: why
+    attributes:
+      label: 为什么
+      placeholder: "当前 512MB 内存，多开 4 个进程后 PIE 程序 mmap 失败"
+  - type: textarea
+    id: alternative
+    attributes:
+      label: 替代方案
+      placeholder: "或者我可以用 OOM killer + 限制每个进程堆大小，但体验差"

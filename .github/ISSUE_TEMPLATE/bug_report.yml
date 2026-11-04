@@ -1,0 +1,50 @@
+---
+name: 🐛 Bug 报告
+about: 运行失败 / 功能异常 / 内核 panic 等
+title: "[BUG] "
+labels: bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## 复现信息
+  - type: textarea
+    id: repro
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1. `bash tools/make_single_img64.sh`
+        2. `qemu-system-x86_64 -m 512M -drive file=/tmp/hepu64_single.img`
+        3. 在 shell 里: `exec /bin/glibchello.elf`
+  - type: textarea
+    id: expected
+    attributes:
+      label: 预期行为
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际行为
+  - type: markdown
+    attributes:
+      value: |
+        ## 附加信息
+  - type: textarea
+    id: log
+    attributes:
+      label: serial.log 片段（失败前后 30 行）
+      render: text
+  - type: textarea
+    id: env
+    attributes:
+      label: 环境
+      placeholder: |
+        - HepuOS tag: v0.54.7
+        - 宿主: Ubuntu 24.04 LTS
+        - QEMU: qemu-system-x86_64 v8.2.0
+  - type: checkboxes
+    id: search
+    attributes:
+      label: 搜索过了
+      options:
+        - label: 已经在 docs/status/OPEN_BUGS.md 里搜过了，没有重复
+          required: true
