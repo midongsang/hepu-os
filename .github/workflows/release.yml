@@ -35,20 +35,8 @@ jobs:
         run: |
           make -C tools/hepboot/uefi || {
             echo "=== UEFI build diagnostics ==="
-            ls -la tools/hepboot/uefi/hepboot_uefi.so 2>/dev/null
-            sha1sum tools/hepboot/uefi/hepboot_uefi.so 2>/dev/null
             file tools/hepboot/uefi/hepboot_uefi.so 2>/dev/null
-            echo "--- 前 64 字节 hexdump ---"
-            head -c 64 tools/hepboot/uefi/hepboot_uefi.so | xxd 2>/dev/null
-            echo "--- 工具链路径与版本 ---"
-            which -a ld objcopy
-            ld --version | head -1
-            objcopy --version | head -1
-            echo "--- ld 支持的模拟 ---"
-            ld -V 2>&1 | head -8
-            echo "--- objcopy efi target ---"
-            objcopy --info 2>/dev/null | grep -i efi || echo "objcopy --info 列表无 efi (正常现象, 不一定不支持)"
-            df -h /home/runner/work | tail -1
+            ld --version | head -1; objcopy --version | head -1
             exit 1
           }
 

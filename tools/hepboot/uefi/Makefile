@@ -53,10 +53,12 @@ hepboot_uefi.so: $(OBJECT)
 	$(LD) $(LDFLAGS) -o $@ $(OBJECT) $(LIBS)
 
 # 转换为EFI应用（PE/COFF格式）
+# 注意: binutils >= 2.45 起 --target 会同时指定输入格式, 导致 ELF 输入被拒
+# ("file format not recognized"), 必须用 --output-target (上游 bug 2139340)
 $(TARGET): hepboot_uefi.so
 	$(OBJCOPY) -j .text -j .sdata -j .data -j .dynamic \
 	           -j .dynsym -j .rel -j .rela -j .reloc \
-	           --target=efi-app-x86_64 $< $@
+	           --output-target=efi-app-x86_64 $< $@
 	@echo "  [UEFI] Build complete: $(TARGET)"
 	@ls -la $(TARGET)
 
