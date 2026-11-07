@@ -1317,6 +1317,7 @@ long_mode:
     movb %al, 6(%rdi)
     movl vbe_fb(%rip), %eax
     movl %eax, 8(%rdi)
+    movl $0, 12(%rdi)          /* fb 高32位: VBE 帧缓冲始终 <4GB */
 
     /* 输出"JMP>"然后跳转 */
     movb $'J', %al

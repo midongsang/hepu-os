@@ -750,9 +750,14 @@ static int show_boot_menu(void)
         L"  2. Hepu OS 32-bit (Stable)"
     };
 
-    /* 如果失败次数>=2，自动选择32位稳定版 */
+    /* 如果失败次数>=2，自动选择32位稳定版（仅当 ESP 中确实存在 32 位内核） */
     if (fail_count >= 2) {
-        selected = 1;
+        VOID *probe = NULL;
+        UINTN probe_size = 0;
+        if (!EFI_ERROR(read_esp_file(KERNEL32_PATH, &probe, &probe_size))) {
+            selected = 1;
+        }
+        if (probe) FreePool(probe);
     }
 
     clear_screen();
@@ -912,7 +917,7 @@ static EFI_STATUS load_kernel_to_memory(CHAR16 *kernel_path, UINT64 *kernel_addr
     EFI_FILE_INFO *file_info = NULL;
     UINTN info_size = sizeof(EFI_FILE_INFO) + 256;
     UINTN read_size;
-    UINT8 magic[4];
+    UINT8 magic[5];
     EFI_HANDLE device_handle = NULL;
     UINT64 target_addr = 0x100000;
     UINTN pages;
@@ -1072,22 +1077,28 @@ static EFI_STATUS load_kernel_to_memory(CHAR16 *kernel_path, UINT64 *kernel_addr
     }
     print_str(L"    [OK] 内核已加载到 0x100000\r\n");
 
-    /* 8. 验证内核魔数 (0x1BADB002 小端 = 02 B0 AD 1B) */
-    CopyMem(magic, (VOID*)(UINTN)target_addr, 4);
+    /* 8. 验证内核入口魔数
+     * 32位内核以 multiboot header 开头: 02 B0 AD 1B
+     * 64位内核以入口指令开头: BF 02 B0 AD 2B (mov $0x2badb002,%edi) */
+    CopyMem(magic, (VOID*)(UINTN)target_addr, 5);
     print_str(L"    [OK] 内核魔数: ");
     print_hex(magic[0]); print_str(L" ");
     print_hex(magic[1]); print_str(L" ");
     print_hex(magic[2]); print_str(L" ");
-    print_hex(magic[3]);
+    print_hex(magic[3]); print_str(L" ");
+    print_hex(magic[4]);
     print_str(L"\r\n");
 
-    if (magic[0] != 0x02 || magic[1] != 0xB0 ||
-        magic[2] != 0xAD || magic[3] != 0x1B) {
+    int is_mb32 = (magic[0] == 0x02 && magic[1] == 0xB0 &&
+                   magic[2] == 0xAD && magic[3] == 0x1B);
+    int is_x64  = (magic[0] == 0xBF && magic[1] == 0x02 &&
+                   magic[2] == 0xB0 && magic[3] == 0xAD && magic[4] == 0x2B);
+    if (!is_mb32 && !is_x64) {
         print_str(L"    [ERROR] 内核魔数校验失败!\r\n");
         FreePool(file_info);
         return EFI_LOAD_ERROR;
     }
-    print_str(L"    [OK] 内核魔数校验通过 (0x1BADB002)\r\n");
+    print_str(L"    [OK] 内核魔数校验通过\r\n");
 
     *kernel_addr = target_addr;
     FreePool(file_info);
@@ -1422,6 +1433,8 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
             v[2] = (UINT16)(g_gop_info.pixels_per_scanline * (g_gop_info.bpp / 8));
             *(volatile UINT8 *)(0x6000 + 6) = (UINT8)g_gop_info.bpp;
             *(volatile UINT32 *)(0x6000 + 8) = (UINT32)(g_gop_info.framebuffer_base & 0xFFFFFFFF);
+            /* 帧缓冲物理地址可能 >4GB (大显存独显/核显), 高32位写 0x600c */
+            *(volatile UINT32 *)(0x6000 + 12) = (UINT32)(g_gop_info.framebuffer_base >> 32);
             debug_puts("FB info -> 0x6000: ");
             debug_put_hex((UINT64)g_gop_info.width);
             debug_puts("x");

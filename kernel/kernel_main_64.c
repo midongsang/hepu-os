@@ -425,6 +425,12 @@ void x86_64_kernel_main(void)
 
     /* 解析MBR分区表，找到ext2根分区 */
     vga_puts("[INIT] Parsing MBR partition table...\n");
+    /* 出厂镜像根分区固定在 LBA13000; 若 MBR 中有可用的 0x83 ext2 分区,
+     * 下面的扫描会用实际分区覆盖。这样 SATA/USB 启动(读不到 MBR)也能找到根。 */
+    ext2_64_set_partition_offset(13000);
+    g_root_lba = 13000;
+    g_root_size = 0;
+    int mbr_ext2_found = 0;
     {
         uint8_t mbr[512];
         if (ide64_read_sector(0, mbr) == 0) {
@@ -493,24 +499,40 @@ void x86_64_kernel_main(void)
                             if (magic == 0xEF53) { root_part = pi; break; }
                         }
                     }
-                    if (root_part < 0) root_part = part_count - 1;  /* 回退旧行为 */
-                    ext2_64_set_partition_offset(part_lba[root_part]);
-                    /* V0.13.54: 保存根分区信息供 ext2 自动扩展 */
-                    g_root_lba = part_lba[root_part];
-                    g_root_size = part_size[root_part];
-                    vga_puts("[INIT] Using partition ");
-                    char buf[16];
-                    int n = root_part + 1, i = 0;
-                    if (n == 0) buf[i++] = '0';
-                    while (n > 0) { buf[i++] = '0' + n % 10; n /= 10; }
-                    buf[i] = 0;
-                    for (int j = 0; j < i / 2; j++) {
-                        char t = buf[j]; buf[j] = buf[i-1-j]; buf[i-1-j] = t;
+                    if (root_part < 0) {
+                        /* 没有可用的 ext2 分区(如 GPT 混合镜像的保护性 MBR 0xEE),
+                         * 回退出厂固定布局 LBA13000, 而不是取最后一个分区 */
+                        ext2_64_set_partition_offset(13000);
+                        g_root_lba = 13000;
+                        g_root_size = 0;
+                        vga_puts("[INIT] No ext2 partition in MBR, fallback root LBA=13000\n");
+                    } else {
+                        mbr_ext2_found = 1;
+                        ext2_64_set_partition_offset(part_lba[root_part]);
+                        /* V0.13.54: 保存根分区信息供 ext2 自动扩展 */
+                        g_root_lba = part_lba[root_part];
+                        g_root_size = part_size[root_part];
+                        vga_puts("[INIT] Using partition ");
+                        char buf[16];
+                        int n = root_part + 1, i = 0;
+                        if (n == 0) buf[i++] = '0';
+                        while (n > 0) { buf[i++] = '0' + n % 10; n /= 10; }
+                        buf[i] = 0;
+                        for (int j = 0; j < i / 2; j++) {
+                            char t = buf[j]; buf[j] = buf[i-1-j]; buf[i-1-j] = t;
+                        }
+                        vga_puts(buf);
+                        vga_puts(" as root (");
+                        vga_puts(root_part == 0 ? "initrd recovery" : "ext2 root");
+                        vga_puts(")\n");
                     }
-                    vga_puts(buf);
-                    vga_puts(" as root (");
-                    vga_puts(root_part == 0 ? "initrd recovery" : "ext2 root");
-                    vga_puts(")\n");
+                } else {
+                    /* MBR 中没有 0x83 分区 (GPT 混合镜像的保护性 0xEE):
+                     * 使用出厂固定布局, 否则会误读 GPT 头当作 ext2 超级块 */
+                    ext2_64_set_partition_offset(13000);
+                    g_root_lba = 13000;
+                    g_root_size = 0;
+                    vga_puts("[INIT] No 0x83 partition in MBR, fallback root LBA=13000\n");
                 }
             } else {
                 vga_puts("[INIT] No MBR signature, using raw disk\n");
@@ -530,14 +552,22 @@ void x86_64_kernel_main(void)
         extern int ahci64_disk_present(void);
         extern int ahci64_read_disk(uint32_t, uint8_t, uint8_t *);
         extern void ext2_64_set_block_device(int (*rd)(uint32_t, uint8_t, uint8_t *));
-        if (ahci64_disk_present()) {
-            ext2_64_set_block_device(ahci64_read_disk);
-        } else {
-            /* V0.20.101: 无SATA盘, 尝试USB启动 (U盘) */
-            vga_puts("[INIT] No SATA disk, trying USB boot...\n");
-            extern int usb64_init(void);
-            extern int usb64_storage_present(void);
-            extern int usb_storage_read_sectors(uint32_t, uint8_t, uint8_t *);
+        extern int usb64_init(void);
+        extern int usb64_storage_present(void);
+        extern int usb_storage_read_sectors(uint32_t, uint8_t, uint8_t *);
+        int have_ahci = ahci64_disk_present();
+        int ahci_has_root = 0;
+        uint8_t probe[512];
+        if (have_ahci && ahci64_read_disk(13002, 1, probe) == 0 &&
+            probe[56] == 0x53 && probe[57] == 0xEF) {
+            ahci_has_root = 1;
+        }
+
+        /* 从 U 盘启动且机器内还有 SATA 盘时, 不能误把内部盘当根设备。
+         * 仅当没有 MBR 0x83 根分区、且当前 SATA 盘不含出厂根分区时探测 U 盘。 */
+        int usb_has_root = 0;
+        if (!mbr_ext2_found && (!have_ahci || !ahci_has_root)) {
+            vga_puts("[INIT] Probing USB boot...\n");
             usb64_init();
             if (!usb64_storage_present()) {
                 /* UHCI可能没找到U盘, 试EHCI */
@@ -548,17 +578,27 @@ void x86_64_kernel_main(void)
                     usb64_enumerate();
                 }
             }
-            if (usb64_storage_present()) {
-                vga_puts("[INIT] USB mass storage found, using as root device\n");
-                ext2_64_set_block_device(usb_storage_read_sectors);
-                extern void storage_hal_set_device(int);
-                storage_hal_set_device(1);
-                /* rootfs分区在LBA 13000 (V0.54.6: 32位内核后移，ext2 随之后移) */
-                g_root_lba = 13000;
-                g_root_size = 0;
-            } else {
-                vga_puts("[INIT] No USB storage either, falling back to IDE\n");
+            if (usb64_storage_present() &&
+                usb_storage_read_sectors(13002, 1, probe) == 0 &&
+                probe[56] == 0x53 && probe[57] == 0xEF) {
+                usb_has_root = 1;
             }
+        }
+
+        if (usb_has_root) {
+            vga_puts("[INIT] USB mass storage found, using as root device\n");
+            ext2_64_set_block_device(usb_storage_read_sectors);
+            extern void storage_hal_set_device(int);
+            storage_hal_set_device(1);
+            ext2_64_set_partition_offset(13000);
+            g_root_lba = 13000;
+            g_root_size = 0;
+        } else if (mbr_ext2_found) {
+            /* IDE MBR 中已找到根分区, 保持 IDE 块设备 */
+        } else if (have_ahci) {
+            ext2_64_set_block_device(ahci64_read_disk);
+        } else {
+            vga_puts("[INIT] No SATA/USB disk, falling back to IDE\n");
         }
     }
 

@@ -751,10 +751,12 @@ void gfx64_blur_region(int x, int y, int w, int h, int blur_radius, uint32_t ove
  * 在 vmm64_init 之后调用: 读 0x6000(GOP fb 信息, UEFI引导器写入) -> 映射 fb -> 激活 */
 void early_fb_text_init_from_bootloader(void)
 {
+    /* VBE/GOP信息存储在0x6000: w(2)h(2)pitch(2)bpp(1) + fb(4) + fb_hi(4) */
     volatile uint16_t *v = (volatile uint16_t *)0x6000;
     uint16_t w = v[0], h = v[1], pitch = v[2];
     uint8_t bpp = *(volatile uint8_t *)(0x6000 + 6);
-    uint32_t fb = *(volatile uint32_t *)(0x6000 + 8);
+    uint64_t fb = (uint64_t)*(volatile uint32_t *)(0x6000 + 8)
+                | ((uint64_t)*(volatile uint32_t *)(0x6000 + 12) << 32);
     if (w == 0 || h == 0 || fb == 0) {
         vga_puts("[GFX64] early fb: no info\n");
         return;
@@ -781,13 +783,14 @@ void early_fb_text_init_from_bootloader(void)
 
 int gfx64_init_from_bootloader(void)
 {
-    /* VBE信息存储在0x6000: width(2), height(2), pitch(2), bpp(1), fb(4) */
+    /* VBE/GOP信息存储在0x6000: w(2)h(2)pitch(2)bpp(1) + fb(4) + fb_hi(4) */
     volatile uint16_t *vbe_info = (volatile uint16_t *)0x6000;
     uint16_t width = vbe_info[0];
     uint16_t height = vbe_info[1];
     uint16_t pitch = vbe_info[2];
     uint8_t bpp = *(volatile uint8_t *)(0x6000 + 6);
-    uint32_t fb = *(volatile uint32_t *)(0x6000 + 8);
+    uint64_t fb = (uint64_t)*(volatile uint32_t *)(0x6000 + 8)
+                | ((uint64_t)*(volatile uint32_t *)(0x6000 + 12) << 32);
 
     if (width == 0 || height == 0 || fb == 0) {
         vga_puts("[GFX64] No VBE info from bootloader\n");

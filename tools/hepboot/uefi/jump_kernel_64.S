@@ -51,6 +51,15 @@ low_mem_code_64:
     movw %ax, %fs
     movw %ax, %gs
 
+    /* 重新加载 CS 为本 GDT 的 0x08。
+     * UEFI 固件通常用 CS=0x38, 若直接跳入内核, 中断 iretq 用内核 GDT
+     * 恢复 0x38(无效选择子) 会触发 #GP(0x38)。 */
+    leaq 1f(%rip), %rax
+    pushq $0x08
+    pushq %rax
+    lretq
+1:
+
     /* 设置multiboot约定: eax=0x2BADB002(magic), ebx=multiboot_info_addr */
     movl $0x2BADB002, %eax
     movq %r13, %rbx      /* rbx = multiboot_info_addr */

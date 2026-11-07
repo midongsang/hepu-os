@@ -6,12 +6,13 @@ CC = gcc
 LD = ld
 OBJCOPY = objcopy
 
-# gnu-efi路径（使用本地编译版本）
-EFI_INCLUDE = /home/user/Doubao/chats/38448056008342018/extracted/os-source/hepu_os_src/hepu-os/tools/gnu-efi/inc
-EFI_LIB = /home/user/Doubao/chats/38448056008342018/extracted/os-source/hepu_os_src/hepu-os/tools/gnu-efi/x86_64/lib
-EFI_GNUEFI_LIB = /home/user/Doubao/chats/38448056008342018/extracted/os-source/hepu_os_src/hepu-os/tools/gnu-efi/x86_64/gnuefi
-EFI_CRT0 = /home/user/Doubao/chats/38448056008342018/extracted/os-source/hepu_os_src/hepu-os/tools/gnu-efi/x86_64/gnuefi/crt0-efi-x86_64.o
-EFI_LDS = /home/user/Doubao/chats/38448056008342018/extracted/os-source/hepu_os_src/hepu-os/tools/gnu-efi/gnuefi/elf_x86_64_efi.lds
+# gnu-efi路径（本仓库内置版本，相对当前 Makefile 定位）
+EFI_ROOT = $(abspath $(CURDIR)/../../gnu-efi)
+EFI_INCLUDE = $(EFI_ROOT)/inc
+EFI_LIB = $(EFI_ROOT)/x86_64/lib
+EFI_GNUEFI_LIB = $(EFI_ROOT)/x86_64/gnuefi
+EFI_CRT0 = $(EFI_ROOT)/x86_64/gnuefi/crt0-efi-x86_64.o
+EFI_LDS = $(EFI_ROOT)/gnuefi/elf_x86_64_efi.lds
 
 # 编译选项
 CFLAGS = -fno-stack-protector -fpic -fshort-wchar -mno-red-zone \
