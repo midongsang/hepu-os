@@ -1405,8 +1405,9 @@ static int64_t sys_newfstatat(int dirfd, const char *path, uint64_t statbuf, int
 
 /* sys_pipe: 创建管道, fds[0]=读端 fds[1]=写端 */
 static int64_t sys_pipe(int *fds) {
-    if (!fds || (uint64_t)fds < 0x40000000ULL || (uint64_t)fds >= 0x80000000ULL) return -1;
-
+    /* 安全修复：fds 是用户指针，旧实现仅查地址范围就内核态直写，
+     * SMAP 开启或页未映射时 ring0 写用户地址 → #PF → 整机 hlt。
+     * 一律走 copy_to_user（含范围+逐页映射校验+STAC）。 */
     int pid = -1, wid = -1;
     for (int i = 0; i < MAX_PIPES; i++) {
         if (!g_pipes[i].used) { pid = i; break; }
@@ -1437,8 +1438,14 @@ static int64_t sys_pipe(int *fds) {
     sys_files[wfd].pipe_buf = pid;
     sys_files[wfd].mode = 1;
 
-    fds[0] = rfd;
-    fds[1] = wfd;
+    /* 写回用户空间；失败则回滚已分配的管道与 fd，避免泄漏 */
+    if (copy_to_user(&fds[0], &rfd, sizeof(int)) != 0 ||
+        copy_to_user(&fds[1], &wfd, sizeof(int)) != 0) {
+        g_pipes[pid].used = 0;
+        sys_files[rfd].used = 0;
+        sys_files[wfd].used = 0;
+        return -1;
+    }
     return 0;
 }
 
@@ -2526,9 +2533,10 @@ static int64_t wrap_net_stats(int64_t a1, int64_t a2, int64_t a3, int64_t a4, in
                                   uint64_t *tx_bytes, uint64_t *rx_bytes);
     uint64_t tx = 0, rx = 0;
     net_hal_get_stats(0, 0, 0, &tx, &rx);
-    /* 用户窗口指针才允许写（隔离下安全）；否则直接返回 */
-    if (a1 >= 0x40000000ULL && a1 < 0x80000000ULL) *(uint64_t *)a1 = tx;
-    if (a2 >= 0x40000000ULL && a2 < 0x80000000ULL) *(uint64_t *)a2 = rx;
+    /* 安全修复：a1/a2 是用户指针，旧实现仅查范围就内核态直写，
+     * SMAP/未映射页 → 内核 #PF 停机。走 copy_to_user（失败忽略，仅丢统计）。 */
+    if (a1) copy_to_user((void *)a1, &tx, 8);
+    if (a2) copy_to_user((void *)a2, &rx, 8);
     return (int64_t)tx;   /* rax 同时带 tx，rx 通过指针 */
 }
 

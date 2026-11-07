@@ -167,6 +167,11 @@ void ip64_handle(const uint8_t *frame, int length)
 
     if (data_len < 0) return;
 
+    /* 安全修复：total_len 是对端自报字段，必须钳制到实际收到的帧长。
+     * 旧实现直接用自报值，截断包会把接收缓冲区之后的内核内存当作载荷
+     * 交给 TCP/UDP（进而拷入 socket 接收缓冲可被应用读回）——远程信息泄露。 */
+    if (data_len > length - 14 - ip_len) data_len = length - 14 - ip_len;
+
     const uint8_t *data = frame + 14 + ip_len;
 
     switch (ip->protocol) {

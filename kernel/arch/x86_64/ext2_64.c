@@ -189,6 +189,9 @@ int ext2_read_inode(uint32_t ino, ext2_inode_t *inode)
 
     uint32_t group = (ino - 1) / ext2_sb.s_inodes_per_group;
     uint32_t index = (ino - 1) % ext2_sb.s_inodes_per_group;
+    /* 安全修复：ino 可来自磁盘目录项（恶意镜像），组号必须落在已加载的
+     * GDT 静态数组(32项)内，否则 ext2_gdt[group] 越界读 */
+    if (group >= ext2_groups_count || group >= 32) return -1;
     uint32_t inode_table = ext2_gdt[group].bg_inode_table;
     uint32_t inode_size = ext2_sb.s_inode_size ? ext2_sb.s_inode_size : 128;
     uint32_t block_offset = (index * inode_size) / ext2_block_size;
@@ -328,11 +331,15 @@ static int ext2_find_in_dir(ext2_inode_t *dir_inode, const char *name, uint32_t 
         uint32_t offset = 0;
         uint32_t guard = 0;  /* SEC-18: 防止目录遍历死循环 */
         while (offset < ext2_block_size && guard++ < 256) {
+            /* 安全修复：目录项来自磁盘（恶意镜像/USB），先校验边界再解引用，
+             * 否则名字比较会越过 block_buf 读内核栈（信息泄露预言机） */
+            if (offset + 8 > ext2_block_size) break;
             ext2_dir_entry_t *entry = (ext2_dir_entry_t *)(block_buf + offset);
-            if (entry->rec_len == 0) break;
             if (entry->rec_len < 8) break;  /* rec_len最小8字节，异常则退出 */
+            if (entry->rec_len > ext2_block_size - offset) break;
 
-            if (entry->name_len > 0 && entry->name_len <= 255) {
+            if (entry->name_len > 0 && entry->name_len <= 255 &&
+                8 + (uint32_t)entry->name_len <= entry->rec_len) {
                 int match = 1;
                 for (uint8_t i = 0; i < entry->name_len; i++) {
                     if (name[i] != entry->name[i]) { match = 0; break; }
@@ -549,9 +556,13 @@ int ext2_64_init(void)
             if (ext2_read_data_block(&root, b, dir_buf) != 0) continue;
             uint32_t offset = 0;
             while (offset < ext2_block_size) {
+                /* 安全修复：根目录来自磁盘，校验目录项边界防越界读栈 */
+                if (offset + 8 > ext2_block_size) break;
                 ext2_dir_entry_t *entry = (ext2_dir_entry_t *)(dir_buf + offset);
-                if (entry->rec_len == 0) break;
-                if (entry->name_len > 0) {
+                if (entry->rec_len < 8) break;
+                if (entry->rec_len > ext2_block_size - offset) break;
+                if (entry->name_len > 0 &&
+                    8 + (uint32_t)entry->name_len <= entry->rec_len) {
                     vga_put_hex(offset);
                     vga_puts(" rec=");
                     vga_put_hex(entry->rec_len);
@@ -847,6 +858,8 @@ int ext2_write_inode(uint32_t ino, const ext2_inode_t *inode)
 
     uint32_t group = (ino - 1) / ext2_sb.s_inodes_per_group;
     uint32_t index = (ino - 1) % ext2_sb.s_inodes_per_group;
+    /* 安全修复：同 ext2_read_inode，组号必须落在 GDT 静态数组(32项)内 */
+    if (group >= ext2_groups_count || group >= 32) return -1;
     uint32_t inode_table = ext2_gdt[group].bg_inode_table;
     uint32_t inode_size = ext2_sb.s_inode_size ? ext2_sb.s_inode_size : 128;
     uint32_t block_offset = (index * inode_size) / ext2_block_size;
@@ -917,10 +930,16 @@ static int ext2_add_dir_entry(uint32_t dir_ino, const char *name, uint32_t ino, 
 
         uint32_t offset = 0;
         while (offset < ext2_block_size) {
+            /* 安全修复：目录项来自磁盘，必须先校验再分割。
+             * 旧实现：rec_len<actual 时 free_space 下溢为巨大值通过检查，
+             * 或 rec_len 越块导致 new_entry 落到 dir_buf 之外 —— 栈写溢出 */
+            if (offset + 8 > ext2_block_size) break;
             ext2_dir_entry_t *entry = (ext2_dir_entry_t *)(dir_buf + offset);
-            if (entry->rec_len == 0) break;
+            if (entry->rec_len < 8) break;
+            if (entry->rec_len > ext2_block_size - offset) break;
 
             uint32_t actual = 8 + ((entry->name_len + 3) & ~3);
+            if (entry->rec_len < actual) break;
             uint32_t free_space = entry->rec_len - actual;
 
             if (free_space >= needed) {
@@ -1588,7 +1607,7 @@ int ext2_64_delete_file(const char *path)
     } else {
     uint32_t g = (ino - 1) / ext2_sb.s_inodes_per_group;
     uint32_t idx = (ino - 1) % ext2_sb.s_inodes_per_group;
-    if (g < ext2_groups_count) {
+    if (g < ext2_groups_count && g < 32) {   /* 安全修复：GDT 静态数组仅32项 */
         uint8_t bitmap[EXT2_MAX_BLOCK_SIZE];
         if (ext2_read_block(ext2_gdt[g].bg_inode_bitmap, bitmap) == 0) {
             bitmap[idx / 8] &= ~(1 << (idx % 8));
@@ -1720,7 +1739,7 @@ int ext2_64_delete_dir(const char *path)
     } else {
     uint32_t g = (ino - 1) / ext2_sb.s_inodes_per_group;
     uint32_t idx = (ino - 1) % ext2_sb.s_inodes_per_group;
-    if (g < ext2_groups_count) {
+    if (g < ext2_groups_count && g < 32) {   /* 安全修复：GDT 静态数组仅32项 */
         uint8_t bitmap[EXT2_MAX_BLOCK_SIZE];
         if (ext2_read_block(ext2_gdt[g].bg_inode_bitmap, bitmap) == 0) {
             bitmap[idx / 8] &= ~(1 << (idx % 8));

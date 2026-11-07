@@ -76,6 +76,14 @@ void auth64_sha256(const uint8_t *data, uint32_t len, uint8_t out[32])
     uint8_t msg[128];               /* 最多支持 len<=55 的密码（足够） */
     uint32_t i, ml = len;
 
+    /* 安全修复：msg[128] 单缓冲实现只容纳 len<=55（1块）~111（2块）字节。
+     * 旧实现无长度检查，超长密码（OOBE/登录输入可被用户控制）直接写穿
+     * 栈缓冲区覆盖返回地址 —— ring0 栈溢出 RCE。超长输入一律拒绝。 */
+    if (len > 55) {
+        for (i = 0; i < 32; i++) out[i] = 0;
+        return;
+    }
+
     for (i = 0; i < ml; i++) msg[i] = data[i];
     msg[ml++] = 0x80;
     while ((ml % 64) != 56) msg[ml++] = 0;
@@ -220,6 +228,7 @@ int auth64_current_role(void) { return g_role; }
 int auth64_verify_password(const char *pass)
 {
     if (g_hash[0] == '\0') return 0;
+    if (!pass || a_strlen(pass) > 55) return 0;  /* sha256 单缓冲实现上限 */
     char hex[HASH_HEX_LEN + 1];
     hash_password(pass, hex);
     return a_streq(hex, g_hash);
@@ -231,6 +240,9 @@ int auth64_create_account(const char *name, const char *pass, int role,
 {
     if (!name || !name[0] || !pass || !pass[0]) return -1;
     if (role != ROLE_NORMAL && role != ROLE_DEVELOPER) return -1;
+    /* sha256 单缓冲实现上限 55 字节，超长密码拒绝（防栈溢出+语义截断碰撞） */
+    if (a_strlen(pass) > 55) return -1;
+    if (admin_pass && a_strlen(admin_pass) > 55) return -1;
     a_copy(g_user, name, sizeof(g_user));
     hash_password(pass, g_hash);
     g_admin_hash[0] = '\0';
