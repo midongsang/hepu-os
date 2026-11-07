@@ -299,255 +299,94 @@ enter_unreal_mode:
     ret
 
 load_64bit_kernel:
-    /* 从磁盘加载64位内核（分4次，每次64KB，共256KB） */
     SERIAL_PUTS msg_load_kernel
 
-    /* 检测CD-ROM: DL>=0xE0使用AH=42h(2048字节扇区), 否则使用AH=42h(512字节扇区) */
+    /* V0.56 真机修复: 旧方案把第 10 个 64KB 块暂存到 0xA0000(VGA 显存窗口),
+     * 而内核 .data(链接地址 0x1909c0+) 恰好全部落在该块 → 真机 VGA 窗口读回
+     * 不可靠 → .data 被破坏 → 黑屏/重启; 另外 E801 结果写 0x90100 也会踩到
+     * 第 9 块里的内核数据。改为 unreal mode 下"读一块 → 立刻拷到 1MB 以上",
+     * 全程只用 0x10000 作 64KB 缓冲, 不再占用 0x60000-0xAFFFF。 */
+    call enter_unreal_mode
+
+    /* 参数: EBX=起始LBA, ECX=每块扇区数, EDX=块数(20 x 32KB = 640KB)
+     * 每次 32KB 而非 64KB: 不少真机 BIOS 的 EDD 单次传输上限为 127 扇区 */
     cmpb $0xE0, boot_drive
-    jl load_64bit_hdd
+    jl 1f
+    /* CD-ROM: 2048B/扇区, 16 扇区 = 32KB, 内核起始 LBA 500 */
+    movl $500, %ebx
+    movl $16, %ecx
+    jmp 2f
+1:
+    /* HDD: 512B/扇区, 64 扇区 = 32KB, 内核起始 LBA 2000 */
+    movl $2000, %ebx
+    movl $64, %ecx
+2:
+    movl $0x100000, %edi
+    movl $20, %edx
 
-    /* ===== CD-ROM模式: 使用AH=42h扩展读取(2048字节/扇区) ===== */
-    /* 内核在512字节扇区LBA2000，对应2048字节扇区LBA500 */
-    /* 每次读取32个2048字节扇区=64KB */
-
-    /* 第1次: LBA500, 32扇区(64KB), 到0x10000 */
+load64_live_loop:
+    /* DAP: 读到 0x10000 (DS=0) */
     movw $0x7B00, %si
     movb $0x10, %ds:(%si)
     movb $0x00, %ds:1(%si)
-    movw $32, %ds:2(%si)        /* 32个2048字节扇区=64KB */
-    movw $0x0000, %ds:4(%si)    /* 偏移 */
-    movw $0x1000, %ds:6(%si)    /* 段=0x1000 -> 地址0x10000 */
-    movl $500, %ds:8(%si)       /* LBA=500 (2048字节扇区) */
+    movw %cx, %ds:2(%si)
+    movw $0x0000, %ds:4(%si)
+    movw $0x1000, %ds:6(%si)
+    movl %ebx, %ds:8(%si)
     movl $0, %ds:12(%si)
-    movb $3, %cl          /* V0.13.63: 读盘重试3次 (真机慢盘/偶发失败) */
-read_retry_1:
+
+    /* BIOS INT13 会破坏 EDX/ECX/EBX 等寄存器 → 读盘前后保存循环状态 */
+    pushl %ebx
+    pushl %ecx
+    pushl %edx
+    pushl %edi
+    movb $3, load64_retry
+load64_read:
     movb boot_drive, %dl
     movb $0x42, %ah
     int $0x13
-    jnc read_ok_1
-    decb %cl
-    jnz read_retry_1
+    jnc load64_read_ok
+    decb load64_retry
+    jnz load64_read
     jmp read_error
-read_ok_1:
+load64_read_ok:
+    popl %edi
+    popl %edx
+    popl %ecx
+    popl %ebx
 
-    /* 第2次: LBA532, 32扇区, 到0x20000 */
-    movw $0x7B00, %si
-    movb $0x10, %ds:(%si)
-    movb $0x00, %ds:1(%si)
-    movw $32, %ds:2(%si)
-    movw $0x0000, %ds:4(%si)
-    movw $0x2000, %ds:6(%si)    /* 段=0x2000 -> 地址0x20000 */
-    movl $532, %ds:8(%si)       /* LBA=500+32=532 */
-    movl $0, %ds:12(%si)
-    movb $3, %cl          /* V0.13.63: 读盘重试3次 (真机慢盘/偶发失败) */
-read_retry_2:
-    movb boot_drive, %dl
-    movb $0x42, %ah
-    int $0x13
-    jnc read_ok_2
-    decb %cl
-    jnz read_retry_2
-    jmp read_error
-read_ok_2:
+    /* 复制 32KB: 0x10000 -> EDI (FS 隐藏段 = 4GB 平坦) */
+    pushl %ebx
+    pushl %ecx
+    pushl %edx
+    pushl %edi
+    movw $0x1000, %ax
+    movw %ax, %ds
+    xorl %esi, %esi
+    movl $8192, %ecx        /* 32KB / 4 */
+    cld
+load64_copy_loop:
+    movl (%esi), %eax
+    movl %eax, %fs:(%edi)
+    addl $4, %esi
+    addl $4, %edi
+    decl %ecx
+    jnz load64_copy_loop
+    xorw %ax, %ax
+    movw %ax, %ds           /* 恢复 DS=0 */
+    popl %edi
+    popl %edx
+    popl %ecx
+    popl %ebx
 
-    /* 第3次: LBA564, 32扇区, 到0x30000 */
-    movw $0x7B00, %si
-    movb $0x10, %ds:(%si)
-    movb $0x00, %ds:1(%si)
-    movw $32, %ds:2(%si)
-    movw $0x0000, %ds:4(%si)
-    movw $0x3000, %ds:6(%si)
-    movl $564, %ds:8(%si)
-    movl $0, %ds:12(%si)
-    movb boot_drive, %dl
-    movb $0x42, %ah
-    int $0x13
-    /* 第3次失败不致命 */
-
-    /* 第4次: LBA596, 32扇区, 到0x40000 */
-    movw $0x7B00, %si
-    movb $0x10, %ds:(%si)
-    movb $0x00, %ds:1(%si)
-    movw $32, %ds:2(%si)
-    movw $0x0000, %ds:4(%si)
-    movw $0x4000, %ds:6(%si)
-    movl $596, %ds:8(%si)
-    movl $0, %ds:12(%si)
-    movb boot_drive, %dl
-    movb $0x42, %ah
-    int $0x13
-    /* 第4次失败不致命 */
-
-    /* 第5次: LBA628, 32扇区, 到0x50000 */
-    movw $0x7B00, %si
-    movb $0x10, %ds:(%si)
-    movb $0x00, %ds:1(%si)
-    movw $32, %ds:2(%si)
-    movw $0x0000, %ds:4(%si)
-    movw $0x5000, %ds:6(%si)
-    movl $628, %ds:8(%si)
-    movl $0, %ds:12(%si)
-    movb boot_drive, %dl
-    movb $0x42, %ah
-    int $0x13
-    /* 第5次失败不致命 */
+    addl %ecx, %ebx         /* 下一块 LBA */
+    addl $32768, %edi       /* 下一块目标 */
+    decl %edx
+    jnz load64_live_loop
 
     jmp load_64bit_done
 
-load_64bit_hdd:
-    /* ===== 硬盘模式: 使用AH=42h读取(512字节/扇区) ===== */
-
-    /* 第一次：加载前64KB到0x10000 */
-    movw $0x7B00, %si
-    movb $0x10, %ds:(%si)
-    movb $0x00, %ds:1(%si)
-    movw $128, %ds:2(%si)       /* 128扇区=64KB */
-    movw $0x0000, %ds:4(%si)
-    movw $0x1000, %ds:6(%si)    /* 段=0x1000 -> 地址0x10000 */
-    movl $2000, %ds:8(%si)      /* LBA=2000 */
-    movl $0, %ds:12(%si)
-
-    movb $3, %cl          /* V0.13.63: 读盘重试3次 (真机慢盘/偶发失败) */
-read_retry_3:
-    movb boot_drive, %dl
-    movb $0x42, %ah
-    int $0x13
-    jnc read_ok_3
-    decb %cl
-    jnz read_retry_3
-    jmp read_error
-read_ok_3:
-
-    /* 第二次：加载后64KB到0x20000 */
-    movw $0x7B00, %si
-    movb $0x10, %ds:(%si)
-    movb $0x00, %ds:1(%si)
-    movw $128, %ds:2(%si)       /* 128扇区=64KB */
-    movw $0x0000, %ds:4(%si)
-    movw $0x2000, %ds:6(%si)    /* 段=0x2000 -> 地址0x20000 */
-    movl $2128, %ds:8(%si)      /* LBA=2000+128=2128 */
-    movl $0, %ds:12(%si)
-
-    movb $3, %cl          /* V0.13.63: 读盘重试3次 (真机慢盘/偶发失败) */
-read_retry_4:
-    movb boot_drive, %dl
-    movb $0x42, %ah
-    int $0x13
-    jnc read_ok_4
-    decb %cl
-    jnz read_retry_4
-    jmp read_error
-read_ok_4:
-
-    /* 第三次：加载第三个64KB到0x30000（内核可能超过128KB） */
-    movw $0x7B00, %si
-    movb $0x10, %ds:(%si)
-    movb $0x00, %ds:1(%si)
-    movw $128, %ds:2(%si)       /* 128扇区=64KB */
-    movw $0x0000, %ds:4(%si)
-    movw $0x3000, %ds:6(%si)    /* 段=0x3000 -> 地址0x30000 */
-    movl $2256, %ds:8(%si)      /* LBA=2000+256=2256 */
-    movl $0, %ds:12(%si)
-
-    movb boot_drive, %dl
-    movb $0x42, %ah
-    int $0x13
-    /* 第三次加载失败不致命（内核可能小于192KB） */
-
-    /* 第四次：加载第四个64KB到0x40000（内核可能超过192KB） */
-    movw $0x7B00, %si
-    movb $0x10, %ds:(%si)
-    movb $0x00, %ds:1(%si)
-    movw $128, %ds:2(%si)       /* 128扇区=64KB */
-    movw $0x0000, %ds:4(%si)
-    movw $0x4000, %ds:6(%si)    /* 段=0x4000 -> 地址0x40000 */
-    movl $2384, %ds:8(%si)      /* LBA=2000+384=2384 */
-    movl $0, %ds:12(%si)
-
-    movb boot_drive, %dl
-    movb $0x42, %ah
-    int $0x13
-    /* 第四次加载失败不致命（内核可能小于256KB） */
-
-    /* 第五次：加载第五个64KB到0x50000（内核可能超过256KB） */
-    movw $0x7B00, %si
-    movb $0x10, %ds:(%si)
-    movb $0x00, %ds:1(%si)
-    movw $128, %ds:2(%si)       /* 128扇区=64KB */
-    movw $0x0000, %ds:4(%si)
-    movw $0x5000, %ds:6(%si)    /* 段=0x5000 -> 地址0x50000 */
-    movl $2512, %ds:8(%si)      /* LBA=2000+512=2512 */
-    movl $0, %ds:12(%si)
-
-    movb boot_drive, %dl
-    movb $0x42, %ah
-    int $0x13
-    /* 第五次加载失败不致命（内核可能小于320KB） */
-
-    /* 第六次：加载第六个64KB到0x60000 */
-    movw $0x7B00, %si
-    movb $0x10, %ds:(%si)
-    movb $0x00, %ds:1(%si)
-    movw $128, %ds:2(%si)
-    movw $0x0000, %ds:4(%si)
-    movw $0x6000, %ds:6(%si)
-    movl $2640, %ds:8(%si)
-    movl $0, %ds:12(%si)
-    movb boot_drive, %dl
-    movb $0x42, %ah
-    int $0x13
-
-    /* 第七次：加载第七个64KB到0x70000 */
-    movw $0x7B00, %si
-    movb $0x10, %ds:(%si)
-    movb $0x00, %ds:1(%si)
-    movw $128, %ds:2(%si)
-    movw $0x0000, %ds:4(%si)
-    movw $0x7000, %ds:6(%si)
-    movl $2768, %ds:8(%si)
-    movl $0, %ds:12(%si)
-    movb boot_drive, %dl
-    movb $0x42, %ah
-    int $0x13
-
-    /* 第八次：加载第八个64KB到0x80000 */
-    movw $0x7B00, %si
-    movb $0x10, %ds:(%si)
-    movb $0x00, %ds:1(%si)
-    movw $128, %ds:2(%si)
-    movw $0x0000, %ds:4(%si)
-    movw $0x8000, %ds:6(%si)
-    movl $2896, %ds:8(%si)
-    movl $0, %ds:12(%si)
-    movb boot_drive, %dl
-    movb $0x42, %ah
-    int $0x13
-
-    /* 第九次：加载第九个64KB到0x90000 */
-    movw $0x7B00, %si
-    movb $0x10, %ds:(%si)
-    movb $0x00, %ds:1(%si)
-    movw $128, %ds:2(%si)
-    movw $0x0000, %ds:4(%si)
-    movw $0x9000, %ds:6(%si)
-    movl $3024, %ds:8(%si)
-    movl $0, %ds:12(%si)
-    movb boot_drive, %dl
-    movb $0x42, %ah
-    int $0x13
-
-    /* 第十次：加载第十个64KB到0xA0000 */
-    movw $0x7B00, %si
-    movb $0x10, %ds:(%si)
-    movb $0x00, %ds:1(%si)
-    movw $128, %ds:2(%si)
-    movw $0x0000, %ds:4(%si)
-    movw $0xA000, %ds:6(%si)
-    movl $3152, %ds:8(%si)
-    movl $0, %ds:12(%si)
-    movb boot_drive, %dl
-    movb $0x42, %ah
-    int $0x13
+load64_retry: .byte 0
 
 load_64bit_done:
     SERIAL_PUTS msg_load_ok
@@ -1237,6 +1076,7 @@ protected_mode:
     movb $'M', %al
     stosw
 
+    jmp kernel_already_high
     /* 把内核从0x10000、0x20000、0x30000、0x40000和0x50000复制到0x100000（共320KB） */
     movl $0x10000, %esi
     movl $0x100000, %edi
@@ -1279,6 +1119,7 @@ protected_mode:
     movl $16384, %ecx
     rep movsl
 
+kernel_already_high:
     /* 串口输出：内核复制完成 */
     movl $msg_copy_ok, %esi
     call serial_puts32
@@ -1432,6 +1273,8 @@ serial_puts32:
 
 .code64
 long_mode:
+    cli                     /* V0.56: 进入内核前关中断 — IDT 仍是实模式 IVT,
+                             * 外部中断会以非法门描述符触发 #GP → 三重故障 */
     /* 成功进入64位长模式 */
     movw $0x10, %ax
     movw %ax, %ds
