@@ -159,6 +159,12 @@ int ext2_algo_read_data_block(ext2_context_t *ctx, const ext2_inode_t *inode, ui
     uint32_t pointers_per_block = ctx->block_size / 4;
     uint32_t block_num;
 
+    /* 独立间接块缓冲：不再复用 ctx->block_buf。调用方传入的 buffer 可能就是
+     * ctx->block_buf（见 ext2_algo_read_file / 目录遍历），旧实现让间接指针
+     * 与目标数据同址，仅靠写入顺序自洽，是脆弱设计。block_size 经
+     * validate_sb 校验 <=4096，64KB 内核栈足以容纳本缓冲。 */
+    uint8_t ind_buf[4096];
+
     if (block_idx < 12) {
         /* 直接块 */
         block_num = inode->i_block[block_idx];
@@ -172,8 +178,8 @@ int ext2_algo_read_data_block(ext2_context_t *ctx, const ext2_inode_t *inode, ui
         /* 单次间接 */
         uint32_t indirect_block = inode->i_block[12];
         if (indirect_block == 0) { memset(buffer, 0, ctx->block_size); return 0; }
-        if (algo_read_checked(ctx, indirect_block, ctx->block_buf) != 0) return -1;
-        block_num = ((uint32_t *)ctx->block_buf)[block_idx];
+        if (algo_read_checked(ctx, indirect_block, ind_buf) != 0) return -1;
+        block_num = ((uint32_t *)ind_buf)[block_idx];
         if (block_num == 0) { memset(buffer, 0, ctx->block_size); return 0; }
         return algo_read_checked(ctx, block_num, buffer);
     }
@@ -184,31 +190,31 @@ int ext2_algo_read_data_block(ext2_context_t *ctx, const ext2_inode_t *inode, ui
         /* 双重间接 */
         uint32_t double_indirect = inode->i_block[13];
         if (double_indirect == 0) { memset(buffer, 0, ctx->block_size); return 0; }
-        if (algo_read_checked(ctx, double_indirect, ctx->block_buf) != 0) return -1;
-        uint32_t indirect_block = ((uint32_t *)ctx->block_buf)[block_idx / pointers_per_block];
+        if (algo_read_checked(ctx, double_indirect, ind_buf) != 0) return -1;
+        uint32_t indirect_block = ((uint32_t *)ind_buf)[block_idx / pointers_per_block];
         if (indirect_block == 0) { memset(buffer, 0, ctx->block_size); return 0; }
-        if (algo_read_checked(ctx, indirect_block, ctx->block_buf) != 0) return -2;
-        block_num = ((uint32_t *)ctx->block_buf)[block_idx % pointers_per_block];
+        if (algo_read_checked(ctx, indirect_block, ind_buf) != 0) return -2;
+        block_num = ((uint32_t *)ind_buf)[block_idx % pointers_per_block];
         if (block_num == 0) { memset(buffer, 0, ctx->block_size); return 0; }
         return algo_read_checked(ctx, block_num, buffer);
     }
 
     block_idx -= pointers_per_block * pointers_per_block;
 
-    /* 安全修复：三重间接的一级索引必须 < pointers_per_block，否则越过 block_buf 读 */
+    /* 安全修复：三重间接的一级索引必须 < pointers_per_block，否则越界读 */
     if (block_idx / (pointers_per_block * pointers_per_block) >= pointers_per_block) return -4;
 
     /* 三重间接 */
     uint32_t triple_indirect = inode->i_block[14];
     if (triple_indirect == 0) { memset(buffer, 0, ctx->block_size); return 0; }
-    if (algo_read_checked(ctx, triple_indirect, ctx->block_buf) != 0) return -1;
-    uint32_t double_block = ((uint32_t *)ctx->block_buf)[block_idx / (pointers_per_block * pointers_per_block)];
+    if (algo_read_checked(ctx, triple_indirect, ind_buf) != 0) return -1;
+    uint32_t double_block = ((uint32_t *)ind_buf)[block_idx / (pointers_per_block * pointers_per_block)];
     if (double_block == 0) { memset(buffer, 0, ctx->block_size); return 0; }
-    if (algo_read_checked(ctx, double_block, ctx->block_buf) != 0) return -2;
-    uint32_t indirect_block = ((uint32_t *)ctx->block_buf)[(block_idx / pointers_per_block) % pointers_per_block];
+    if (algo_read_checked(ctx, double_block, ind_buf) != 0) return -2;
+    uint32_t indirect_block = ((uint32_t *)ind_buf)[(block_idx / pointers_per_block) % pointers_per_block];
     if (indirect_block == 0) { memset(buffer, 0, ctx->block_size); return 0; }
-    if (algo_read_checked(ctx, indirect_block, ctx->block_buf) != 0) return -3;
-    block_num = ((uint32_t *)ctx->block_buf)[block_idx % pointers_per_block];
+    if (algo_read_checked(ctx, indirect_block, ind_buf) != 0) return -3;
+    block_num = ((uint32_t *)ind_buf)[block_idx % pointers_per_block];
     if (block_num == 0) { memset(buffer, 0, ctx->block_size); return 0; }
     return algo_read_checked(ctx, block_num, buffer);
 }
