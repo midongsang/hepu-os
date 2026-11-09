@@ -266,6 +266,10 @@ void tcp64_handle(const uint8_t *packet, int length, uint32_t src_ip, uint32_t d
     uint32_t seq = ntohl32(tcp->seq);
     uint32_t ack = ntohl32(tcp->ack);
     int data_offset = (tcp->data_offset >> 4) * 4;
+    /* 安全：数据偏移必须是合法 TCP 头长度（最小 20，最大 60）且不超过
+     * 报文长度。旧实现不校验，畸形包会得到负 data_len 或把头部当数据，
+     * 并据此错误确认序列号。非法报文直接丢弃。 */
+    if (data_offset < 20 || data_offset > length) return;
     int data_len = length - data_offset;
     const uint8_t *data = packet + data_offset;
 
