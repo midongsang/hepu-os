@@ -25,7 +25,19 @@ truncate -s ${SIZE_MB}M $IMG 2>/dev/null   # V0.13.55: 稀疏创建, 物理占�
 echo "[1/6] 镜像创建完成（${SIZE_MB}MB）"
 
 # 2. 写入MBR
-dd if=$PROJECT/tools/hepboot/hepboot_mbr.bin of=$IMG bs=512 count=1 conv=notrunc 2>/dev/null
+# 构建链加固：镜像依赖 hepboot_mbr.bin，但没有任何 Makefile/CI 目标自动构建它，
+# 缺失时 dd 会静默失败，导致镜像前 446 字节无 MBR 引导代码、无法从 MBR 启动。
+# 打包前若缺失则自动构建（gcc -m32 → ld 0x7C00 → objcopy）。
+MBR_BIN=$PROJECT/tools/hepboot/hepboot_mbr.bin
+if [ ! -f "$MBR_BIN" ]; then
+    echo "[2a] 构建 MBR 引导桩..."
+    gcc -m32 -c "$PROJECT/tools/hepboot/hepboot_mbr.S" -o "$TMPDIR/mbr.o" \
+        && ld -Ttext=0x7C00 -m elf_i386 "$TMPDIR/mbr.o" -o "$TMPDIR/mbr.elf" \
+        && objcopy -O binary "$TMPDIR/mbr.elf" "$MBR_BIN" \
+        || { echo "[错误] MBR 引导桩构建失败，中止（检查 TMPDIR 权限与 32 位工具链）"; exit 1; }
+fi
+dd if=$MBR_BIN of=$IMG bs=512 count=1 conv=notrunc \
+    || { echo "[错误] MBR 写入失败，中止"; exit 1; }
 echo "[2/6] MBR引导桩写入完成"
 
 # 3. 创建MBR分区表（ext2从LBA9000开始）
