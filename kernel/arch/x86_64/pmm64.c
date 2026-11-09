@@ -14,7 +14,10 @@
 
 /* 最大支持内存：2GB = 524288页，位图需要65536字节（64KB） */
 #define MAX_MEMORY_PAGES 524288
-#define MAX_MEMORY_SIZE (MAX_MEMORY_PAGES * PAGE_SIZE)
+/* 安全：强制 uint64 运算。旧写法按 int 计算 524288*4096=2^31 溢出为
+ * 负数，使 pmm64_init 的内存上限钳制失效（大内存下固定位图越界），
+ * pmm64_get_max_memory_mb 也会返回错误的巨大值。 */
+#define MAX_MEMORY_SIZE ((uint64_t)MAX_MEMORY_PAGES * PAGE_SIZE)
 
 /* 内存区域类型 */
 typedef enum {
