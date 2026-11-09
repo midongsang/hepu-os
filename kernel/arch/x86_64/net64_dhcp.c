@@ -238,7 +238,9 @@ static void dhcp_handle_offer(const uint8_t *packet, int len)
     while (i < 308) {
         if (opts[i] == DHCP_OPT_END) break;
         if (opts[i] == DHCP_OPT_PAD) { i++; continue; }
+        if (i + 2 > 308) break;  /* 边界：保证 tag 与 len 字节可读 */
         if (opts[i] == DHCP_OPT_SERVER_ID && opts[i+1] == 4) {
+            if (i + 6 > 308) break;  /* 4 字节值 opts[i+2..i+5] 不越界 */
             dhcp_memcpy(&dhcp_server_ip, &opts[i+2], 4);
             dhcp_server_ip = ntohl32(dhcp_server_ip);
             break;
@@ -356,7 +358,9 @@ int dhcp64_poll(void)
                     while (i < 308) {
                         if (opts[i] == DHCP_OPT_END) break;
                         if (opts[i] == DHCP_OPT_PAD) { i++; continue; }
+                        if (i + 2 > 308) break;  /* 边界：tag 与 len 可读 */
                         if (opts[i] == DHCP_OPT_DHCP_MSG && opts[i+1] == 1) {
+                            if (i + 3 > 308) break;  /* 1 字节值 opts[i+2] 不越界 */
                             if (opts[i+2] == DHCP_OFFER) {
                                 dhcp_handle_offer(buffer, len);
                                 dhcp_send_request(dhcp_offered_ip, dhcp_server_ip);
@@ -382,7 +386,9 @@ int dhcp64_poll(void)
                     while (i < 308) {
                         if (opts[i] == DHCP_OPT_END) break;
                         if (opts[i] == DHCP_OPT_PAD) { i++; continue; }
+                        if (i + 2 > 308) break;  /* 边界：tag 与 len 可读 */
                         if (opts[i] == DHCP_OPT_DHCP_MSG && opts[i+1] == 1) {
+                            if (i + 3 > 308) break;  /* 1 字节值 opts[i+2] 不越界 */
                             if (opts[i+2] == DHCP_ACK) {
                                 dhcp_handle_ack(buffer, len);
                                 return 1;  /* 成功 */
