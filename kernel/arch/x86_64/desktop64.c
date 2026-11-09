@@ -139,8 +139,15 @@ void desktop64_run(void)
         if (!auth64_is_configured()) hs_oobe_begin();
     }
 
-    /* 事件循环 */
+    /* 事件循环
+     * V0.56.1 性能修复：渲染限 60fps 并与输入轮询解耦。
+     * 旧实现每轮都整屏合成 + gfx64_present() 全屏拷贝(1080p≈8MB)且无帧率上限，
+     * 实际跑到数百 fps，把内存带宽/CPU 吃满，输入轮询被饿死 → 实机卡顿。 */
+    uint64_t last_render_ms = 0;
     while (1) {
+        extern uint64_t pit64_get_ms(void);
+        uint64_t now = pit64_get_ms();
+
         /* V0.13.9: 网络轮询 (网卡收发) */
         extern void net64_poll(void);
         net64_poll();
@@ -170,22 +177,20 @@ void desktop64_run(void)
             mem_pressure_tick();
         }
 
-        /* 渲染 (鼠标位置/按钮已由 hs_input_poll 统一更新: tablet 绝对优先,
-         * USB 相对次之, PS/2 兜底 — 此处不再覆盖, 否则多源合流被破坏) */
-        hepushell_render();
-
-        /* 鼠标按钮/点击事件已由 hs_input_poll 统一分发 (含左右键沿检测) */
+        /* 渲染：仅每 ~16ms(≈60fps) 一次，输入/网络仍每轮处理保证低延迟 */
+        if (now - last_render_ms >= 16) {
+            last_render_ms = now;
+            hepushell_render();
+        }
 
         /* V0.13.7 P4: HepuShell Dock/启动器图标点击的应用启动请求 */
-
         if (g_pending_app != 0) {
             hepushell_handle_pending_app();
             vga_puts("[DESKTOP64] Pending app request handled by HepuShell\n");
             g_pending_app = 0;
         }
 
-
-        /* 短暂延迟，减少CPU占用 */
-        for (volatile int i = 0; i < 2000; i++) { asm volatile("nop"); }
+        /* 让出 CPU 等下一次中断(PIT 1kHz 兜底), 避免忙等 100% 占用 */
+        asm volatile("hlt");
     }
 }
