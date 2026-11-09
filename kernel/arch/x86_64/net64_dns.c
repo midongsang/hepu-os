@@ -123,6 +123,7 @@ static int dns_parse_name(const uint8_t *packet, int packet_len, int offset,
     int name_pos = 0;
     int jumped = 0;
     int new_offset = offset;
+    int jumps = 0;  /* 压缩指针跳转计数，防止自指/互指造成无限循环（DoS） */
 
     while (pos < packet_len) {
         uint8_t len = packet[pos];
@@ -137,6 +138,11 @@ static int dns_parse_name(const uint8_t *packet, int packet_len, int offset,
             /* 压缩指针 */
             if (pos + 1 >= packet_len) break;
             uint16_t ptr = ((len & 0x3F) << 8) | packet[pos + 1];
+            /* 安全：RFC 1035 压缩指针只能指向包内「先前出现」的名字。
+             * 1) ptr 必须在包内；2) ptr 必须严格小于当前位置（跳转单调
+             *    前移、必然终止）；3) 跳转次数上限做深度防御。恶意响应
+             *    构造自指/互指指针时直接报错，避免内核网络路径挂死。 */
+            if (ptr >= packet_len || ptr >= pos || ++jumps > 64) return -1;
             if (!jumped) new_offset = pos + 2;
             pos = ptr;
             jumped = 1;
@@ -252,12 +258,14 @@ uint32_t dns64_resolve(const char *hostname)
             /* 跳过问题部分 */
             char qname[128];
             offset = dns_parse_name(response, len, offset, qname, sizeof(qname));
+            if (offset < 0) continue;  /* 畸形响应（含压缩指针循环），丢弃 */
             offset += sizeof(dns_question_t);
 
             /* 解析回答 */
             for (int i = 0; i < answer_count && offset < len; i++) {
                 char aname[128];
                 offset = dns_parse_name(response, len, offset, aname, sizeof(aname));
+                if (offset < 0) break;  /* 畸形名称，停止解析本响应 */
 
                 if (offset + sizeof(dns_rr_t) > len) break;
                 dns_rr_t *rr = (dns_rr_t *)(response + offset);
