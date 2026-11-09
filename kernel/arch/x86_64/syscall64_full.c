@@ -1135,16 +1135,17 @@ static int64_t sys_getdents(int fd, uint64_t dirp, int count) {
     (void)fd;
     /* Linux dirent64: ino(8) + off(8) + reclen(2) + type(1) + namelen(1) + name[] */
     if (!ext2_64_is_mounted()) return -9;  /* -EBADF */
+    /* 用户窗口校验：旧实现直接解引用 dirp 写用户地址，SMAP 下会内核 #PF */
+    if (dirp < 0x40000000ULL || dirp >= 0x80000000ULL) return -1;
+    if (count < 19) return 0;
     extern int ext2_read_data_block(ext2_inode_t *inode, uint32_t block_idx, uint8_t *buffer);
     extern uint32_t ext2_block_size;
     typedef struct { uint32_t inode; uint16_t rec_len; uint8_t name_len; uint8_t file_type; char name[]; } ext2_dirent_t;
-    typedef struct { uint64_t d_ino; int64_t d_off; uint16_t d_reclen; uint8_t d_type; char d_name[]; } linux_dirent64_t;
 
     uint8_t dir_buf[4096];
     /* 读root inode */
     uint8_t root_inode[128];
     if (ext2_read_inode(2, (ext2_inode_t *)root_inode) != 0) return -9;
-    uint32_t root_size = *(uint32_t*)(root_inode + 4);
     uint32_t block_size = ext2_block_size;
     if (block_size == 0) block_size = 1024;
 
@@ -1153,22 +1154,29 @@ static int64_t sys_getdents(int fd, uint64_t dirp, int count) {
 
     int total = 0;
     uint32_t offset = 0;
+    /* 单条目内核缓冲：最大 reclen = (19+255) 向上 8 字节对齐 = 280 */
+    uint8_t kentry[288];
     while (offset < block_size && total < count - 19) {
         ext2_dirent_t *e = (ext2_dirent_t *)(dir_buf + offset);
         if (e->rec_len == 0) break;
         if (e->name_len > 0 && e->inode != 0) {
             int name_len = e->name_len;
             if (name_len > 255) name_len = 255;
-            int reclen = 19 + name_len;
-            reclen = (reclen + 7) & ~7;  /* 8字节对齐 */
+            int reclen = (19 + name_len + 7) & ~7;  /* 8字节对齐 */
             if (total + reclen > count) break;
-            linux_dirent64_t *d = (linux_dirent64_t *)(uint64_t)(dirp + total);
-            d->d_ino = e->inode;
-            d->d_off = offset + e->rec_len;
-            d->d_reclen = reclen;
-            d->d_type = e->file_type;
-            for (int i = 0; i < name_len; i++) d->d_name[i] = e->name[i];
-            d->d_name[name_len] = 0;
+            /* 先在内核缓冲构造条目，再 copy_to_user，不直写用户指针 */
+            memset(kentry, 0, sizeof(kentry));
+            uint64_t d_ino = e->inode;
+            int64_t d_off = (int64_t)(offset + e->rec_len);
+            uint16_t d_reclen = (uint16_t)reclen;
+            memcpy(kentry + 0, &d_ino, 8);    /* d_ino  @0  */
+            memcpy(kentry + 8, &d_off, 8);    /* d_off  @8  */
+            memcpy(kentry + 16, &d_reclen, 2);/* d_reclen @16 */
+            kentry[18] = e->file_type;        /* d_type @18 */
+            memcpy(kentry + 19, e->name, name_len);  /* d_name @19 */
+            kentry[19 + name_len] = 0;
+            if (copy_to_user((void *)(dirp + total), kentry, (uint32_t)reclen) != 0)
+                return total > 0 ? total : -1;
             total += reclen;
         }
         offset += e->rec_len;
