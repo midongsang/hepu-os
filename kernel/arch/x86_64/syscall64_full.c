@@ -1262,11 +1262,25 @@ static int64_t sys_futex(uint64_t uaddr, int op, uint32_t val, uint64_t timeout,
 static int64_t sys_getrandom(uint64_t buf, int64_t len, uint64_t flags) {
     (void)flags;
     if (buf < 0x40000000ULL || buf >= 0x80000000ULL) return -1;
+    if (len <= 0) return 0;
     if (len > 1024) len = 1024;
-    for (int i = 0; i < len; i++) {
-        uint8_t b = (uint8_t)(i * 17 + 3);
-        copy_to_user((void*)(buf + i), &b, 1);
+
+    /* 密码学安全随机数：使用内核 ChaCha20 CSPRNG。旧实现返回可预测的
+     * 确定性序列 (b=i*17+3)，无法用于密钥/nonce/栈金丝雀等安全用途。 */
+    extern int csprng_get_bytes(uint8_t *buffer, uint32_t n);
+    extern void *kmalloc(uint32_t size);
+    extern void kfree(void *ptr);
+    uint8_t *kbuf = (uint8_t *)kmalloc((uint32_t)len);
+    if (!kbuf) return -1;
+    if (csprng_get_bytes(kbuf, (uint32_t)len) != 0) {
+        kfree(kbuf);
+        return -1;
     }
+    if (copy_to_user((void *)buf, kbuf, (uint32_t)len) != 0) {
+        kfree(kbuf);
+        return -1;
+    }
+    kfree(kbuf);
     return len;
 }
 

@@ -742,6 +742,12 @@ void x86_64_kernel_main(void)
     gfx64_enable_ttf(1);
     vga_puts("[INIT] TrueType font enabled for graphics\n");
 
+    /* 初始化密码学安全随机数（CSPRNG）。必须在网络栈之前：DHCP/DNS/TLS
+     * 以及 getrandom 系统调用都依赖它。旧 64 位启动序列从未调用
+     * csprng_init，CSPRNG 一直处于未播种状态（csprng_initialized=0）。 */
+    extern void csprng_init(void);
+    csprng_init();
+
     /* 初始化网络协议栈 */
     vga_puts("[INIT] Initializing 64-bit network stack...\n");
     net64_init();

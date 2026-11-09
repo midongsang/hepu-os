@@ -232,14 +232,17 @@ void csprng_init(void)
     uint8_t entropy[64];
     csprng_collect_entropy(entropy, sizeof(entropy));
 
-    /* 使用熵作为种子 */
+    /* 使用熵作为种子（seed 与 state 各取 32 字节真实熵） */
     memcpy(csprng.seed, entropy, 32);
     memcpy(csprng.state, entropy + 32, 32);
     csprng.counter = 0;
     csprng.reseed_counter = 0;
 
-    /* 立即重新播种一次，进一步混合熵 */
-    csprng_reseed(entropy, sizeof(entropy));
+    /* 安全修复：不得在此调用 csprng_reseed(entropy, ...)。reseed 会把
+     * additional_data 异或进当前 seed，而二者是同一份 entropy，异或后
+     * seed 变为全 0，随后 ChaCha20(全0 key/counter/nonce) 输出一个固定块
+     * （RFC 7539 全零向量 76b8e0ad...），把真实熵彻底抹掉，导致每次启动
+     * 种子完全相同。seed/state 已直接由 64 字节熵初始化，无需再混合。 */
 
     vga_puts("[CSPRNG] CSPRNG init (V7.75 multi-source entropy)\n");
     vga_printf("[CSPRNG] algo: ChaCha20, reseed interval: %llu\n",
