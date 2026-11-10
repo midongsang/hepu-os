@@ -486,17 +486,28 @@ static void t_complete(void)
             t_input[j] = 0;
             t_in_len = j;
         } else if (matches > 1) {
-            /* 列出候选 */
+            /* 列出候选。V0.54.12(R4 GFX-01): out[80] 旧实现用无界 strcpy
+               拼接候选名（每个可达 256 字符），≥5 个候选即栈溢出。改为逐字符
+               有界拼接，缓冲将满时安全截断并强制 NUL。 */
             char out[80];
-            strcpy(out, "candidates: ");
+            int olen = 0;
+            const char *hdr = "candidates: ";
+            while (hdr[olen] && olen < (int)sizeof(out) - 1) {
+                out[olen] = hdr[olen];
+                olen++;
+            }
             for (int i = 0; i < n; i++) {
                 int j = 0;
                 while (names[i][j] && t_input[j] && names[i][j] == t_input[j]) j++;
                 if (t_input[j] == 0 && names[i][j] != 0) {
-                    strcpy(out + hs_strlen(out), names[i]);
-                    strcpy(out + hs_strlen(out), " ");
+                    int k = 0;
+                    while (names[i][k] && olen < (int)sizeof(out) - 1) {
+                        out[olen++] = names[i][k++];
+                    }
+                    if (olen < (int)sizeof(out) - 1) out[olen++] = ' ';
                 }
             }
+            out[olen] = 0;
             t_put(out);
         }
         return;

@@ -153,8 +153,10 @@ static int tcp_send_packet(tcp_connection_t *conn, uint8_t flags,
         }
     }
 
-    /* V0.13.9: 发送成功后才推进序列号 (原先加后发, ARP 未解析时序列错位) */
-    if (sret == 0) {
+    /* V0.13.9: 发送成功后才推进序列号 (原先加后发, ARP 未解析时序列错位)。
+       V0.54.12(R4 NET-01): ip64_send 成功返回正字节数（eth64_send 透传），
+       旧判据 sret==0 恒假，导致序列号永不推进、后续数据全乱序；改为 >0。 */
+    if (sret > 0) {
         if (flags & (TCP_SYN | TCP_FIN)) conn->seq_num++;
         conn->seq_num += data_len;
     }
@@ -235,6 +237,18 @@ int tcp64_recv(int sock, uint8_t *buffer, int max_len)
     if (avail > max_len) avail = max_len;
     tcp_memcpy(buffer, conn->rx_buf + conn->rx_read, avail);
     conn->rx_read += avail;
+    /* V0.54.12(R4 NET-05): 旧实现只推进 rx_read，rx_len 永不回落，缓冲
+       填满一次后新数据在接收分支静默丢弃。取尽则复位，部分取走则把剩余
+       未读数据压缩到缓冲头部，腾出接收空间。 */
+    if (conn->rx_read >= conn->rx_len) {
+        conn->rx_len = 0;
+        conn->rx_read = 0;
+    } else {
+        int remain = conn->rx_len - conn->rx_read;
+        tcp_memcpy(conn->rx_buf, conn->rx_buf + conn->rx_read, remain);
+        conn->rx_len = remain;
+        conn->rx_read = 0;
+    }
     return avail;
 }
 
@@ -253,6 +267,23 @@ int tcp64_close(int sock)
         conn->state = TCP_CLOSED;
     }
     return 0;
+}
+
+/* V0.54.12(R4 NET-02): 处理对我方已发数据的确认（RTT/拥塞窗口/重传记账）。
+ * 旧代码把这段逻辑嵌在 data_len>0 分支里，纯 ACK（无数据）在 ESTABLISHED
+ * 下不匹配任何分支，导致 unacked_seq 不清除、RTT 不更新、拥塞窗口不增长。 */
+static void tcp_process_ack(tcp_connection_t *conn, uint32_t ack)
+{
+    if (conn->unacked_seq && ack >= conn->unacked_seq) {
+        extern uint64_t pit64_get_ms(void);
+        uint64_t now = pit64_get_ms();
+        int rtt = (int)(now - conn->last_send_ms);
+        if (conn->rtt_est == 0) conn->rtt_est = rtt;
+        else conn->rtt_est = (conn->rtt_est * 7 + rtt) / 8;
+        conn->unacked_seq = 0;
+        conn->retries = 0;
+        if (conn->cwnd < conn->ssthresh) conn->cwnd++;
+    }
 }
 
 /* 处理收到的TCP包 */
@@ -336,19 +367,11 @@ void tcp64_handle(const uint8_t *packet, int length, uint32_t src_ip, uint32_t d
                 }
                 conn->ack_num = seq + data_len;
                 tcp_send_packet(conn, TCP_ACK, NULL, 0);
-                /* RTT估计：收到ACK，计算RTT并平滑 */
-                if (conn->unacked_seq && ack >= conn->unacked_seq) {
-                    extern uint64_t pit64_get_ms(void);
-                    uint64_t now = pit64_get_ms();
-                    int rtt = (int)(now - conn->last_send_ms);
-                    /* 指数平滑：srtt = 7/8*srtt + 1/8*rtt */
-                    if (conn->rtt_est == 0) conn->rtt_est = rtt;
-                    else conn->rtt_est = (conn->rtt_est * 7 + rtt) / 8;
-                    conn->unacked_seq = 0;
-                    conn->retries = 0;
-                    /* 慢启动：拥塞窗口+1 */
-                    if (conn->cwnd < conn->ssthresh) conn->cwnd++;
-                }
+                tcp_process_ack(conn, ack);
+            } else if (tcp->flags & TCP_ACK) {
+                /* V0.54.12(R4 NET-02): 纯 ACK 分支——只确认我方数据，
+                   不存数据、不回 ACK；旧实现此处静默丢弃。 */
+                tcp_process_ack(conn, ack);
             }
             break;
 

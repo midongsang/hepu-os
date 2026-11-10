@@ -58,13 +58,15 @@ static uint64_t csprng_rdtsc(void)
 /* V7.75: 获取中断计数（如果有全局计数器） */
 static uint32_t csprng_get_irq_count(void)
 {
-    /* 使用irq_count数组的总和作为熵源 */
-    extern uint32_t irq_count[16];
-    uint32_t total = 0;
-    for (int i = 0; i < 16; i++) {
+    /* V0.54.12(R4 BLD-14): extern 必须与 irq64_simple.c 的真实定义
+       uint64_t irq_count[256] 一致。旧声明 uint32_t[16] 宽度/元素数双错，
+       小端下只读到前 8 个计数器的低半与高半，熵源记账失真。 */
+    extern uint64_t irq_count[256];
+    uint64_t total = 0;
+    for (int i = 0; i < 256; i++) {
         total += irq_count[i];
     }
-    return total;
+    return (uint32_t)total;
 }
 
 /* V7.75: 收集多源熵 */

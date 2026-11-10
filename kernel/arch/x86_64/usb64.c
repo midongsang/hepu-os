@@ -1352,6 +1352,15 @@ static void usb_kbd_poll(void);
 
 void usb64_poll(void)
 {
+    /* V0.54.12(R4 WM-02): 取真实屏幕尺寸，替代散落各处的硬编码 1023/767。
+       非 1024x768 模式下，旧钳制让鼠标/tablet 无法到达屏幕右/下方。 */
+    extern int gfx64_get_width(void);
+    extern int gfx64_get_height(void);
+    int scr_w = gfx64_get_width();
+    int scr_h = gfx64_get_height();
+    int max_x = scr_w - 1;
+    int max_y = scr_h - 1;
+
     /* V0.13.66: XHCI 事件轮询 (无 UHCI/EHCI 时的 USB 通路) */
     {
         extern int xhci64_present(void);
@@ -1387,9 +1396,9 @@ void usb64_poll(void)
                 m->x += dx;
                 m->y -= dy;
                 if (m->x < 0) m->x = 0;
-                if (m->x > 1023) m->x = 1023;
+                if (m->x > max_x) m->x = max_x;
                 if (m->y < 0) m->y = 0;
-                if (m->y > 767) m->y = 767;
+                if (m->y > max_y) m->y = max_y;
                 if (m->report_len >= 4)
                     m->wheel += (int8_t)m->report[3];
             }
@@ -1414,9 +1423,9 @@ void usb64_poll(void)
                 m->x += dx;
                 m->y -= dy;  /* USB Y向下为正, 屏幕Y向下为正 → 取反 */
                 if (m->x < 0) m->x = 0;
-                if (m->x > 1023) m->x = 1023;
+                if (m->x > max_x) m->x = max_x;
                 if (m->y < 0) m->y = 0;
-                if (m->y > 767) m->y = 767;
+                if (m->y > max_y) m->y = max_y;
                 if (m->report_len >= 4)
                     m->wheel += (int8_t)m->report[3];
             }
@@ -1442,15 +1451,14 @@ void usb64_poll(void)
                 uint8_t buttons = t->report[off];
                 int ax = t->report[off + 1] | (t->report[off + 2] << 8);
                 int ay = t->report[off + 3] | (t->report[off + 4] << 8);
-                /* V0.54.7: HID 16 位绝对坐标一律按 0-32767 归一映射到 1024x768
-                 * (QEMU usb-tablet 实际就是该范围; 旧 ">1024 才缩放" 会把
-                 *  左上角 32px 内的坐标当成像素值, 导致点击落到错误的 x*32 处) */
-                ax = ax * 1024 / 32768;
-                ay = ay * 768 / 32768;
+                /* V0.54.7: HID 16 位绝对坐标按 0-32767 归一映射；
+                 * V0.54.12(R4 WM-02): 归一目标与钳制改用真实屏幕尺寸。 */
+                ax = ax * scr_w / 32768;
+                ay = ay * scr_h / 32768;
                 t->abs_x = ax;
                 t->abs_y = ay;
-                if (t->abs_x > 1023) t->abs_x = 1023;
-                if (t->abs_y > 767) t->abs_y = 767;
+                if (t->abs_x > max_x) t->abs_x = max_x;
+                if (t->abs_y > max_y) t->abs_y = max_y;
                 if ((buttons & 0x01) && !t->left) t->click_latch = 1;
                 t->left = buttons & 0x01;
                 t->right = buttons & 0x02;
@@ -1469,13 +1477,14 @@ void usb64_poll(void)
                 uint8_t buttons = t->report[off];
                 int ax = t->report[off + 1] | (t->report[off + 2] << 8);
                 int ay = t->report[off + 3] | (t->report[off + 4] << 8);
-                /* V0.54.7: 16 位绝对坐标统一按 0-32767 归一 (同 EHCI 分支) */
-                ax = ax * 1024 / 32768;
-                ay = ay * 768 / 32768;
+                /* V0.54.7: 16 位绝对坐标按 0-32767 归一；
+                 * V0.54.12(R4 WM-02): 归一目标与钳制改用真实屏幕尺寸。 */
+                ax = ax * scr_w / 32768;
+                ay = ay * scr_h / 32768;
                 t->abs_x = ax;
                 t->abs_y = ay;
-                if (t->abs_x > 1023) t->abs_x = 1023;
-                if (t->abs_y > 767) t->abs_y = 767;
+                if (t->abs_x > max_x) t->abs_x = max_x;
+                if (t->abs_y > max_y) t->abs_y = max_y;
                 if ((buttons & 0x01) && !t->left) t->click_latch = 1;
                 t->left = buttons & 0x01;
                 t->right = buttons & 0x02;

@@ -19,6 +19,8 @@ int g_running_linux_elf = 0;  /* V0.20.70: 当前是否在运行Linux ABI ELF */
 extern int copy_from_user(void *kernel_dst, const void *user_src, size_t size);
 extern int copy_to_user(void *user_dst, const void *kernel_src, size_t size);
 extern int copy_str_from_user(char *kernel_dst, const char *user_src, size_t max_size);
+/* V0.54.12(R4): 用户地址窗口校验（含溢出检查），用于危险 syscall 入口 */
+extern int hepu_is_user_address(uintptr_t addr, size_t size);
 
 /* 安全修复：从用户空间复制路径字符串
  * 旧实现固定拷贝 255/256 字节且不保证 NUL 结尾（超长路径会让后续 strlen/strcpy
@@ -477,7 +479,10 @@ static int64_t sys_close(int fd)
 extern int ext2_64_mkfs(uint32_t part_lba, uint32_t part_sectors, const char *label);
 static int64_t sys_mkfs(uint32_t lba, uint32_t sectors, const char *label, uint32_t magic)
 {
-    /* 安全：mkfs 是高危操作，需魔数 'MKFS'=0x4D4B4653 防普通程序误调用 */
+    /* 安全：mkfs 是高危操作。V0.54.12(R4 SC-04) 在原魔数之外加 PID==0
+       临时闸——魔数是源码内可见常量，单独不足以鉴权；完整能力模型待后续。 */
+    extern int user_process_get_current_pid(void);
+    if (user_process_get_current_pid() != 0) return -1;
     if (magic != 0x4D4B4653u) return -1;
     char klabel[16]; klabel[0] = 0;
     if (label) copy_str_from_user(klabel, label, sizeof(klabel));
@@ -928,14 +933,18 @@ static int64_t sys_clone(int flags, uint64_t stack, uint64_t parent_tid, uint64_
     *(volatile uint64_t *)(child + 88) = 0;   /* blocked */
     *(volatile uint64_t *)(child + 96) = 0;   /* futex_wait_addr */
 
+    /* V0.54.12(R4 SC-02): child_tid 写前校验用户窗口并走 copy_to_user。
+       旧实现 ring0 裸写未校验，用户传内核地址即构成 4 字节任意内核写。 */
     if (child_tid) {
-        int ac_prev = hepu_user_access_enter();
-        *(volatile uint32_t *)child_tid = 200 + idx;
-        hepu_user_access_exit(ac_prev);
+        if (!hepu_is_user_address(child_tid, 4)) return -1;  /* EFAULT */
+        uint32_t tid_val = (uint32_t)(200 + idx);
+        if (copy_to_user((void *)child_tid, &tid_val, 4) != 0) return -1;
     }
 
-    /* 设置 TLS (fsbase) */
+    /* 设置 TLS (fsbase)：V0.54.12(R4) 校验落在用户窗口，防止 FS_BASE
+       指向内核/MMIO；保留 wrmsr 最小改动，统一记账留待后续架构轮。 */
     if (tls) {
+        if (!hepu_is_user_address(tls, 1)) return -1;
         uint64_t tls_val = tls;
         __asm__ volatile("wrmsr" : : "c"(0xC0000100), "a"((uint32_t)tls_val), "d"((uint32_t)(tls_val>>32)));
     }
@@ -1193,28 +1202,64 @@ static int64_t sys_rseq(void) { return 0; }
 static int64_t sys_readv(int fd, uint64_t iov, int iovcnt) {
     (void)fd;(void)iov;(void)iovcnt; return 0;
 }
+/* V0.54.12(R4 SC-01): writev 安全加固。
+ * 旧实现 ring0 直解用户 iov/iov_base（无 copy_from_user），iovcnt 无上限、
+ * per-iov len 为无界 uint64，可触发内核死循环/ring0 缺页并把用户任意地址
+ * 内容外发。现在：iovcnt 上限 1024、单次总字节封顶 1MB，所有用户内存走
+ * copy_from_user（窗口+映射校验），分块处理避免大栈占用。 */
+#define WRITEV_MAX_IOV      1024
+#define WRITEV_MAX_TOTAL    (1024*1024)
+#define WRITEV_IOV_CHUNK    64   /* 一次拷 64 个 iovec = 1KB 栈 */
+#define WRITEV_BUF_CHUNK    512  /* 数据缓冲 512B */
 static int64_t sys_writev(int fd, uint64_t iov, int iovcnt) {
     extern void syscall_serial_out(uint8_t c);
-    if (iovcnt <= 0 || iov < 0x40000000ULL || iov >= 0x80000000ULL) return -1;
+    if (iovcnt <= 0 || iovcnt > WRITEV_MAX_IOV) return -1;
+    if (!hepu_is_user_address(iov, (size_t)iovcnt * 16)) return -1;
+
+    uint64_t k_iov[WRITEV_IOV_CHUNK * 2];  /* 每项 base+len */
+    uint8_t kbuf[WRITEV_BUF_CHUNK];
     int total = 0;
-    int ac_prev = hepu_user_access_enter();
-    for (int i = 0; i < iovcnt; i++) {
-        uint64_t base = *(volatile uint64_t *)(iov + i*16);
-        uint64_t len  = *(volatile uint64_t *)(iov + i*16 + 8);
-        if (base < 0x40000000ULL || base >= 0x80000000ULL) {
-            continue;
+
+    for (int base_i = 0; base_i < iovcnt; base_i += WRITEV_IOV_CHUNK) {
+        int chunk = iovcnt - base_i;
+        if (chunk > WRITEV_IOV_CHUNK) chunk = WRITEV_IOV_CHUNK;
+        /* 拷贝本批 iovec（copy_from_user 校验窗口与映射） */
+        if (copy_from_user(k_iov, (const void *)(iov + (uint64_t)base_i*16),
+                           (size_t)chunk*16) != 0) {
+            return -1;
         }
-        for (uint64_t j = 0; j < len; j++) {
-            char c = *(volatile char *)(base + j);
-            if (fd == 1 || fd == 2) {
-                vga_putchar(c);
-                if (c == '\n') syscall_serial_out('\r');
-                syscall_serial_out(c);
+        for (int i = 0; i < chunk; i++) {
+            uint64_t ubase = k_iov[i*2];
+            uint64_t ulen  = k_iov[i*2 + 1];
+            /* 窗口外的 iov_base 跳过，保持原 continue 语义 */
+            if (!hepu_is_user_address(ubase, 0)) continue;
+            /* 累计总长度封顶 */
+            uint64_t remain = ulen;
+            if ((uint64_t)total + remain > WRITEV_MAX_TOTAL) {
+                remain = WRITEV_MAX_TOTAL - (uint64_t)total;
+            }
+            uint64_t off = 0;
+            while (remain > 0) {
+                uint64_t n = remain;
+                if (n > WRITEV_BUF_CHUNK) n = WRITEV_BUF_CHUNK;
+                if (copy_from_user(kbuf, (const void *)(ubase + off), (size_t)n) != 0) {
+                    return -1;
+                }
+                for (uint64_t j = 0; j < n; j++) {
+                    char c = (char)kbuf[j];
+                    if (fd == 1 || fd == 2) {
+                        vga_putchar(c);
+                        if (c == '\n') syscall_serial_out('\r');
+                        syscall_serial_out(c);
+                    }
+                }
+                off += n;
+                remain -= n;
+                total += (int)n;
+                if (total >= WRITEV_MAX_TOTAL) return total;
             }
         }
-        total += len;
     }
-    hepu_user_access_exit(ac_prev);
     return total;
 }
 static int64_t sys_pselect6(void) { return 0; }
@@ -1295,12 +1340,39 @@ static int64_t sys_getrandom(uint64_t buf, int64_t len, uint64_t flags) {
 /* V0.20.41: dup2 桩 (mkdir/rmdir 已有) */
 static int64_t sys_dup2(int oldfd, int newfd) { (void)oldfd;(void)newfd; return newfd; }
 
-/* V0.20.42: signal 系列桩 */
+/* V0.54.12(R4 SC-05): 正确解析用户 struct sigaction。
+ * 布局与 glibc x86_64 一致：sa_handler@0、sa_mask@8(128B)、sa_flags@136、
+ * sa_restorer@144（共 152B）。旧实现把 act 指针当 handler 存储，信号投递时
+ * RIP 跳到用户栈上的 sigaction 数据地址，信号功能整体失效。 */
+struct k_sigaction {
+    void (*sa_handler)(int);
+    uint64_t sa_mask[16];
+    int sa_flags;
+    void (*sa_restorer)(void);
+};
 static int64_t sys_sigaction(int signum, const void *act, void *oldact) {
     extern int user_process_get_current_pid(void);
     extern void process64_set_signal_handler(int pid, int signum, uint64_t handler);
+    extern uint64_t process64_get_handler(int pid, int signum);
     int pid = user_process_get_current_pid();
-    process64_set_signal_handler(pid, signum, (uint64_t)act);
+    if (signum < 1 || signum >= 32) return -1;
+
+    if (act) {
+        struct k_sigaction kact;
+        if (copy_from_user(&kact, act, sizeof(kact)) != 0) return -1;
+        uint64_t handler = (uint64_t)kact.sa_handler;
+        /* 0=SIG_DFL、1=SIG_IGN 为合法特殊值；其余必须落在用户窗口 */
+        if (handler > 1 && !hepu_is_user_address(handler, 1)) return -1;
+        process64_set_signal_handler(pid, signum, handler);
+    }
+    if (oldact) {
+        struct k_sigaction kold;
+        for (int i = 0; i < 16; i++) kold.sa_mask[i] = 0;
+        kold.sa_flags = 0;
+        kold.sa_restorer = 0;
+        kold.sa_handler = (void (*)(int))process64_get_handler(pid, signum);
+        if (copy_to_user(oldact, &kold, sizeof(kold)) != 0) return -1;
+    }
     return 0;
 }
 static int64_t sys_sigprocmask(void) { return 0; }
@@ -2535,6 +2607,11 @@ static int64_t wrap_disk_write(int64_t a1, int64_t a2, int64_t a3, int64_t a4, i
 /* V0.13.49: 重启系统（安装引导流: 安装完成后重启进入新系统） */
 static int64_t sys_reboot(void)
 {
+    /* V0.54.12(R4 SC-03): 临时权限闸，PID==0 才允许重启。
+       完整 cred/capability 模型留作后续架构项；内核内安装/文本 shell 走
+       直接调用不经过本分发，不受影响。 */
+    extern int user_process_get_current_pid(void);
+    if (user_process_get_current_pid() != 0) return -1;
     vga_puts("[SYSCALL] Rebooting system...\n");
     /* 8042 键盘控制器复位脉冲 */
     __asm__ volatile("outb %0, %1" : : "a"((uint8_t)0xFE), "Nd"((uint16_t)0x64));

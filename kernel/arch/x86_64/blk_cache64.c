@@ -111,6 +111,9 @@ int blk_cache_read(uint32_t lba, uint8_t count, uint8_t *buffer)
     return 0;
 }
 
+/* 前向声明：写失败时需失效缓存（定义在本文件后部） */
+void blk_cache_invalidate(uint32_t lba, uint8_t count);
+
 /* 带缓存写: 写穿直落盘 + 更新缓存 */
 int blk_cache_write(uint32_t lba, uint8_t count, const uint8_t *buffer)
 {
@@ -118,8 +121,12 @@ int blk_cache_write(uint32_t lba, uint8_t count, const uint8_t *buffer)
     blk_cache_init();
     if (!g_slots_alloc) return -1;
 
-    /* 先直写盘(写穿) */
-    if (storage_hal_raw_write(lba, count, buffer) != 0) return -1;
+    /* 先直写盘(写穿)。V0.54.12(R4 FS-03): 写失败（含多扇区部分落盘）时
+       失效对应缓存槽，否则缓存可能保留旧数据，后续读得到脏内容。 */
+    if (storage_hal_raw_write(lba, count, buffer) != 0) {
+        blk_cache_invalidate(lba, count);
+        return -1;
+    }
 
     /* 更新缓存: 命中槽更新, 未命中填充 */
     for (uint32_t s = 0; s < count; s++) {

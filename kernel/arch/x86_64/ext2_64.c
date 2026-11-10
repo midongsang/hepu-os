@@ -1314,8 +1314,10 @@ int ext2_64_write_file_offset(const char *path, const uint8_t *data,
     uint32_t bs = ext2_block_size;
     uint32_t start_block = offset / bs;
     uint32_t start_off = offset % bs;
-    uint32_t end_offset = offset + size;
-    uint32_t end_block = (end_offset + bs - 1) / bs;
+    /* V0.54.12(R4 FS-05): 结束偏移用 64 位计算，旧实现 offset+size 在
+       uint32 内回绕，使 blocks_needed 变小，造成写截断/数据错位。 */
+    uint64_t end_offset64 = (uint64_t)offset + size;
+    uint32_t end_block = (uint32_t)((end_offset64 + bs - 1) / bs);
     uint32_t blocks_needed = end_block - start_block;
     uint32_t blocks_written = 0;
     uint32_t max_blocks = 12 + 256 + 65536 + 16777216;
@@ -1451,7 +1453,7 @@ int ext2_64_write_file_offset(const char *path, const uint8_t *data,
         /* 读改写: 首块/尾块保留现有内容 */
         uint8_t block_buf[EXT2_MAX_BLOCK_SIZE];
         int need_merge = (i == 0 && start_off != 0) ||
-                         (i == blocks_needed - 1 && (end_offset % bs) != 0);
+                         (i == blocks_needed - 1 && (end_offset64 % bs) != 0);
         if (need_merge) {
             memset(block_buf, 0, bs);
             ext2_read_data_block(&inode, b, block_buf);
@@ -1460,8 +1462,8 @@ int ext2_64_write_file_offset(const char *path, const uint8_t *data,
         }
 
         uint32_t dst_start = (i == 0) ? start_off : 0;
-        uint32_t dst_end = (i == blocks_needed - 1 && (end_offset % bs) != 0)
-                               ? (end_offset % bs) : bs;
+        uint32_t dst_end = (i == blocks_needed - 1 && (end_offset64 % bs) != 0)
+                               ? (uint32_t)(end_offset64 % bs) : bs;
         uint32_t src = i * bs + dst_start - start_off;
         memcpy(block_buf + dst_start, data + src, dst_end - dst_start);
 
@@ -1473,7 +1475,7 @@ int ext2_64_write_file_offset(const char *path, const uint8_t *data,
         return (blocks_written == 0) ? -1 : blocks_written * bs;
     }
 
-    if (end_offset > inode.i_size) inode.i_size = end_offset;
+    if (end_offset64 > inode.i_size) inode.i_size = (uint32_t)end_offset64;
     inode.i_blocks = (inode.i_size + bs - 1) / bs * (bs / 512);
     ext2_write_inode(ino, &inode);
 

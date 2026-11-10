@@ -222,6 +222,13 @@ uint64_t hepu_build_initial_stack(const uint64_t *stack_phys, const char *path,
 
     /* 字符串区内容 */
     static uint8_t strbuf[512];
+    /* V0.54.12(R4 MM-02): 长 p0 路径（>~480 字符）会让字符串区越过 512B
+       strbuf 造成内核 BSS 越界写。strings_len 已在上方按真实写入量计算，
+       超界直接拒绝，不静默截断。 */
+    if (strings_len > sizeof(strbuf)) {
+        vga_puts("[STACK] string region too long\n");
+        return 0;
+    }
     uint32_t off = 0;
     for (uint32_t i = 0; i <= len_p0; i++) strbuf[off++] = (uint8_t)p0[i];
     for (uint32_t i = 0; i < len_plat; i++) strbuf[off++] = (uint8_t)plat[i];

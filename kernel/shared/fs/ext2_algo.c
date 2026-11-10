@@ -620,10 +620,13 @@ int ext2_algo_free_inode(ext2_context_t *ctx, uint32_t ino)
     {
         uint32_t inode_size = algo_inode_size(&ctx->sb);
         uint64_t inode_byte = (uint64_t)index * inode_size;
-        uint32_t it_block = itb + (uint32_t)(inode_byte / ctx->block_size);
+        /* V0.54.12(R4 FS-04): inode 表块号用 64 位计算并先校验再截断，
+           与 alloc/read/write_inode 口径一致，避免大盘越界块号被截断。 */
+        uint64_t itb64 = (uint64_t)itb + inode_byte / ctx->block_size;
+        uint32_t it_block = (uint32_t)itb64;
         uint32_t it_off = (uint32_t)(inode_byte % ctx->block_size);
         uint8_t it_buf[EXT2_ALGO_MAX_BLOCK];
-        if (it_block < ctx->sb.s_blocks_count && ctx->read_block(it_block, it_buf) == 0) {
+        if (itb64 < ctx->sb.s_blocks_count && ctx->read_block(it_block, it_buf) == 0) {
             ext2_inode_t *ino_p = (ext2_inode_t *)(it_buf + it_off);
             is_dir = ((ino_p->i_mode & 0xF000) == 0x4000) ? 1 : 0;
         }
@@ -641,9 +644,10 @@ int ext2_algo_free_inode(ext2_context_t *ctx, uint32_t ino)
     {
         uint32_t inode_size = algo_inode_size(&ctx->sb);
         uint64_t inode_byte = (uint64_t)index * inode_size;
-        uint32_t it_block = itb + (uint32_t)(inode_byte / ctx->block_size);
+        uint64_t itb64 = (uint64_t)itb + inode_byte / ctx->block_size;
+        uint32_t it_block = (uint32_t)itb64;
         uint32_t it_off = (uint32_t)(inode_byte % ctx->block_size);
-        if (it_block < ctx->sb.s_blocks_count) {
+        if (itb64 < ctx->sb.s_blocks_count) {
             uint8_t it_buf[EXT2_ALGO_MAX_BLOCK];
             if (ctx->read_block(it_block, it_buf) == 0) {
                 memset(it_buf + it_off, 0, sizeof(ext2_inode_t));

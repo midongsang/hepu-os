@@ -280,8 +280,11 @@ int kmod64_load(const char *name, void *elf_data, uint64_t size)
                     vga_puts(" P="); kmod_hex(P); vga_puts("\n"); }
                 *(uint32_t *)paddr = (uint32_t)(int64_t)(S + A - P); break;
             case R_X86_64_PLT32: {
-                /* 合成 PLT: jmp *[rip+disp] -> GOT 槽(内容=符号地址) */
-                static uint64_t plt_slot_idx = 0;
+                /* 合成 PLT: jmp *[rip+disp] -> GOT 槽(内容=符号地址)。
+                   V0.54.12(R4 DRV-02): plt_slot_idx 改为模块级局部（删除 static）。
+                   旧 static 跨模块累计，第二个模块从非零槽起写，越过本模块 PLT
+                   区域造成越界写；与同级 got_idx 局部变量口径一致。 */
+                uint64_t plt_slot_idx = 0;
                 uint64_t pslot = plt_base + plt_slot_idx * 16;
                 uint64_t gslot = got_base + got_idx * 8;
                 plt_slot_idx++;

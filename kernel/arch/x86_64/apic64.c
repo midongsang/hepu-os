@@ -502,17 +502,85 @@ void apic64_enable_for_ap(void)
     (void)apic_read(0x280);
 }
 
-/* 初始化当前CPU的Local APIC定时器（周期模式，约1000Hz） */
+/* 校准窗口长度（毫秒）。基准是 PIT channel 0 的软件 tick（1ms/tick，
+   由 1193182Hz 晶体分频得到，已确认精确）。窗口越长，tick 对齐抖动占比越小。 */
+#define CAL_WINDOW_MS  50
+
+/* 校准结果：LAPIC 定时器在 DCR=16 分频下的实际计数频率（Hz），0=未校准。
+   BSP 校准后 AP 核直接复用，无需各自再测。 */
+static uint32_t g_apic_timer_hz = 0;
+
+/* 启动期校准：用 PIT channel 0 的软件 tick 测量 LAPIC 在 16 分频下的实际
+ * 计数频率。替代历史硬编码 ICR=6250——旧魔数假设 100MHz 总线，QEMU 实测
+ * 总线约 400MHz 致 tick 漂移到约 4kHz，KVM/真机可漂移至 40kHz。
+ * 返回 0 成功，-1 失败（调用方回退保守值）。
+ * V0.54.12(R4): 早期版本用 PIT ch2 GATE2/OUT2 门控，QEMU 下该门控窗口与
+ * 1193182Hz 假设不一致（实测窗口约 1.6 倍），校准高估 1.6 倍；改用 channel 0
+ * 软件 tick 并对齐边界，中断保持使能（channel-0 中断不影响 LAPIC 自由计数）。 */
+static int apic64_calibrate_timer(void)
+{
+    /* 1. LAPIC：一次性、最大计数、DCR=16（与最终周期配置一致）。
+       LVT 置屏蔽位（bit16）：测量期间不投递中断，但 CCR 照常递减。 */
+    apic_write(APIC_TIMER_DCR, 0x3);
+    apic_write(APIC_LVT_TIMER, APIC_TIMER_VECTOR | 0x10000);
+    apic_write(APIC_TIMER_ICR, 0xFFFFFFFFu);
+
+    extern uint64_t pit64_get_ticks(void);
+    /* 2. 对齐到下一个 channel-0 tick 边界，降低起点抖动 */
+    uint64_t t = pit64_get_ticks();
+    while (pit64_get_ticks() == t) { /* spin ≤1ms */ }
+    uint64_t start_tick = pit64_get_ticks();
+    uint32_t ccr_start = apic_read(APIC_TIMER_CCR);
+
+    /* 3. 等窗口结束（CAL_WINDOW_MS 个 1ms tick） */
+    uint64_t target = start_tick + CAL_WINDOW_MS;
+    while (pit64_get_ticks() < target) { /* spin */ }
+    uint32_t ccr_end = apic_read(APIC_TIMER_CCR);
+    uint64_t end_tick = pit64_get_ticks();
+
+    /* 4. 用真实窗口长度计算（64 位），CCR 递减量即窗口内计数 */
+    uint32_t ticks = ccr_start - ccr_end;
+    if (ticks == 0) return -1;
+    uint64_t actual_ms = end_tick - start_tick;
+    if (actual_ms == 0) return -1;
+    uint64_t hz = (uint64_t)ticks * 1000 / actual_ms;
+    /* 合理区间：16 分频下 0.5MHz（8MHz 总线）~ 100MHz（1.6GHz 总线） */
+    if (hz < 500000ULL || hz > 100000000ULL) return -1;
+
+    g_apic_timer_hz = (uint32_t)hz;
+    return 0;
+}
+
+/* 初始化当前CPU的Local APIC定时器（周期模式，目标1000Hz） */
 void apic64_init_timer(void)
 {
     /* 设置分频配置：16分频 */
     apic_write(APIC_TIMER_DCR, 0x3);
 
-    /* 设置LVT定时器：周期模式，向量0x40，不屏蔽 */
-    apic_write(APIC_LVT_TIMER, (1 << 17) | APIC_TIMER_VECTOR);
+    /* V0.54.12(R4): 启动期 PIT ch2 门控校准，删除硬编码 ICR=6250。
+       旧魔数假设 100MHz 总线，QEMU 实测约 400MHz 致 tick 漂移 4 倍，
+       KVM/真机可漂移至 40kHz；BSP 校准结果由 AP 核复用。 */
+    uint32_t icr;
+    if (g_apic_timer_hz == 0 && apic64_calibrate_timer() != 0) {
+        /* 校准失败回退：保守 ICR（对应 100MHz 总线假设），PIT 1kHz 仍在
+           投递调度 tick，系统不致停摆；打印告警便于后续定位。 */
+        vga_puts("[APIC] WARN: timer calibration failed, fallback ICR=6250\n");
+        icr = 6250;
+    } else {
+        icr = g_apic_timer_hz / 1000;  /* 目标 1kHz */
+        if (icr < 100) icr = 100;       /* 下限保护 */
+        vga_puts("[APIC] timer calibrated: tick_hz=");
+        vga_put_hex(g_apic_timer_hz);
+        vga_puts(" ICR=");
+        vga_put_hex(icr);
+        vga_puts("\n");
+    }
 
-    /* 设置初始计数（QEMU中约100MHz总线，16分频后6.25MHz，1000Hz需要6250计数） */
-    apic_write(APIC_TIMER_ICR, 6250);
+    /* V0.54.12(R4 INT-01 修正): 校准函数内部会把 LVT 改写为一次性模式，
+       必须在其之后重新置为周期模式（旧代码在校准前写 LVT，被覆盖后定时器
+       只触发一次即停）。bit17=周期，bit16=0 不屏蔽，向量 0x40。 */
+    apic_write(APIC_LVT_TIMER, (1 << 17) | APIC_TIMER_VECTOR);
+    apic_write(APIC_TIMER_ICR, icr);
 }
 
 /* APIC定时器中断处理（发送EOI） */

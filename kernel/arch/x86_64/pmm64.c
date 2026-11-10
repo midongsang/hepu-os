@@ -110,8 +110,10 @@ int cow_handle_fault(uint64_t cr2) {
     uint64_t old_phys = old_pte & 0xFFFFFFFFF000ULL;
     __builtin_memcpy((void*)vmm64_phys_to_virt(new_page),
                      (void*)vmm64_phys_to_virt(old_phys), 4096);
-    /* 更新PTE：新物理页 + W位 */
-    pt[si] = (old_pte & 0xFFF) | new_page | 0x2;  /* bit1=W */
+    /* 更新PTE：新物理页 + W位。
+       V0.54.12(R4 MM-01): 掩码补保留 bit63 NX——旧实现 (old_pte&0xFFF) 丢弃
+       NX，COW 后用户页变可执行，构成 DEP 绕过；与 vmm64_try_cow 口径对齐。 */
+    pt[si] = (old_pte & 0xFFF) | (old_pte & (1ULL << 63)) | new_page | 0x2;
     cow_unref(old_phys);
     return 0;
 }
