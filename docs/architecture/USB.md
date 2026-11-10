@@ -1,7 +1,7 @@
 ---
 title: USB 与无线输入支持（V0.13.62）
 status: active
-sys_version: 0.54.6
+sys_version: 0.54.11
 updated: 2026-11-01
 owner: kernel
 source_of_truth: kernel/arch/x86_64/usb64.c

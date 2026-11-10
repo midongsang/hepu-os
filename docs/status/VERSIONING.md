@@ -1,8 +1,8 @@
 ---
 title: VERSIONING
 status: active
-sys_version: 0.54.8
-updated: 2026-11-05
+sys_version: 0.54.11
+updated: 2026-11-10
 owner: status
 source_of_truth: null
 supersedes: null
@@ -107,12 +107,39 @@ supersedes: null
 
 ## 当前版本
 
-**0.54.8**
+**0.54.11**
 - 重要版本：0
 - 默认版本：54
-- bug版本：8
+- bug版本：11
 
 > 版本号以本文件 frontmatter `sys_version` 为唯一事实源。以下为历史迭代记录。
+
+### 双内核版本边界
+
+本仓库为双内核架构，两条线的版本号各自独立，不可混用：
+- **64 位主线（当前事实源）**：由 `kernel/arch/x86_64` 构建，CI/Release 只构建
+  这条线，版本即本文件 frontmatter 的 `sys_version`。
+- **32 位 legacy（已冻结）**：由仓库根 `Makefile` 构建 `kernel/arch/x86`，已不在
+  CI 中；其版本宏（`hepu_brand.h` 的 V0.33.1、`hepu.h`、`kernel.c` 的
+  hepu_kernel/hepu_system_version）停留在 legacy 自身版本，不随 64 位主线 bump，
+  也不作为当前系统版本的判断依据。
+
+**0.54.11 迭代内容（2026-11-10，两轮安全审计修复与版本号治理）**
+- 第二轮安全修复：DNS 压缩指针循环 DoS、CSPRNG 种子被 reseed 抹成固定值、getrandom 假随机接通真实 CSPRNG、pmm64 整数溢出、getdents 直写用户指针、DHCP/TCP 边界校验、ext2 间接块同址复用（SEC-11）
+- 构建链加固：镜像脚本自动构建 MBR 引导桩，失败明确报错，不再静默产出坏镜像
+- 版本号治理：统一界面显示字符串、README、本文件的多源不一致；补齐此前缺失的 0.54.9/0.54.10 记录
+- 回归：主机端 5 套件（ASan/UBSan）全通过，QEMU 端到端引导无 panic
+- 详见 `docs/security/AUDIT_64BIT_R2.md`
+
+**0.54.10 迭代内容（2026-11-07，镜像自动构建发布）**
+- CI 自动构建并发布 x86_64 镜像（Legacy BIOS `hepu64_single.img` + UEFI `hepu64_uefi.img`），附 SHA256 校验
+- release 工作流授予 GITHUB_TOKEN contents:write 以创建 Release；增强 UEFI 构建诊断
+- 修复 binutils>=2.45 下 objcopy 参数兼容；UEFI 双启动镜像与真机启动修复、内核加载不再占用 VGA 显存
+
+**0.54.9 迭代内容（2026-11-04，Clavis 界面对齐与 OOBE 图形化向导）**
+- 对照 Clavis Shell 做桌面体验对齐：程序化壁纸与取色、控制中心分页、启动器网格化、Dock 动效、通知卡片样式、侧栏滚动
+- 图形化首启向导（OOBE）与账户体系；新增设备管理器/磁盘管理/日志查看器
+- 共 19 个提交
 
 **0.54.8 迭代内容（2026-11-04，刷入漏洞紧急修复）**
 - 修复 MBR 分区表 CHS 字段全零（`make_single_img64.sh` 硬编码 `0x00,0x00,0x00`）导致部分 BIOS 混合模式拒绝分区、U 盘刷入失败（critical）

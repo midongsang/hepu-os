@@ -1,7 +1,7 @@
 ---
 title: Android HAL 移植方案（ANDROID_HAL_PORTING）
 status: active
-sys_version: 0.54.6
+sys_version: 0.54.11
 updated: 2026-11-02
 owner: planning
 source_of_truth: null

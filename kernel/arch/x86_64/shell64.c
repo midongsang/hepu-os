@@ -819,7 +819,7 @@ static void shell_cmd_version(int argc, char **argv)
 
 static void shell_cmd_uname(int argc, char **argv)
 {
-    vga_puts("HepuOS 64-bit Kernel v0.54.6\n");
+    vga_puts("HepuOS 64-bit Kernel v0.54.11\n");
     vga_puts("Architecture: x86_64 (long mode)\n");
     vga_puts("Memory: 64MB\n");
     vga_puts("Filesystem: ext2\n");

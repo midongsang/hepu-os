@@ -1,7 +1,7 @@
 ---
 title: Hepu OS 核心哲学与原生契约
 status: active
-sys_version: 0.54.6
+sys_version: 0.54.11
 updated: 2026-10-29
 owner: architecture
 source_of_truth: null
