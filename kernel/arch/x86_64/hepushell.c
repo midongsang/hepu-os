@@ -977,6 +977,7 @@ void hs_window_manager_init(void)
     g_wm.cascade_index = 0;
     for (int i = 0; i < HS_MAX_WINDOWS; i++) {
         g_wm.windows[i].visible = 0;
+        g_wm.windows[i].id = -1;   /* 槽位空闲标记(visible=0 不等于空闲: 最小化/布局隐藏仍占用) */
         g_wm.z_order[i] = -1;
     }
 }
@@ -1005,10 +1006,20 @@ static void hs_window_auto_pos(int *x, int *y, int w, int h)
 hs_window_t *hs_window_create(hs_window_type_t type, const char *title,
                               int x, int y, int w, int h)
 {
-    if (g_wm.window_count >= HS_MAX_WINDOWS) return NULL;
+    /* 找空闲槽(id==-1)并统计活跃窗口数；仅当活跃窗口真正占满才失败。
+     * 修复槽位泄漏: 旧实现用 window_count 线性追加, 关闭不回收, 反复开关 32 次后无法再开窗 */
+    int slot = -1, active = 0;
+    for (int i = 0; i < HS_MAX_WINDOWS; i++) {
+        if (g_wm.windows[i].id >= 0) {
+            if (g_wm.windows[i].visible) active++;
+        } else if (slot < 0) {
+            slot = i;
+        }
+    }
+    if (active >= HS_MAX_WINDOWS || slot < 0) return NULL;
 
-    hs_window_t *win = &g_wm.windows[g_wm.window_count];
-    win->id = g_wm.window_count;
+    hs_window_t *win = &g_wm.windows[slot];
+    win->id = slot;
     win->type = type;
     win->state = HS_WINDOW_STATE_NORMAL;
 
@@ -1041,9 +1052,10 @@ hs_window_t *hs_window_create(hs_window_type_t type, const char *title,
     win->anim_start = g_frame_no;
     win->anim_dur = 12;  /* ≈200ms @60fps, Clavis durations.small */
 
-    /* 添加到z_order */
+    /* 维护高水位 window_count(=最大已用槽位下标+1), 兼容 for i<window_count 遍历与 id<window_count 校验 */
+    if (slot + 1 > g_wm.window_count) g_wm.window_count = slot + 1;
+    /* 添加到 z_order(空闲槽被回收时其 id 已从 z_order 移除, 此处不会产生重复 id) */
     g_wm.z_order[g_wm.z_count++] = win->id;
-    g_wm.window_count++;
 
     /* V0.13.16: 新窗口自动获得焦点(修复平铺/快捷键作用目标缺失) */
     for (int i = 0; i < g_wm.window_count; i++) g_wm.windows[i].focus = 0;
@@ -1053,19 +1065,28 @@ hs_window_t *hs_window_create(hs_window_type_t type, const char *title,
     return win;
 }
 
+/* 统一回收窗口槽位: 标记 id=-1 并从 z_order 紧凑移除。
+ * visible=0 有两种语义: 真正关闭(走本函数回收) vs 最小化/布局隐藏(保留槽位, 不回收) */
+static void hs_window_recycle(int id)
+{
+    if (id < 0 || id >= HS_MAX_WINDOWS) return;
+    hs_window_t *w = &g_wm.windows[id];
+    if (w->id < 0) return;   /* 已是空闲槽 */
+    w->visible = 0;
+    w->id = -1;
+    int new_z = 0;
+    for (int i = 0; i < g_wm.z_count; i++) {
+        if (g_wm.z_order[i] != id) g_wm.z_order[new_z++] = g_wm.z_order[i];
+    }
+    g_wm.z_count = new_z;
+    if (g_wm.focus_window == id) g_wm.focus_window = -1;
+}
+
 /* 销毁窗口 */
 void hs_window_destroy(hs_window_t *win)
 {
-    if (!win) return;
-    win->visible = 0;
-    /* 从z_order移除 */
-    int new_z = 0;
-    for (int i = 0; i < g_wm.z_count; i++) {
-        if (g_wm.z_order[i] != win->id) {
-            g_wm.z_order[new_z++] = g_wm.z_order[i];
-        }
-    }
-    g_wm.z_count = new_z;
+    if (!win || win->id < 0) return;
+    hs_window_recycle(win->id);
 }
 
 /* 聚焦窗口 */
@@ -2826,7 +2847,7 @@ void hepushell_handle_click(int x, int y)
         int close_x = w->x + w->width - 20;
         int close_y = w->y + 4;
         if (x >= close_x && x <= close_x + 16 && y >= close_y && y <= close_y + 16) {
-            w->visible = 0;
+            hs_window_recycle(w->id);
             return;
         }
         /* 系统工具窗口点击 (标签切换/挂载/fsck) — 仅最顶层窗口 */
@@ -3150,9 +3171,7 @@ void hepushell_mouse_down(int x, int y)
                 return;
             }
             if (x >= close_x && x <= close_x + 24) {
-                w->visible = 0;
-                w->focus = 0;
-                if (g_wm.focus_window == w->id) g_wm.focus_window = -1;
+                hs_window_recycle(w->id);
                 return;
             }
             /* V0.13.16: 双击标题栏(非按钮区) → 最大化/还原 */
@@ -4612,8 +4631,7 @@ void hepushell_switcher_close(void)
     if (g_sw_count > 0 && g_sw_sel >= 0 && g_sw_sel < g_sw_count) {
         int idx = g_sw_order[g_sw_sel];
         if (idx >= 0 && idx < g_wm.window_count) {
-            g_wm.windows[idx].visible = 0;
-            if (g_wm.focus_window == idx) g_wm.focus_window = -1;
+            hs_window_recycle(idx);
         }
     }
     g_sw_active = 0;
@@ -4664,9 +4682,8 @@ void hepushell_cycle_window_focus(void)
 /* ---- 关闭聚焦窗口 ---- */
 void hepushell_close_focused_window(void)
 {
-    if (g_wm.focus_window < 0 || g_wm.focus_window >= g_wm.window_count) return;
-    g_wm.windows[g_wm.focus_window].visible = 0;
-    g_wm.focus_window = -1;
+    if (g_wm.focus_window < 0) return;
+    hs_window_recycle(g_wm.focus_window);
 }
 
 /* ---- 主题切换 (Light → Dark → Mono 循环) ---- */

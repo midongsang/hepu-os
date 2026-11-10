@@ -362,6 +362,11 @@ void x86_64_kernel_main(void)
     vga_puts("[OK] APIC initialized\n");
     vga_puts("[BOOT] step4 done (APIC)\n");
 
+    /* 先解析 MADT 中断源覆盖（如 QEMU 把 ISA IRQ0/PIT 重定向到 GSI 2）。
+       只依赖分页，可在 SMP/中断切换前安全调用；失败时映射回退恒等。 */
+    extern int acpi_init_irq_overrides(void);
+    acpi_init_irq_overrides();
+
     /* 切换到纯APIC模式（必须在启动AP之前）：
        否则 apic_mode 全局标志保持0，AP核启动后 apic64_get_id() 与
        irq_handler_64 的FPU保存区选择都走PIC分支，导致所有AP核误判自己

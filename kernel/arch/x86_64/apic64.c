@@ -389,15 +389,19 @@ int apic64_switch_to_apic_mode(void)
     /* 3. 通过IMCR切换到APIC模式 */
     imcr_set_mode(1);
 
-    /* 4. 配置关键中断重定向 */
-    /* IRQ0: PIT定时器 -> vector 32 (0x20) */
-    apic64_enable_irq(0, 0x20);
-    /* IRQ1: 键盘 -> vector 33 (0x21) */
-    apic64_enable_irq(1, 0x21);
+    /* 4. 配置关键中断重定向。
+       注意：enable_irq 的第一个参数是 IOAPIC 引脚（= GSI），不是 ISA IRQ。
+       必须经 MADT 中断源覆盖翻译，否则在 QEMU 上 PIT(ISA IRQ0 被覆盖到
+       GSI 2) 会被错误配到 pin 0，中断永远不投递，桌面渲染计时冻结。 */
+    extern int acpi_irq_to_gsi(int irq);
+    /* PIT -> vector 32 (0x20) */
+    apic64_enable_irq((uint8_t)acpi_irq_to_gsi(0), 0x20);
+    /* 键盘 -> vector 33 (0x21) */
+    apic64_enable_irq((uint8_t)acpi_irq_to_gsi(1), 0x21);
     /* IRQ2: 级联（通常不需要） */
-    /* IRQ12: PS/2鼠标 -> vector 44 (0x2C) */
+    /* PS/2鼠标 -> vector 44 (0x2C) */
     if (ioapic_max_redir >= 12) {
-        apic64_enable_irq(12, 0x2C);
+        apic64_enable_irq((uint8_t)acpi_irq_to_gsi(12), 0x2C);
     }
 
     /* 5. 设置LINT0为固定投递模式（不再使用ExtINT/PIC通道） */
