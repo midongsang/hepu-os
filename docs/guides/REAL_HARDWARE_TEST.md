@@ -2,7 +2,7 @@
 title: REAL_HARDWARE_TEST
 status: active
 sys_version: 0.54.11
-updated: 2026-11-01
+updated: 2026-11-11
 owner: guides
 source_of_truth: null
 supersedes: null
@@ -154,7 +154,7 @@ gfxinfo
 | 项 | 状态 |
 |----|------|
 | 32 位内核读取路径重试 | 低优先级，待加 |
-| 现代 USB 控制器（EHCI/XHCI） | 当前仅 UHCI；真机 USB 键盘鼠标依赖 PS/2 兜底 |
+| 现代 USB 控制器（EHCI/XHCI） | 已编入并在 `usb64_init()` 回退尝试（`ehci64.c`/`xhci64.c`，Makefile:103-104）；QEMU 异步列表限制，真机行为待验证；老机器 UHCI 走 PS/2 兜底 |
 | 真机网卡兼容（e1000 82540EM / rtl8139 为老型号） | 网络功能待真机验证 |
 | UEFI BootFailCount 内核不清零 | 仅计数，不影响启动 |
 | >4GB 真机 E820 精化 | 内核上限 2GB，暂不阻塞 |

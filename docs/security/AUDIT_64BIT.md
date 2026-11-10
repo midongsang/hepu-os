@@ -2,7 +2,7 @@
 title: AUDIT_64BIT
 status: active
 sys_version: 0.54.11
-updated: 2026-11-01
+updated: 2026-11-11
 owner: security
 source_of_truth: kernel/arch/x86_64/user_access64.c
 supersedes: null
@@ -28,11 +28,11 @@ supersedes: null
 
 | 漏洞 | 严重程度 | 64位真实状态 | 说明 |
 |------|---------|-------------|------|
-| A: ring3 无内存隔离 | 🔴致命 | 🟡**阶段 1 已实现（`make USER_ISOLATION=1`），默认关闭，待 QEMU 验证**；默认构建仍未修复 | 私有页表 + 内核映射 ring3 不可访问；fork、RAM>1GB、SMEP 等见阶段 2 |
-| B: 系统调用暴露内核堆 | 🔴致命 | 🟡部分 | 无 sys_malloc；但 sys_brk 只改变量、不映射页 |
+| A: ring3 无内存隔离 | 🔴致命 | 🟡**阶段 1 已默认开启**（`Makefile:205` `USER_ISOLATION ?= 1`），QEMU 512MB/1.5GB 均到桌面、sec_test 通过（见 OPEN_BUGS SEC-01）；阶段 2（fork 复制地址空间、RAM>1GB、内核映射 U/S 位）仍未做 | 私有页表 + 内核映射 ring3 不可访问；fork、RAM>1GB、SMEP 等见阶段 2 |
+| B: 系统调用暴露内核堆 | 🔴致命 | 🟡部分 | 无 sys_malloc；`sys_brk` 已按需映射/释放堆页（可写、用户、NX，每进程独立 break，`syscall64_full.c:1678-1694`）；堆隔离其余项见 SEC-01 |
 | C: 用户指针无校验 | 🔴致命 | 🟡主要路径已加固（QEMU 3 项通过） | 严格用户窗口 + 页表遍历校验；**尚未全量审计所有系统调用是否都走 copy_*_user** |
 | D: 数组越界写 | 🟠高危 | 🟡已加固，部分待 QEMU 验证 | ELF/ext2/堆边界检查（主机测试）；fd 表改为每进程（待 QEMU 验证）；其余见「其他未修复项」 |
-| E: signal 任意函数指针 | 🟠高危 | ⏳不适用 | 64 位信号机制尚未实现（P1-1 合入时同步校验） |
+| E: signal 任意函数指针 | 🟠高危 | 🟡部分 | 信号框架已落地（sigaction 存储 handler、信号投递）；`sys_sigaction` 已按 glibc 结构解析并对非特殊值 handler 做用户窗口校验（`syscall64_full.c:1347-1377`，f9db839 SC-05）；信号相关沙箱校验仍随能力模型待补 |
 | F: 沙箱绕过 | 🟠高危 | ⏳不适用 | 64 位沙箱机制尚未实现 |
 | G: 内核地址泄露 | 🟡中危 | 🟡待复核 | `copy_to_user` 已校验目标地址；未逐个系统调用核对返回值/输出是否含内核指针 |
 | H: 共享内存无权限 | 🟡中危 | ⏳不适用 | 64 位共享内存尚未实现 |
@@ -68,10 +68,10 @@ supersedes: null
 
 1. `fork` 仍是共用地址空间的内核线程（在父进程 CR3 下运行），需改为复制地址空间。
 2. 物理内存 > 1GB 时用户窗口与内核恒等映射冲突，目前只能退回旧模式。
-3. 内核自身 CR3 的映射仍带 U/S 位（恒等映射带 `PAGE_USER`），因此暂时不能开 SMEP/SMAP；需把内核 PML4 里的内核映射也去掉 U/S，并确认没有 ring0 路径依赖。
+3. ~~内核自身 CR3 映射带 U/S 位导致不能开 SMEP/SMAP~~ SMEP/SMAP 已启用并按 CR4 真实状态门控（见 SEC-06）；内核 PML4 内核映射去 U/S 位的其余清理仍待确认。
 4. 以内核函数为入口的内置测试进程仍走旧模式。
 5. 进程创建后内核新增的 PDPT 级表项（>=4GB 或新的 1GB 槽位的 MMIO）不会出现在已创建进程的私有 PDPT 里；创建时只预建了 PDPT[2]、[3]。
-6. `sys_brk` 仍不映射页；NX/W^X 未做；进程记录在正常退出后不回收（OPEN_BUGS SEC-09）。
+6. ~~`sys_brk` 不映射页 / NX 未做 / 退出不回收~~ `sys_brk` 已按需映射堆页并带 NX（`:1678-1694`）；进程记录正常退出回收已闭环（SEC-09 已关闭）。
 
 ## 漏洞 C：用户指针无校验 🟡（主要路径已加固）
 
@@ -109,9 +109,9 @@ supersedes: null
 ## 其他未修复项（已登记 OPEN_BUGS SEC-02 至 SEC-06）
 
 - `entry_64.S` 用全局变量（`g_syscall_ret_rip`、`g_syscall_kernel_rsp`、`g_syscall_ustack_slot`）保存系统调用上下文，非 per-CPU/per-task；多核或阻塞后切换进程会互相覆盖。
-- 裸盘读写系统调用（`sys_disk_read/write`）无权限控制；安装器/分区工具需要它，需先有 uid/capability 模型。
-- 系统调用使用静态缓冲区（`kernel_buf`、`file_buf`、`elf_buffer`）不可重入；内核栈仅 4KB，不能简单改成栈数组。
-- 内核态缺页仍然 `hlt`；`vmm64_page_fault_handler` 当前没有调用方；NX/W^X/SMEP/SMAP 均未启用。
+- 裸盘读写/reboot/mkfs 已加 PID==0 临时闸（拒绝所有真实用户进程，PID 恒 ≥100，口径见 OPEN_BUGS PID 注记）；uid/capability 能力模型仍未落地，安装器/分区工具的长期授权随该模型解决（SEC-04、OPEN-04）。
+- 主路径缓冲（`kernel_buf`/`file_buf`/`elf_buffer`）已改为调用期 kmalloc；`sys_readdir` 静态 names/types 表仍不可重入；内核栈仅 4KB 的约束仍在（SEC-05）。
+- 内核态缺页仍然 `hlt`；NX/W^X/SMEP/SMAP 已启用并按 CR4 真实状态门控（见 SEC-06），内核态缺页停机策略未改。
 - 文件系统无访问控制位，`open` 不做路径规范化。
 
 ## 代码卫生
@@ -145,5 +145,5 @@ supersedes: null
 ## 结论
 
 - 系统调用路径上的用户指针校验与多处输入校验（ELF/ext2/堆/fd）已建立，其中用户指针校验经 QEMU 基础回归，其余主要经主机端测试，追加修复尚待 QEMU 验证。
-- **漏洞 A（ring3 内存隔离）**：默认构建仍未修复，用户程序仍可直接读写内核内存。阶段 1（私有页表 + 内核映射不可访问）已实现并通过主机端测试，`make USER_ISOLATION=1` 通过 QEMU 回归后再改为默认；阶段 2（fork 复制地址空间、RAM>1GB、SMEP/SMAP）未做。
+- **漏洞 A（ring3 内存隔离）**：阶段 1（私有页表 + 内核映射不可访问）已实现、**默认开启**并通过 QEMU 回归（512MB/1.5GB 到桌面、sec_test 通过，见 OPEN_BUGS SEC-01）；SMEP/SMAP 已启用并按 CR4 真实状态门控（见 SEC-06）。阶段 2 仍未做：fork/clone 复制私有地址空间（现共享父进程页表指针，COW 未接入，见 SEC-02）、RAM>1GB 冲突、内核自身 CR3 映射去 U/S 位。
 - 不再给出总分：此前的 85/100 基于错误前提，首版重写的 55/100 也没有评分标准。以上逐项状态为准。

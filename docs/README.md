@@ -2,7 +2,7 @@
 title: 赫普OS 文档索引
 status: active
 sys_version: 0.54.11
-updated: 2026-11-03
+updated: 2026-11-11
 generator: tools/gen_docs_index.py
 source_of_truth: frontmatter of docs/*
 ---
@@ -52,6 +52,7 @@ source_of_truth: frontmatter of docs/*
 - [Hepu 完整开发路线图](planning/FULL_ROADMAP.md)
 - [内核优化与兼容预埋路线（KERNEL_OPT_PLAN）](planning/KERNEL_OPT_PLAN.md)
 - [模块化设计准则（MODULARITY）](planning/MODULARITY.md)
+- [组合B：SMP 硬化包实施计划（PLAN_SMP_HARDENING_R5）](planning/PLAN_SMP_HARDENING_R5.md)
 - [赫普OS 开发路线图（唯一优先级来源）](planning/ROADMAP.md)
 - [RUST](planning/RUST.md)
 - [STORAGE_MEMORY](planning/STORAGE_MEMORY.md)
@@ -69,7 +70,10 @@ source_of_truth: frontmatter of docs/*
 ## security
 
 - [AUDIT_64BIT](security/AUDIT_64BIT.md)
+- [64位内核安全审计（第二轮）](security/AUDIT_64BIT_R2.md)
+- [AUDIT_DESKTOP_STABILITY_R3](security/AUDIT_DESKTOP_STABILITY_R3.md)
 - [BUG_FIX_GUIDELINES](security/BUG_FIX_GUIDELINES.md)
+- [FIX_SECURITY_BUNDLE_A_R4](security/FIX_SECURITY_BUNDLE_A_R4.md)
 - [OPEN_SOURCE_POLICY](security/OPEN_SOURCE_POLICY.md)
 
 ## status

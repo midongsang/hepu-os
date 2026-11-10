@@ -2,7 +2,7 @@
 title: KERNEL
 status: active
 sys_version: 0.54.11
-updated: 2026-11-01
+updated: 2026-11-11
 owner: architecture
 source_of_truth: kernel/arch/x86_64/Makefile
 supersedes: null
@@ -65,7 +65,7 @@ supersedes: null
 | 内核上层 | 进程管理 | `process_ops` | `process64_full.c`（fork/execve/waitpid 全套） |
 | 内核上层 | 系统调用（入口壳） | - | `syscall64_simple.c`（MSR_STAR/LSTAR/SFMASK 初始化 + `syscall_handler_64` 入口壳 → **调 full.c 的 dispatch**） |
 | 内核上层 | 系统调用（完整表） | `syscall_ops` | `syscall64_full.c`（`syscall_table[SYSCALL_MAX]` 100+ wrap 函数 + `linux_map[350]` 兼容翻译表，按进程 `env_type` 判定） |
-| 内核上层 | ELF64 装载 | - | `elf64.c`（边界检查 + 规范入口 + 栈 16 对齐 + PIE/ET_DYN + PT_INTERP 明确拒绝） |
+| 内核上层 | ELF64 装载 | - | `elf64.c`（边界检查 + 规范入口 + 栈 16 对齐 + PIE/ET_DYN）；PT_INTERP 解释器由 `user_process.c:1938-2128` 加载入库区并切换入口 |
 | 内核上层 | 文件系统 | `fs_ops` | `ext2_64.c` + `ext2_algo.c`（多挂载 slot + 自动 mkfs + 根分区自动扩展） |
 | 内核上层 | 网络协议栈 | `net_ops` | `net64_*.c`（ARP/IP/ICMP/UDP/TCP/DHCP/DNS/HTTP 明文 + socket64） |
 | 内核上层 | 图形子系统 | `gfx_ops` | `gfx64.c` + `font64.c` + `ttf64.c` + `cjk_font_data.c` + `gfx_algo.c` |
@@ -136,7 +136,7 @@ struct scheduler_ops scheduler_v2_ops = { ... };
 | POSIX 杂项 | sched_yield / ioctl / umask / arch_prctl / newuname / sysinfo / getrusage / getrandom | | arch_prctl 用于 glibc FS_BASE TLS 初始化 |
 | 兼容层 | exit_group / set_tid_address / set_robust_list / rseq | | glibc 静态 PIE 端到端（v0.33） |
 | 内核私有 | ps / net_stats / reboot / disk_read / disk_write / mkfs | ps=200；disk_read/write 需 PID=0；mkfs 需 0x4D4B4653 魔数 |
-| EPoll / Futex / Eventfd | epoll_create / epoll_ctl / epoll_wait / futex / eventfd2 | | 均为 stub 返回 0（让 glibc 继续） |
+| EPoll / Futex / Eventfd | epoll_create / epoll_ctl / epoll_wait / futex / eventfd2 | | epoll 三件套与 eventfd2 为桩返回 0（`syscall64_full.c:1268-1273`）；futex 为真实等待/唤醒实现（`syscall64_full.c:1302-1311` → `user_process.c:1689/1713`） |
 
 ### 4.4 入口路径（两层壳）
 
@@ -191,7 +191,7 @@ struct storage_ops {
 - ✅ AC'97 音频：`ac9764.c`
 - ✅ APIC / ACPI：`apic64.c` + `acpi.c`（RSDT/MADT 走高半区访问，解决真机 >=1GB ACPI 表访问崩溃）
 - ✅ RTL8139 + e1000：`rtl8139_64.c` + `e1000_64.c`，DHCP 自动联网 + 真实链路检测
-- ❌ NVMe / virtio-gpu / UHCI / Secure Boot：**源码不存在或不在 64 位 Makefile 中**（见 OVERVIEW.md 九、已知缺口）
+- ❌ NVMe / virtio-gpu / UHCI / Secure Boot：均不在 64 位 Makefile 中。NVMe（`kernel/drivers/nvme.c`）、UHCI（`kernel/drivers/usb/uhci.c`）仅存于 32 位遗留树；virtio-gpu、Secure Boot 仓库内无源码（见 OVERVIEW.md 九、已知缺口）
 
 ## 六、编码与构建规范
 

@@ -2,7 +2,7 @@
 title: API_REFERENCE
 status: active
 sys_version: 0.54.11
-updated: 2026-11-01
+updated: 2026-11-11
 owner: specs
 source_of_truth: null
 supersedes: null
@@ -68,11 +68,11 @@ supersedes: null
 
 | 系统调用 | 编号 | 原型 | 说明 |
 |---------|------|------|------|
-| SYS_IPC_SEND | 12 | `int ipc_send(pid_t pid, const void *msg, size_t len)` | IPC发送 |
-| SYS_IPC_RECV | 13 | `int ipc_recv(pid_t *pid, void *msg, size_t max_len)` | IPC接收 |
-| SYS_PIPE | 16 | `int pipe(int pipefd[2])` | 创建管道 |
-| SYS_SHMGET | 17 | `int shmget(key_t key, size_t size, int shmflg)` | 获取共享内存 |
-| SYS_SHMAT | 18 | `void *shmat(int shmid, const void *shmaddr, int shmflg)` | 附加共享内存 |
+| SYS_IPC_SEND | 12 | `int ipc_send(pid_t pid, const void *msg, size_t len)` | ❌ 64 位未注册（遗留设计号） |
+| SYS_IPC_RECV | 13 | `int ipc_recv(pid_t *pid, void *msg, size_t max_len)` | ❌ 64 位未注册（遗留设计号） |
+| SYS_PIPE | 16 | `int pipe(int pipefd[2])` | 创建管道（64 位已实现） |
+| SYS_SHMGET | 17 | `int shmget(key_t key, size_t size, int shmflg)` | ❌ 64 位未注册（无共享内存系统调用） |
+| SYS_SHMAT | 18 | `void *shmat(int shmid, const void *shmaddr, int shmflg)` | ❌ 64 位未注册 |
 
 ### 1.5 网络操作
 
@@ -275,7 +275,7 @@ close(sockfd);
 
 | 层级 | 协议 | 状态 |
 |------|------|------|
-| 应用层 | HTTP、WebSocket、TLS 1.3 | 基础实现 |
+| 应用层 | HTTP（明文） | 已实现（`net64_http.c`）；WebSocket 仅 32 位遗留树、未编入 64 位；TLS 代码已编入但未接入 HTTP 调用链（见 OVERVIEW 3.4） |
 | 传输层 | TCP、UDP、ICMP | 完整实现 |
 | 网络层 | IPv4、ARP | 完整实现 |
 | 链路层 | 以太网 | 完整实现 |
@@ -323,10 +323,10 @@ gfx_draw_string(x, y, "Hello", color, size);
 
 | 后端 | 说明 | 状态 |
 |------|------|------|
-| GOP | UEFI Graphics Output Protocol | 完整 |
-| VGA | VGA文本模式 | 完整 |
-| VBE | VESA BIOS Extensions | 基础 |
-| virtio-gpu | 虚拟GPU | 基础 |
+| GOP | UEFI Graphics Output Protocol | ❌ 未实现：64 位不依赖 UEFI GOP，Stage2 走 VBE 设置 framebuffer（`gfx64.c`/`vg64.c`） |
+| VGA | VGA文本模式 | ✅ 文本终端回退（`term64.c`/`shell64.c`） |
+| VBE | VESA BIOS Extensions | ✅ 默认图形后端（`gfx64.c` + `vg64.c`） |
+| virtio-gpu | 虚拟GPU | ❌ 仓库内无源码，不在 64 位 Makefile |
 
 ---
 

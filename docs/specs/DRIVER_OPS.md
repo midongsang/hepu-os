@@ -2,7 +2,7 @@
 title: 赫普OS 驱动操作接口（DRIVER_OPS）
 status: active
 sys_version: 0.54.11
-updated: 2026-11-01
+updated: 2026-11-11
 owner: specs
 source_of_truth: kernel/shared/drivers/driver_framework.h
 ---
@@ -16,7 +16,7 @@ source_of_truth: kernel/shared/drivers/driver_framework.h
 见 `kernel/shared/drivers/driver_framework.h` 中 drv_desc_t / drv_ops_t 定义:
 - read/write: 块设备扇区读写 (lba, buffer, count*512)
 - 上层: storage_hal_read/write (经 blk_cache64 统一缓存)
-- 设备选择: storage_hal_set_device(0=IDE, 1=USB)
+- 设备选择: `storage_hal_set_device(sel)`；设备类型 `0=IDE, 1=AHCI, 2=NVMe`（`storage_hal64.c:23`）；读路径有 AHCI 盘时优先走 AHCI（`storage_hal64.c:69-74`），USB Mass Storage 经 BOT 接入
 
 ## 约束
 

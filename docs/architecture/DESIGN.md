@@ -2,7 +2,7 @@
 title: 赫普OS 系统设计（现行）
 status: active
 sys_version: 0.54.11
-updated: 2026-11-02
+updated: 2026-11-11
 source_of_truth: kernel/arch/x86_64/
 iteration_history: ../history/DESIGN_ITERATIONS.md
 ---
@@ -2275,7 +2275,7 @@ V1 期间新增子系统必须附一页说明：目标、非目标、依赖、�
 |---|---|
 | 原生 ET_EXEC | 支持 |
 | static-PIE（ET_DYN，无 PT_INTERP） | 支持，仅应用 `R_X86_64_RELATIVE` |
-| 动态链接（PT_INTERP / ld.so / DT_NEEDED） | 不支持，明确拒绝 |
+| 动态链接（PT_INTERP / ld.so / DT_NEEDED） | ⚠️ 部分：PT_INTERP 解释器加载已接入 exec（`user_process.c:1938-2128`）；DT_NEEDED 符号/重定位由用户态 ld.so 完成，内核遗留 `hepu_dynlink_relocate()` 未接线 |
 | `PT_TLS` | 未处理 |
 | `PT_GNU_STACK` | 未处理 |
 | 段重叠检测 | 未实现 |
@@ -2292,7 +2292,7 @@ V1 期间新增子系统必须附一页说明：目标、非目标、依赖、�
 
 ### 22.5 表述红线
 
-- 不称"支持 Linux 动态链接"：`PT_INTERP` 仍被拒绝；
+- 不称"支持完整 Linux 动态链接"：PT_INTERP 解释器虽已加载入库区（`user_process.c:1938-2128`），但内核不自解析 DT_NEEDED 符号/重定位，依赖用户态 ld.so；
 - 不称"代码段只读可执行"：当前统一映射为可写，W^X 尚未落地；
 - 不把固定布局说成"地址空间随机化"。
 

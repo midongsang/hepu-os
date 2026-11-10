@@ -2,7 +2,7 @@
 title: OVERVIEW
 status: active
 sys_version: 0.54.11
-updated: 2026-11-01
+updated: 2026-11-11
 owner: architecture
 source_of_truth: kernel/arch/x86_64/Makefile
 supersedes: null
@@ -94,9 +94,10 @@ supersedes: null
 └──────────────────────────────────────────────────────────┘
 ```
 
-> **未编入 64 位构建**的模块（源码可能在仓库但 Makefile 没有）：
-> NVMe、virtio-gpu、UHCI、VFS、fscrypt、ext4/FAT32/exFAT/NTFS、IPv6、TLS 1.2、WebSocket、FTP、SMTP、POP3、
-> IPC 信号量/共享内存/消息队列/互斥锁、Secure Boot 签名验证、Rust 用户态打包、第三方库（zlib/libpng/libjpeg）。
+> **未编入 64 位构建**的模块（源码可能在 32 位遗留树或用户态目录，但 64 位 Makefile 没有）：
+> NVMe、UHCI、VFS、fscrypt、ext4/exFAT/NTFS、WebSocket、IPC 信号量/共享内存/消息队列/互斥锁、FTP/SMTP/POP3、第三方库（zlib/libpng/libjpeg）。
+> 其中 IPv6、virtio-gpu、virtio-blk、Secure Boot 签名验证在仓库内无对应源码；Rust 用户态打包未接入 `user/Makefile` 与镜像脚本。
+> TLS 1.2 协议代码已编入 64 位 Makefile（见 3.4 / 5.4），但未接入 HTTP 调用链。
 
 ---
 
@@ -110,7 +111,7 @@ supersedes: null
 - **execve**：ELF64 加载器 `elf64_load`（边界检查 + 规范入口 + 栈 16 字节对齐），支持 PIE/ET_DYN
 - **信号**：`sigaction/sigprocmask/kill/tgkill/rt_sigreturn` 全套
 - **系统调用编号**：原生号表 `syscall_table[SYSCALL_MAX]` + Linux 兼容翻译 `linux_map[350]`（按进程 `user_process_t.env_type` 判定）
-- **已知限制**：PT_INTERP 动态链接器路径明确拒绝（`elf64_has_interp()` 返回 -1），DT_NEEDED 共享库依赖链未实现
+- **PT_INTERP 解释器加载**：已接入 exec 路径（`user_process.c:1938-2128`）：检测 PT_INTERP → 从 ext2 读取解释器（ld.so）→ 按偏置装入库区 `[0x60000000,0x70000000)` → 映射进进程并把入口切到解释器，`AT_BASE/AT_ENTRY/AT_PHDR` 填好。DT_NEEDED 符号查找/重定位/TLS 初始化交由用户态 ld.so 完成；内核遗留的 `hepu_dynlink_relocate()`（`user_process.c:1523`，含 DT_NEEDED 遍历与 JMPREL 重定位）已不再被 exec 调用（`user_process.c:2140-2150`）。
 
 ### 3.2 内存管理 ✅（已编入）
 - **物理内存**：`pmm64` 位图分配器，stage2 E801 探测 → 内核写 0x90100
@@ -136,9 +137,9 @@ supersedes: null
 | 自动扩展 | ✅ | `ext2_64_expand_to_partition` |
 | 三区制挂载 | ✅ | P1 系统 + P2 配置(/cfg) + P3 自由(/data) |
 | fsck | ✅ | `ext2_fsck64.c` |
-| VFS 抽象层 | ❌ 不在构建 | 源码不存在 |
-| fscrypt 加密 | ❌ 不在构建 | 源码不存在 |
-| ext4/FAT32/exFAT/NTFS | ❌ 不在构建 | 源码不存在 |
+| VFS 抽象层 | ❌ 不在 64 位构建 | 源码仅存于 32 位遗留树 `kernel/fs/vfs.c`，未编入 64 位 Makefile |
+| fscrypt 加密 | ❌ 不在 64 位构建 | 源码仅存于 32 位遗留树 `kernel/fs/fscrypt.c`（`kernel/include/fscrypt.h`），未编入 64 位 Makefile |
+| ext4/exFAT/NTFS/FAT | ❌ 不在 64 位构建 | 源码仅存于 32 位遗留树 `kernel/fs/ext4.c`/`exfat.c`/`ntfs.c`/`vfat.c`，未编入 64 位 Makefile |
 
 ### 3.4 网络协议栈 ⚠️（部分）
 | 层 | 协议 | 状态 | 源码落点 |
@@ -154,8 +155,8 @@ supersedes: null
 | 应用 | DHCP | ✅ | `net64_dhcp.c`（自动 client，桌面主循环 poll） |
 | 应用 | DNS | ✅ | `net64_dns.c` |
 | 应用 | HTTP/1.0（明文） | ✅ | `net64_http.c` |
-| 应用 | TLS/HTTPS | ❌ | 源码不存在（crypto.c 只有 XTEA） |
-| 应用 | WebSocket/FTP/SMTP/POP3 | ❌ | 源码不存在 |
+| 应用 | TLS/HTTPS | ⚠️ 代码已编入、未接入调用链 | `kernel/net/tls.c`/`tls_record.c`/`tls_crypto.c`/`tls_handshake.c`/`tls_client.c`（Makefile:96-100，共 2327 行）；启动期 `hepu_tls_init()`（`kernel_main_64.c:1107`）初始化子模块，但 HTTP 客户端 `net64_http.c` 无 https/443 路由，顶层会话 API 为模拟握手桩（`tls.c:197`），端到端加密收发未打通 |
+| 应用 | WebSocket/FTP/SMTP/POP3 | ❌ 不在 64 位构建 | WebSocket 源码仅存于 32 位遗留树 `kernel/net/websocket.c`；FTP/SMTP/POP3 仅用户态样例 `user/apps/{ftp,smtp,pop3}_client/`，均未编入 64 位内核或用户态构建 |
 | Socket API | BSD 兼容 | ✅ | `socket64.c`（socket/connect/accept/bind/listen/sendto/recvfrom 等） |
 | 可观测 | 链路检测 + 真实速率 | ✅ | 任务管理器 DHCP 绑定状态 + `net_hal_get_stats` DL/UL KB/s |
 
@@ -182,10 +183,10 @@ supersedes: null
 | brk 分页 + NX/W^X | ✅ | `vmm64.c`（用户堆带 PT_NX） |
 | fork COW + 独立地址空间 | ✅ | `user_aspace64.c` + `elf64.c`（uaspace_fork_copy） |
 | 用户程序异常只终止自身 | ✅ | vec40 用户异常 trampoline，不再整机 hlt |
-| 加密原语 | ⚠️ 仅 XTEA + XTS 页级加密 | `crypto/crypto.c`（**没有 AES-256/SHA-256/RSA/X509/TLS**） |
-| Secure Boot 签名验证 | ❌ | 源码不存在 |
-| fscrypt 文件加密 | ❌ | 源码不存在 |
-| CSPRNG ChaCha20 | ❌ | 源码不存在 |
+| 加密原语 | ⚠️ XTEA/XTS 在用，公钥/摘要套件已编入但上层调用有限 | `kernel/crypto/` 共 11 个文件 3552 行全部编入（Makefile:85-95）：XTEA + XTS 页级加密（`crypto.c:33/168`）为在用路径；AES-128/256(-GCM/CBC)、SHA-256/512、HMAC、HKDF、ECDHE、RSA、X.509 代码已编译，主要供 TLS 子模块（`tls_crypto.c:48-55`）与 `auth64.c:71` 使用；RSA/X.509 证书校验暂无独立上层调用方 |
+| Secure Boot 签名验证 | ❌ | 仓库内无对应源码，引导器不传签名校验 |
+| fscrypt 文件加密 | ❌ 不在 64 位构建 | 源码仅存于 32 位遗留树 `kernel/fs/fscrypt.c`，未编入 64 位 Makefile |
+| CSPRNG ChaCha20 | ✅ 已接线 | `kernel/crypto/csprng.c:162/214/296`（ChaCha20 块函数 + init + get_bytes），Makefile:94；启动期 `csprng_init()`（`kernel_main_64.c:754`），`getrandom` 系统调用 `sys_getrandom` → `csprng_get_bytes`（`syscall64_full.c:1315/1328`，表项 `:2740`） |
 
 ---
 
@@ -197,8 +198,8 @@ supersedes: null
 | IDE (PATA) | ✅ | `ide64.c` | 标准 PATA 控制器 |
 | AHCI (SATA) | ✅ | `ahci64.c` | BAR5 高区 MMIO 映射 + storage_hal 接入 |
 | USB Mass Storage | ✅ | `usb64.c`（BOT 协议） | Bulk-Only Transport + SCSI INQUIRY/READ10/WRITE10 |
-| NVMe (PCIe SSD) | ❌ | **不在 Makefile** | 源码不存在 |
-| virtio-blk | ❌ | **不在 Makefile** | 源码不存在 |
+| NVMe (PCIe SSD) | ❌ 不在 64 位 Makefile | 源码仅存于 32 位遗留树 `kernel/drivers/nvme.c`（32 位 Makefile:131 编入），64 位树无 `nvme64.c` |
+| virtio-blk | ❌ | 仓库内无对应源码，不在 Makefile |
 
 ### 4.2 网络驱动
 | 驱动 | 状态 | 源码落点 |
@@ -233,7 +234,7 @@ supersedes: null
 |------|------|---------|------|
 | EHCI（USB 2.0） | ✅ | `ehci64.c` | QH/qTD/异步列表（模拟器异步列表不执行，真机行为待验证） |
 | XHCI（USB 3.0） | ✅ | `xhci64.c` | TRB/EP context/DCI 多端点，复合 HID 支持 |
-| UHCI（USB 1.1） | ❌ | **不在 Makefile** | 源码不存在 |
+| UHCI（USB 1.1） | ❌ 不在 64 位 Makefile | 源码仅存于 32 位遗留树 `kernel/drivers/usb/uhci.c`（`uhci.h`）；64 位由 EHCI/XHCI 接管 |
 | USB 核心（设备管理） | ✅ | `usb64.c` | 枚举/配置/驱动匹配 |
 
 ### 4.7 PCI / APIC / ACPI
@@ -266,7 +267,7 @@ supersedes: null
 | 系统设置 | ✅ 可用 | 语言/驱动/通知位置/注册表/文件关联 接线 |
 | 终端 | ✅ 可用 | 命令补全、历史、内核命令集（drv/usb/reg/ps/ifconfig） |
 | 计算器 | ⚠️ 占位 | Dock 渲染但未实现 |
-| 编辑器 | ❌ 占位 | 提示 "App content rebuilding" |
+| 编辑器 | ✅ 可用 | 轻量代码编辑器：16KB 平铺缓冲区/行号/光标/方向键/Ctrl+S 保存（`hs_apps.c:2050/2242/2280`，启动入口 `hepushell.c:4792`） |
 | 浏览器 | ❌ 占位 | 提示 "App content rebuilding" |
 | 笔记 | ❌ 占位 | 提示 "App content rebuilding" |
 
@@ -281,11 +282,11 @@ supersedes: null
 | DHCP 自动联网 | ✅ | 桌面主循环 `dhcp64_poll` |
 | HTTP 客户端（明文） | ✅ | `net64_http.c` |
 | DNS 解析 | ✅ | `net64_dns.c`，IP 字面量直返 |
-| TLS/HTTPS | ❌ | 无 TLS 协议实现 |
-| FTP/SMTP/POP3/WebSocket | ❌ | 源码不存在 |
+| TLS/HTTPS | ⚠️ 代码已编入、未接入调用链 | 同 3.4：`kernel/net/tls_*.c` 已编入（Makefile:96-100）并在启动期 init，但 HTTP 客户端未走 https/443，顶层会话为模拟握手桩 |
+| FTP/SMTP/POP3/WebSocket | ❌ 不在 64 位构建 | WebSocket 仅 32 位遗留树 `kernel/net/websocket.c`；FTP/SMTP/POP3 仅用户态样例 `user/apps/{ftp,smtp,pop3}_client/`，未编入构建 |
 
 ### 5.5 第三方库 ❌ 未接入
-- **zlib / libpng / libjpeg**：源码不存在，用户态 ELF 不链接任何第三方库
+- **zlib / libpng / libjpeg**：源码在 `user/third_party/{zlib,libpng,libjpeg}/`，但 `user/Makefile` 未编入、用户态 ELF 不链接任何第三方库
 - 用户态链接脚本 `user/user.ld` 只有内置 syscall stub
 
 ---
@@ -364,18 +365,18 @@ bash tools/make_single_img64.sh
 
 以下功能**源码可能存在于仓库但不在 64 位 Makefile C_SOURCES 中**，因此不可用：
 
-1. **NVMe**、**virtio-gpu**、**UHCI（USB 1.1）** — 驱动不存在
-2. **VFS 抽象层** — ext2 硬编码，无统一文件操作接口
-3. **fscrypt / 加密文件系统** — 不存在
-4. **IPv6** — 只有 IPv4
-5. **TLS 1.2 / HTTPS** — crypto.c 只有 XTEA，无 AES/SHA/RSA/X509/TLS 协议
-6. **WebSocket / FTP / SMTP / POP3** — 不存在
-7. **蓝牙 HCI/L2CAP/HID-over-GATT** — `usb64_bt.c` 待建
-8. **IPC 信号量/共享内存/消息队列/互斥锁** — 未实现
-9. **Secure Boot 签名验证** — 引导器不传签名校验
-10. **Rust 用户态打包** — Makefile 未接 cargo
-11. **第三方库（zlib/libpng/libjpeg）** — 不存在
-12. **动态链接器 ld-linux.so.2 + DT_NEEDED 共享库** — PT_INTERP 明确拒绝
+1. **NVMe**、**UHCI（USB 1.1）** — 仅 32 位遗留树有源码（`kernel/drivers/nvme.c`、`kernel/drivers/usb/uhci.c`），未编入 64 位 Makefile；**virtio-gpu** 仓库内无源码
+2. **VFS 抽象层** — 64 位 ext2 硬编码，无统一文件操作接口（`kernel/fs/vfs.c` 仅 32 位遗留）
+3. **fscrypt / 加密文件系统** — 仅 32 位遗留树 `kernel/fs/fscrypt.c`，未编入 64 位构建
+4. **IPv6** — 只有 IPv4，仓库内无 IPv6 源码
+5. **TLS 1.2 / HTTPS** — 协议代码已编入 64 位（`kernel/net/tls_*.c`，Makefile:96-100）并在启动期 init，但未接入 HTTP/443 调用链，顶层会话为模拟握手桩；crypto 套件（AES/SHA/RSA/X509）已编入，见 3.6
+6. **WebSocket / FTP / SMTP / POP3** — WebSocket 仅 32 位遗留树；FTP/SMTP/POP3 仅用户态样例，均未编入 64 位构建
+7. **蓝牙 HCI/L2CAP/HID-over-GATT** — 仅 32 位遗留树 `kernel/net/{bluetooth,bt2,bt_gatt,hci,l2cap,rfcomm}.c`，64 位无 `usb64_bt.c`，未接入
+8. **IPC 信号量/共享内存/消息队列/互斥锁** — 64 位未实现（`kernel/ipc/ipc_sem.c`/`ipc_mutex.c`/`ipc_fifo.c` 仅 32 位遗留）；64 位仅有命名通道服务 `hsipc.c`，非 POSIX IPC
+9. **Secure Boot 签名验证** — 仓库内无源码，引导器不传签名校验
+10. **Rust 用户态打包** — `user/rust/` 有 crate，但 `user/Makefile` 未接 cargo、镜像脚本不打包 Rust 产物
+11. **第三方库（zlib/libpng/libjpeg）** — 源码在 `user/third_party/`，未编入用户态构建
+12. **动态链接** — PT_INTERP 解释器加载已接入 exec（`user_process.c:1938-2128`）；内核不自解析 DT_NEEDED 符号/重定位，交由用户态 ld.so（遗留 `hepu_dynlink_relocate()` 已不被调用）
 13. **进程级 swap 换出** — `vmm64_swap_out` 有原语但无调用者（`memory_pressure` 只回收 ext2 缓存）
 14. **桌面 P1/P2 增强** — 图标字体、壁纸 Crossfade、主题取色、设计令牌（ROADMAP P1-7 未开始）
 

@@ -2,7 +2,7 @@
 title: 兼容层落地路线（COMPAT_ROADMAP）
 status: active
 sys_version: 0.54.11
-updated: 2026-11-01
+updated: 2026-11-11
 owner: planning
 source_of_truth: null
 supersedes: null
@@ -45,8 +45,8 @@ supersedes: null
 - [x] 完整 144 字节 stat 结构
 - [x] fork + exec + waitpid 链路
 - [x] pipe 管道
-- [x] PT_INTERP 检测
-- [x] DT_NEEDED 枚举
+- [x] PT_INTERP 检测（且解释器加载已落地，见下方 2026-11-11 实况更新）
+- [~] DT_NEEDED 枚举：内核遗留枚举/重定位 `hepu_dynlink_relocate` 未接线，DT_NEEDED 依赖链由用户态 ld.so 完成
 
 v0.33.0 阶段性结论（已落地并实测）：
 - [x] **ABI 按进程判定**：`user_process_t.env_type`（ENV_NATIVE / ENV_LINUX_COMPAT）取代全局 `g_running_linux_elf`。
@@ -108,6 +108,7 @@ v0.33.1 追加（SEC-12 收官：历史测试程序补源码，牵出三个内�
       现按 ELF 自身的 `PT_INTERP` 判定（`elf64_has_interp()`），在 exec 阶段就拒绝并给出建议
       （HepuOS 只加载静态 / 静态 PIE）；文件名启发式及其调用一并删除。
       **兼容层的边界因此清晰：静态与静态 PIE 是支持的，动态链接器不在支持范围内。**
+      > **2026-11-11 实况更新**：上述 v0.33.1 的"exec 阶段拒绝 PT_INTERP"已被后续实现取代——PT_INTERP 解释器加载现已接入 exec（`user_process.c:1938-2128`：从 ext2 读 ld.so、按偏置装入库区、映射进进程并切换入口，填 AT_BASE/AT_ENTRY/AT_PHDR）；DT_NEEDED 符号/重定位交由用户态 ld.so，内核遗留 `hepu_dynlink_relocate()` 不再被调用（`user_process.c:2140-2150`）。完整 Linux 动态链接（glibc .so 依赖链）仍未端到端打通。
 - [x] **`open()` 不得占用 fd 0/1/2**（SEC-16）。
       兼容层要跑 Linux 程序，而 Linux 里 stdin/stdout/stderr 是保留槽位。内核 `sys_open()` 原来从 0 开始
       找空槽，于是进程第一次 `open()` 拿到 fd=0；而 `sys_read()` 把 `fd==0` 一律当 stdin（阻塞等键盘）

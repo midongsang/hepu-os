@@ -2,7 +2,7 @@
 title: Hepu OS 核心哲学与原生契约
 status: active
 sys_version: 0.54.11
-updated: 2026-10-29
+updated: 2026-11-11
 owner: architecture
 source_of_truth: null
 supersedes: null
@@ -246,5 +246,5 @@ Linux、BSD、Redox 踩过的坑，都是非常宝贵的：他们证明了哪些
 
 ### 7.5 真机已知问题
 - 12GB DDR3 机器从 U 盘启动：看到 H1 后闪一下黑屏回 BIOS
-- 根因待查（可能：USB mass storage 无驱动、VBE 不兼容、SMP AP 启动失败）
+- 根因待查（可能：VBE 不兼容、SMP AP 启动失败等；USB mass storage BOT 驱动已编入 `usb64.c`，非当前怀疑点）
 - 已做：SMP init 失败不挂死、文本模式版

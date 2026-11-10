@@ -2,7 +2,7 @@
 title: UNIFIED_SOURCE_TREE
 status: active
 sys_version: 0.54.11
-updated: 2026-11-01
+updated: 2026-11-11
 owner: docs
 source_of_truth: null
 supersedes: null
@@ -142,7 +142,7 @@ kernel/shared/
 | A: ring3无内存隔离 | 🔴致命 | ✅已实现 | 每进程独立CR3/PML4（HEPU_USER_ISOLATION默认开）+ SMEP + SMAP + W^X |
 | B: 系统调用暴露内核堆 | 🔴致命 | ⚠️部分 | sys_malloc未实现；用户态使用brk分配 |
 | E: signal存任意函数指针 | 🟠高危 | ⚠️部分 | sigaction已实现（process64_set_signal_handler）；rt_sigreturn/sigprocmask为桩 |
-| F: 沙箱绕过 | 🟠高危 | ❌未实现 | 64位沙箱/seccomp未实现 |
+| F: 沙箱绕过 | 🟠高危 | ⚠️部分 | seccomp STRICT 模式已实现并接线（`seccomp64.c`，`sys_seccomp` `syscall64_full.c:989/2717`）；BPF 过滤器暂不支持；namespace/能力边界等其他沙箱维度仍缺 |
 | H: 共享内存无权限 | 🟡中危 | ❌未实现 | 64位共享内存未实现 |
 
 ## 后续计划

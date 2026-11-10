@@ -2,13 +2,13 @@
 title: V0.33 开发路线板
 status: active
 sys_version: 0.54.11
-updated: 2026-11-01
+updated: 2026-11-11
 owner: kernel
 source_of_truth: ../planning/ROADMAP.md
 supersedes: null
 ---
 
-> ⚠️ **版本说明**：sys_version 已对齐 0.54.6，但正文口径仍为 v0.13.x ~ v0.33.x 设计稿。源码事实请以 `kernel/arch/x86_64/Makefile` 实际编入为准。
+> ⚠️ **版本说明**：sys_version 对齐 0.54.11（冻结，未 bump）；正文口径仍为 v0.13.x ~ v0.33.x 历史设计稿。源码事实请以 `kernel/arch/x86_64/Makefile` 实际编入为准；现行缺陷状态以 `docs/status/OPEN_BUGS.md` 为准。
 
 
 # V0.33 路线板（每轮开工前对照本表）
@@ -47,7 +47,8 @@ supersedes: null
 
 - **SEC-15**：`[DYNLINK] load bias=0x0000000000001000`（既不在兼容区也不在用户窗口）
   → `[DYNLINK] Needs: <乱码>` → `[EXCEPTION] vector=0xD error=0x0 rip=0x1204AC`。
-  修后：`[USER64] exec ERROR: dynamic linking is not supported.` + 明确建议，电池不再被打断。
+  修后（v0.33.1 时期）：`[USER64] exec ERROR: dynamic linking is not supported.` + 明确建议，电池不再被打断。
+  **注**：该「明确拒绝」行为后被 v0.54.6 P1-7（提交 3375fbe）取代——当前源码加载 PT_INTERP 解释器，现行口径见 OPEN_BUGS SEC-15。
 - **SEC-16**：`hello4.elf` 的 `open("/bin/hello3.elf")` 成功返回 **fd=0** ⇒ `read(0,…)`
   命中 `sys_read` 的 stdin 分支（`while (!keyboard64_haschar()) hlt;`）⇒ 日志停在 `[LINUX4] Running`。
   修后：`read+close ok` 正常输出。
@@ -100,7 +101,7 @@ supersedes: null
 | `crash_jump` | freestanding | `0x40002000` | **故意**写未映射地址 ⇒ `#PF` | ✅ 预期异常，进程被隔离 |
 | `glibc_test` | glibc static-PIE | 兼容区 | 真 glibc 静态程序 | ✅ `Hello from glibc!` |
 | `hello_libc` | glibc static-PIE | 兼容区 | glibc + `write` | ✅ `Hello libc!` |
-| `dynhello` / `dynhello2` | 动态链接（`PT_INTERP`） | — | 动态加载器 + `DT_NEEDED` | ⛔ 明确拒绝（不支持动态链接） |
+| `dynhello` / `dynhello2` | 动态链接（`PT_INTERP`） | — | 动态加载器 + `DT_NEEDED` | ⛔ v0.33.1 时期明确拒绝（历史状态）；**v0.54.6 P1-7（提交 3375fbe）已改为内核加载解释器 ld.so**，现行口径见 OPEN_BUGS SEC-15/DYN-01~03 |
 | `libtest.so` / `libtest2.so` | 共享库 | `0x60000000` | 导出 `test_add`/`get_value`/`func_table` 等 | 随动态程序保留 |
 
 > 历史上 `hello_linux`/`hello2`/`hello3`/`hello4`/`hello_c2` 链在 `0x401000` ——
@@ -119,10 +120,12 @@ supersedes: null
   ⇒ 判定为**低频偶发**，与 SEC-11 同源但形态不同（挂死而非报错），**失败点未定位**。
 - **SEC-11** ext2 大文件 / 目录跨块读取偶发失败。已修「静默吞掉」+ 上层如实报错；底层失败点未复现（主机端 40KB 跨间接块文件读取逐字节比对一致）。
   另：`ext2_algo_read_data_block()` 的 `ctx->block_buf` 复用待加固。
-- **SEC-14** `syscall64_simple.c` 里 `SYS_PUTS=2` / `SYS_GETPID=4` 与原生号表大面积撞号
-  （2=read / 4=close），那套 `case SYS_*` 分支仍有潜在误用风险。
-- **SEC-02** fork 子进程仍整页深拷贝而非 COW。
-- **SEC-05** 系统调用静态缓冲区不可重入。
+- **SEC-14** ~~撞号遗留~~ **已关闭**（提交 3375fbe）：撞号 `case` 分支已删除，仅保留
+  `SYS_HELLO=0`/`SYS_PUTCHAR=1`，见 OPEN_BUGS SEC-14。
+- **SEC-02** clone 子线程共享父进程页表指针，未接入 COW；COW 缺页框架
+  `vmm64_try_cow` 已存在（`vmm64.c:432-457`），fork/clone 路径尚未接入。**部分**。
+- **SEC-05** 主路径缓冲（kernel_buf/file_buf/elf_buffer）已改为调用期 kmalloc；
+  `sys_readdir` 静态 names/types 表残留不可重入，4KB 内核栈约束仍在。**部分**。
 
 ## 验证命令（复现用）
 
@@ -170,7 +173,7 @@ tr -d '\0' < logs/run.log            # 日志含 NUL
 | Linux PIE demo | `Hello from Linux PIE on Hepu!` + `PIE ok, len=30` |
 | legacy 全套 | hello_linux / hello_static / hello2 / hello3 / hello4 / hello_c2 / glibc_test / hello_libc 全部正常输出 |
 | crash_jump | 产生 1 次预期 `#PF`（`vector=0xE error=0x6`），进程被隔离，内核继续 |
-| dynhello / dynhello2 | **明确拒绝**（`dynamic linking is not supported`），不再打断电池 |
+| dynhello / dynhello2 | v0.33.1 复测时**明确拒绝**（`dynamic linking is not supported`），不再打断电池；该拒绝行为后被 v0.54.6 P1-7 解释器加载实现取代（提交 3375fbe），现行状态见 OPEN_BUGS |
 
 > `total=0x1` 的那 1 次异常是 **crash_jump.elf 的故意坏地址测试**
 > —— 用来验证 SEC-07「用户态异常只终止该进程、不整机 hlt」。
@@ -230,7 +233,7 @@ tr -d '\0' < logs/run.log            # 日志含 NUL
 
 ## 下一步（按顺序）
 
-1. **SEC-14**：清理 `syscall64_simple.c` 里与原生号表撞号的历史扩展号（`SYS_PUTS=2` 实为 read、`SYS_GETPID=4` 实为 close）。
+1. ~~**SEC-14**：清理撞号历史扩展号~~ **已关闭**（提交 3375fbe，见 OPEN_BUGS SEC-14）。
 2. **ROADMAP P0-2**：把 `syscall64_compat.c` 与 security/kunit/compat/tls 接入 64 位 `kernel/arch/x86_64/Makefile` 的 `C_SOURCES`（注意 VPATH / 重复符号）。
-3. **SEC-11**：构造大文件 / 目录跨块的可复现用例（当前未复现）；加固 `ext2_algo_read_data_block()` 的 `ctx->block_buf` 复用。
-4. **SEC-02**：fork 改写时复制（COW）。
+3. **SEC-11**：构造大文件 / 目录跨块的可复现用例（当前未复现）；`ctx->block_buf` 同址复用已由 R2-7（0ae1ead）改为独立 ind_buf，余留底层失败点待复现。
+4. **SEC-02**：把 fork/clone 路径接入已有 COW 框架（`vmm64_try_cow`），当前 clone 仍共享父进程页表指针。

@@ -2,7 +2,7 @@
 title: AUDIT_DESKTOP_STABILITY_R3
 status: active
 sys_version: 0.54.11
-updated: 2026-11-10
+updated: 2026-11-11
 owner: kernel
 source_of_truth: null
 supersedes: null
@@ -47,3 +47,14 @@ supersedes: null
 - QEMU：`pit_ticks` 恢复 1kHz 增长；OOBE 键盘操作后画面实时从 1/4 进入 2/4；
   鼠标坐标随移动正常更新；顶栏时钟走时。
 - 主机测试 6/6 通过（含新增 winslot）。
+- 落地提交：`0b4750f`（窗口槽位泄漏 + 纯 APIC 模式 PIT 中断冻结，两项均已关闭）。
+
+## 已复核关闭遗留
+
+- **R3-CURSOR**（测量误解，关闭，非真 bug，无需修复）：实测确认 Shell 选定坐标源后逐帧直拷、渲染无二次偏移。
+  - 符号/偏移（nm + 反汇编互证）：`g_shell`=0x23ced60；`mouse_x` 偏移 0x5148（0x23d3ea8）、`mouse_y` 偏移 0x514c（0x23d3eac）；`hepushell_update_mouse` 直拷赋值。
+  - PS/2 路径 7 组采样，`g_shell` 内坐标与 `ps2mouse64.c` 静态 `mouse_x/y` 逐点相等（512,384 → 562,384 → 612,384；钳制 1020,767）。
+  - tablet 路径跟随 USB tablet 绝对坐标（`abs_x` 偏移 0x30、`abs_y` 偏移 0x34、结构 0x48、基址 0x30b1e0，基线 (0,0)）；HMP `mouse_move` 只发 PS/2 相对 delta、改不到绝对指针设备，`mouse_set 0/1/2` 无效、7.2.0 无绝对定位命令，故 tablet 光标停初始 (0,0) 被误读为「光标不动/坐标错」。
+  - 误解机制：两套独立坐标源直接对比 + 混用相对/绝对语义；实际无错位。
+  - 可选加固（非缺陷，本轮未实施）：tablet 首个报告前坐标默认屏幕中心而非 (0,0)（`usb64.c:223`、`:1787`，约 ≤5 行）。
+  - 详见 OPEN_BUGS「已复核关闭条目 · R3-CURSOR」。

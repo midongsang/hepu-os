@@ -2,7 +2,7 @@
 title: DYNAMIC_LINKING
 status: active
 sys_version: 0.54.11
-updated: 2026-11-01
+updated: 2026-11-11
 owner: specs
 source_of_truth: null
 supersedes: null
@@ -91,19 +91,25 @@ $(LD) -m elf_i386 -dynamic-linker /lib/ld.so -o app.elf app.o -lhepu
 
 ## 当前状态
 
-### 已完成
+> **64 位实况（2026-11-11 核对，以 `kernel/arch/x86_64/Makefile` 与 `user_process.c` 为准）**：
+> - ET_DYN/PIE 装载已支持（`elf64.c:139/263/335`，装载偏置 + RELATIVE + SysV 初始栈 + auxv AT_PHDR/AT_ENTRY）。
+> - PT_INTERP 解释器加载已接入 exec：内核从 ext2 读取 ld.so、按偏置装入库区 `[0x60000000,0x70000000)`、映射进进程并把入口切到解释器，填 AT_BASE/AT_ENTRY/AT_PHDR（`user_process.c:1938-2128`）。
+> - DT_NEEDED 符号查找/重定位/TLS 初始化交由用户态 ld.so 完成；内核遗留 `hepu_dynlink_relocate()`（`user_process.c:1523`，含 DT_NEEDED 遍历 1560-1576 与 JMPREL 重定位）已不再被 exec 调用（`user_process.c:2140-2150`）。
+> - 下文 i386/R_386_* 与 `user/ldso/` 为 32 位历史设计稿，重定位类型与 64 位 R_X86_64_* 不同，保留作设计参考。
+
+### 已完成（32 位 ldso 框架，历史）
 - [x] 动态链接器框架（ldso.h/c）
 - [x] ELF结构定义
 - [x] 符号解析框架
 - [x] 重定位处理框架
 - [x] 共享库管理结构
 
-### 待完成
-- [ ] 内核ELF加载器支持ET_DYN
-- [ ] 共享库文件系统加载
-- [ ] 完整的PLT/GOT处理
+### 待完成（32 位设计稿口径；64 位现状见上方实况）
+- [x] ~~内核ELF加载器支持ET_DYN~~（64 位已支持 PIE/ET_DYN，`elf64.c`）
+- [x] ~~共享库文件系统加载~~（64 位已加载 PT_INTERP 解释器；.so 依赖由用户态 ld.so 完成，内核不自解析 DT_NEEDED）
+- [ ] 完整的PLT/GOT处理（内核遗留 `hepu_dynlink_relocate` 未接线；64 位交由 ld.so）
 - [ ] 延迟绑定（Lazy Binding）
-- [ ] 动态链接器启动集成
+- [ ] 动态链接器启动集成（用户态 ld.so 侧）
 - [ ] libhepu.so构建
 - [ ] 示例动态链接程序
 

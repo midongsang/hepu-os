@@ -2,7 +2,7 @@
 title: ANTI_BURDEN
 status: active
 sys_version: 0.54.11
-updated: 2026-11-01
+updated: 2026-11-11
 owner: architecture
 source_of_truth: null
 supersedes: null
@@ -124,7 +124,7 @@ struct mm_ops mm_v2_ops;
 
 ### 当前状态
 - 已有微内核、系统调用、文件系统、TCP/IP协议栈、图形子系统等
-- 引导器：HepuBoot（UEFI）+ BIOS引导器（自研）
+- 引导器：当前为自研 BIOS/Stage2 引导（MBR + `multiboot_entry.S`，VBE 设置 framebuffer）；UEFI 引导为规划/原型（`tools/hepboot/`、`tools/build_uefi_dual.py`），内核无 UEFI GOP 实现
 - 版本号：0.10.5（重要版本.默认版本.bug版本）
 
 ### 改进方向（按优先级）

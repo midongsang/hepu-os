@@ -2,7 +2,7 @@
 title: STORAGE_MEMORY
 status: active
 sys_version: 0.54.11
-updated: 2026-11-01
+updated: 2026-11-11
 owner: planning
 source_of_truth: null
 supersedes: null
@@ -20,13 +20,13 @@ supersedes: null
 |------|------|------|
 | 物理内存 | QEMU 256MB 同一块；64 位 pmm64 全盘接管（total_pages=memory_size/4096，vmm64 identity 映射 0-256MB）；32 位内核有独立分配器（lowmem_throttle/memory_optimizer/sys_mem） | **不共用**：双内核引导时二选一（Stage2 菜单），各自独立管理物理内存，**不同时运行** |
 | 存储 | 镜像 = MBR + Stage2 + 64 内核(LBA2000，加载上限640KB) + 32 内核(LBA3400) + **单个 ext2 根分区**(LBA13000)；两内核挂载同一 ext2 | **共用** ✓：32/64 共享同一根分区文件系统（ext2_64 支持 partition_offset） |
-| 缓存 | 内核堆 KHEAP 仅 256KB 静态数组；无页缓存/块缓存；无统一 IO 缓冲 | **未实现**：大程序加载即 OOM（OBS 需 5.9MB） |
+| 缓存 | 64 位现状：内核堆 `kheap64` 32MB 动态分配（`kheap64.c:191`，`kernel_main_64.c:282`）；统一块缓存 `blk_cache64` 256 槽 × 512B 已挂 storage_hal（`storage_hal64.c:133/140`）；仍无文件页缓存/统一 IO 缓冲 | ✅ 块缓存与动态堆已落地；页缓存仍缺（2026-10-23 旧记录的"256KB 静态堆、无块缓存"已过时） |
 
 **关键差距**：所谓"混合 32/64 位"目前是**引导时二选一**，不是**同系统内 32/64 程序共存**。程序级共存是兼容层职责（见兼容层规划：ELF32/ELF64 加载器统一）。
 
 ### 2. 分区现状
-- 单 ext2 分区 = 系统 + 用户数据混在一起；无 /home、无数据分区、无 swap
-- 用户三区制（系统/用户配置/自由）**完全未实现**
+- 单 ext2 根分区；`/home` 独立目录未建
+- 用户三区制（系统/用户配置/自由）：64 位已支持 P1 系统 + P2 配置(`/cfg`) + P3 自由(`/data`) 挂载，挂载点前缀解析见 `ext2_64.c:682/732`；安装器"重装保留 /cfg"的逻辑仍未实现（ROADMAP P2-1）。swap 仅有页换出/换入原语框架（`swap64.c`），内存压力触发进程换出未闭环
 
 ### 3. 安装现状
 - 仅"镜像直接写盘"（Rufus DD / dd），无安装引导、无分区配置、无试用流程

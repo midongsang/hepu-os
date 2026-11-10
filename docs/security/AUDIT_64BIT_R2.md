@@ -1,10 +1,15 @@
 ---
 title: 64位内核安全审计（第二轮）
 status: active
+sys_version: 0.54.11
+updated: 2026-11-11
+owner: security
 date: 2026-11-10
 baseline: main（v0.54.6 显示版本）
 scope: 网络栈 / 系统调用 / 密码学 / 内存管理 / ext2 / 构建链
 method: 源码审计 + 主机端 ASan/UBSan 测试 + 最小复现 + QEMU 端到端验证
+source_of_truth: null
+supersedes: null
 related: AUDIT_64BIT.md, BUG_FIX_GUIDELINES.md, OPEN_BUGS.md
 ---
 
@@ -16,16 +21,16 @@ related: AUDIT_64BIT.md, BUG_FIX_GUIDELINES.md, OPEN_BUGS.md
 
 ## 结论汇总
 
-| 编号 | 模块 | 缺陷 | 严重度 | 验证方式 |
-|------|------|------|--------|----------|
-| R2-1 | net64_dns | 压缩指针无循环保护，远程 DoS 挂死 | 高 | 主机复现 timeout 124 → 修复后返回 -1 |
-| R2-2 | csprng / getrandom | 种子被 reseed 抹成固定值；getrandom 用假随机 | 高 | RFC7539 向量比对 + 两次初始化种子不同 |
-| R2-3 | pmm64 | MAX_MEMORY_SIZE 整数溢出，钳制失效 | 中 | 编译警告消除 + 2GB/2048MB 校验 |
-| R2-4 | syscall getdents | 直写用户指针，未走 copy_to_user | 中 | 代码重构 + 编译通过 |
-| R2-5 | net64_dhcp | 内联选项遍历缺边界检查（越界读） | 低 | 三处补边界 + 回归通过 |
-| R2-6 | net64_tcp | data_offset 缺合法性校验 | 低 | 加校验 + 回归通过 |
-| R2-7 | ext2_algo | 间接块与目标数据同址复用（SEC-11） | 低 | 独立缓冲 + 主机 5 套件通过 |
-| R2-8 | 构建链 | MBR 无自动构建，缺失时静默产出坏镜像 | 中 | 脚本自动构建 + 失败即中止 |
+| 编号 | 模块 | 缺陷 | 严重度 | 验证方式 | 落地提交 / 状态 |
+|------|------|------|--------|----------|----------------|
+| R2-1 | net64_dns | 压缩指针无循环保护，远程 DoS 挂死 | 高 | 主机复现 timeout 124 → 修复后返回 -1 | 4378ade / 已关闭 |
+| R2-2 | csprng / getrandom | 种子被 reseed 抹成固定值；getrandom 用假随机 | 高 | RFC7539 向量比对 + 两次初始化种子不同 | ad3a552 / 已关闭 |
+| R2-3 | pmm64 | MAX_MEMORY_SIZE 整数溢出，钳制失效 | 中 | 编译警告消除 + 2GB/2048MB 校验 | 38d67bb / 已关闭 |
+| R2-4 | syscall getdents | 直写用户指针，未走 copy_to_user | 中 | 代码重构 + 编译通过 | a692be9 / 已关闭 |
+| R2-5 | net64_dhcp | 内联选项遍历缺边界检查（越界读） | 低 | 三处补边界 + 回归通过 | 1fad35c / 已关闭 |
+| R2-6 | net64_tcp | data_offset 缺合法性校验 | 低 | 加校验 + 回归通过 | b91018a / 已关闭 |
+| R2-7 | ext2_algo | 间接块与目标数据同址复用（SEC-11） | 低 | 独立缓冲 + 主机 5 套件通过 | 0ae1ead / 已关闭 |
+| R2-8 | 构建链 | MBR 无自动构建，缺失时静默产出坏镜像 | 中 | 脚本自动构建 + 失败即中止 | 68beced / 已关闭 |
 
 ---
 
@@ -141,7 +146,7 @@ data_len 或把 TCP 头部当载荷，并据此错误确认序列号。
 ## 备注
 
 - 显示版本字符串（`Hepu OS v0.54.6`）在多处硬编码，与 `VERSIONING.md`
-  （sys_version 0.54.8）已存在不一致；本轮未擅自变更版本号，是否 bump 由
-  项目负责人决定。
+  （sys_version 0.54.11）存在不一致；版本号当前冻结在 0.54.11，未擅自 bump，
+  是否统一显示串由项目负责人决定。
 - QEMU 默认 CPU 模型未暴露 RDRAND（日志 RDRAND=0），CSPRNG 走 RDTSC/MEM/
   STACK 熵；真机启用 RDRAND 时会自动使用硬件熵。
