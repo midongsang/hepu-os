@@ -105,7 +105,12 @@ def main() -> int:
         print(f"cursor at {cur[0]},{cur[1]}")
         return 0
 
-    print(f"start {cur[0]},{cur[1]} -> target {args.x},{args.y}")
+    # 纯白像素包围盒的左上角并不等于指针热点: default.xcur 的 hotspot 是 (1,0),
+    # 箭头尖端那段是深色描边, 白色填充要到图内约 (7,12) 才出现(24px 光标实测)。
+    # 因此把检测值换算回热点再算偏差。
+    off_x, off_y = 7, 12
+    cur = (cur[0] - off_x, cur[1] - off_y)
+    print(f"hotspot {cur[0]},{cur[1]} -> target {args.x},{args.y}")
     scale = 3.0  # 系统对增量做了放大，先按实测值起步
     for _ in range(60):
         dx, dy = args.x - cur[0], args.y - cur[1]

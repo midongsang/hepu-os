@@ -16,6 +16,7 @@ extern int hpdesk_init(int width, int height);
 extern void hpdesk_render(void);
 extern void hpdesk_handle_key(int key);
 extern void hpdesk_update_mouse(int x, int y);
+extern void hpdesk_mark_dirty(void);
 extern void hpdesk_mouse_down(int x, int y);
 extern void hpdesk_mouse_up(int x, int y);
 extern void hpdesk_handle_click(int x, int y);
@@ -180,6 +181,18 @@ void desktop64_run(void)
             mp_tick = 0;
             extern void mem_pressure_tick(void);
             mem_pressure_tick();
+        }
+
+        /* V0.57.0: 数据面板节拍 —— 每 ~500ms 请求一次重绘。
+         * 按需合成只在"脏"时重绘, 而 CPU/内存占用、进程数这类数值会自己变,
+         * 没有任何交互去标脏 → 面板上的百分比会一直冻在打开那一刻的数字,
+         * 看起来就像"占用不显示/不刷新"。这里给一个低频心跳, 代价是每秒两次重绘。 */
+        {
+            static int data_tick = 0;
+            if (++data_tick >= 500) {   /* 主循环一轮约 1ms(PIT 1kHz), 500 轮≈0.5s */
+                data_tick = 0;
+                hpdesk_mark_dirty();
+            }
         }
 
         /* 渲染：仅每 ~16ms(≈60fps) 一次，输入/网络仍每轮处理保证低延迟 */

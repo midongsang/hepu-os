@@ -1927,8 +1927,14 @@ static void m_draw_curve(void *fb, int W, int H, int x, int y, int w, int h,
         if (v < 0) v = 0;
         int px = x + w - 4 - i * 3;
         if (px < x + 2) break;
+        /* V0.57.0: 0 值也留 1px 采样点。
+         * 空闲系统的 CPU 真的是 0%(idle 100%), 原来 bh=0 就什么都不画,
+         * 整块图看着是空的, 用户会以为"图表没接上数据"。留基线表示在采样。 */
         int bh = (v * (h - 4)) / maxv;
-        if (bh > 0) gfx64_fill_rect(px, y + h - 2 - bh, 2, bh, color);
+        if (bh < 1) bh = 1;
+        uint32_t c = (v > 0) ? color
+                             : hs_apps_mix(g_shell.colors.panel_bg, color, 40);
+        gfx64_fill_rect(px, y + h - 2 - bh, 2, bh, c);
     }
 }
 
