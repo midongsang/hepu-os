@@ -219,7 +219,13 @@ static int g_drag_offset_y;
 static int g_dragging;
 
 /* 设置窗口当前页面 */
-static int g_settings_page = 0;  /* 0=Appearance, 1=Panels, 2=System, 3=About */
+static int g_content_dirty;   /* 定义在文件后部, 此处前向声明供设置页使用 */
+static int g_settings_page = 0;  /* 0=Appearance, 1=Panels, 2=System, 3=About, 4=Display */
+/* Display 页缩放按钮的渲染位置: 命中测试直接复用, 不另算一套坐标 */
+static int g_disp_scale_btn_x = 0, g_disp_scale_btn_y = 0;
+static const int g_disp_scale_pcts[4] = {100, 125, 150, 200};
+#define HS_DISP_BTN_W 64
+#define HS_DISP_BTN_GAP 72
 static int g_settings_storage_ry = 0; /* V0.13.39: 存储管理行点击区域 */
 static int g_settings_reg_ry = 0;    /* V0.13.39: 注册表查看行 */
 static int g_settings_assoc_ry = 0;  /* V0.13.39: 文件关联查看行 */
@@ -464,7 +470,56 @@ static int hpdesk_load_config(const char *config)
     }
     vga_printf("[Hepu Desktop] config: %d sections, background=0x%x\n",
                applied, (unsigned)g_shell.colors.bg);
+    /* 显示设置(缩放)在配置解析之后覆盖, 优先级高于 config.hsqml 的 ui_scale */
+    hs_display_load();
     return applied > 0 ? 0 : -1;
+}
+
+static void itoa_hs(int value, char *buf);
+
+/* 显示设置持久化: /display.conf (key=value, 与 config.hsqml 分开写, 互不覆盖) */
+#define HS_DISPLAY_CFG "/display.conf"
+void hs_display_save(void)
+{
+    extern int ext2_64_write_file(const char *path, const uint8_t *data, uint32_t size);
+    char buf[96];
+    int p = 0;
+    const char *k = "scale=";
+    while (k[p]) { buf[p] = k[p]; p++; }
+    char n[8]; itoa_hs(g_ui_scale_pct, n);
+    int j = 0; while (n[j]) { buf[p++] = n[j++]; }
+    buf[p++] = '\n';
+    const char *k2 = "resolution=";
+    j = 0; while (k2[j]) { buf[p++] = k2[j++]; }
+    char a[8]; itoa_hs(g_shell.screen_width, a);
+    j = 0; while (a[j]) { buf[p++] = a[j++]; }
+    buf[p++] = 'x';
+    char b[8]; itoa_hs(g_shell.screen_height, b);
+    j = 0; while (b[j]) { buf[p++] = b[j++]; }
+    buf[p++] = '\n'; buf[p] = 0;
+    int rc = ext2_64_write_file(HS_DISPLAY_CFG, (const uint8_t *)buf, (uint32_t)p);
+    vga_printf("[DISPLAY] save %s rc=%d\n", HS_DISPLAY_CFG, rc);
+    (void)rc;
+}
+
+void hs_display_load(void)
+{
+    extern int ext2_64_read_file(const char *path, uint8_t *buffer, uint32_t max_size);
+    char buf[128];
+    int n = ext2_64_read_file(HS_DISPLAY_CFG, (uint8_t *)buf, sizeof(buf) - 1);
+    if (n <= 0) return;
+    buf[n] = 0;
+    /* 解析 scale=<num> */
+    for (int i = 0; buf[i]; i++) {
+        if (buf[i] == 's' && buf[i + 1] == 'c' && buf[i + 2] == 'a' &&
+            buf[i + 3] == 'l' && buf[i + 4] == 'e' && buf[i + 5] == '=') {
+            int v = 0, j = i + 6;
+            while (buf[j] >= '0' && buf[j] <= '9') { v = v * 10 + (buf[j] - '0'); j++; }
+            if (v >= 100 && v <= 250) g_ui_scale_pct = v;
+            vga_printf("[DISPLAY] loaded scale=%d%%\n", g_ui_scale_pct);
+            return;
+        }
+    }
 }
 
 /* 数字转字符串 */
@@ -1721,8 +1776,8 @@ static void hs_settings_window_render(hs_window_t *w)
     int cy = w->y + 36;  /* 跳过标题栏 */
 
     /* 左侧菜单 */
-    const char *menu[] = {"Appearance", "Panels", "System", "About"};
-    for (int i = 0; i < 4; i++) {
+    const char *menu[] = {"Appearance", "Panels", "System", "About", "Display"};
+    for (int i = 0; i < 5; i++) {
         uint32_t bg = (i == g_settings_page) ? g_shell.colors.accent : g_shell.colors.panel_bg;
         uint32_t fg = (i == g_settings_page) ? hs_on_accent() : g_shell.colors.panel_fg;
         gfx64_fill_rounded_rect(cx, cy + i * 32, 120, 28, 6, bg);
@@ -1902,6 +1957,54 @@ static void hs_settings_window_render(hs_window_t *w)
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            rx, ry, ab, g_shell.colors.panel_fg, 12);
         g_settings_assoc_ry = ry;
+    } else if (g_settings_page == 4) {
+        /* Display */
+        char b1[16], b2[16];
+        font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                           rx, ry, "Display", g_shell.colors.panel_fg, 16);
+        ry += 30;
+        itoa_hs(g_shell.screen_width, b1);
+        itoa_hs(g_shell.screen_height, b2);
+        char res[64];
+        int p = 0;
+        const char *pre = "Resolution: ";
+        while (pre[p]) { res[p] = pre[p]; p++; }
+        int k = 0; while (b1[k]) { res[p++] = b1[k++]; }
+        res[p++] = ' '; res[p++] = 'x'; res[p++] = ' ';
+        k = 0; while (b2[k]) { res[p++] = b2[k++]; }
+        res[p] = 0;
+        font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                           rx, ry, res, g_shell.colors.panel_fg, 12);
+        ry += 22;
+        font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                           rx, ry, "Set by firmware at boot", g_shell.colors.panel_fg, 11);
+        ry += 26;
+
+        font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                           rx, ry, "UI Scale (applies immediately):", g_shell.colors.panel_fg, 12);
+        ry += 24;
+        g_disp_scale_btn_x = rx;
+        g_disp_scale_btn_y = ry;
+        for (int i = 0; i < 4; i++) {
+            int bx = rx + i * HS_DISP_BTN_GAP;
+            int on = (g_disp_scale_pcts[i] == g_ui_scale_pct);
+            gfx64_fill_rounded_rect(bx, ry, HS_DISP_BTN_W, 28, 6,
+                                    on ? g_shell.colors.accent : g_shell.colors.panel_bg);
+            char lab[16];
+            itoa_hs(g_disp_scale_pcts[i], lab);
+            int q = 0; while (lab[q]) q++;
+            lab[q] = '%'; lab[q + 1] = 0;
+            font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                               bx + 14, ry + 6, lab,
+                               on ? hs_on_accent() : g_shell.colors.panel_fg, 12);
+        }
+        ry += 44;
+
+        font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                           rx, ry, "Refresh rate: firmware-controlled", g_shell.colors.panel_fg, 11);
+        ry += 20;
+        font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                           rx, ry, "(no EDID/CRTC driver yet)", g_shell.colors.panel_fg, 11);
     } else {
         /* About */
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
@@ -3376,7 +3479,7 @@ void hpdesk_handle_click(int x, int y)
             int menu_y = w->y + 36;
             if (x >= menu_x && x <= menu_x + 120 && y >= menu_y) {
                 int item = (y - menu_y) / 32;
-                if (item >= 0 && item < 4) {
+                if (item >= 0 && item < 5) {
                     g_settings_page = item;
                     /* V0.13.39: System tab 内可点击操作 (语言切换 / 驱动刷新) */
                     if (item == 2 && g_settings_page == 2) {
@@ -3470,6 +3573,23 @@ void hpdesk_handle_click(int x, int y)
                         }
                     }
                     return;
+                }
+            }
+            /* Display 页: 缩放档位点击 -> 立即生效 + 持久化 */
+            if (g_settings_page == 4) {
+                if (y >= g_disp_scale_btn_y && y <= g_disp_scale_btn_y + 28) {
+                    int bi = (x - g_disp_scale_btn_x);
+                    if (bi >= 0 && bi < 4 * HS_DISP_BTN_GAP) {
+                        int idx = bi / HS_DISP_BTN_GAP;
+                        if (idx >= 0 && idx < 4) {
+                            g_ui_scale_pct = g_disp_scale_pcts[idx];
+                            g_content_dirty = 1;
+                            extern void hs_display_save(void);
+                            hs_display_save();
+                            vga_printf("[SETTINGS] ui scale = %d%%\n", g_ui_scale_pct);
+                            return;
+                        }
+                    }
                 }
             }
             /* V0.54.7: Appearance 页色板点击 — 取色器应用源色 */

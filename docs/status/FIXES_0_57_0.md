@@ -754,6 +754,38 @@ Lua / `klibm64` 是 `-msse2`。`context_switch_64` 原本只保存 rbx/rbp/r12-r
 从未被应用，系统实际一直在用硬编码默认值运行。此修复后这些配置真正生效，
 后续显示设置（`ui_scale`、`resolution`）也才可能通过配置下发。
 
+
+### 1.37 显示设置页（Settings/Display）：缩放即时生效、分辨率与刷新率如实标注
+
+**Windows 对照**：Windows 分三层——显示驱动按 EDID 枚举模式并编程 CRTC 切分辨率/刷新率；
+系统级 DPI（每显示器 DPI + 用户百分比）让应用按 logical DPI 重画；DPI 变化发 `WM_DPICHANGED` 触发重排。
+关键点是**缩放永远是"用更大单位重画"，不是放大位图**。
+
+**赫普的现状（代码级）**
+- 模式枚举/设置：引导器已具备（`hepboot_uefi.c:311-441`，`QueryMode` + `SetMode`）；
+- 内核侧：`ExitBootServices` 之后无 Boot Services，**运行时无法 SetMode**；
+- 缩放：桌面 `hs_sx/hs_sy/hs_s` 已按 1024×768 基准缩放，本次再叠加显式因子 `g_ui_scale_pct`；
+- 字体：自研 TTF 光栅化（矢量），放大是重新栅格化，不是位图拉伸；
+- EDID/CRTC：**没有**，因此刷新率不可调。
+
+**本次实现（P2）**
+- Settings 左侧菜单由 4 项扩到 5 项，新增 `Display`（放在末尾，索引 0–3 的既有语义完全不动）；
+- Display 页内容：当前分辨率（`2048 x 1536` + "Set by firmware at boot"）、
+  四个缩放档位按钮（100/125/150/200，点击即时生效）、刷新率（"firmware-controlled / no EDID/CRTC driver yet"）；
+- 缩放按钮的渲染位置存为 `g_disp_scale_btn_x/y`，命中测试直接复用，**不另算一套坐标**；
+- 持久化：写 `/display.conf`（`scale=<pct>` + `resolution=WxH`），启动时在 `hpdesk_load_config` 末尾由
+  `hs_display_load()` 覆盖 `g_ui_scale_pct`（优先级高于 `config.hsqml`）。
+
+**验证**
+- 100%（默认）：桌面与改动前一致，Settings 菜单出现 Display 项；
+- 150%：整体按 1.5 倍放大，Quick Controls 的 6 张卡片与两条滑块排布仍成立、无压盖；
+  但左侧 Info 面板内容溢出出现滚动条、底部 dock 被挤 —— 见「遗留」。
+
+**遗留（P1 未完成部分）**
+面板内部仍有部分固定像素坐标（侧栏内容行距、天气卡、Settings 内部、命中测试镜像），
+在 >100% 时会溢出。真正统一需要把绘制与命中共用一套"逻辑坐标 → 物理像素"transform，
+工作量约等于逐面板重排。当前 100% 完全可用，125/150/200 属"可放大但不完美"。
+
 ---
 
 ## 四、回归基线
