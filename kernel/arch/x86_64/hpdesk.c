@@ -707,7 +707,15 @@ static int hs_wallpaper_png(void)
     static uint8_t wp_raw[262144];
 
     int n = ext2_64_read_file("/usr/share/wallpapers/wallpaper.png", wp_raw, sizeof(wp_raw));
-    if (n > 8 && png64_decode(wp_raw, n, &g_wp_png) == 0 && g_wp_png.rgba) return 1;
+    if (n > 8 && png64_decode(wp_raw, n, &g_wp_png) == 0 && g_wp_png.rgba) {
+        vga_printf("[PNG64] ok read=%d %dx%d px0=(%d,%d,%d) pxC=(%d,%d,%d)\n", n,
+                   (int)g_wp_png.width, (int)g_wp_png.height,
+                   g_wp_png.rgba[0], g_wp_png.rgba[1], g_wp_png.rgba[2],
+                   g_wp_png.rgba[((g_wp_png.height/2)*g_wp_png.width + g_wp_png.width/2)*4],
+                   g_wp_png.rgba[((g_wp_png.height/2)*g_wp_png.width + g_wp_png.width/2)*4+1],
+                   g_wp_png.rgba[((g_wp_png.height/2)*g_wp_png.width + g_wp_png.width/2)*4+2]);
+        return 1;
+    }
     /* 回退: 平铺根目录。多级路径读取在部分镜像布局下取不到文件, 留一条短路。 */
     n = ext2_64_read_file("/wallpaper.png", wp_raw, sizeof(wp_raw));
     if (n > 8 && png64_decode(wp_raw, n, &g_wp_png) == 0 && g_wp_png.rgba) return 1;
@@ -720,18 +728,69 @@ static int hs_wallpaper_png(void)
     return 0;
 }
 
+/* 壁纸预缩放缓存: 512x288 放大到 2048x1536 需要 300 万次「除法+alpha 混合」,
+ * 在 QEMU 上一帧画不完, 截屏就抓到只刷了部分行的水平条纹。
+ * 改为启动时算一次整屏 XRGB 缓存, 之后每帧只做整行 memcpy。 */
+static uint32_t *g_wp_cache;
+static int g_wp_cache_w = -1, g_wp_cache_h = -1;
+
+static int hs_wallpaper_build_cache(int w, int h)
+{
+    uint8_t *src_px = g_wp_is_jpeg ? g_wp_jpg.rgba : g_wp_png.rgba;
+    int sw = (int)(g_wp_is_jpeg ? g_wp_jpg.width : g_wp_png.width);
+    int sh = (int)(g_wp_is_jpeg ? g_wp_jpg.height : g_wp_png.height);
+    if (!src_px || sw <= 0 || sh <= 0) return 0;
+
+    int dw = w, dh = (int)((long)sh * w / (long)sw);
+    if (dh < h) { dh = h; dw = (int)((long)sw * h / (long)sh); }
+    int dx = (w - dw) / 2, dy = (h - dh) / 2;
+
+    static int xmap_buf[4096];
+    if (w > 4096) return 0;
+    for (int x = 0; x < w; x++) {
+        int sx = (x - dx) * sw / dw;
+        xmap_buf[x] = (sx < 0 || sx >= sw) ? -1 : sx;
+    }
+
+    extern void *kmalloc(uint64_t size);
+    uint32_t *c = (uint32_t *)kmalloc((uint64_t)w * h * 4);
+    if (!c) return 0;
+
+    for (int y = 0; y < h; y++) {
+        int sy = (y - dy) * sh / dh;
+        uint32_t *out = c + (uint64_t)y * w;
+        if (sy < 0 || sy >= sh) {
+            for (int x = 0; x < w; x++) out[x] = 0;
+            continue;
+        }
+        const uint8_t *row = src_px + (uint64_t)sy * sw * 4;
+        for (int x = 0; x < w; x++) {
+            int sx = xmap_buf[x];
+            if (sx < 0) { out[x] = 0; continue; }
+            const uint8_t *p = row + sx * 4;
+            out[x] = ((uint32_t)p[0] << 16) | ((uint32_t)p[1] << 8) | p[2];
+        }
+    }
+    g_wp_cache = c;
+    g_wp_cache_w = w;
+    g_wp_cache_h = h;
+    return 1;
+}
+
 static void hs_wallpaper_render(void)
 {
     int w = g_shell.screen_width, h = g_shell.screen_height;
     if (hs_wallpaper_png()) {
-        /* 覆盖式铺满: 按屏幕比例取源图中心区域, 避免拉伸变形 */
-        uint8_t *src_px = g_wp_is_jpeg ? g_wp_jpg.rgba : g_wp_png.rgba;
-        int sw = (int)(g_wp_is_jpeg ? g_wp_jpg.width : g_wp_png.width);
-        int sh = (int)(g_wp_is_jpeg ? g_wp_jpg.height : g_wp_png.height);
-        int dw = w, dh = (int)((long)sh * w / (long)sw);
-        if (dh < h) { dh = h; dw = (int)((long)sw * h / (long)sh); }
-        int dx = (w - dw) / 2, dy = (h - dh) / 2;
-        gfx64_blit_rgba(dx, dy, dw, dh, src_px, sw, sh);
+        if (!g_wp_cache || g_wp_cache_w != w || g_wp_cache_h != h) {
+            if (!hs_wallpaper_build_cache(w, h)) return;   /* 分配失败则不出壁纸 */
+        }
+        uint32_t *fb = (uint32_t *)gfx64_get_framebuffer();
+        if (!fb) return;
+        for (int y = 0; y < h; y++) {
+            uint32_t *dst = fb + (uint64_t)y * w;
+            const uint32_t *src = g_wp_cache + (uint64_t)y * w;
+            for (int x = 0; x < w; x++) dst[x] = src[x];
+        }
         return;
     }
     if (g_wallpaper_style == 1) {

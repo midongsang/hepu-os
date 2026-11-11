@@ -1914,6 +1914,33 @@ void gfx64_blit_alpha24(int x, int y, int w, int h,
     }
 }
 
+/* 不透明快速路径: 忽略 alpha 直接覆盖写。
+ * 壁纸这类全屏不透明图每像素做 alpha 混合 + 除法在 QEMU 上慢到画不完一帧,
+ * 表现为截图里的水平条纹(只刷了部分行)。 */
+void gfx64_blit_rgba_opaque(int x, int y, int w, int h,
+                            const uint8_t *rgba, int sw, int sh)
+{
+    if (!gfx_initialized || !rgba || w <= 0 || h <= 0 || sw <= 0 || sh <= 0) return;
+    uint32_t *fb = (uint32_t *)gfx64_get_framebuffer();
+    int W = gfx_width, H = gfx_height;
+    for (int dy = 0; dy < h; dy++) {
+        int sy = dy * sh / h;
+        if (sy >= sh) sy = sh - 1;
+        int yy = y + dy;
+        if (yy < 0 || yy >= H) continue;
+        const uint8_t *row = rgba + (uint32_t)sy * sw * 4;
+        uint32_t *dstrow = fb + (uint32_t)yy * W;
+        for (int dx = 0; dx < w; dx++) {
+            int sx = dx * sw / w;
+            if (sx >= sw) sx = sw - 1;
+            int xx = x + dx;
+            if (xx < 0 || xx >= W) continue;
+            const uint8_t *p = row + (uint32_t)sx * 4;
+            dstrow[xx] = ((uint32_t)p[0] << 16) | ((uint32_t)p[1] << 8) | p[2];
+        }
+    }
+}
+
 void gfx64_blit_rgba(int x, int y, int w, int h,
                      const uint8_t *rgba, int sw, int sh)
 {
