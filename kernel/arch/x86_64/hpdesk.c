@@ -87,9 +87,14 @@ extern uint32_t smp_get_cpu_count(void);
 /* PIT 毫秒计数 (窗口打开动画, 对齐 Clavis 200ms) */
 extern uint64_t pit64_get_ticks(void);
 
-/* 自适应缩放辅助函数（基准1024x768，纯整数运算避免FPU状态问题） */
-static int hs_sx(int v) { return (v * g_shell.screen_width) / 1024; }
-static int hs_sy(int v) { return (v * g_shell.screen_height) / 768; }
+/* 自适应缩放辅助函数（基准1024x768，纯整数运算避免FPU状态问题）
+ * g_ui_scale_pct: 用户选择的界面缩放百分比(100/125/150/200), 与分辨率解耦。
+ * 物理像素 = 逻辑像素 * (screen_w/1024) * (pct/100)
+ * 把缩放做成显式因子后, 分辨率变了不会再顺带改变"组件相对大小",
+ * 用户也能在设置里单独放大界面(字体是矢量光栅化, 放大是重画不是拉伸)。 */
+int g_ui_scale_pct = 100;
+static int hs_sx(int v) { return (v * g_shell.screen_width * g_ui_scale_pct) / (1024 * 100); }
+static int hs_sy(int v) { return (v * g_shell.screen_height * g_ui_scale_pct) / (768 * 100); }
 static int hs_s(int v)  {
     int sx = (v * g_shell.screen_width) / 1024;
     int sy = (v * g_shell.screen_height) / 768;
@@ -344,6 +349,9 @@ static void load_ui_from_config(hsqml_node_t *ui)
     g_shell.ui.cc_margin_right = hsqml_get_number(ui, "cc_margin_right", 384);
     g_shell.ui.cc_y = hsqml_get_number(ui, "cc_y", 108);
     g_shell.ui.cc_width = hsqml_get_number(ui, "cc_width", 280);
+    g_ui_scale_pct = (int)hsqml_get_number(ui, "ui_scale", 100);
+    if (g_ui_scale_pct < 100) g_ui_scale_pct = 100;
+    if (g_ui_scale_pct > 250) g_ui_scale_pct = 250;
     g_shell.ui.cc_height = hsqml_get_number(ui, "cc_height", 440);
     g_shell.ui.bar_height = hsqml_get_number(ui, "bar_height", 40);
     g_shell.ui.island_width = hsqml_get_number(ui, "island_width", 120);
