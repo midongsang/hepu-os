@@ -2289,8 +2289,10 @@ static void hs_weather_widget_render(void)
 
     /* V0.56.1: 取数失败/尚未返回时给明确占位。旧实现直接画空字符串,
      * 卡片只剩一块纯色方块, 看不出是"没数据"还是"渲染坏了"。 */
-    const char *tstr = g_weather_ok ? g_weather_temp : "--";
-    const char *dstr = g_weather_ok ? g_weather_desc : "N/A";
+    /* V0.57.0: 取到响应但字段没解析出来时, g_weather_ok 已是 1 而两个字符串还是空串,
+     * 卡片就退化成一块纯色方块 —— 看起来像"没接数据"或"渲染坏了"。按字段回退占位。 */
+    const char *tstr = (g_weather_ok && g_weather_temp[0]) ? g_weather_temp : "--";
+    const char *dstr = (g_weather_ok && g_weather_desc[0]) ? g_weather_desc : "N/A";
 
     font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                        wx + hs_sx(20), wy + hs_sy(15), (char *)tstr, hs_on_accent(), hs_s(g_shell.ui.weather_temp_font));
@@ -5079,11 +5081,12 @@ void hs_workspace_send_to_prev(void)
  * ========================================================================== */
 
 /* ---- 天气: 键查找与整数解析 (无 libc, 手写) ---- */
-static int hs_find_key(const uint8_t *b, int len, const char *key)
+static int hs_find_key_from(const uint8_t *b, int len, const char *key, int start)
 {
     int klen = 0;
     while (key[klen]) klen++;
-    for (int i = 0; i + klen < len; i++) {
+    if (start < 0) start = 0;
+    for (int i = start; i + klen < len; i++) {
         int ok = 1;
         for (int k = 0; k < klen; k++) {
             if (b[i + k] != (uint8_t)key[k]) { ok = 0; break; }
@@ -5134,22 +5137,37 @@ int hpdesk_fetch_weather(void)
     uint8_t body[1024];
     /* V0.56.1: 失败要能让调用方知道(此前失败静默 return, 桌面只在第 60 帧试一次,
      * 网络没就绪就永久没有天气) */
-    if (http64_get(url, resp, sizeof(resp)) < 0) return 0;
+    int rlen = http64_get(url, resp, sizeof(resp));
+    if (rlen < 0) return 0;
     int st = http64_get_status(resp);
     if (st < 200 || st >= 300) return 0;
-    int blen = http64_get_body(resp, sizeof(resp), body, sizeof(body));
+    /* V0.57.0: 这里必须传"真实响应长度" rlen, 而不是缓冲区大小 sizeof(resp)。
+     * 旧实现传 2048, 而实际响应只有 ~730 字节, get_body 于是算出
+     * body_len = 2048 - body_start ≈ 1900, 再被 max_body 截到 1024 ——
+     * 拷进 body 的后半截全是缓冲区里的旧垃圾, 返回长度也虚高,
+     * 后续按长度扫描 JSON 自然解析不出 temperature/weathercode。 */
+    int blen = http64_get_body(resp, rlen, body, sizeof(body));
     if (blen <= 0) return 0;
 
-    /* 温度: 仅当冒号后解析出数字才取用 (修复 temperature_units 误匹配) */
+    /* 温度: open-meteo 的响应里 "temperature" 会先出现在 current_weather_units 段
+     * (值是单位字符串 "..C"), 旧实现只找第一个、解析失败就放弃, 于是永远取不到温度。
+     * 改为从上一个命中点继续往下找, 直到某个值真的是数字为止。 */
     int t = -999;
-    int tp = hs_find_key(body, blen, "\"temperature\":");
-    if (tp >= 0 && hs_parse_int_at(body, tp, blen, &t) == 0) {
-        hs_itoa(t, g_weather_temp);
+    int tp = 0;
+    while ((tp = hs_find_key_from(body, blen, "\"temperature\":", tp)) >= 0) {
+        if (hs_parse_int_at(body, tp, blen, &t) == 0) { hs_itoa(t, g_weather_temp); break; }
+        t = -999;
+        tp += 1;
     }
-    /* 天气码 → 描述 */
+    /* 天气码 → 描述 (同样跳过 units 段里的字符串值) */
     int wc = -1;
-    int wp = hs_find_key(body, blen, "\"weathercode\":");
-    if (wp >= 0 && hs_parse_int_at(body, wp, blen, &wc) == 0) {
+    int wp = 0;
+    while ((wp = hs_find_key_from(body, blen, "\"weathercode\":", wp)) >= 0) {
+        if (hs_parse_int_at(body, wp, blen, &wc) == 0) break;
+        wc = -1;
+        wp += 1;
+    }
+    if (wc >= 0) {
         const char *desc = "Cloudy";
         switch (wc) {
             case 0: desc = "Clear"; break;

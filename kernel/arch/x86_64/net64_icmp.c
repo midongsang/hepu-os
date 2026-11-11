@@ -69,7 +69,7 @@ int icmp64_ping(uint32_t dst_ip)
     /* 填充数据 */
     for (int i = 8; i < 64; i++) packet[i] = (uint8_t)(i & 0xFF);
 
-    icmp->checksum = icmp_checksum(packet, 64);
+    icmp->checksum = htons16(icmp_checksum(packet, 64));   /* V0.57.0: 网络字节序 */
 
     return ip64_send(dst_ip, 1, packet, 64);
 }
@@ -90,7 +90,7 @@ void icmp64_handle(const uint8_t *packet, int length, uint32_t src_ip)
         icmp_header_t *r = (icmp_header_t *)reply;
         r->type = ICMP_TYPE_ECHO_REPLY;
         r->checksum = 0;
-        r->checksum = icmp_checksum(reply, length);
+        r->checksum = htons16(icmp_checksum(reply, length));   /* V0.57.0: 网络字节序 */
 
         ip64_send(src_ip, 1, reply, length);
 

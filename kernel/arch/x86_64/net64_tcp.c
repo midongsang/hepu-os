@@ -132,8 +132,9 @@ static int tcp_send_packet(tcp_connection_t *conn, uint8_t flags,
 
     if (data && data_len > 0) tcp_memcpy(packet + 20, data, data_len);
 
-    tcp->checksum = tcp_checksum(htonl32(eth64_get_ip()),
-                                  htonl32(conn->remote_ip), packet, tcp_len);
+    /* V0.57.0: 校验和字段必须按网络字节序写入, 否则 TCP 握手永远得不到回应 */
+    /* V0.57.0: 伪头部 IP 用主机序 (同 UDP, 传字节交换过的值会算出错校验和) */
+    tcp->checksum = htons16(tcp_checksum(eth64_get_ip(), conn->remote_ip, packet, tcp_len));
 
     int sret = ip64_send(conn->remote_ip, 6, packet, tcp_len);
 

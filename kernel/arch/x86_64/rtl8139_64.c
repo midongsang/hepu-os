@@ -172,6 +172,12 @@ int rtl8139_init(void)
     }
     vga_puts("\n");
 
+    /* V0.57.0: 先解锁配置寄存器。
+     * 8139too 在配置前后都会做一次 Cfg9346 unlock/lock; QEMU 的 rtl8139 也用这一步
+     * 建立"时钟已使能"状态, can_receive() 会检查它 —— 没写过这个寄存器时
+     * 收包判定直接返回"不可接收", 表现就是 ISR 永远只有 TOK、没有 ROK。 */
+    rtl_outb(rtl_io_base + REG_9346CR, 0xC0);   /* EEM1|EEM0 = config write enable */
+
     /* 设置接收缓冲区地址（必须是物理地址） */
     uint32_t rx_buf_phys = (uint32_t)rtl_virt_to_phys(rtl_rx_buffer);
     rtl_outl(rtl_io_base + REG_RBSTART, rx_buf_phys);
@@ -196,6 +202,9 @@ int rtl8139_init(void)
     /* 初始化接收偏移 (CAPR 指向缓冲末尾=读指针落后写指针 0xFFF0, 表示"空") */
     rtl_rx_offset = 0;
     rtl_outw(rtl_io_base + REG_CAPR, 0xFFF0);   /* 与 8139too 一致 */
+
+    /* 配置完毕，锁回配置寄存器（正常模式） */
+    rtl_outb(rtl_io_base + REG_9346CR, 0x00);
 
     rtl_initialized = 1;
     vga_puts("[OK] RTL8139 initialized\n");

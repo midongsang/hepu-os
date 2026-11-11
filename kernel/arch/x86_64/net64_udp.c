@@ -40,10 +40,6 @@ static void udp_memcpy(void *dst, const void *src, int n) {
 }
 
 static uint16_t htons16(uint16_t v) { return (v >> 8) | (v << 8); }
-static uint32_t htonl32(uint32_t v) {
-    return ((v & 0xFF) << 24) | ((v & 0xFF00) << 8) |
-           ((v & 0xFF0000) >> 8) | ((v & 0xFF000000) >> 24);
-}
 
 /* UDP校验和（含伪头部） */
 static uint16_t udp_checksum(uint32_t src_ip, uint32_t dst_ip,
@@ -120,7 +116,12 @@ int udp64_send(uint32_t dst_ip, uint16_t src_port, uint16_t dst_port,
     udp_memcpy(packet + 8, data, data_len);
 
     /* 计算校验和 */
-    udp->checksum = udp_checksum(htonl32(eth64_get_ip()), htonl32(dst_ip), packet, udp_len);
+    /* V0.57.0: 同上, 校验和字段必须按网络字节序写入, 否则对端直接丢包 */
+    /* V0.57.0: 伪头部的 IP 必须以"主机序"传入 —— udp_checksum 内部按
+     * (ip>>16)&0xFFFF / ip&0xFFFF 拆成两个 16 位字, 这里先 htonl32 过一遍
+     * 等于把两个字的字节再交换一次, 算出来的校验和是错的(实测相差 0x5FA 量级),
+     * 对端校验失败后整个数据报被静默丢弃。 */
+    udp->checksum = htons16(udp_checksum(eth64_get_ip(), dst_ip, packet, udp_len));
 
     return ip64_send(dst_ip, 17, packet, udp_len);
 }

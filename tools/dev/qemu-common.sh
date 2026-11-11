@@ -18,7 +18,7 @@ PID=${PID:-/tmp/qemu.pid}
 
 qemu_common_args() {
     # 注意: 必须是单行输出 —— 带反斜杠续行的 echo 结果在 $(...) 里会变成字面参数
-    echo "-drive format=raw,file=${IMG} -m 1024 -smp 1 -monitor unix:${MON},server,nowait -qmp unix:${QMP},server,nowait -serial file:${SERIAL} -device qemu-xhci -device usb-kbd -device usb-mouse -vga std -nic user,model=rtl8139"
+    echo "-drive format=raw,file=${IMG} -m 1024 -smp 1 -monitor unix:${MON},server,nowait -qmp unix:${QMP},server,nowait -serial file:${SERIAL} -device qemu-xhci -device usb-kbd -device usb-mouse -vga std -nic user,model=e1000"
 }
 
 stop_qemu() {

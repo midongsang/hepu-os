@@ -136,6 +136,46 @@ RTL8139 的真实 MAC，并在网卡初始化之后再回写一次。
 三块图板看着全空，容易被当成"图表没接上数据"。改为 0 值也留 1px 采样点
 （浅色），表示仍在采样。
 
+### 1.10 IP/UDP/TCP/ICMP 校验和字节序全部写反（网络全线的真正断点）
+
+`ip_checksum` / `udp_checksum` / `tcp_checksum` / `icmp_checksum` 都返回"按大端拼 16 位字
+算出的反码和"，即网络序语义的值；但调用处全部直接赋给 `uint16_t` 字段，在 x86 上按小端
+存进包 → 实际发出的校验和是字节颠倒的。后果极其隐蔽：**ARP 一直是通的**（ARP 没有 IP
+校验和），而 ICMP/UDP/TCP 每个包都被对端按校验失败静默丢弃，于是 DNS 永远解析不出来、
+天气组件一直是 `-- / N/A`。
+
+用 QEMU `-object filter-dump` 抓帧验证：修复前 IP 头校验和字段 `0x9b62`，正确值 `0x629b`；
+修复后 `csum_ok=True`。共修 5 处（IP 头、UDP、ICMP 两处、TCP），全部改为 `htons16(...)`。
+
+顺带修了 UDP/TCP 的伪头部：`udp_checksum` 内部按 `(ip>>16)&0xFFFF` / `ip&0xFFFF` 拆两个
+16 位字，调用处却传了 `htonl32(...)`（已经字节交换过的值），等于交换了两次、算出错校验和
+（实测与正确值差 0x5FA 量级）。改为直接传主机序 IP。
+
+### 1.11 `http64_get_body` 传错响应长度 → body 尾部是垃圾
+
+`hpdesk_fetch_weather` 里调 `http64_get_body(resp, sizeof(resp), ...)`，传的是**缓冲区大小
+2048** 而不是 `http64_get` 返回的真实长度（约 730）。函数据此算出
+`body_len = 2048 - body_start ≈ 1900`，再被 `max_body=1024` 截断，于是拷进 body 的后半截
+全是缓冲区旧数据、返回长度也虚高。改为 `int rlen = http64_get(...)` 并把 `rlen` 传下去。
+
+### 1.12 open-meteo 的 units 段抢走 `"temperature"` 键
+
+响应里 `"temperature"` 第一次出现是在 `current_weather_units` 段，值是单位字符串 `"..C"`。
+旧实现只找第一个命中点，`hs_parse_int_at` 解析失败就放弃 → 温度永远是初始值，卡片上什么都
+不画。改为用 `hs_find_key_from()` 从上一个命中点继续往下找，直到取到真正的数字；
+`weathercode` 同理。
+
+### 1.13 天气卡片在"有响应但没解析出字段"时退化成纯色块
+
+`g_weather_ok` 置 1 而 `g_weather_temp` / `g_weather_desc` 还是空串时，卡片只剩一块纯色
+圆角方块 —— 看起来跟"没接数据"和"渲染坏了"都分不开。改为按字段回退占位。
+
+### 1.14 QEMU 默认网卡改为 e1000
+
+RTL8139 的接收侧在 QEMU 上始终拿不到 ROK（详见 1.9 的遗留说明），而 e1000 全链路
+（ARP → DNS → HTTP → 天气）实测通过，`tools/dev/qemu-common.sh` 的默认网卡切到 e1000。
+RTL8139 驱动与 `rtl8139_available()` 判定都保留，真机上仍会优先走 RTL。
+
 ## 2.1 窗口三层阶梯投影
 
 `hs_window_shadow()`：三层圆角矩形（`k=3..1`，每层缩放 4px 递增），

@@ -97,8 +97,12 @@ int ip64_send(uint32_t dst_ip, uint8_t protocol, const uint8_t *data, int data_l
     ip->src_ip = htonl32(eth64_get_ip());
     ip->dst_ip = htonl32(dst_ip);
 
-    /* 计算校验和 */
-    ip->checksum = ip_checksum((uint8_t *)ip, 20);
+    /* 计算校验和 — V0.57.0: 必须转成网络字节序。
+     * ip_checksum 返回的是"按大端拼字"算出的 16 位反码和(即网络序语义的值),
+     * 直接赋给 uint16_t 字段会被按小端存进包里, 实际写出去的是字节颠倒的校验和。
+     * 后果: 每个 IP 包都被对端按"校验和错误"丢弃 —— ARP 能通(ARP 无 IP 校验),
+     * 但 ICMP/UDP/TCP 全无应答, 于是 DNS 永远解析失败、天气组件一直 -- / N/A。 */
+    ip->checksum = htons16(ip_checksum((uint8_t *)ip, 20));
 
     /* 复制数据 */
     ip_memcpy(packet + 20, data, data_len);
