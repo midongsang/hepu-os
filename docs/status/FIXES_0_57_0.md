@@ -474,11 +474,64 @@ LBA3400 → 4400（`make_single_img64.sh` 的 `KERNEL32_LBA` 同步）。安全�
 **验证**：内核 637880 → 652472 B（+14.6KB，1MB 上限内）；`[JPEG64] decoded 1024x768`，
 壁纸顶部像素 `(26,94,193)` 与测试图渐变一致，桌面正常。
 
+
+### 1.29 B 组第二项：Lua 5.4 解释器接入
+
+目标：让内核里能真正执行 Lua 脚本（后续给 shell / 配置系统 / 插件用）。
+
+**落地组成**
+| 组成 | 文件 | 说明 |
+|---|---|---|
+| Lua 源码 | `third_party/lua/src/` | 5.4.7，去掉 `lua.c`/`luac.c`/`ltests.c` |
+| 兼容头 | `third_party/lua/include/` | 9 个极简 C 头（string/stdlib/stdio/math/locale/time/setjmp/ctype/assert），**不能混内核头** |
+| 内核 libc/libm 子集 | `kernel/arch/x86_64/klibm64.c` | malloc/realloc/free、strtod、memchr/strstr/strspn、double 版 sqrt/exp/log/sin/cos/atan 等 |
+| setjmp/longjmp | `kernel/arch/x86_64/kjmp64.S` | 64 位内核此前完全没有（32 位内核有 `arch/x86/setjmp.S`） |
+| 接入层 | `kernel/arch/x86_64/lua64.c` | kheap 分配器、串口输出重定向、库集合、自检 |
+
+**五个必须踩过去的坑**
+
+1. **浮点 ABI（最隐蔽）**。内核整体 `-mno-sse`，但 x86_64 SysV 规定 `double` 参数/返回值走
+   `xmm0`。禁 SSE 后 stb 报 `SSE register return with SSE disabled`，Lua 则是**静默错误**：
+   用 `-mno-sse` 编的 `vsnprintf` 从整数寄存器组取 vararg double，拿到的是垃圾。
+   → Lua 全部源码 + `klibm64.c` 单独用 `-msse2` 编（Makefile 里 `LUA_CFLAGS`）。
+2. **`-msse2` 与内核头冲突**。把 `kernel/include` 混进 include 路径会让 Lua 一片
+   `expected ')' before 'c'`。→ 给 Lua 独立一套兼容头，互不相见。
+3. **`longjmp` 必须标 `noreturn`**。Lua 的 `luaD_throw` 是 noreturn、以 `abort()` 收尾；
+   漏标会让编译器生成"函数返回"路径（`ldo.c: noreturn function does return`），
+   错误抛出后可能落到未定义位置。`abort`/`exit` 同理。
+4. **`vsnprintf` 要重做**。`kernel/lib/kstdio.c` 只支持 `%d/%u/%x/%c/%s/%p`，Lua 的
+   `tostring` 依赖 `%.14g`、`string.format` 还要 `%f/%e`。→ 在 `klibm64.c` 重写一份，
+   支持精度、`%g` 的有效数字语义、整数/浮点；`kstdio.c` 不再进 64 位构建。
+5. **一堆 libc 桩**。`lauxlib` 即使不用 `loadfile` 也会引用 `fopen/fread/feof/getc/
+   strerror/localeconv/__errno_location`，给安全空实现（返回失败而非乱跳）。
+
+**验证**
+- 内核 652472 → **780480 B**（Lua 真正被链入，1MB 上限内）。
+- 全量干净重建 **0 error / 90 warning**（= 基线，第三方代码的警告已通过补齐
+  兼容头声明消掉，未用 `-w` 掩盖）。
+- QEMU 串口实测：
+  ```
+  hepu lua Lua 5.4
+  sum(1..100)=5050
+  sqrt2=1.414213
+  table=1,4,9,16,25
+  [LUA64] selftest result: ok
+  ```
+  覆盖了：整数运算、`%.6f`、`%.14g`、字符串拼接、table 库、math 库。
+- 桌面仍正常（截图为证），未影响既有启动路径。
+
+**已知限制**
+- `io`/`os`/`package` 库未编（内核没有文件/进程/dlfcn 抽象）。
+- 中断处理不保存 xmm 状态：若 Lua 执行中被 tick 抢占、且另一个线程也用 SSE，
+  xmm 会串。当前只有 Lua 用 SSE，实际不触发；后续需要的话在 `context_switch_64`
+  里补 `fxsave/fxrstor`。
+- 精度是多项式实现（约 1e-9 相对误差），不是 libm 的 0.5ulp。
+
 ---
 
 ## 四、回归基线
 
-- 全量干净重建：**0 error / 90 warning**（`-Wunused-parameter` 基线 +1，来自 jpeg64 新增参数）
+- 全量干净重建：**0 error / 90 warning**（`-Wunused-parameter` 基线不变；接入 Lua 后仍保持）
 - 主机测试：**8/8**
 - 文档检查：`python3 tools/check_docs.py` **0 warn 0 error**
 - QEMU 冒烟：`tools/dev/smoke-test.sh` 通过（颜色数 912，无致命错误关键字）

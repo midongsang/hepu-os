@@ -3,6 +3,9 @@
 # V0.10.6: 初始64位内核构建系统
 # ============================================================================
 
+# 默认目标: 显式指定, 避免 pattern 规则插在前面时把默认目标带偏
+.DEFAULT_GOAL := all
+
 # 工具链
 CC = gcc
 LD = ld
@@ -147,16 +150,19 @@ C_SOURCES = \
 ASM_SOURCES = \
     $(ARCH_DIR)/multiboot_entry.S \
     $(ARCH_DIR)/entry_64.S \
-    $(ARCH_DIR)/user_switch.S
+    $(ARCH_DIR)/user_switch.S \
+    $(ARCH_DIR)/kjmp64.S
 
 # 对象文件（放在build目录下）
 C_OBJECTS = $(addprefix $(BUILD_DIR)/, $(notdir $(C_SOURCES:.c=.o)))
 ASM_OBJECTS = $(addprefix $(BUILD_DIR)/, $(notdir $(ASM_SOURCES:.S=.o)))
 
 # VPATH用于查找源文件
-vpath %.c $(KERNEL_DIR) $(ARCH_DIR) $(KERNEL_DIR)/shared/gfx $(KERNEL_DIR)/shared/drivers $(KERNEL_DIR)/shared/fs $(KERNEL_DIR)/shared/lib $(KERNEL_DIR)/shared/debug $(KERNEL_DIR)/crypto $(KERNEL_DIR)/net
+vpath %.c $(KERNEL_DIR) $(ARCH_DIR) $(KERNEL_DIR)/lib $(KERNEL_DIR)/shared/gfx $(KERNEL_DIR)/shared/drivers $(KERNEL_DIR)/shared/fs $(KERNEL_DIR)/shared/lib $(KERNEL_DIR)/shared/debug $(KERNEL_DIR)/crypto $(KERNEL_DIR)/net
 vpath %.S $(ARCH_DIR)
 
+
+# ============================================================================
 # 编译选项
 # -Os: stage2 低端内存只留 640KB 内核区(0x10000-0x9FFFF), 必须控制内核体积;
 #      -Os 相比 -O2 约省 78KB (V0.55 P3-GUI 新增向导后仍留有安全余量)
@@ -236,6 +242,40 @@ TARGET = $(BUILD_DIR)/hepu-kernel64.bin
 ELF_TARGET = $(BUILD_DIR)/hepu-kernel64.elf
 
 # 默认目标
+
+# B组: Lua 5.4 接入 (third_party/lua)
+#
+# 这些文件和内核其余部分**不能**一起用 -mno-sse 编: x86_64 SysV 的浮点 ABI
+# 规定 double 走 xmm0, 禁 SSE 后编译器直接报 "SSE register return with SSE
+# disabled"。所以 Lua 与 klibm64 单独用 -msse2, 二进制里它们才互相对得上。
+# 它们也不引内核头(内核 include 里的宏会和标准头打架), 只用 third_party/lua/include
+# 那套极简兼容头。
+# ============================================================================
+LUA_SRC = $(PROJECT_ROOT)/third_party/lua/src
+LUA_INC = $(PROJECT_ROOT)/third_party/lua/include
+LUA_CORE = lapi lcode lctype ldebug ldo ldump lfunc lgc llex lmem lobject \
+           lopcodes lparser lstate lstring ltable ltm lundump lvm lzio \
+           lauxlib lbaselib lcorolib lmathlib lstrlib ltablib lutf8lib
+
+LUA_CFLAGS = -m64 -mcmodel=small -mno-red-zone -msse2 \
+             -ffreestanding -fno-stack-protector -fno-pic -fno-pie \
+             -fcf-protection=none -fno-strict-aliasing -fwrapv -Os \
+             -ffunction-sections -fdata-sections \
+             -I$(LUA_SRC) -I$(LUA_INC) -D__x86_64__ \
+             -DLUA_USER_H='"lua64_user.h"'
+
+LUA_OBJECTS = $(addprefix $(BUILD_DIR)/lua_, $(addsuffix .o, $(LUA_CORE))) \
+              $(BUILD_DIR)/lua64.o $(BUILD_DIR)/klibm64.o
+
+$(BUILD_DIR)/lua_%.o: $(LUA_SRC)/%.c | $(BUILD_DIR)
+	@$(CC) $(LUA_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/lua64.o: $(ARCH_DIR)/lua64.c | $(BUILD_DIR)
+	@$(CC) $(LUA_CFLAGS) -I$(ARCH_DIR) -c $< -o $@
+
+$(BUILD_DIR)/klibm64.o: $(ARCH_DIR)/klibm64.c | $(BUILD_DIR)
+	@$(CC) $(LUA_CFLAGS) -c $< -o $@
+
 all: $(TARGET)
 
 # 创建构建目录
@@ -258,8 +298,8 @@ $(BUILD_DIR)/%.o: %.S | $(BUILD_DIR)
 	@echo "  [AS] $<"
 
 # 链接为ELF
-$(ELF_TARGET): $(C_OBJECTS) $(ASM_OBJECTS)
-	$(LD) $(LDFLAGS) -o $@ $(C_OBJECTS) $(ASM_OBJECTS)
+$(ELF_TARGET): $(C_OBJECTS) $(ASM_OBJECTS) $(LUA_OBJECTS)
+	$(LD) $(LDFLAGS) -o $@ $(C_OBJECTS) $(ASM_OBJECTS) $(LUA_OBJECTS)
 	@echo "  [LD] $@"
 
 # 转换为二进制

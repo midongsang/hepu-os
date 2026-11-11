@@ -1132,6 +1132,15 @@ void x86_64_kernel_main(void)
     if (desktop64_init() == 0) {
         vga_puts("[INIT] Desktop environment ready\n");
 
+        /* V0.57.0 B组: Lua 5.4 解释器自检。放在桌面渲染之后执行 ——
+           即使 Lua 侧出问题, 桌面画面已经画完, 串口日志也能拿到完整结果。
+           跑通即证明: 1MB 加载区、内核版 libm/setjmp、kheap 分配器三者都可用。 */
+        {
+            extern int lua64_selftest(void);
+            vga_puts("[LUA64] selftest start\n");
+            lua64_selftest();
+        }
+
         /* V0.57.0: 启动期校准若超时失败(smp_init 阶段 PIT tick 未必已推进), 定时器
            会退化到 ICR=6250 —— 那是"假设 100MHz 总线"的旧魔数, QEMU 实测约 31MHz,
            tick 会快约 4 倍(影响 CPU 占用率/uptime 精度)。此处 tick 已确定在跑,
