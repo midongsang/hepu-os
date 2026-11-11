@@ -214,6 +214,22 @@ RTL8139 驱动与 `rtl8139_available()` 判定都保留，真机上仍会优先�
 从桌面主循环挪进线程，要先解决"线程与主循环同时调 `net64_poll` 抢网卡"的并发问题，
 属于下一步。
 
+### 1.18 系统图标改为一套统一线性图标
+
+原来的应用图标是十几组各写各的矢量函数（`hs_icon_terminal/task/settings/...`），
+线条粗细、圆角、视觉重心都不一致，放在 48×48 底座上像拼凑出来的。
+
+改为统一图标集：从一份 30 枚线性图标总览图裁出每个图标的实际 bbox（按列/行投影定位，
+不靠估算坐标），二值化后缩到 32×32、每行一个 `uint32`（bit31=最左）存进
+`hs_icons_data.h`（12 枚在用，约 1.5KB）。新增 `hs_icon_bmp(x,y,size,color,bits)`
+按目标色填充绘制，所以同一图标在浅/深主题、选中/未选中状态下都能用。
+
+映射按语义贴而不是按名字硬配（注释在 `hpdesk.c` 的 switch 里逐行写明）：
+Terminal≡ / Files=home / Browser=search / Settings=齿轮 / Editor=信封 / Calculator=+
+/ Notes=点阵 / Task Manager=时钟 / App Store=投影 / About=滑杆 / Device=齿轮 / Disk=下载。
+
+素材另存 `assets/icons-linear/`（30 枚 128×128 PNG），供以后换尺寸或复用到别处。
+
 ## 2.1 窗口三层阶梯投影
 
 `hs_window_shadow()`：三层圆角矩形（`k=3..1`，每层缩放 4px 递增），

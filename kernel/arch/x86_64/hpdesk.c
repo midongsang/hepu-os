@@ -5,6 +5,7 @@
  * ========================================================================== */
 
 #include "hpdesk.h"
+#include "hs_icons_data.h"   /* V0.57.0: 系统图标位图集(32x32 1bit) */
 #include "png64.h"
 
 extern void vga_printf(const char *fmt, ...);
@@ -2081,6 +2082,28 @@ static void hs_icon_volume(int x, int y, int size, uint32_t color)
 }
 
 /* 设置: 齿轮(8 齿 + 齿体圆 + 中心孔) */
+/* V0.57.0: 位图图标绘制。数据是 32x32 1bit(bit31=最左), 按 size 缩放,
+ * 目标色由调用方给 —— 这样同一套图标在浅/深主题、选中/未选中状态下都能用。
+ * 每像素落成一个矩形块, 缩小时按 >=1px 保证细线不被吃掉。 */
+static void hs_icon_bmp(int x, int y, int size, uint32_t color, const uint32_t *bits)
+{
+    if (!bits || size <= 0) return;
+    for (int py = 0; py < 32; py++) {
+        uint32_t row = bits[py];
+        if (!row) continue;
+        for (int px = 0; px < 32; px++) {
+            if (!(row & (1u << (31 - px)))) continue;
+            int rx0 = x + px * size / 32;
+            int ry0 = y + py * size / 32;
+            int rx1 = x + (px + 1) * size / 32;
+            int ry1 = y + (py + 1) * size / 32;
+            if (rx1 <= rx0) rx1 = rx0 + 1;
+            if (ry1 <= ry0) ry1 = ry0 + 1;
+            gfx64_fill_rect(rx0, ry0, rx1 - rx0, ry1 - ry0, color);
+        }
+    }
+}
+
 static void hs_icon_settings(int x, int y, int size, uint32_t color)
 {
     int cx = x + size / 2, cy = y + size / 2;
@@ -2658,20 +2681,27 @@ static void hs_sidebar_render(void)
             /* V0.13.15: 应用矢量图标(白, 透明底) */
             gfx64_fill_rounded_rect(ax, ay, hs_s(48), hs_s(48), hs_s(10), g_shell.colors.accent);
             uint32_t ic = 0xFDF8EF;
-            switch (i) {
-                case 0: hs_icon_terminal(ax + hs_s(8), ay + hs_s(8), hs_s(32), ic); break;
-                case 1: hs_icon_folder(ax + hs_s(8), ay + hs_s(8), hs_s(32), ic); break;
-                case 2: hs_icon_browser(ax + hs_s(8), ay + hs_s(8), hs_s(32), ic); break;
-                case 3: hs_icon_settings(ax + hs_s(8), ay + hs_s(8), hs_s(32), ic); break;
-                case 4: hs_icon_editor(ax + hs_s(8), ay + hs_s(8), hs_s(32), ic); break;
-                case 5: hs_icon_calc(ax + hs_s(8), ay + hs_s(8), hs_s(32), ic); break;
-                case 6: hs_icon_doc(ax + hs_s(8), ay + hs_s(8), hs_s(32), ic); break;
-                case 7: hs_icon_task(ax + hs_s(8), ay + hs_s(8), hs_s(32), ic); break;
-                case 8: hs_icon_store(ax + hs_s(8), ay + hs_s(8), hs_s(32), ic); break;
-                case 9: hs_icon_info(ax + hs_s(8), ay + hs_s(8), hs_s(32), ic); break;
-                case 10: hs_icon_settings(ax + hs_s(8), ay + hs_s(8), hs_s(32), ic); break;
-                case 11: hs_icon_task(ax + hs_s(8), ay + hs_s(8), hs_s(32), ic); break;
-                default: hs_icon_doc(ax + hs_s(8), ay + hs_s(8), hs_s(32), ic); break;
+            /* V0.57.0: 改用统一线性图标位图集(hs_icons_data.h)。
+             * 映射按语义尽量贴近, 注释写在每行后面 —— 有错配的地方是"造型可用但语义近似",
+             * 不是照着应用名字硬配的。 */
+            {
+                const uint32_t *ico = hs_ico_menu;
+                switch (i) {
+                    case 0:  ico = hs_ico_menu_bar; break;  /* Terminal: 命令行横幅 */
+                    case 1:  ico = hs_ico_home;     break;  /* Files: 主目录 */
+                    case 2:  ico = hs_ico_search;   break;  /* Browser: 检索 */
+                    case 3:  ico = hs_ico_settings; break;  /* Settings: 齿轮 */
+                    case 4:  ico = hs_ico_mail;     break;  /* Editor: 文档/信件 */
+                    case 5:  ico = hs_ico_add;      break;  /* Calculator: 运算 */
+                    case 6:  ico = hs_ico_menu;     break;  /* Notes: 笔记网格 */
+                    case 7:  ico = hs_ico_clock;    break;  /* Task Manager: 性能时钟 */
+                    case 8:  ico = hs_ico_cast;     break;  /* Store: 分发 */
+                    case 9:  ico = hs_ico_slider;   break;  /* Info: 参数面板 */
+                    case 10: ico = hs_ico_settings; break;
+                    case 11: ico = hs_ico_download; break;  /* Disk Manager: 存储 */
+                    default: ico = hs_ico_menu;     break;
+                }
+                hs_icon_bmp(ax + hs_s(8), ay + hs_s(8), hs_s(32), ic, ico);
             }
             /* 名称 (截断至 10 字符, 对齐单元格宽) */
             char nm[11];
