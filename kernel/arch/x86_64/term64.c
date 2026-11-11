@@ -89,13 +89,13 @@ void term64_cmd_neofetch(void)
     vga_puts("\n");
     vga_puts("       ___          \n");
     vga_puts("      /\\  \\         HepuOS 64-bit\n");
-    vga_puts("     /  \\  \\        Version: 0.10.117\n");
+    vga_puts("     /  \\  \\        Version: 0.54.12\n");
     vga_puts("    / /\\ \\  \\       Kernel: x86_64 Long Mode\n");
     vga_puts("   / ____ \\  \\      Shell: HepuSH\n");
     vga_puts("  /_/    \\_\\__\\     CPU: AMD EPYC 9Y24\n");
     vga_puts("\n");
 
-    vga_puts("  OS: HepuOS 0.10.117 x86_64\n");
+    vga_puts("  OS: HepuOS 0.54.12 x86_64\n");
     vga_puts("  Host: QEMU Virtual Machine\n");
     vga_puts("  Kernel: 64-bit Microkernel\n");
     vga_puts("  Shell: HepuSH 1.0\n");
@@ -185,7 +185,7 @@ void term64_cmd_top(void)
 /* ver - 版本信息 */
 void term64_cmd_ver(void)
 {
-    vga_puts("\nHepuOS Version 0.10.117\n");
+    vga_puts("\nHepuOS Version 0.54.12\n");
     vga_puts("Kernel: 64-bit Microkernel\n");
     vga_puts("Architecture: x86_64\n");
     vga_puts("Boot Loader: HepuBoot (SeaBIOS)\n");

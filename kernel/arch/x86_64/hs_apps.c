@@ -201,7 +201,7 @@ static void t_exec(const char *line)
     if (strcmp(cmd, "echo") == 0) { t_put(arg); return; }
     if (strcmp(cmd, "whoami") == 0) { t_put("user"); return; }
     if (strcmp(cmd, "ver") == 0 || strcmp(cmd, "version") == 0) {
-        t_put("Hepu OS v0.54.11 (x86_64)");
+        t_put("Hepu OS v0.54.12 (x86_64)");
         return;
     }
     if (strcmp(cmd, "date") == 0) {
@@ -2004,7 +2004,7 @@ hs_window_t *hs_terminal_create(void)
     t_win = hs_window_create(HS_WINDOW_FLOATING, "Terminal", -1, -1, 520, 340);
     if (t_win) {
         t_win->render = t_render;
-        t_put("Hepu Terminal v0.54.11");
+        t_put("Hepu Terminal v0.54.12");
         t_put("Type 'help' for commands.");
         extern void vga_puts(const char *s);
         vga_puts("[HSAPPS] terminal created\n");

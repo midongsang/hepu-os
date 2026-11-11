@@ -1,7 +1,7 @@
 ---
 title: AUDIT_DESKTOP_STABILITY_R3
 status: active
-sys_version: 0.54.11
+sys_version: 0.54.12
 updated: 2026-11-11
 owner: kernel
 source_of_truth: null

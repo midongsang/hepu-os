@@ -1,7 +1,7 @@
 ---
 title: ENVIRONMENT
 status: active
-sys_version: 0.54.11
+sys_version: 0.54.12
 updated: 2026-11-01
 owner: guides
 source_of_truth: null

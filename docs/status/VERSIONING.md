@@ -1,8 +1,8 @@
 ---
 title: VERSIONING
 status: active
-sys_version: 0.54.11
-updated: 2026-11-10
+sys_version: 0.54.12
+updated: 2026-11-11
 owner: status
 source_of_truth: null
 supersedes: null
@@ -107,10 +107,10 @@ supersedes: null
 
 ## 当前版本
 
-**0.54.11**
+**0.54.12**
 - 重要版本：0
 - 默认版本：54
-- bug版本：11
+- bug版本：12
 
 > 版本号以本文件 frontmatter `sys_version` 为唯一事实源。以下为历史迭代记录。
 
@@ -123,6 +123,26 @@ supersedes: null
   CI 中；其版本宏（`hepu_brand.h` 的 V0.33.1、`hepu.h`、`kernel.c` 的
   hepu_kernel/hepu_system_version）停留在 legacy 自身版本，不随 64 位主线 bump，
   也不作为当前系统版本的判断依据。
+
+**0.54.12 迭代内容（2026-11-11，桌面稳定性 + 安全止血 + 文档真值对齐）**
+
+一、桌面与稳定性（`0b4750f`）
+- HepuShell 窗口槽位泄漏：开窗失败时仍占用槽位，反复开关 32 次后无槽可用、无法再开新窗口；改为识别 `id==-1` 空闲槽并新增 `hs_window_recycle` 回收
+- 纯 APIC 模式 PIT 中断冻结：解析 MADT 中断源覆盖（IRQ0→GSI2），IOAPIC 重定向表改用真实 GSI，新增 `acpi_irq_to_gsi` / `acpi_init_irq_overrides`；桌面画面恢复实时刷新
+
+二、安全与健壮性（`f9db839`，6 P0 + 12 P1）
+- INT-01 LAPIC 定时器校准：改用 PIT channel-0 软件 tick（1ms/tick、50ms 窗口）门控实测 LAPIC 计数，替换硬编码 ICR=6250（此前实测漂至约 4kHz）；多窗口实测 994.6 / 998.3 / 998.5 / 1014.0 Hz，客户机时间内为 1kHz；并修复"校准函数把周期 LVT 覆盖为一次性模式"的子缺陷（周期 LVT 改为校准返回后写入）
+- 系统调用 P0：`writev` 用户指针与长度边界校验；`clone` 的 `child_tid` 与 `tls` 裸写校验；`reboot`、`mkfs` 增加 PID==0 权限闸；`sigaction` 正确解析 sigaction 结构，修复信号投递
+- 12 项 P1：MM-01/MM-02、NET-01/02/05、FS-03/04/05、BLD-14、GFX-01、DRV-02、WM-02
+- 回归：全量干净重建警告 210→209（唯一消失项为基线 `syscall64_full.c` unused parameter `oldact`）、零新增警告类型；主机测试 6/6；镜像重建成功；QEMU 桌面与输入正常
+
+三、文档与规划
+- `2f78278` 文档真值对齐：修正 14 份架构/规格/规划文档中落后于源码的表述（TLS、CSPRNG、动态链接、RSA、PT_INTERP 等已实现能力不再标"不存在"）；收敛 OPEN_BUGS 台账（R1–R4 关闭项带 commit hash 与 `file:line` 证据）；两项待定现象定论——OPEN-03 sendkey 属应用按键绑定而非驱动缺陷（PS/2 与 USB HID 双链路均端到端可用），R3-CURSOR 属测量误解（相对/绝对指针语义混淆，渲染无二次错位）
+- `0be1334` 新增 `docs/planning/PLAN_SMP_HARDENING_R5.md`：SMP 硬化 25 条、五阶段（仅计划，未实施）
+- `3855fa1` `docs/guides/REAL_HARDWARE_TEST.md` 升级为可执行真机上机 checklist：41 条缺口、7 条硬阻塞（含校准自旋无超时导致真机启动挂死）
+- `53a993e` 新增 `docs/planning/SMP_DECISION_A_VS_B_R5.md`：A 完整硬化 vs B 显式单核声明，推荐先 B 止血、真机闭环后再分阶段做 A
+- 版本同步：本文件 frontmatter、49 份活跃文档 `sys_version`、README 徽章与"当前版本"行统一为 0.54.12；界面版本字符串共修 **14 处**——发布清单内 6 处（`hepushell.c`×2、`hs_apps.c`×2、`notes64.c`、`shell64.c`），另 8 处陈旧串一并收敛（启动横幅 `kernel_main_64.c` 的 `v0.54.6`、`version` 命令 `0.37.2`、uname 行 `0.10.156`、neofetch 三处 `0.10.117`、Settings 的 `System/Version` 值 `0.10.156`、占位文案 `V0.13.10`）
+- 发布验证：真全量干净重建（删除仓库根 `build_x86_64`，126 个目标文件全新编译）警告 **209** 条，与基线一致、零新增；主机测试 **6/6**；镜像 `/tmp/hepu64_single.img`（256 MiB）重建成功；QEMU 实测 System Info、终端标题、`ver`、`version`、Settings 系统页均显示 v0.54.12；二进制 `0.54.11` / `0.54.6` / `0.37.2` / `0.10.117` / `0.10.156` 残留计数均为 0
 
 **0.54.11 迭代内容（2026-11-10，两轮安全审计修复与版本号治理）**
 - 第二轮安全修复：DNS 压缩指针循环 DoS、CSPRNG 种子被 reseed 抹成固定值、getrandom 假随机接通真实 CSPRNG、pmm64 整数溢出、getdents 直写用户指针、DHCP/TCP 边界校验、ext2 间接块同址复用（SEC-11）
@@ -711,6 +731,7 @@ ext2_disk_uefi.img           # 数据盘（版本无关）
 
 | 版本 | 日期 | 主要内容 |
 |------|------|---------|
+| 0.54.12 | 2026-11-11 | 桌面稳定性(窗口槽位泄漏/PIT 中断冻结)+安全止血包 6P0+12P1(LAPIC 校准至真实 1kHz、writev/clone/sigaction/reboot/mkfs 加固)+文档真值对齐+SMP 计划与决策对比+真机上机 checklist(41 缺口/7 硬阻塞) |
 | 0.13.68 | 2026-10-28 | 安全修复集成:严格用户窗口+页表校验堵系统调用任意读写;ELF/堆/fd/ext2加固;栈对齐修复#GP;sec_test回归;更正审计文档(漏洞A未修复) |
 | 0.13.67 | 2026-10-27 | XHCI复合HID:单设备多HID接口多中断端点(EP1..EP15 IN/DCI3..31),上下文扩到DCI31,一次Configure全Add,按DCI路由;面向无线接收器 |
 | 0.13.66 | 2026-10-27 | XHCI USB3.0驱动完成:10处硬件行为缺陷修复(TRB 16字节/槽位号字段/Drop-Add/DCI3/门铃/事件环/wValue字节序等)+EP0/中断生产者索引环根除SetConfig时序竞争;QEMU qemu-xhci下鼠标键盘枚举state=2且输入报告正确 |

@@ -801,7 +801,7 @@ static void shell_cmd_version(int argc, char **argv)
 {
     vga_puts("=== HepuOS Version ===\n");
     vga_puts("  OS Name:    HepuOS\n");
-    vga_puts("  Version:    0.37.2\n");
+    vga_puts("  Version:    0.54.12\n");
     vga_puts("  Codename:   HepuBoot Unified\n");
     vga_puts("  Architecture: x86_64 (64-bit Long Mode)\n");
     vga_puts("  Kernel:     Microkernel\n");
@@ -819,7 +819,7 @@ static void shell_cmd_version(int argc, char **argv)
 
 static void shell_cmd_uname(int argc, char **argv)
 {
-    vga_puts("HepuOS 64-bit Kernel v0.54.11\n");
+    vga_puts("HepuOS 64-bit Kernel v0.54.12\n");
     vga_puts("Architecture: x86_64 (long mode)\n");
     vga_puts("Memory: 64MB\n");
     vga_puts("Filesystem: ext2\n");
@@ -2571,7 +2571,7 @@ static void shell_cmd_alias(int argc, char **argv)
 /* uname -a full信息 */
 static void shell_cmd_uname_full(int argc, char **argv)
 {
-    vga_puts("HepuOS hepu 0.10.156 #1 SMP x86_64 GNU/HepuOS\n");
+    vga_puts("HepuOS hepu 0.54.12 #1 SMP x86_64 GNU/HepuOS\n");
 }
 
 /* V0.13.18: driver管理器命令 drv update|repo|list|install|remove|help */

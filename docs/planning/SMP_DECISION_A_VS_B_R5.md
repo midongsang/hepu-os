@@ -1,7 +1,7 @@
 ---
 title: SMP 决策对比：选项 A 完整硬化 vs 选项 B 显式单核声明（R5）
 status: active
-sys_version: 0.54.11
+sys_version: 0.54.12
 updated: 2026-11-11
 owner: kernel
 source_of_truth: null
