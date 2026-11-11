@@ -297,7 +297,8 @@ int smp_init(void)
     vga_put_hex(trampoline_size);
     vga_puts(" bytes)\n");
 
-    /* 为BSP启用Local APIC定时器 */
+    /* 为BSP启用Local APIC定时器。校准的两个等待循环已加有界超时(V0.57.0),
+       失败会返回 -1 并退化到保守 ICR; 进桌面后由 apic64_timer_recalibrate 补校准。 */
     extern void apic64_init_timer(void);
     apic64_init_timer();
     per_cpu_current_proc[bsp_cpu_id] = 0;

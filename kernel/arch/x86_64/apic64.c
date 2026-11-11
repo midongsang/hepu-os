@@ -582,7 +582,9 @@ void apic64_init_timer(void)
     uint32_t icr;
     if (g_apic_timer_hz == 0 && apic64_calibrate_timer() != 0) {
         /* 校准失败回退：保守 ICR（对应 100MHz 总线假设），PIT 1kHz 仍在
-           投递调度 tick，系统不致停摆；打印告警便于后续定位。 */
+           投递调度 tick，系统不致停摆；打印告警便于后续定位。
+           注意：实测只改这个回退值并不能把校准失败的系统救回桌面（6250 与 62500
+           现象相同）—— 失败本身意味着此刻 PIT tick 不推进，不是频率快慢的问题。 */
         vga_puts("[APIC] WARN: timer calibration failed, fallback ICR=6250\n");
         icr = 6250;
     } else {
@@ -600,6 +602,26 @@ void apic64_init_timer(void)
        只触发一次即停）。bit17=周期，bit16=0 不屏蔽，向量 0x40。 */
     apic_write(APIC_LVT_TIMER, (1 << 17) | APIC_TIMER_VECTOR);
     apic_write(APIC_TIMER_ICR, icr);
+}
+
+/*/* V0.57.0: 启动期校准是否失败过(为 0 说明还没拿到真实频率, 值得在桌面就绪后补一次)。 */
+int apic64_timer_needs_recal(void) { return g_apic_timer_hz == 0; }
+
+/* V0.57.0: 运行期重校准。返回 0 成功并更新 ICR; 失败则保持当前 ICR 不动,
+ * 只是精度差一些, 系统照常跑。 */
+int apic64_timer_recalibrate(void)
+{
+    if (apic64_calibrate_timer() != 0) return -1;
+    uint32_t icr = g_apic_timer_hz / 1000;
+    if (icr < 100) icr = 100;
+    apic_write(APIC_LVT_TIMER, (1 << 17) | APIC_TIMER_VECTOR);
+    apic_write(APIC_TIMER_ICR, icr);
+    vga_puts("[APIC] timer recalibrated: tick_hz=");
+    vga_put_hex(g_apic_timer_hz);
+    vga_puts(" ICR=");
+    vga_put_hex(icr);
+    vga_puts("\n");
+    return 0;
 }
 
 /* APIC定时器中断处理（发送EOI） */

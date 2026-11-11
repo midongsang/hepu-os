@@ -1126,6 +1126,17 @@ void x86_64_kernel_main(void)
     /* 尝试启动桌面环境，失败则启动Shell */
     if (desktop64_init() == 0) {
         vga_puts("[INIT] Desktop environment ready\n");
+
+        /* V0.57.0: 启动期校准若超时失败(smp_init 阶段 PIT tick 未必已推进), 定时器
+           会退化到 ICR=6250 —— 那是"假设 100MHz 总线"的旧魔数, QEMU 实测约 31MHz,
+           tick 会快约 4 倍(影响 CPU 占用率/uptime 精度)。此处 tick 已确定在跑,
+           补做一次精确校准把频率拉回真实值。注意不能放在 irq64_init 之后立即做,
+           那个时刻访问 APIC 寄存器会触发页错误(CR2=0xF00003E0)。 */
+        extern int apic64_timer_needs_recal(void);
+        extern int apic64_timer_recalibrate(void);
+        if (apic64_timer_needs_recal() && apic64_timer_recalibrate() == 0)
+            vga_puts("[OK] APIC timer recalibrated at desktop\n");
+
         klog64_log("[GUI] desktop environment ready");
 
         /* Crypto 完整懒加载 + TLS (延迟到桌面后，启动更快) */

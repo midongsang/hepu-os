@@ -29,7 +29,9 @@ wait_desktop() {
     local limit=${1:-12}
     for _ in $(seq 1 "$limit"); do
         sleep 5
-        grep -q 'Hepu Desktop started' "$SERIAL" 2>/dev/null && return 0
+        # 判据二选一: 桌面启动标记, 或主循环帧统计(后者由桌面主循环周期性打印,
+        # 即使启动早期日志因 fb 接管而没进串口也能命中)
+        grep -aq 'Hepu Desktop started\|[P0] frames' "$SERIAL" 2>/dev/null && return 0
     done
     return 1
 }
