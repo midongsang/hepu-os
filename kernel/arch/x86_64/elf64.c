@@ -651,7 +651,7 @@ int elf64_relocate(elf64_loaded_t *mod)
     uint64_t dyn_rela = 0, dyn_relasz = 0;
     uint64_t dyn_symtab = 0, dyn_strtab = 0;
     uint64_t dyn_jmprel = 0, dyn_pltrelsz = 0;
-    uint64_t dyn_syment = 24;
+    uint64_t dyn_syment = 24;   /* ELF64 规范固定 24; 下面的 DT_SYMENT 仅作记录 */
 
     elf64_phdr_t *phdr = (elf64_phdr_t*)((uint8_t*)mod->ehdr + ehdr->e_phoff);
     for (int i = 0; i < ehdr->e_phnum; i++) {
@@ -666,7 +666,7 @@ int elf64_relocate(elf64_loaded_t *mod)
                 case 8: dyn_relasz = val; break;
                 case 6: dyn_symtab = val; break;
                 case 5: dyn_strtab = val; break;
-                case 10: dyn_syment = val; break;
+                case 10: dyn_syment = val; (void)dyn_syment; break;
                 case 23: dyn_jmprel = val; break;
                 case 2: dyn_pltrelsz = val; break;
             }
@@ -730,6 +730,10 @@ int elf64_relocate(elf64_loaded_t *mod)
                 uint64_t *loc = (uint64_t*)((uint8_t*)mod->base + jrel[j].r_offset);
                 uint32_t sym_idx = ELF64_R_SYM(jrel[j].r_info);
                 uint32_t type = ELF64_R_TYPE(jrel[j].r_info);
+                /* V0.55.1: 只处理可解析的重定位类型, 其余跳过。
+                 * 旧实现不校验类型, 把任何类型都按 64 位绝对地址写入,
+                 * 遇到 JUMP_SLOT/COPY/GLOB_DAT 等会写坏目标位置。 */
+                if (type != R_X86_64_RELATIVE && type != R_X86_64_64) continue;
                 if (sym_idx > 0 && mod->symtab) {
                     elf64_sym_t *sym = &mod->symtab[sym_idx];
                     const char *name = ELF64_SYM_NAME(sym, mod->strtab);

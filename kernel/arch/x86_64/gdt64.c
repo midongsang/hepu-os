@@ -69,13 +69,14 @@ extern void vga_put_hex(uint64_t val);
 extern void *memset(void *dst, int val, size_t n);
 
 /* 设置普通GDT条目 */
-static void gdt_set_entry(int index, uint32_t base, uint32_t limit, uint8_t access, uint8_t gran)
+/* V0.55.1: 保留的 GDT 项构造工具, 当前 GDT 用静态表构建, 暂无调用方 */
+static __attribute__((unused)) void gdt_set_entry(int index, uint32_t base, uint32_t limit, uint8_t access, uint8_t gran)
 {
     gdt64[index].entry.limit_low = limit & 0xFFFF;
     gdt64[index].entry.base_low = base & 0xFFFF;
     gdt64[index].entry.base_mid = (base >> 16) & 0xFF;
     gdt64[index].entry.access = access;
-    gdt64[index].entry.granularity = (limit >> 16) & 0x0F | gran;
+    gdt64[index].entry.granularity = ((limit >> 16) & 0x0F) | gran;
     gdt64[index].entry.base_high = (base >> 24) & 0xFF;
     gdt64[index].base_high32 = 0;
     gdt64[index].reserved = 0;

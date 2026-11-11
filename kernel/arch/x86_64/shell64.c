@@ -5,6 +5,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+extern void vga_put_hex(uint64_t val);   /* V0.55.1: 提前原型, 消除隐式声明冲突 */
 #include "process64.h"
 #include "domain64.h"
 #include "capability64.h"
@@ -1412,8 +1413,8 @@ static void shell_cmd_uniq(int argc, char **argv)
     /* 逐行输出,跳过连续重复行 */
     char last_line[128] = "";
     char current_line[128];
-    int pos = 0;
     int current_pos = 0;
+    int pos = 0;      /* V0.55.1: 仅记录上一行结束位置, 当前无人读取 */
     for (int i = 0; i <= len; i++) {
         if (i == len || buf[i] == '\n') {
             current_line[current_pos] = 0;
@@ -1429,6 +1430,7 @@ static void shell_cmd_uniq(int argc, char **argv)
             }
             current_pos = 0;
             pos = i + 1;
+            (void)pos;
         } else if (current_pos < 127) {
             current_line[current_pos++] = buf[i];
         }
@@ -2004,18 +2006,6 @@ static void shell_cmd_tty(int argc, char **argv)
     vga_puts("/dev/tty1\n");
 }
 
-/* id命令：显示userID */
-static void shell_cmd_id(int argc, char **argv)
-{
-    vga_puts("uid=0(root) gid=0(root) groups=0(root)\n");
-}
-
-/* who命令：显示登录user */
-static void shell_cmd_who(int argc, char **argv)
-{
-    vga_puts("root     tty1         2026-10-11 00:00\n");
-}
-
 static void shell_cmd_mkdir(int argc, char **argv)
 {
     if (argc < 2) {
@@ -2465,7 +2455,6 @@ static void shell_cmd_netstat(int argc, char **argv)
     uint8_t mac[6];
     if (eth64_get_mac(mac) == 0) {
         vga_puts("  MAC: ");
-        char num[8];
         static const char hex[] = "0123456789ABCDEF";
         for (int i = 0; i < 6; i++) {
             vga_puts((char[]){hex[mac[i] >> 4], hex[mac[i] & 0xF], 0});
@@ -3085,7 +3074,6 @@ void shell64_run(void)
     vga_puts("\nHepuOS 64-bit Shell v1.0\n");
     vga_puts("Type 'help' for commands.\n");
     vga_puts("[DBG] kbd_irq=");
-    extern void vga_put_hex(uint64_t);
     vga_put_hex(g_kbd_irq_count);
     vga_puts("\n");
 

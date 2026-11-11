@@ -363,7 +363,8 @@ int sec_get_process_context(int pid, sec_context_t *ctx)
 int sec_set_file_context(const char *path, sec_context_t *ctx) { (void)path;(void)ctx; return 0; }
 int sec_get_file_context(const char *path, sec_context_t *ctx)
 {
-    if (!ctx) return -1; (void)path;
+    if (!ctx) return -1;
+    (void)path;
     ctx->domain = 0;
     ctx->type = sec_get_type("public_t");
     ctx->level = 0; ctx->category = 0;

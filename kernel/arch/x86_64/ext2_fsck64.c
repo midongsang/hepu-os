@@ -246,7 +246,9 @@ static int check_group_descriptors(const ext2_superblock_t *sb,
 }
 
 /* 检查inode */
-static int check_inode(const ext2_inode_t *inode, int ino)
+/* V0.55.1: check_inode 已实现但 fsck 主流程目前只校验超级块/位图, 尚未遍历
+ * inode 表, 因此该检查暂无调用点(功能缺口, 已在文档记录)。 */
+static __attribute__((unused)) int check_inode(const ext2_inode_t *inode, int ino)
 {
     int errors = 0;
 
@@ -256,8 +258,10 @@ static int check_inode(const ext2_inode_t *inode, int ino)
         return 0;
     }
 
-    /* 检查链接计数 */
-    if (inode->i_links_count > 65535) {
+    /* 检查链接计数。
+     * V0.55.1: 旧判断 "> 65535" 对 uint16_t 恒假, 等于从未检查;
+     * 已分配的 inode 链接计数为 0 才是真正的异常(孤立 inode)。 */
+    if (inode->i_links_count == 0) {
         vga_puts("[FSCK64]   ERROR: Inode ");
         fsck_putint(ino);
         vga_puts(" bad links count: ");

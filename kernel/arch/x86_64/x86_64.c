@@ -308,15 +308,14 @@ void x86_64_init_paging(uint64_t *pml4)
 /* 映射单个页面 */
 void x86_64_map_page(uint64_t *pml4, uint64_t virt, uint64_t phys, uint64_t flags)
 {
+    /* V0.55.1: 这是早期空桩, 不建立任何映射 —— 调用它会静默失败。
+     * 需要真实映射请用 vmm64_map_page()(vmm64.c)。当前无调用者。 */
     uint64_t pml4_idx = (virt >> PML4_SHIFT) & PML4_MASK;
     uint64_t pdpt_idx = (virt >> PDPT_SHIFT) & PDPT_MASK;
     uint64_t pd_idx   = (virt >> PD_SHIFT) & PD_MASK;
     uint64_t pt_idx   = (virt >> PT_SHIFT) & PT_MASK;
-
-    /* 简化：需要动态分配页表 */
-    /* 实际实现需要分配PDPT/PD/PT页面 */
-
-    /* 这里只做框架，实际映射需要完整的页表分配器 */
+    (void)pml4; (void)phys; (void)flags;
+    (void)pml4_idx; (void)pdpt_idx; (void)pd_idx; (void)pt_idx;
 }
 
 /* 虚拟地址转物理地址 */

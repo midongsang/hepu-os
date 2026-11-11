@@ -226,7 +226,8 @@ void gfx_algo_draw_font8x16(gfx_algo_backend_t *ops, int x, int y, char c,
                              const uint8_t *font_data, uint32_t color)
 {
     if (!ops || !ops->put_pixel || !font_data) return;
-    if (c < 0 || c >= 128) return;
+    /* V0.55.1: c 是 char(有符号), "c >= 128" 恒假, 负数已由 c<0 拦下 */
+    if (c < 0) return;
     const uint8_t *glyph = font_data + (uint8_t)c * 16;
     for (int row = 0; row < 16; row++) {
         uint8_t bits = glyph[row];

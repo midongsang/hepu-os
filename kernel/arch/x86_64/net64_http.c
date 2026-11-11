@@ -31,11 +31,6 @@ static int http_strlen(const char *s) {
     return i;
 }
 
-static int http_strcmp(const char *a, const char *b) {
-    while (*a && *b && *a == *b) { a++; b++; }
-    return *a - *b;
-}
-
 static void http_itoa(int n, char *s) {
     int i = 0, sign = n;
     char tmp[16];

@@ -246,6 +246,9 @@ int rtl8139_recv(uint8_t *buffer, uint32_t max_size)
 
     /* 读取接收缓冲区 */
     uint16_t cbr = rtl_inw(rtl_io_base + REG_CBR);
+    /* V0.55.1: 读 CBR 目前只作硬件状态快照, 未参与边界校验(遗留缺口)。
+     * 收包正确性仍依赖 rtl_rx_offset 的自增回绕, 后续应按 CBR 交叉校验。 */
+    (void)cbr;
     uint8_t *pkt = rtl_rx_buffer + rtl_rx_offset;
 
     /* 读取包头：状态(2字节) + 长度(2字节) */

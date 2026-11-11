@@ -57,9 +57,6 @@ extern int copy_from_user(void *kernel_dst, const void *user_src, size_t size);
 /* 系统调用入口（在entry_64.S中定义） */
 extern void syscall_entry_64(void);
 
-/* 当前进程ID */
-static uint64_t current_pid = 1;
-
 /* 完整系统调用分发（在syscall64_full.c中定义） */
 extern int64_t syscall64_dispatch(int number, int64_t arg1, int64_t arg2,
                                    int64_t arg3, int64_t arg4, int64_t arg5,

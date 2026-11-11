@@ -66,8 +66,8 @@ extern int gfx64_get_height(void);
 extern void vga_puts(const char *s);
 
 /* SMP渲染锁：防止多CPU同时渲染导致竞争 */
-typedef struct { volatile int lock; } render_lock_t;
-static render_lock_t g_render_lock = {0};
+/* V0.55.1: 这里的 g_render_lock 从未被任何代码加/解锁, 属残留死代码, 已移除。
+ * 桌面为单线程渲染(中断不上桌面 API), 当前无需互斥; 若将来做多线程渲染需重新引入。 */
 
 /* 字符串函数兼容 */
 extern int strcmp(const char *s1, const char *s2);
@@ -355,11 +355,17 @@ static void load_ui_from_config(hsqml_node_t *ui)
     g_shell.ui.font_large = hsqml_get_number(ui, "font_large", 18);
 }
 
-/* 从配置加载面板开关 */
+static void load_panel_from_config(hsqml_node_t *panel);   /* 前置声明 */
+
+/* 从配置加载面板组：逐个 Panel{} 子节点应用 */
 static void load_panels_from_config(hsqml_node_t *panels)
 {
-    (void)panels;
-    /* 临时空操作，待hsqml解析器稳定后恢复 */
+    if (!panels) return;
+    int n = hsqml_count_children(panels, "Panel");
+    for (int i = 0; i < n; i++) {
+        hsqml_node_t *panel = hsqml_get_child(panels, "Panel", i);
+        if (panel) load_panel_from_config(panel);
+    }
 }
 
 /* 从配置加载面板 */
@@ -404,12 +410,46 @@ static int hs_read_config_file(char *buf, int max_len)
     return n;
 }
 
-/* 加载配置 */
+/* 加载配置: 解析 /etc/hepushell/config.hsqml 并应用 Theme / UI / Panels
+ * V0.55.1: 旧实现是空桩(注释写着"完全跳过配置加载"), 于是图形界面写回的
+ * 配色与尺寸在重启后完全不生效 —— load_*_from_config 四个函数长期是死代码。
+ * 现在真正解析并应用; 无配置文件或解析失败时安全回退到硬编码默认值。 */
+static hsqml_result_t g_cfg_res;    /* 静态: 解析结果较大, 不放栈上 */
+
 static int hpdesk_load_config(const char *config)
 {
     (void)config;
-    /* 完全跳过配置加载，使用硬编码默认值 */
-    return 0;
+    static char cfgbuf[4096];
+    const char *src;
+    int n = hs_read_config_file(cfgbuf, sizeof(cfgbuf));
+    if (n > 0) {
+        src = cfgbuf;
+    } else {
+        /* V0.55.1: 配置文件缺失时回退到内置 default_config(此前该常量从未被使用) */
+        vga_puts("[Hepu Desktop] config: no file, using built-in defaults\n");
+        src = default_config;
+    }
+    /* 注意: hsqml_parse 成功时返回"根节点数"(正数), 失败返回 -1 或置 error,
+     * 不能用 "!=0" 判失败 —— 语义与常见 0=成功 的约定相反。 */
+    int pr = hsqml_parse(src, &g_cfg_res);
+    if (pr < 0 || g_cfg_res.error || g_cfg_res.root_count <= 0) {
+        vga_printf("[Hepu Desktop] config: parse failed rc/roots=%d/%d err=%d line=%d msg=%s n=%d\n",
+                   g_cfg_res.root_count, g_cfg_res.node_count, g_cfg_res.error,
+                   g_cfg_res.error_line, g_cfg_res.error_msg, n);
+        return -1;
+    }
+
+    int applied = 0;
+    for (int i = 0; i < g_cfg_res.root_count; i++) {
+        hsqml_node_t *r = g_cfg_res.roots[i];
+        if (!r) continue;
+        if (str_cmp(r->type, "Theme") == 0) { load_theme_from_config(r); applied++; }
+        else if (str_cmp(r->type, "UI") == 0) { load_ui_from_config(r); applied++; }
+        else if (str_cmp(r->type, "Panels") == 0) { load_panels_from_config(r); applied++; }
+    }
+    vga_printf("[Hepu Desktop] config: %d sections, background=0x%x\n",
+               applied, (unsigned)g_shell.colors.bg);
+    return applied > 0 ? 0 : -1;
 }
 
 /* 数字转字符串 */
@@ -580,9 +620,12 @@ static uint32_t hsl_to_rgb(int h, int s, int l)
     g = HSL_COMP(tg);
     b = HSL_COMP(tb);
     #undef HSL_COMP
-    if (r > 255) r = 255; if (r < 0) r = 0;
-    if (g > 255) g = 255; if (g < 0) g = 0;
-    if (b > 255) b = 255; if (b < 0) b = 0;
+    if (r > 255) r = 255;
+    if (r < 0) r = 0;
+    if (g > 255) g = 255;
+    if (g < 0) g = 0;
+    if (b > 255) b = 255;
+    if (b < 0) b = 0;
     return ((uint32_t)r << 16) | ((uint32_t)g << 8) | b;
 }
 
@@ -1624,7 +1667,7 @@ static void hs_settings_window_render(hs_window_t *w)
                            rx, ry, "System Information", g_shell.colors.panel_fg, 16);
         ry += 30;
         const char *labels[] = {"OS:", "Kernel:", "CPU:", "Memory:", "Graphics:", "Filesystem:"};
-        const char *values[] = {"Hepu OS v0.55.0", "64-bit SMP", "4 cores", "2GB",
+        const char *values[] = {"Hepu OS v0.55.1", "64-bit SMP", "4 cores", "2GB",
                                 "VBE 1024x768", "ext2"};
         for (int i = 0; i < 6; i++) {
             font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
@@ -2181,7 +2224,7 @@ static int g_locked = 0;       /* 0=桌面, 1=锁屏, 2=登录 */
 static char g_password[32] = {0};
 static int g_password_len = 0;
 static int g_vkb_visible = 0;  /* V0.13.39: 锁屏虚拟键盘 */
-static int g_vkb_shift = 0;    /* 保留: shift状态 */
+/* V0.55.1: 虚拟键盘尚未实现 shift 状态(该变量从未被读写), 已移除声明。 */
 
 /* 锁屏界面：模糊背景+大时钟 */
 static void hs_lock_screen_render(void)
@@ -2309,7 +2352,6 @@ static void hs_login_screen_render(void)
             }
         }
         /* Backspace 键(第4行右侧) */
-        int row4_x = kb_x + (kb_w - 8 * 0) / 2;
         int bsw = hs_sx(76);
         int bsx = kb_x + kb_w - bsw;
         int bsy = kb_y + 3 * hs_sy(38);
@@ -2440,7 +2482,7 @@ static void hs_sidebar_render(void)
 
         /* 系统信息 */
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           sx + hs_sx(20), content_y, "Hepu OS v0.55.0", g_shell.colors.accent, hs_s(14));
+                           sx + hs_sx(20), content_y, "Hepu OS v0.55.1", g_shell.colors.accent, hs_s(14));
         content_y += hs_sy(24);
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            sx + hs_sx(20), content_y, "Kernel: 64-bit SMP", g_shell.colors.panel_fg, hs_s(12));
@@ -2998,11 +3040,9 @@ void hpdesk_handle_click(int x, int y)
         /* 登录按钮 */
         {
             int center_x = g_shell.screen_width / 2;
-            int input_w = hs_sx(240);
             int input_h = hs_sy(36);
             int avatar_size = hs_s(96);
             int avatar_y = hs_sy(180);
-            int input_x = center_x - input_w / 2;
             int input_y = avatar_y + avatar_size + hs_sy(60);
             int btn_w = hs_sx(100);
             int btn_h = hs_sy(32);

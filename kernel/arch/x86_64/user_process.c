@@ -111,12 +111,6 @@ static void user_process_mem_init(int slot);
 /* 汇编函数：切换到用户态 */
 extern void user_enter(uint64_t rip, uint64_t rsp, uint64_t rflags) __attribute__((noreturn));
 
-static void uproc_memcpy(void *dst, const void *src, int n) {
-    uint8_t *d = (uint8_t*)dst;
-    const uint8_t *s = (const uint8_t*)src;
-    for (int i = 0; i < n; i++) d[i] = s[i];
-}
-
 /* 创建用户页表：复制内核PML4条目（用户态可访问内核），添加用户栈和代码段映射 */
 static void ua_fail(uint64_t pml4_phys, int isolated)
 {
@@ -167,7 +161,6 @@ static uint64_t create_user_page_table_ex(void *code_data, uint64_t code_size, u
     /* 映射用户代码段（按4KB页对齐） */
     if (code_data && code_size > 0) {
         /* V0.20.93: 如果code_vaddr不是页对齐到0x40000000, 补一页放ELF头 */
-        uint64_t map_start = code_vaddr;
         if (code_vaddr > 0x40000000ULL) {
             uint64_t phys0 = pmm64_alloc_page();
             if (phys0) {
@@ -378,7 +371,7 @@ static uint64_t hepu_elf_vaddr_to_fileoff(const uint8_t *elf, uint64_t elf_size,
     if (e_phoff == 0 || e_phnum == 0 || e_phnum > 128 || e_phentsize < 56) return 0;
     if (e_phoff + (uint64_t)e_phnum * e_phentsize > elf_size) return 0;
     for (int i = 0; i < e_phnum; i++) {
-        uint8_t *ph = elf + e_phoff + (uint64_t)i * e_phentsize;
+        const uint8_t *ph = elf + e_phoff + (uint64_t)i * e_phentsize;
         if (*(uint32_t *)(ph + 0) != 1 /* PT_LOAD */) continue;
         uint64_t p_offset = *(uint64_t *)(ph + 8);
         uint64_t p_vaddr = *(uint64_t *)(ph + 16);
@@ -394,37 +387,6 @@ static uint64_t hepu_elf_vaddr_to_fileoff(const uint8_t *elf, uint64_t elf_size,
 }
 
 /* 通过用户页表把虚拟地址翻译成内核可写的指针；失败返回 0 */
-static void *hepu_user_ptr(uint64_t pml4_phys, uint64_t vaddr)
-{
-    /* 必须落在用户窗口 [0x40000000, 0x80000000) */
-    if (vaddr < 0x40000000ULL || vaddr >= 0x80000000ULL) return 0;
-    uint64_t *l4 = (uint64_t *)vmm64_phys_to_virt(pml4_phys);
-    uint64_t e4 = l4[(vaddr >> 39) & 0x1FF];
-    if (!(e4 & 1)) return 0;
-    if (!(e4 & 4)) return 0;  /* U/S 位必须为用户 */
-    uint64_t *l3 = (uint64_t *)vmm64_phys_to_virt(e4 & 0x000FFFFFFFFFF000ULL);
-    uint64_t e3 = l3[(vaddr >> 30) & 0x1FF];
-    if (!(e3 & 1)) return 0;
-    if (!(e3 & 4)) return 0;
-    if (e3 & 0x80) {  /* 大页: 直接返回 */
-        uint64_t phys = e3 & 0x000FFFFFE00000ULL;
-        return (uint8_t *)vmm64_phys_to_virt(phys) + (vaddr & 0x1FFFFF);
-    }
-    uint64_t *l2 = (uint64_t *)vmm64_phys_to_virt(e3 & 0x000FFFFFFFFFF000ULL);
-    uint64_t e2 = l2[(vaddr >> 21) & 0x1FF];
-    if (!(e2 & 1)) return 0;
-    if (!(e2 & 4)) return 0;
-    if (e2 & 0x80) {  /* 大页 */
-        uint64_t phys = e2 & 0x000FFFFFFFE00000ULL;
-        return (uint8_t *)vmm64_phys_to_virt(phys) + (vaddr & 0x1FFFFF);
-    }
-    uint64_t *l1 = (uint64_t *)vmm64_phys_to_virt(e2 & 0x000FFFFFFFFFF000ULL);
-    uint64_t e1 = l1[(vaddr >> 12) & 0x1FF];
-    if (!(e1 & 1)) return 0;
-    if (!(e1 & 4)) return 0;
-    uint64_t phys = e1 & 0x000FFFFFFFFFF000ULL;
-    return (uint8_t *)vmm64_phys_to_virt(phys) + (vaddr & 0xFFF);
-}
 
 /* V0.33.5: W^X 写保护版本 — 拒绝写到可执行页。
  * 内核写用户页时(GOT重定位等), 如果该页 NX=0(可执行), 拒绝写。 */
@@ -474,7 +436,7 @@ static int hepu_apply_irelative(user_process_t *proc, const uint8_t *elf, uint64
     /* 找 PT_DYNAMIC */
     uint64_t dyn_fileoff = 0, dyn_size = 0;
     for (int i = 0; i < e_phnum; i++) {
-        uint8_t *ph = elf + e_phoff + (uint64_t)i * e_phentsize;
+        const uint8_t *ph = elf + e_phoff + (uint64_t)i * e_phentsize;
         if (*(uint32_t *)(ph + 0) != 2 /* PT_DYNAMIC */) continue;
         dyn_fileoff = *(uint64_t *)(ph + 8);
         dyn_size = *(uint64_t *)(ph + 32);
@@ -531,7 +493,7 @@ static int hepu_apply_irelative(user_process_t *proc, const uint8_t *elf, uint64
             e_shoff <= elf_size &&
             (uint64_t)e_shnum <= (elf_size - e_shoff) / e_shentsize) {
             for (int i = 0; i < e_shnum && ntab < 8; i++) {
-                uint8_t *sh = elf + e_shoff + (uint64_t)i * e_shentsize;
+                const uint8_t *sh = elf + e_shoff + (uint64_t)i * e_shentsize;
                 if (*(uint32_t *)(sh + 4) != 4 /* SHT_RELA */) continue;
                 uint64_t off = *(uint64_t *)(sh + 0x18);
                 uint64_t sz  = *(uint64_t *)(sh + 0x20);
@@ -557,6 +519,16 @@ static int hepu_apply_irelative(user_process_t *proc, const uint8_t *elf, uint64
             tab_size[ntab] = pltrelsz;
             ntab++;
         }
+    }
+    /* V0.55.1 修复: DT_RELA 指向的 .rela.dyn 此前只算偏移(rela2_off)却从未加入
+     * 上表, 若 IRELATIVE 只出现在 DT_RELA 而不在 section header 列表里, 这些
+     * ifunc 解析器会被完全跳过。此处按与上面相同的去重规则补入。 */
+    if (rela2_off && relasz && ntab < 8) {
+        int dup2 = 0;
+        for (int i = 0; i < ntab; i++) {
+            if (tab_off[i] == rela2_off) { dup2 = 1; break; }
+        }
+        if (!dup2) { tab_off[ntab] = rela2_off; tab_size[ntab] = relasz; ntab++; }
     }
     if (ntab == 0) return 0;
 
@@ -584,7 +556,7 @@ static int hepu_apply_irelative(user_process_t *proc, const uint8_t *elf, uint64
     uint64_t tbl_off  = tab_off[which];
     uint64_t tbl_size = tab_size[which];
     for (uint64_t off = 0; off + 24 <= tbl_size; off += 24) {
-        uint8_t *rela = elf + tbl_off + off;
+        const uint8_t *rela = elf + tbl_off + off;
         uint64_t r_offset = *(uint64_t *)(rela);
         uint64_t r_info = *(uint64_t *)(rela + 8);
         int64_t r_addend = *(int64_t *)(rela + 16);
@@ -868,13 +840,8 @@ int user_process_map_extra(int pid, void *data, uint64_t size, uint64_t vaddr)
                     /* zero page first */
                     for (int z = 0; z < 4096; z++) dst[z] = 0;
                     /* copy file bytes for this page */
-                    uint64_t file_start = pg - p_vaddr + p_offset;
-                    uint64_t page_offset_in_seg = pg - p_vaddr;
-                    uint64_t copy_lo = 0;
-                    uint64_t copy_sz = 4096;
-                    if (page_offset_in_seg < 0) { copy_lo = -page_offset_in_seg; }
-                    uint64_t seg_off = pg - start_page;
-                    /* simpler: copy bytes that fall in [pg, pg+4096) from file */
+                    /* V0.55.1: 旧代码用 uint64 做 "<0" 判断(恒假), copy_lo 从未生效;
+                     * 页内偏移实际由下面的 copy_start/copy_end 正确裁剪, 故删除。 */
                     uint64_t seg_start = p_vaddr;
                     uint64_t seg_end = p_vaddr + p_filesz;
                     uint64_t copy_start = (pg > seg_start) ? pg : seg_start;
@@ -1266,7 +1233,6 @@ uint64_t hepu_module_load(int pid, const char *path)
         uint64_t p_vaddr = *(uint64_t*)(ph + 0x10);
         uint64_t p_filesz = *(uint64_t*)(ph + 0x20);
         if (p_filesz == 0) continue;
-        uint64_t target = base + (p_vaddr - map_start);
         /* 逐页拷贝 */
         uint64_t start_page = p_vaddr & ~0xFFFULL;
         uint64_t end_page = (p_vaddr + p_filesz + 0xFFF) & ~0xFFFULL;
@@ -1360,7 +1326,7 @@ module_map_done: ;
                 if (*(uint32_t*)ph != 2) continue;
                 uint64_t p_offset = *(uint64_t*)(ph + 0x08);
                 uint64_t p_filesz = *(uint64_t*)(ph + 0x20);
-                uint64_t rela = 0, relasz = 0, relasym = 0;
+                uint64_t rela = 0, relasz = 0;
                 for (uint64_t d = 0; d + 16 <= p_filesz; d += 16) {
                     uint64_t tag = *(uint64_t*)(buf + p_offset + d);
                     uint64_t val = *(uint64_t*)(buf + p_offset + d + 8);
@@ -1602,7 +1568,6 @@ int hepu_dynlink_relocate(int pid, uint8_t *exe_buf, uint64_t exe_size)
         uint64_t r_info = *(uint64_t*)(exe_buf + rel_off + 8);
         uint64_t r_addend = *(int64_t*)(exe_buf + rel_off + 16);
         uint32_t sym_idx = r_info >> 32;
-        uint32_t type = r_info & 0xFFFFFFFF;
         /* 取符号名 */
         uint64_t sym_off = dynsym + sym_idx * 24;
         uint32_t st_name = *(uint32_t*)(exe_buf + sym_off);
@@ -2156,8 +2121,8 @@ int user_process_exec(const char *path)
     return pid;
 }
 
-/* 用户栈（16KB） */
-static uint8_t user_stack[16384] __attribute__((aligned(16)));
+/* V0.55.1: 这里曾有一个 16KB 的静态 user_stack, 但无任何代码引用它
+ * (用户栈实际由 g_user_stack_phys + hepu_build_initial_stack 构建), 已移除。 */
 
 /* 启动示例用户程序 */
 void user_process_test(void)

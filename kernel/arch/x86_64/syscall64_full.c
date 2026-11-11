@@ -100,7 +100,10 @@ static int copy_user_path(char *dst, size_t dstsz, const char *user_path)
 #define SYSCALL_REBOOT      SYS_REBOOT
 #define SYSCALL_NET_STATS   SYS_NET_STATS
 #define SYSCALL_MKFS        SYS_MKFS
-#define SYSCALL_UMASK       226   /* V0.54.6: 赫普 OS 未统一，暂时保留 */
+/* V0.55.1 修复: 原值 226 与 SYS_MKFS(kernel/include/syscall.h) 撞号,
+ * 表内 [SYS_HEPU_PS] 之前的 [SYS_MKFS]=wrap_mkfs 被 [SYSCALL_UMASK]=wrap_umask
+ * 静默覆盖 —— 即 mkfs 系统调用实际执行的是 umask。改到空闲号 209。 */
+#define SYSCALL_UMASK       209
 
 /* ---- wait4/creations ---- */
 #define SYSCALL_WAIT4       SYS_WAIT4
@@ -1062,7 +1065,8 @@ static int64_t sys_select(int nfds, uint64_t readfds, uint64_t writefds, uint64_
 }
 
 /* V0.20.73: ppoll 真实桩 — glibc 启动会调 */
-static int64_t sys_ppoll(uint64_t fds, int nfds, uint64_t timeout, uint64_t sigmask) {
+/* V0.55.1: ppoll 实现已就绪但尚未挂入 syscall 表(预留) */
+static __attribute__((unused)) int64_t sys_ppoll(uint64_t fds, int nfds, uint64_t timeout, uint64_t sigmask) {
     (void)fds;(void)nfds;(void)timeout;(void)sigmask; return 0;
 }
 
@@ -1502,7 +1506,7 @@ static int64_t sys_pipe(int *fds) {
     /* 安全修复：fds 是用户指针，旧实现仅查地址范围就内核态直写，
      * SMAP 开启或页未映射时 ring0 写用户地址 → #PF → 整机 hlt。
      * 一律走 copy_to_user（含范围+逐页映射校验+STAC）。 */
-    int pid = -1, wid = -1;
+    int pid = -1;
     for (int i = 0; i < MAX_PIPES; i++) {
         if (!g_pipes[i].used) { pid = i; break; }
     }

@@ -1,7 +1,7 @@
 ---
 title: 内核优化与兼容预埋路线（KERNEL_OPT_PLAN）
 status: active
-sys_version: 0.55.0
+sys_version: 0.55.1
 updated: 2026-11-01
 owner: planning
 source_of_truth: null

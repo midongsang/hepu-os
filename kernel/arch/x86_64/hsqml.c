@@ -28,13 +28,6 @@ static void str_cpy(char *dst, const char *src)
     *dst = 0;
 }
 
-static void str_ncpy(char *dst, const char *src, int n)
-{
-    int i = 0;
-    while (i < n - 1 && src[i]) { dst[i] = src[i]; i++; }
-    dst[i] = 0;
-}
-
 static int is_space(char c)
 {
     return c == ' ' || c == '\t' || c == '\n' || c == '\r';
@@ -109,7 +102,7 @@ static void lexer_skip_space(lexer_t *lex)
         }
         lexer_skip_space(lex);
     }
-    /* 跳过注释 /* ... * / */
+    /* 跳过块注释(星号斜杠 形式) */
     if (lex->pos + 1 < lex->len &&
         lex->src[lex->pos] == '/' && lex->src[lex->pos + 1] == '*') {
         lexer_advance(lex); lexer_advance(lex);

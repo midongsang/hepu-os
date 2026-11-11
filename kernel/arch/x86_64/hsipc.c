@@ -15,12 +15,6 @@ static int str_cmp(const char *s1, const char *s2)
     return *(const unsigned char *)s1 - *(const unsigned char *)s2;
 }
 
-static void str_cpy(char *dst, const char *src)
-{
-    while (*src) *dst++ = *src++;
-    *dst = 0;
-}
-
 static int str_len(const char *s)
 {
     int n = 0;

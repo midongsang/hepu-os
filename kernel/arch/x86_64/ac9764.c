@@ -137,7 +137,8 @@ static uint8_t ac97_read_bm_byte(uint16_t reg)
     return ac97_inb(ac97_dev.bus_master_base + reg);
 }
 
-static uint16_t ac97_read_bm_word(uint16_t reg)
+/* V0.55.1: 预留的 AC97 总线主控寄存器读, 当前未接入 */
+static __attribute__((unused)) uint16_t ac97_read_bm_word(uint16_t reg)
 {
     if (!ac97_dev.bus_master_base) return 0;
     return ac97_inw(ac97_dev.bus_master_base + reg);

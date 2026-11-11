@@ -202,7 +202,7 @@ static void t_exec(const char *line)
     if (strcmp(cmd, "echo") == 0) { t_put(arg); return; }
     if (strcmp(cmd, "whoami") == 0) { t_put("user"); return; }
     if (strcmp(cmd, "ver") == 0 || strcmp(cmd, "version") == 0) {
-        t_put("Hepu OS v0.55.0 (x86_64)");
+        t_put("Hepu OS v0.55.1 (x86_64)");
         return;
     }
     if (strcmp(cmd, "date") == 0) {
@@ -653,7 +653,8 @@ static int f_filter_len = 0;
 static int f_matched[FS_MAX_ITEMS];   /* 过滤/排序后的显示索引 */
 static int f_match_count = 0;
 static int f_view_mode = 0;           /* 0=列表, 1=网格 */
-static int f_fs_menu = 0;             /* 0=桌面菜单, 1=文件菜单 */
+/* V0.55.1: 文件菜单状态当前未被使用(统一走桌面菜单), 先标注保留意图 */
+static int f_fs_menu __attribute__((unused)) = 0;   /* 0=桌面菜单, 1=文件菜单 */
 static int f_dclick_tick = 0;         /* 双击检测: 上次点击 tick */
 static char f_status2[FS_PROMPT_MAX + 1] = "";
 static hs_window_t *v_win = 0;
@@ -1449,7 +1450,7 @@ void hs_files_click(int x, int y)
         }
     }
 
-    int cx = f_win->x + 6, cy = f_win->y + 26 + 26;
+    int cy = f_win->y + 26 + 26;
     int rows = f_visible_rows();
     if (f_view_mode == 0) {
         int rel = (y - cy) / FS_ROW_H;

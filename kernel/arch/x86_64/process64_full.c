@@ -130,12 +130,6 @@ static spinlock_t scheduler_lock;
 static int ready_queue[PRIORITY_COUNT][MAX_PROCESSES];
 static int ready_queue_count[PRIORITY_COUNT];
 
-static void proc_memcpy(void *dst, const void *src, int n) {
-    uint8_t *d = (uint8_t*)dst;
-    const uint8_t *s = (const uint8_t*)src;
-    for (int i = 0; i < n; i++) d[i] = s[i];
-}
-
 static void proc_memset(void *dst, uint8_t val, int n) {
     uint8_t *d = (uint8_t*)dst;
     for (int i = 0; i < n; i++) d[i] = val;

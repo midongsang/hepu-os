@@ -123,7 +123,8 @@ void rtc64_init(void)
     vga_puts("[RTC64] Initializing Real Time Clock...\n");
 
     /* 读取状态寄存器B */
-    uint8_t status_b = rtc_read_register(RTC_REG_STATUS_B);
+    /* V0.55.1: 保留状态寄存器 B 的读取(硬件探测), 但其值当前未参与判断 */
+    (void)rtc_read_register(RTC_REG_STATUS_B);
 
     /* 启用周期性中断（如果需要） */
     /* status_b |= 0x40; */

@@ -110,7 +110,8 @@ void eth64_init(void)
 }
 
 /* 查找设备 */
-static eth_device_t *eth64_find(const char *name)
+/* V0.55.1: 按名字查找网卡设备(预留, 当前接口选择走默认网卡) */
+static __attribute__((unused)) eth_device_t *eth64_find(const char *name)
 {
     if (!name) return &eth_devices[0];
     for (int i = 0; i < ETH_MAX_DEVICES; i++) {

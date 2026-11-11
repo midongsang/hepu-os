@@ -71,7 +71,7 @@ static void tls_record_build_nonce(const uint8_t *iv, uint32_t iv_len,
 {
     memcpy(nonce, iv, iv_len);
     /* XOR sequence number到nonce的最后8字节 */
-    for (int i = 0; i < 8 && i < iv_len; i++) {
+    for (int i = 0; i < 8 && (uint32_t)i < iv_len; i++) {
         nonce[iv_len - 1 - i] ^= (seq_num >> (i * 8)) & 0xFF;
     }
 }
@@ -172,7 +172,7 @@ int tls_record_decrypt(tls_record_ctx_t *ctx,
     uint8_t type = record[0];
     uint16_t ciphertext_len = (record[3] << 8) | record[4];
 
-    if (record_len != TLS_RECORD_HEADER_SIZE + ciphertext_len) {
+    if ((uint32_t)record_len != (uint32_t)TLS_RECORD_HEADER_SIZE + ciphertext_len) {
         vga_printf("[TLS-REC] record length mismatch: expected %d, got %d\n",
                    TLS_RECORD_HEADER_SIZE + ciphertext_len, record_len);
         return -1;

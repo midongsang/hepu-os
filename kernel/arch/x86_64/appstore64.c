@@ -56,7 +56,7 @@ typedef struct {
 
 static appstore_app_t appstore_apps[APPSTORE_MAX_APPS];
 static int appstore_count = 0;
-static install_task_t install_tasks[8];
+static install_task_t install_tasks[8] __attribute__((unused));   /* 预留: 安装任务队列尚未实现 */
 static int appstore_initialized = 0;
 
 /* 字符串复制 */
@@ -71,11 +71,6 @@ static void store_strcpy(char *dst, const char *src, int max)
 }
 
 /* 字符串比较 */
-static int store_strcmp(const char *a, const char *b)
-{
-    while (*a && *b && *a == *b) { a++; b++; }
-    return *a - *b;
-}
 
 /* 字符串包含 */
 static int store_strstr(const char *haystack, const char *needle)

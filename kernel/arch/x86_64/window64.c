@@ -6,6 +6,8 @@
 #include <stdint.h>
 #include <stddef.h>
 
+void window64_set_focus(int id);   /* V0.55.1: 提前原型, 消除隐式声明冲突 */
+
 #define MAX_WINDOWS 16
 #define WINDOW_TITLE_HEIGHT 24
 #define WINDOW_BORDER_WIDTH 2

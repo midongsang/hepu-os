@@ -314,7 +314,7 @@ int tls_crypto_decrypt_record(const uint8_t *record, uint32_t record_len,
     uint16_t version = (record[1] << 8) | record[2];
     uint16_t length = (record[3] << 8) | record[4];
 
-    if (record_len < length + 5) return -1;
+    if ((uint32_t)record_len < (uint32_t)length + 5) return -1;
 
     /* AES-CBC解密 */
     uint8_t decrypted[2048];

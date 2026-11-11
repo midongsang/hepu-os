@@ -170,7 +170,6 @@ static const char *freq_itoa(int v)
 void hs_audio_render_indicator(int x, int y)
 {
     void *fb = gfx64_get_framebuffer();
-    char buf[16];
 
     /* 音量图标 */
     if (g_audio.muted) {

@@ -69,12 +69,14 @@ extern uint64_t vmm64_get_pml4(void);
 /* APIC寄存器读写 */
 static inline uint32_t apic_read(uint32_t reg)
 {
-    return *(volatile uint32_t *)(APIC_BASE_ADDR + reg);
+    /* V0.55.1: APIC_BASE_ADDR 是 int 字面量, int->指针在 64 位下行为依编译器而定
+     * (可能符号扩展成 0xFFFFFFFFF0000000), 显式经 uintptr_t 零扩展。 */
+    return *(volatile uint32_t *)(uintptr_t)((uintptr_t)APIC_BASE_ADDR + reg);
 }
 
 static inline void apic_write(uint32_t reg, uint32_t val)
 {
-    *(volatile uint32_t *)(APIC_BASE_ADDR + reg) = val;
+    *(volatile uint32_t *)(uintptr_t)((uintptr_t)APIC_BASE_ADDR + reg) = val;
 }
 
 /* I/O APIC寄存器读写 */
@@ -131,7 +133,8 @@ static uint64_t ioapic_pd[512] __attribute__((aligned(4096)));
 static uint64_t ioapic_pt[512] __attribute__((aligned(4096)));
 
 /* 直接映射高地址（使用静态页表，避免动态分配） */
-static void apic_map_high_address(uint64_t virt, uint64_t phys)
+/* V0.55.1: 预留, 供将来高地址 LAPIC 映射使用 */
+static __attribute__((unused)) void apic_map_high_address(uint64_t virt, uint64_t phys)
 {
     vga_puts("[MAP] start\n");
     /* 读取CR3获取PML4 */
@@ -356,7 +359,7 @@ static void ioapic_init(void)
     vga_puts("\n");
 
     /* 屏蔽所有中断（先全部屏蔽，再逐个启用） */
-    for (int irq = 0; irq <= ioapic_max_redir; irq++) {
+    for (int irq = 0; (uint32_t)irq <= ioapic_max_redir; irq++) {
         ioapic_write(IOAPIC_REDTBL_BASE + irq * 2, 0x10000);  /* 屏蔽位 */
         ioapic_write(IOAPIC_REDTBL_BASE + irq * 2 + 1, 0);
     }

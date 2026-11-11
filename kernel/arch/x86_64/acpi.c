@@ -63,7 +63,7 @@ acpi_rsdp_t *acpi_find_rsdp(void)
      */
     uint8_t *ebda_ptr = (uint8_t *)0x40E;
     uint16_t ebda_seg = (uint16_t)(ebda_ptr[0] | (ebda_ptr[1] << 8));
-    uint8_t *ebda = (uint8_t *)((uint32_t)ebda_seg << 4);
+    uint8_t *ebda = (uint8_t *)(uintptr_t)((uint32_t)ebda_seg << 4);
 
     /* 在EBDA中搜索 */
     for (uint32_t i = 0; i < 1024; i += 16) {
@@ -80,7 +80,7 @@ acpi_rsdp_t *acpi_find_rsdp(void)
 
     /* 在主BIOS区域搜索 */
     for (uint32_t addr = 0xE0000; addr < 0x100000; addr += 16) {
-        acpi_rsdp_t *rsdp = (acpi_rsdp_t *)addr;
+        acpi_rsdp_t *rsdp = (acpi_rsdp_t *)(uintptr_t)addr;
         if (rsdp->signature[0] == 'R' && rsdp->signature[1] == 'S' &&
             rsdp->signature[2] == 'D' && rsdp->signature[3] == ' ' &&
             rsdp->signature[4] == 'P' && rsdp->signature[5] == 'T' &&

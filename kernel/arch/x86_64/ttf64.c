@@ -96,8 +96,11 @@ static uint16_t ttf_char_to_glyph(ttf_font_t *f, uint32_t ch)
         const uint8_t *table = cmap + offset;
         uint16_t format = tt_read16(table);
 
-        /* 只处理Unicode映射 (platform 0,3) */
+        /* 只处理Unicode映射 (platform 0,3)。
+         * V0.55.1: platform 3 只接受 encoding 1(BMP)/10(全 Unicode),
+         * 否则会命中 Symbol(0) 等子表, 取到错误字形。 */
         if (platform != 0 && platform != 3) continue;
+        if (platform == 3 && encoding != 1 && encoding != 10) continue;
 
         if (format == 4) {
             /* Format 4: 分段映射 */

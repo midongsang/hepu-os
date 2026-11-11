@@ -338,7 +338,8 @@ static int ext2_find_in_dir(ext2_inode_t *dir_inode, const char *name, uint32_t 
             if (entry->rec_len < 8) break;  /* rec_len最小8字节，异常则退出 */
             if (entry->rec_len > ext2_block_size - offset) break;
 
-            if (entry->name_len > 0 && entry->name_len <= 255 &&
+            /* V0.55.1: name_len 是 uint8_t, "<=255" 恒真, 直接去掉该恒真项 */
+            if (entry->name_len > 0 &&
                 8 + (uint32_t)entry->name_len <= entry->rec_len) {
                 int match = 1;
                 for (uint8_t i = 0; i < entry->name_len; i++) {
@@ -1463,7 +1464,7 @@ int ext2_64_write_file_offset(const char *path, const uint8_t *data,
 
         uint32_t dst_start = (i == 0) ? start_off : 0;
         uint32_t dst_end = (i == blocks_needed - 1 && (end_offset64 % bs) != 0)
-                               ? (uint32_t)(end_offset64 % bs) : bs;
+                               ? (uint32_t)(end_offset64 % bs) : (uint32_t)bs;
         uint32_t src = i * bs + dst_start - start_off;
         memcpy(block_buf + dst_start, data + src, dst_end - dst_start);
 
@@ -1472,7 +1473,8 @@ int ext2_64_write_file_offset(const char *path, const uint8_t *data,
     }
 
     if (blocks_written != blocks_needed) {
-        return (blocks_written == 0) ? -1 : blocks_written * bs;
+        /* V0.55.1: 显式统一为 uint32_t, 避免 ?: 两侧有符号性不同 */
+        return (blocks_written == 0) ? -1 : (int)((uint32_t)blocks_written * (uint32_t)bs);
     }
 
     if (end_offset64 > inode.i_size) inode.i_size = (uint32_t)end_offset64;
@@ -2293,7 +2295,6 @@ int ext2_64_mkfs(uint32_t part_lba, uint32_t part_sectors, const char *label)
     /* 3. 各组: 块位图 / inode位图 / inode表 */
     for (uint32_t g = 0; g < groups; g++) {
         uint32_t gstart = g * bpg;
-        uint32_t gtotal = (g == groups - 1) ? (total_blocks - gstart) : bpg;
         uint32_t used = (g == 0) ? used_meta0 : used_meta_g;
         uint32_t bb = (g == 0) ? 2 : gstart;
         uint32_t ib = (g == 0) ? 3 : gstart + 1;

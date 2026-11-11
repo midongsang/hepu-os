@@ -99,16 +99,6 @@ static inline void e1000_write(uint32_t reg, uint32_t val)
     e1000_regs[reg / 4] = val;
 }
 
-/* 等待设备 TDH 追平 (发送完成) */
-static int e1000_wait_tx(void)
-{
-    int head = e1000_read(E1000_TDH);
-    for (int i = 0; i < 2000000; i++) {
-        if (e1000_read(E1000_TDH) == head) return 0;
-    }
-    return -1;
-}
-
 int e1000_init(void)
 {
     vga_puts("[E1000] Initializing...\n");

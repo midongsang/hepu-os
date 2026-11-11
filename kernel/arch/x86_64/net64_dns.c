@@ -267,7 +267,7 @@ uint32_t dns64_resolve(const char *hostname)
                 offset = dns_parse_name(response, len, offset, aname, sizeof(aname));
                 if (offset < 0) break;  /* 畸形名称，停止解析本响应 */
 
-                if (offset + sizeof(dns_rr_t) > len) break;
+                if (offset + sizeof(dns_rr_t) > (uint64_t)len) break;
                 dns_rr_t *rr = (dns_rr_t *)(response + offset);
                 offset += sizeof(dns_rr_t);
 

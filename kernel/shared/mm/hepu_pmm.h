@@ -50,7 +50,6 @@ static inline int hepu_pmm_is_reserved(uint64_t phys);
 static inline void hepu_pmm_get_stats(mm_phys_stats_t *out);
 static inline uint64_t hepu_pmm_free_bytes(void);
 static inline uint64_t hepu_pmm_get_memory_size_mb(void);
-static inline void hepu_pmm_dump_regions(void);
 
 /* --------------------------------------------------------------------------
  * 可选扩展（pmm64 有、mm 暂无；mm 用 stub 返回 0）

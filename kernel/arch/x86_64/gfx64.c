@@ -12,6 +12,10 @@
 #include "math64.h"
 #include "vg64.h"   /* P19.2: 图元统一到矢量管线 */
 
+/* V0.55.1: 以下两个函数在文件内先被调用、后定义, 在此提前原型以消除隐式声明 */
+void gfx64_blit_background(uint8_t *bg, int x, int y, int w, int h);
+void gfx64_blend_pixel(int x, int y, uint32_t fg, int alpha);
+
 /* 图形模式信息（使用共享gfx_framebuffer_t结构） */
 static gfx_framebuffer_t gfx_fb_info = {0};
 
@@ -76,8 +80,8 @@ void gfx64_blit_background(uint8_t *bg, int x, int y, int w, int h)
     int x0 = x, y0 = y, x1 = x + w, y1 = y + h;
     if (x0 < 0) x0 = 0;
     if (y0 < 0) y0 = 0;
-    if (x1 > gfx_width) x1 = gfx_width;
-    if (y1 > gfx_height) y1 = gfx_height;
+    if ((uint32_t)x1 > gfx_width) x1 = (int)gfx_width;
+    if ((uint32_t)y1 > gfx_height) y1 = (int)gfx_height;
     if (x0 >= x1 || y0 >= y1) return;
     uint8_t *dstfb = gfx_target ? gfx_target : front_buffer;
     if (gfx_bpp == 32) {
@@ -267,7 +271,7 @@ void gfx64_set_mode(int width, int height, int pitch, int bpp, uint8_t *fb)
 void gfx64_put_pixel(int x, int y, uint32_t color)
 {
     if (!gfx_initialized) return;
-    if (x < 0 || x >= gfx_width || y < 0 || y >= gfx_height) return;
+    if (x < 0 || y < 0 || (uint32_t)x >= gfx_width || (uint32_t)y >= gfx_height) return;
     uint8_t *dst = gfx_target ? gfx_target : front_buffer;
 
     if (gfx_bpp == 32) {
@@ -285,7 +289,7 @@ void gfx64_put_pixel(int x, int y, uint32_t color)
 uint32_t gfx64_get_pixel(int x, int y)
 {
     if (!gfx_initialized) return 0;
-    if (x < 0 || x >= gfx_width || y < 0 || y >= gfx_height) return 0;
+    if (x < 0 || y < 0 || (uint32_t)x >= gfx_width || (uint32_t)y >= gfx_height) return 0;
     uint8_t *dst = gfx_target ? gfx_target : front_buffer;
     if (gfx_bpp == 32) {
         uint32_t *p = (uint32_t *)(dst + y * gfx_pitch + x * 4);
@@ -305,8 +309,8 @@ void gfx64_fill_rect(int x, int y, int w, int h, uint32_t color)
     int y0 = y, y1 = y + h;
     if (x0 < 0) x0 = 0;
     if (y0 < 0) y0 = 0;
-    if (x1 > gfx_width) x1 = gfx_width;
-    if (y1 > gfx_height) y1 = gfx_height;
+    if ((uint32_t)x1 > gfx_width) x1 = (int)gfx_width;
+    if ((uint32_t)y1 > gfx_height) y1 = (int)gfx_height;
     if (x0 >= x1 || y0 >= y1) return;
     uint8_t *dst = gfx_target ? gfx_target : front_buffer;
 
@@ -390,13 +394,14 @@ int gfx64_put_char(int x, int y, char c, uint32_t color)
         return gfx64_put_ttf(x, y, (uint32_t)(uint8_t)c, color);
     }
     /* 回退到8x16位图字体 */
-    if (c > 0 && c < 128) {
+    /* V0.55.1: c 是 char(最大 127), "c < 128" 恒真, 只保留可打印判定 */
+    if (c > 0) {
         const uint8_t *glyph = font8x16[(uint8_t)c];
         for (int row = 0; row < 16; row++) {
             uint8_t bits = glyph[row];
             for (int col = 0; col < 8; col++) {
                 if (bits & (0x80 >> col)) {
-                    if (x + col < gfx_width && y + row < gfx_height)
+                    if ((uint32_t)(x + col) < gfx_width && (uint32_t)(y + row) < gfx_height)
                         gfx64_put_pixel(x + col, y + row, color);
                 }
             }
@@ -467,7 +472,7 @@ static int gfx64_put_ttf(int x, int y, uint32_t cp, uint32_t color)
                 if (alpha > 0) {
                     int px = x + bx + col;
                     int py = baseline_y - by + row;
-                    if (px >= 0 && px < gfx_width && py >= 0 && py < gfx_height) {
+                    if (px >= 0 && py >= 0 && (uint32_t)px < gfx_width && (uint32_t)py < gfx_height) {
                         if (alpha >= 240) {
                             gfx64_put_pixel(px, py, color);
                         } else {
@@ -713,14 +718,14 @@ void gfx64_blur_region(int x, int y, int w, int h, int blur_radius, uint32_t ove
     if (blur_radius < 1) blur_radius = 1;
 
     /* 盒式模糊：对每个像素取周围blur_radius范围内的平均 */
-    for (int py = y; py < y + h && py < gfx_height; py++) {
-        for (int px = x; px < x + w && px < gfx_width; px++) {
+    for (int py = y; py < y + h && (uint32_t)py < gfx_height; py++) {
+        for (int px = x; px < x + w && (uint32_t)px < gfx_width; px++) {
             int r = 0, g = 0, b = 0, count = 0;
             for (int dy = -blur_radius; dy <= blur_radius; dy++) {
                 for (int dx = -blur_radius; dx <= blur_radius; dx++) {
                     int sx = px + dx;
                     int sy = py + dy;
-                    if (sx >= 0 && sx < gfx_width && sy >= 0 && sy < gfx_height) {
+                    if (sx >= 0 && sy >= 0 && (uint32_t)sx < gfx_width && (uint32_t)sy < gfx_height) {
                         uint32_t c = gfx64_get_pixel(sx, sy);
                         r += (c >> 16) & 0xFF;
                         g += (c >> 8) & 0xFF;
@@ -867,7 +872,7 @@ int gfx64_init(void)
 void gfx64_blend_pixel(int x, int y, uint32_t fg, int alpha)
 {
     if (!gfx_initialized) return;
-    if (x < 0 || x >= gfx_width || y < 0 || y >= gfx_height) return;
+    if (x < 0 || y < 0 || (uint32_t)x >= gfx_width || (uint32_t)y >= gfx_height) return;
     if (alpha <= 0) return;
     if (alpha >= 255) { gfx64_put_pixel(x, y, fg); return; }
 
@@ -884,8 +889,8 @@ void gfx64_blend_pixel(int x, int y, uint32_t fg, int alpha)
 void gfx64_fill_rect_alpha(int x, int y, int w, int h, uint32_t color, int alpha)
 {
     if (!gfx_initialized) return;
-    for (int j = y; j < y + h && j < gfx_height; j++) {
-        for (int i = x; i < x + w && i < gfx_width; i++) {
+    for (int j = y; j < y + h && (uint32_t)j < gfx_height; j++) {
+        for (int i = x; i < x + w && (uint32_t)i < gfx_width; i++) {
             gfx64_blend_pixel(i, j, color, alpha);
         }
     }
@@ -1110,9 +1115,10 @@ void gfx64_draw_circle_aa(int cx, int cy, int r, uint32_t color)
     if (!gfx_initialized || r < 0) return;
     int x0 = cx - r - 1, x1 = cx + r + 1;
     int y0 = cy - r - 1, y1 = cy + r + 1;
-    if (x0 < 0) x0 = 0; if (y0 < 0) y0 = 0;
-    if (x1 >= gfx_width) x1 = gfx_width - 1;
-    if (y1 >= gfx_height) y1 = gfx_height - 1;
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if ((uint32_t)x1 >= gfx_width) x1 = (int)gfx_width - 1;
+    if ((uint32_t)y1 >= gfx_height) y1 = (int)gfx_height - 1;
     int r2_in  = (r - 1) * (r - 1);
     int r2_out = (r + 1) * (r + 1);
     for (int y = y0; y <= y1; y++) {
@@ -1189,8 +1195,8 @@ void gfx64_fill_rect_gradient(int x, int y, int w, int h,
     int r2 = (c2 >> 16) & 0xFF, g2 = (c2 >> 8) & 0xFF, b2 = c2 & 0xFF;
     int den = vertical ? (h - 1) : (w - 1);
     if (den <= 0) den = 1;
-    for (int j = y; j < y + h && j < gfx_height; j++) {
-        for (int i = x; i < x + w && i < gfx_width; i++) {
+    for (int j = y; j < y + h && (uint32_t)j < gfx_height; j++) {
+        for (int i = x; i < x + w && (uint32_t)i < gfx_width; i++) {
             int t;
             if (vertical == 2) {        /* 对角：左上→右下 */
                 t = (j - y) + (i - x);
@@ -1432,7 +1438,6 @@ void gfx64_icon_draw(int id, int x, int y, int size, uint32_t fg, uint32_t hole_
     case GFX64_ICON_FOLDER: {
         /* 文件夹: 底部矩形 + 顶部小折角 */
         int w = size - 2, h = size - 3;
-        int by = y + h;
         gfx64_draw_rounded_rect(x, y + h / 3, w, h - h / 3, 2, fg);
         gfx64_draw_line_aa(x, y + h / 3, x + size / 3, y, fg);
         gfx64_draw_line_aa(x + size / 3, y, x + size / 2, y + h / 3, fg);

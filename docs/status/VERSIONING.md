@@ -1,7 +1,7 @@
 ---
 title: VERSIONING
 status: active
-sys_version: 0.55.0
+sys_version: 0.55.1
 updated: 2026-11-11
 owner: status
 source_of_truth: null
@@ -838,6 +838,10 @@ ext2_disk_uefi.img           # 数据盘（版本无关）
 | 版本 | 日期 | 类型 | 内容 |
 |---|---|---|---|
 | 0.55.0 | 2026-11-11 | minor（普通功能发布） | P0 渲染管线升级：按需合成（脏矩形+离屏缓冲，静止帧跳过 96.7%）、通用缓动动画（ease-out cubic，灵动岛展开/收起）、PNG 解码器（自包含 inflate，含主机回归夹具） |
+| 0.55.1 | 2026-11-11 | patch（缺陷修复） | 编译告警 209→89，并修复其暴露的真实缺陷：mkfs/umask 撞号致 mkfs 被覆盖、桌面配置从未被读取、ELF 重定位不校验类型、DT_RELA 表未应用、TTF cmap 未筛 encoding、LAPIC 基址指针转换、恒真假判断等 10 类（详见 FIXES_0_55_1.md） |
 
 说明：按本规范第二位（默认版本）用于"新增常规功能/完善子系统"，P0 属新增能力而非 bug 修复，
 故推进 minor 至 0.55.0，bug 位归零。重要版本仍为 0（未由用户确认为里程碑）。
+
+0.55.1 为紧随其后的缺陷修复批次（patch 位 +1）：告警清理过程中逐条追查到 10 类真实逻辑缺陷，
+属修 bug 而非新增功能，故不动 minor。
