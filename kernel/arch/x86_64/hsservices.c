@@ -198,10 +198,16 @@ int hs_process_monitor_init(void)
 {
     g_proc.process_count = 0;
     g_proc.total_cpu = 0;
-    g_proc.total_mem = 0;
-    g_proc.mem_total = 2048;  /* 2GB */
-    g_proc.mem_used = 512;
-    g_proc.mem_free = 1536;
+    /* V0.56.1: 原为写死的 2GB/512KB, 与实际机器无关; 改读 PMM 真实统计 */
+    {
+        extern void pmm64_get_stats(uint64_t *total, uint64_t *used, uint64_t *free);
+        uint64_t mt = 0, mu = 0, mf = 0;
+        pmm64_get_stats(&mt, &mu, &mf);
+        g_proc.mem_total = (int)(mt / 1024);
+        g_proc.mem_used  = (int)(mu / 1024);
+        g_proc.mem_free  = (int)(mf / 1024);
+        g_proc.total_mem = g_proc.mem_total;
+    }
 
     /* 数据同源：从 process64_snapshot 获取全部进程 */
     process64_stat_t procs[PROCESS64_MAX_SLOTS];
@@ -222,23 +228,35 @@ int hs_process_monitor_init(void)
 
 void hs_process_monitor_update(void)
 {
-    static int tick = 0;
-    tick++;
+    /* V0.56.1: 原实现用 15 + (tick*3)%40、480 + (tick%5)*32 之类公式"模拟波动",
+     * 任务管理器显示的 CPU/内存全是编出来的数。现接真实数据:
+     *   CPU 总量 <- process64_cpu_usage() (调度 tick 的 idle 占比)
+     *   内存     <- pmm64_get_stats() (非空闲物理内存口径)
+     *   进程 CPU <- runtime / 总 tick, 即该进程实际占用的调度份额 */
+    extern int process64_cpu_usage(void);
+    extern uint32_t process64_total_ticks(void);
+    extern void pmm64_get_stats(uint64_t *total, uint64_t *used, uint64_t *free);
 
-    /* 更新CPU/内存使用率（模拟波动，真实统计后续接入） */
-    g_proc.total_cpu = 15 + (tick * 3) % 40;
-    g_proc.mem_used = 480 + (tick % 5) * 32;
-    g_proc.mem_free = g_proc.mem_total - g_proc.mem_used;
+    uint64_t mt = 0, mu = 0, mf = 0;
+    pmm64_get_stats(&mt, &mu, &mf);
+    g_proc.mem_total = (int)(mt / 1024);
+    g_proc.mem_used  = (int)(mu / 1024);
+    g_proc.mem_free  = (int)(mf / 1024);
+    g_proc.total_mem = g_proc.mem_total;
+
+    g_proc.total_cpu = process64_cpu_usage();
 
     /* 数据同源：每次从 process64_snapshot 刷新进程列表 */
     process64_stat_t procs[PROCESS64_MAX_SLOTS];
     int n = process64_snapshot(procs, PROCESS64_MAX_SLOTS);
     g_proc.process_count = 0;
+    uint32_t tt = process64_total_ticks();
     for (int i = 0; i < n && g_proc.process_count < HS_MAX_PROC_INFO; i++) {
         hs_process_info_t *p = &g_proc.processes[g_proc.process_count];
         p->pid = procs[i].pid;
         str_cpy(p->name, procs[i].name);
-        p->cpu_usage = (procs[i].state == 2) ? (5 + (tick * 7 + i * 3) % 30) : 1;
+        /* 进程级 CPU: 累计运行 tick 占总调度 tick 的比例 */
+        p->cpu_usage = tt ? (int)((uint64_t)procs[i].runtime * 100 / tt) : 0;
         p->mem_usage = procs[i].mem_pages * 4;
         p->state = (procs[i].state == 2) ? 0 : 1;
         g_proc.process_count++;

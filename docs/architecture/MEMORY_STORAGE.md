@@ -1,7 +1,7 @@
 ---
 title: MEMORY_STORAGE
 status: active
-sys_version: 0.56.0
+sys_version: 0.56.1
 updated: 2026-11-01
 owner: architecture
 source_of_truth: null

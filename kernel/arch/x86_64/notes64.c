@@ -62,7 +62,7 @@ void notes64_init(void)
         "Use 'notes save <file>' to save.\n"
         "Use 'notes edit' to enter edit mode.\n"
         "\n"
-        "HepuOS 64-bit v0.56.0\n",
+        "HepuOS 64-bit v0.56.1\n",
         NOTES_MAX_TEXT);
     notes.text_len = notes_strlen(notes.text);
 

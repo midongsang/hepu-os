@@ -1,7 +1,7 @@
 ---
 title: fsck 接入 inode 检查与欢迎引导开关（0.56.0）
 status: active
-sys_version: 0.56.0
+sys_version: 0.56.1
 updated: 2026-11-11
 owner: status
 source_of_truth: kernel/arch/x86_64/

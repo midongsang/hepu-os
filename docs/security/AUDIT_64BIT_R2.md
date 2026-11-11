@@ -1,7 +1,7 @@
 ---
 title: 64位内核安全审计（第二轮）
 status: active
-sys_version: 0.56.0
+sys_version: 0.56.1
 updated: 2026-11-11
 owner: security
 date: 2026-11-10

@@ -337,7 +337,11 @@ void pmm64_free_pages(uint64_t phys_addr, size_t count)
 void pmm64_get_stats(uint64_t *total, uint64_t *used, uint64_t *free)
 {
     if (total) *total = pmm64.total_pages * PAGE_SIZE;
-    if (used) *used = pmm64.used_pages * PAGE_SIZE;
+    /* V0.56.1: used 旧口径只统计运行期 pmm64_alloc_page 的分配 —— 初始化时
+     * 内核/固件占用的页只记在 reserved_pages, used_pages 从 0 起算, 于是
+     * 桌面"内存占用"长期显示 0%。改用"非空闲物理内存"口径(total - free),
+     * 才包含内核镜像、页表、固件保留区与运行期分配。 */
+    if (used) *used = (pmm64.total_pages - pmm64.free_pages) * PAGE_SIZE;
     if (free) *free = pmm64.free_pages * PAGE_SIZE;
 }
 

@@ -1675,7 +1675,24 @@ static void hs_settings_window_render(hs_window_t *w)
                            rx, ry, "System Information", g_shell.colors.panel_fg, 16);
         ry += 30;
         const char *labels[] = {"OS:", "Kernel:", "CPU:", "Memory:", "Graphics:", "Filesystem:"};
-        const char *values[] = {"Hepu OS v0.56.0", "64-bit SMP", "4 cores", "2GB",
+        /* V0.56.1: "4 cores" / "2GB" 原是写死文案, 与实际机器无关。
+         * 改为读 SMP CPU 数与 PMM 物理内存总量。 */
+        extern uint32_t smp_get_cpu_count(void);
+        extern void pmm64_get_stats(uint64_t *total, uint64_t *used, uint64_t *free);
+        static char cpu_str[16];
+        static char mem_str[16];
+        {
+            uint32_t nc = smp_get_cpu_count();
+            uint64_t mt = 0, mu = 0, mf = 0;
+            pmm64_get_stats(&mt, &mu, &mf);
+            hs_itoa((int)(nc ? nc : 1), cpu_str);
+            int k = strlen(cpu_str);
+            strcpy(cpu_str + k, (nc == 1) ? " core" : " cores");
+            hs_itoa((int)(mt / (1024ULL * 1024ULL)), mem_str);
+            k = strlen(mem_str);
+            strcpy(mem_str + k, " MB");
+        }
+        const char *values[] = {"Hepu OS v0.56.1", "64-bit SMP", cpu_str, mem_str,
                                 "VBE 1024x768", "ext2"};
         for (int i = 0; i < 6; i++) {
             font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
@@ -2217,11 +2234,16 @@ static void hs_weather_widget_render(void)
 
     void *fb = gfx64_get_framebuffer();
 
-    font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                       wx + hs_sx(20), wy + hs_sy(15), g_weather_temp, hs_on_accent(), hs_s(g_shell.ui.weather_temp_font));
+    /* V0.56.1: 取数失败/尚未返回时给明确占位。旧实现直接画空字符串,
+     * 卡片只剩一块纯色方块, 看不出是"没数据"还是"渲染坏了"。 */
+    const char *tstr = g_weather_ok ? g_weather_temp : "--";
+    const char *dstr = g_weather_ok ? g_weather_desc : "N/A";
 
     font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                       wx + hs_sx(15), wy + hs_sy(70), g_weather_desc, hs_on_accent(), hs_s(g_shell.ui.weather_desc_font));
+                       wx + hs_sx(20), wy + hs_sy(15), (char *)tstr, hs_on_accent(), hs_s(g_shell.ui.weather_temp_font));
+
+    font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                       wx + hs_sx(15), wy + hs_sy(70), (char *)dstr, hs_on_accent(), hs_s(g_shell.ui.weather_desc_font));
 }
 
 /* 左侧三标签侧边栏 */
@@ -2490,16 +2512,33 @@ static void hs_sidebar_render(void)
 
         /* 系统信息 */
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           sx + hs_sx(20), content_y, "Hepu OS v0.56.0", g_shell.colors.accent, hs_s(14));
+                           sx + hs_sx(20), content_y, "Hepu OS v0.56.1", g_shell.colors.accent, hs_s(14));
         content_y += hs_sy(24);
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            sx + hs_sx(20), content_y, "Kernel: 64-bit SMP", g_shell.colors.panel_fg, hs_s(12));
         content_y += hs_sy(20);
-        font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           sx + hs_sx(20), content_y, "CPU: 4 cores", g_shell.colors.panel_fg, hs_s(12));
-        content_y += hs_sy(20);
-        font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           sx + hs_sx(20), content_y, "Memory: 2GB", g_shell.colors.panel_fg, hs_s(12));
+        /* V0.56.1: 原有 "CPU: 4 cores" / "Memory: 2GB" 是写死文案, 与实际机器无关 */
+        {
+            extern uint32_t smp_get_cpu_count(void);
+            static char cpuline[32];
+            static char memline[32];
+            uint32_t nc = smp_get_cpu_count();
+            strcpy(cpuline, "CPU: ");
+            char nb[8];
+            hs_itoa((int)(nc ? nc : 1), nb);
+            strcpy(cpuline + strlen(cpuline), nb);
+            strcpy(cpuline + strlen(cpuline), (nc == 1) ? " core" : " cores");
+            font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                               sx + hs_sx(20), content_y, cpuline, g_shell.colors.panel_fg, hs_s(12));
+            content_y += hs_sy(20);
+            strcpy(memline, "Memory: ");
+            char mb[8];
+            hs_itoa((int)(tp / (1024ULL * 1024ULL)), mb);
+            strcpy(memline + strlen(memline), mb);
+            strcpy(memline + strlen(memline), " MB");
+            font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                               sx + hs_sx(20), content_y, memline, g_shell.colors.panel_fg, hs_s(12));
+        }
     } else if (g_sidebar_tab == 1) {
         /* 应用抽屉 (V0.55: 真实注册应用列表 + Clavis 式垂直滚动) */
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
@@ -4931,7 +4970,7 @@ static void hs_itoa(int v, char *buf)
 }
 
 /* 天气拉取: open-meteo 常德 (29.03N/111.69E) */
-void hpdesk_fetch_weather(void)
+int hpdesk_fetch_weather(void)
 {
     extern int http64_get(const char *url, uint8_t *response, int max_response);
     extern int http64_get_status(const uint8_t *response);
@@ -4941,11 +4980,13 @@ void hpdesk_fetch_weather(void)
         "http://api.open-meteo.com/v1/forecast?latitude=29.03&longitude=111.69&current_weather=true";
     uint8_t resp[2048];
     uint8_t body[1024];
-    if (http64_get(url, resp, sizeof(resp)) < 0) return;
+    /* V0.56.1: 失败要能让调用方知道(此前失败静默 return, 桌面只在第 60 帧试一次,
+     * 网络没就绪就永久没有天气) */
+    if (http64_get(url, resp, sizeof(resp)) < 0) return 0;
     int st = http64_get_status(resp);
-    if (st < 200 || st >= 300) return;
+    if (st < 200 || st >= 300) return 0;
     int blen = http64_get_body(resp, sizeof(resp), body, sizeof(body));
-    if (blen <= 0) return;
+    if (blen <= 0) return 0;
 
     /* 温度: 仅当冒号后解析出数字才取用 (修复 temperature_units 误匹配) */
     int t = -999;
@@ -4975,6 +5016,7 @@ void hpdesk_fetch_weather(void)
     }
     g_weather_ok = 1;
     vga_puts("[WX] weather fetched\n");
+    return 1;
 }
 
 /* ---- 窗口切换器 (Alt+Tab, LRU 卡片) ---- */

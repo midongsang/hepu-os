@@ -1,7 +1,7 @@
 ---
 title: FIX_SECURITY_BUNDLE_A_R4
 status: active
-sys_version: 0.56.0
+sys_version: 0.56.1
 updated: 2026-11-10
 owner: security
 source_of_truth: null

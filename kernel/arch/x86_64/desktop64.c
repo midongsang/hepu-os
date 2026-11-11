@@ -158,14 +158,17 @@ void desktop64_run(void)
         extern int dhcp64_poll(void);
         dhcp64_poll();
 
-        /* V0.13.9: 天气真实数据拉取 (60 帧≈8s 后一次性, 阻塞 ~1-3s) */
+        /* V0.13.9: 天气真实数据拉取 (60 帧≈8s 后一次, 阻塞 ~1-3s)
+         * V0.56.1: 原来只试一次, 网络(DHCP/DNS)没就绪就永久空白。改为失败重试,
+         * 最多 6 次, 每次间隔 60 帧; 成功后不再请求。 */
         static int wx_tick = 0;
-        static int wx_done = 0;
-        if (!wx_done) {
+        static int wx_tries = 0;
+        if (wx_tries < 6) {
             if (++wx_tick >= 60) {
-                wx_done = 1;
-                extern void hpdesk_fetch_weather(void);
-                hpdesk_fetch_weather();
+                wx_tick = 0;
+                extern int hpdesk_fetch_weather(void);
+                if (hpdesk_fetch_weather()) wx_tries = 6;
+                else wx_tries++;
             }
         }
 

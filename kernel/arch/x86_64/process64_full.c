@@ -542,6 +542,12 @@ int process64_cpu_usage(void)
     return (int)((uint64_t)busy * 100 / g_total_ticks);
 }
 
+/* V0.56.1: 供任务管理器计算进程级 CPU 占比(runtime / 总 tick) */
+uint32_t process64_total_ticks(void)
+{
+    return g_total_ticks;
+}
+
 void process64_tick(void)
 {
     process_t *curr = process64_get_current();
