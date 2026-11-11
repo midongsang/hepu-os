@@ -708,6 +708,9 @@ static int hs_wallpaper_png(void)
 
     int n = ext2_64_read_file("/usr/share/wallpapers/wallpaper.png", wp_raw, sizeof(wp_raw));
     if (n > 8 && png64_decode(wp_raw, n, &g_wp_png) == 0 && g_wp_png.rgba) return 1;
+    /* 回退: 平铺根目录。多级路径读取在部分镜像布局下取不到文件, 留一条短路。 */
+    n = ext2_64_read_file("/wallpaper.png", wp_raw, sizeof(wp_raw));
+    if (n > 8 && png64_decode(wp_raw, n, &g_wp_png) == 0 && g_wp_png.rgba) return 1;
 
     n = ext2_64_read_file("/usr/share/wallpapers/wallpaper.jpg", wp_raw, sizeof(wp_raw));
     if (n > 8 && jpeg64_decode(wp_raw, n, &g_wp_jpg) == 0 && g_wp_jpg.rgba) {

@@ -415,7 +415,13 @@ int ext2_64_mount(int (*block_read)(uint32_t, uint8_t, uint8_t *), uint32_t part
     memcpy(&ext2_sb, sector_buf, sizeof(ext2_superblock_t));
     if (ext2_sb.s_magic != EXT2_SUPER_MAGIC) return -2;
     /* 安全修复：超级块来自磁盘（可能是恶意镜像/U盘），先校验再用其字段做移位/除法/缓冲区尺寸 */
-    if (ext2_algo_validate_sb(&ext2_sb) != 0) {
+    int vrc = ext2_algo_validate_sb(&ext2_sb);
+    if (vrc != 0) {
+        extern int vga_printf(const char *fmt, ...);
+        vga_printf("[EXT2_64] sb rc=%d bs=%u bpg=%u ipg=%u isz=%u blk=%u ino=%u rev=%u\n",
+                   vrc, ext2_sb.s_log_block_size, ext2_sb.s_blocks_per_group,
+                   ext2_sb.s_inodes_per_group, ext2_sb.s_inode_size,
+                   ext2_sb.s_blocks_count, ext2_sb.s_inodes_count, ext2_sb.s_rev_level);
         vga_puts("[EXT2_64] ERROR: invalid superblock parameters, refuse to mount\n");
         return -2;
     }

@@ -183,12 +183,19 @@ def create_ext2_data(img):
                        capture_output=True)
         print("  写入 /fonts/DejaVuSans.ttf")
 
-    # 壁纸: 桌面 hs_wallpaper_png() 读 /wallpaper.png
+    # 壁纸: 桌面 hs_wallpaper_png() 读 /usr/share/wallpapers/wallpaper.png
+    # (旧注释写 /wallpaper.png 与代码不一致, 导致桌面一直 [PNG64] no sample image)
     wp = f"{PROJECT}/assets/samples/wallpaper.png"
     if os.path.exists(wp):
+        for d in ('/usr', '/usr/share', '/usr/share/wallpapers'):
+            subprocess.run(['debugfs', '-w', ext2_tmp, '-R', f'mkdir {d}'],
+                           capture_output=True)
+        subprocess.run(['debugfs', '-w', ext2_tmp,
+                        '-R', f'write {wp} /usr/share/wallpapers/wallpaper.png'],
+                       capture_output=True)
         subprocess.run(['debugfs', '-w', ext2_tmp,
                         '-R', f'write {wp} /wallpaper.png'], capture_output=True)
-        print("  写入 /wallpaper.png")
+        print("  写入 /usr/share/wallpapers/wallpaper.png + /wallpaper.png")
 
     # 将ext2分区写入主镜像
     with open(ext2_tmp, 'rb') as f:
@@ -198,6 +205,7 @@ def create_ext2_data(img):
 
     os.remove(ext2_tmp)
     print("[EXT2] 根分区创建完成")
+    write_hybrid_mbr(IMG_PATH, DATA_START, DATA_SECTORS)
 
 
 def create_gpt_via_sgdisk(img_path):
@@ -253,6 +261,28 @@ def create_fat32_esp_tool(img_path):
         img.write(esp_data)
     os.remove(esp_tmp)
     print("[FAT32] ESP分区创建完成")
+
+
+
+
+def write_hybrid_mbr(img_path, root_lba, root_sectors):
+    """在保护性 MBR 里补一个 0x83 分区块, 指向 ext2 根分区。
+    UEFI 固件读 GPT, 不看 MBR; 而内核 IDE 扫描只认 MBR 的 0x83 项,
+    GPT 盘原本只有 0xEE 保护项 -> 内核拿不到根分区偏移, 会把 GPT 头当超级块。
+    这是让两边各取所需的桥。"""
+    with open(img_path, 'r+b') as f:
+        f.seek(446)
+        mbr = bytearray(f.read(66))
+        # 保留原有 0xEE 保护项(entry0), 用 entry1 放 0x83
+        e = bytearray(16)
+        e[0] = 0x00; e[4] = 0x83
+        e[8:12] = root_lba.to_bytes(4, 'little')
+        e[12:16] = root_sectors.to_bytes(4, 'little')
+        mbr[16:32] = e
+        f.seek(446)
+        f.write(mbr)
+        f.seek(510); f.write(b'\x55\xaa')
+    print('  [MBR] hybrid 0x83 -> LBA %d (%d sectors)' % (root_lba, root_sectors))
 
 
 def main():

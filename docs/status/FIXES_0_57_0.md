@@ -645,6 +645,34 @@ Lua / `klibm64` 是 `-msse2`。`context_switch_64` 原本只保存 rbx/rbp/r12-r
 
 **回归**：BIOS 线（stage2_64）同步复跑，映射改动不影响原路径（见下）。
 
+
+### 1.33 GPT 盘根分区挂载失败（保护性 MBR 没有 0x83 项）
+
+**症状**：UEFI 路径桌面能起，但根文件系统一直没挂上 —— `[EXT2_64] ERROR: invalid superblock parameters, refuse to mount`。
+连带后果是 `/account.conf` 读不到（每次开机都弹首设向导）、壁纸读不到。
+
+**根因**：`ext2_64_init()` 读超级块用 `super_lba = 2 + ext2_partition_offset`，而该值来自 MBR 分区扫描
+（`kernel_main_64.c` 只认 `type == 0x83`）。GPT 盘的保护性 MBR 只有一条 `0xEE` 项，扫描一个 0x83 也找不到，
+于是回退出厂固定值 **13000**（BIOS 布局），而 UEFI 布局的根分区在 **264192** —— 读到的不是超级块。
+
+**修法（构建期桥接，不改内核分区逻辑）**：`build_uefi_dual.py` 在生成 GPT 后补写一条 `0x83` MBR 项
+（LBA 264192，245760 扇区）。UEFI 固件只读 GPT，不受影响；内核 MBR 扫描因此能拿到真实根分区偏移。
+
+**验证**
+```
+[INIT] Found Linux partition 1: LBA=264192 size=120MB
+[INIT] Using partition 1 as root
+[EXT2_64] Magic OK, block_size=0x1000 / GDT loaded / Root inode OK
+[EXT2_64] Verify read: HepuOS 64-bit ext2 write test OK!
+[AUTH] Account loaded: dev (role 2)        ← 首设不再弹
+```
+
+**同轮修掉的路径不一致**：桌面读壁纸用 `/usr/share/wallpapers/wallpaper.png`，构建脚本却写 `/wallpaper.png`，
+两边对不上。改为两处都写，并在 `hs_wallpaper_png()` 加 `/wallpaper.png` 平铺回退。
+
+**仍未解决（如实记录）**：壁纸 PNG 能读到但 **解码结果是横条纹错乱**（`png64_decode` 对该 4K 壁纸的过滤/扫描线处理有缺陷），
+日志仍打印 `[PNG64] no sample image`。此项不影响系统其余功能，列为待修。
+
 ---
 
 ## 四、回归基线
