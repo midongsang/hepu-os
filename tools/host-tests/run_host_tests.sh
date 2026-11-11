@@ -66,6 +66,24 @@ run_one elf "" tools/host-tests/elf_test.c $ARCH/elf64.c
 # 5) hpdesk 窗口槽位分配/回收（回归：反复开关 32 次后槽位耗尽无法再开窗）
 run_one winslot "" tools/host-tests/winslot_test.c
 
+# 5b) PNG 解码器（inflate/反滤波/颜色类型/位深，V0.54.13 P0）
+#     夹具：tools/host-tests/data/png_case{1..5}.png + .expect，逐像素比对
+if $CC $CFLAGS -DPNG64_HOST $INC -o "$OUT/png64" \
+     tools/host-tests/png_test.c $ARCH/png64.c 2>"$OUT/png64.build.log"; then
+    PNGFAIL=0
+    for n in 1 2 3 4 5; do
+        if ! "$OUT/png64" tools/host-tests/data/png_case$n.png \
+             tools/host-tests/data/png_case$n.expect > "$OUT/png64.$n.log" 2>&1; then
+            PNGFAIL=1
+            bad "png64 case$n ($(tail -1 "$OUT/png64.$n.log" | cut -c1-60))"
+        fi
+    done
+    [ "$PNGFAIL" -eq 0 ] && ok "png64 (5 个用例全通过: RGBA/RGB/调色板/灰度8/灰度1bit)"
+else
+    bad "png64 (编译失败)"
+    sed -n '1,12p' "$OUT/png64.build.log" | sed 's/^/         /'
+fi
+
 # 6) ext2 共享算法（需要镜像夹具：现场生成，测试内含相对路径）
 if command -v mkfs.ext2 >/dev/null 2>&1 && command -v debugfs >/dev/null 2>&1; then
     FIX="$OUT/ext2_fix"

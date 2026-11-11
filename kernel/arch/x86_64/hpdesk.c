@@ -5,6 +5,8 @@
  * ========================================================================== */
 
 #include "hpdesk.h"
+
+extern void vga_printf(const char *fmt, ...);
 #include "l10n64.h"
 #include "hsqml.h"
 #include "hs_apps.h"
@@ -104,6 +106,29 @@ static uint32_t g_frame_no;
 /* 前向声明（定义在后面） */
 static int g_sidebar_tab;
 static int g_island_expanded;
+/* V0.54.13 P0: 灵动岛展开/收起缓动 (ease-out cubic, 0..100) */
+static int g_island_t = 0;        /* 当前进度: 0=收起 100=展开 */
+static int g_island_target = 0;   /* 目标进度 */
+static int hs_ease_out_cubic(int p)
+{
+    if (p <= 0) return 0;
+    if (p >= 100) return 100;
+    int m = 100 - p;
+    return 100 - (m * m * m) / 10000;
+}
+static void hs_island_tick(void)
+{
+    if (g_island_t == g_island_target) return;
+    int step = 8;   /* ≈120ms @60fps */
+    if (g_island_t < g_island_target) {
+        g_island_t += step;
+        if (g_island_t > g_island_target) g_island_t = g_island_target;
+    } else {
+        g_island_t -= step;
+        if (g_island_t < g_island_target) g_island_t = g_island_target;
+    }
+    vga_printf("[P0] island t=%d\n", g_island_t);
+}
 int g_pending_app;
 
 /* V0.55: 侧栏滚动 (对齐 Clavis SidebarFlickable: 垂直滚动+细滚动条)
@@ -1784,10 +1809,13 @@ static void hs_dynamic_island_render(void)
     int island_x = (g_shell.screen_width - island_w) / 2;
     int island_y = hs_sy(g_shell.ui.island_y);
 
-    if (g_island_expanded) {
-        /* 展开状态：更大的卡片，显示时间+日期+天气+系统状态 */
-        island_w = hs_sx(360);
-        island_h = hs_sy(120);
+    {
+        /* P0: 展开/收起尺寸连续插值(缓动), 不再是瞬跳 */
+        int e = hs_ease_out_cubic(g_island_t);
+        int ww = hs_sx(g_shell.ui.island_width), hh = hs_sy(g_shell.ui.island_height);
+        int tw = hs_sx(360), th = hs_sy(120);
+        island_w = ww + (tw - ww) * e / 100;
+        island_h = hh + (th - hh) * e / 100;
         island_x = (g_shell.screen_width - island_w) / 2;
     }
 
@@ -1806,7 +1834,7 @@ static void hs_dynamic_island_render(void)
     int font_size = hs_s(g_shell.ui.island_font_size);
     int text_w = 5 * font_size / 2;
 
-    if (!g_island_expanded) {
+    if (g_island_t < 50) {
         /* 收起状态：只显示时间 */
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            island_x + (island_w - text_w) / 2, island_y + (island_h - font_size) / 2,
@@ -2854,6 +2882,7 @@ static void hs_context_menu_handle_click(int x, int y)
 /* Hepu Desktop鼠标点击处理（由desktop64主循环调用） */
 void hpdesk_handle_click(int x, int y)
 {
+    hpdesk_mark_dirty();   /* P0: 交互发生, 内容需重绘 */
     /* V0.55 P3-GUI: 首启向导模态拦截点击 */
     {
         extern int hs_oobe_active(void);
@@ -3138,6 +3167,8 @@ void hpdesk_handle_click(int x, int y)
     int island_y = hs_sy(g_shell.ui.island_y);
     if (x >= island_x && x <= island_x + island_w && y >= island_y && y <= island_y + island_h) {
         g_island_expanded = !g_island_expanded;
+        g_island_target = g_island_expanded ? 100 : 0;   /* P0: 触发缓动 */
+        hpdesk_mark_dirty();
         return;
     }
 
@@ -3185,6 +3216,7 @@ void hpdesk_handle_click(int x, int y)
 /* Hepu Desktop右键点击处理（显示上下文菜单） */
 void hpdesk_handle_right_click(int x, int y)
 {
+    hpdesk_mark_dirty();   /* P0: 交互发生, 内容需重绘 */
     /* V0.55 P3-GUI: 首启向导期间不弹桌面右键菜单 */
     {
         extern int hs_oobe_active(void);
@@ -3342,6 +3374,7 @@ void hpdesk_mouse_down(int x, int y)
 /* 鼠标释放：结束拖拽 */
 void hpdesk_mouse_up(int x, int y)
 {
+    hpdesk_mark_dirty();   /* P0: 交互发生, 内容需重绘 */
     (void)x; (void)y;
     hs_window_drag_end();
 }
@@ -3352,10 +3385,126 @@ void hpdesk_mouse_up(int x, int y)
 
 extern void gfx64_set_target_back(void);
 extern void gfx64_present(void);
+extern void cursor64_draw(int x, int y);
+extern int cursor64_load_file(const char *path, int want);
+extern int cursor64_pick_size(int w, int h);
+
+/* ============================================================================
+ * V0.54.13 P0: 按需合成（离屏缓冲按需提交 + 光标独立层）
+ *
+ * 旧行为: 每帧无条件把壁纸/面板/窗口/文字全量重画到后台缓冲再 present,
+ *         60fps 下即使画面完全静止也在满负荷跑软件光栅。
+ * 新行为:
+ *   1) 内容只在 dirty(交互/动画/兜底节流) 时重绘到后台缓冲;
+ *   2) 提交(present) 每帧把后台内容整块拷到前台, 顺带覆盖上一帧光标残影;
+ *   3) 光标只画在前台, 不进入后台缓冲 —— 鼠标移动不再触发内容重绘;
+ *   4) 内容不动且鼠标不动时直接 return, 本轮零绘制。
+ * ========================================================================== */
+static int g_content_dirty = 1;
+static int g_last_mx = -1, g_last_my = -1;
+/* P0 观测: 重绘/跳过帧计数, 用于证明按需合成生效 */
+static uint32_t g_redraw_frames = 0, g_skip_frames = 0;
+/* P0 演示: 启动时灵动岛展开->收回一次, 展示缓动 */
+static int g_welcome_frame = -1;
+
+void hpdesk_mark_dirty(void) { g_content_dirty = 1; }
+
+/* V0.54.13 P0: PNG 解码链路自检 (ext2 读取 -> pmm 分配 -> inflate -> 反滤波)
+ * 首次渲染时跑一次, 串口打印尺寸与首像素, 供无人值守验证使用 */
+static void hs_png_selfcheck(void)
+{
+    static int done = 0;
+    if (done) return;
+    done = 1;
+    extern int ext2_64_read_file(const char *path, uint8_t *buffer, uint32_t max_size);
+    extern int png64_decode(const uint8_t *data, int len, void *out);
+    static uint8_t raw[131072];
+    int n = ext2_64_read_file("/usr/share/samples/sample.png", raw, sizeof(raw));
+    if (n <= 0) {
+        vga_puts("[PNG64] no sample image\n");
+        return;
+    }
+    vga_printf("[PNG64] read n=%d sig=%d,%d,%d,%d\n",
+               n, raw[0], raw[1], raw[2], raw[3]);
+    typedef struct { uint32_t w, h; uint8_t *rgba; } im_t;
+    im_t img;
+    img.w = img.h = 0;
+    img.rgba = 0;
+    int rc = png64_decode(raw, n, &img);
+    if (rc != 0 || !img.rgba || img.w == 0) {
+        vga_printf("[PNG64] decode FAILED rc=%d\n", rc);
+        return;
+    }
+    vga_printf("[PNG64] decoded %dx%d px0=%d,%d,%d,%d\n",
+               (int)img.w, (int)img.h,
+               img.rgba[0], img.rgba[1], img.rgba[2], img.rgba[3]);
+}
+
+static void hs_cursor_init_once(void)
+{
+    static int inited = 0;
+    if (inited) return;
+    inited = 1;
+    cursor64_load_file("/usr/share/cursors/default.xcur",
+                       cursor64_pick_size(g_shell.screen_width, g_shell.screen_height));
+}
+
+/* 是否有进行中的动画(有则必须持续重绘) */
+static int hs_anim_active(void)
+{
+    if (g_island_t != g_island_target) return 1;
+    for (int i = 0; i < g_wm.window_count; i++) {
+        hs_window_t *w = &g_wm.windows[i];
+        if (w->visible && w->anim_dur) return 1;
+    }
+    return 0;
+}
+
+/* 提交一帧: 后台内容→前台, 再在前台叠加光标 */
+static void hs_present_with_cursor(int mx, int my)
+{
+    gfx64_present();
+    gfx64_set_target_front();
+    hs_cursor_init_once();
+    cursor64_draw(mx, my);
+}
+
 void hpdesk_render(void)
 {
     /* V0.13.11: 双缓冲原子帧 — 全部绘制到后台缓冲, 帧末一次性提交(消除撕裂/半帧) */
     g_frame_no++;
+    /* P0 演示: 启动第 30 帧起展开灵动岛, 第 120 帧收回 (展示 ease-out 缓动) */
+    if (g_welcome_frame >= 0) {
+        g_welcome_frame++;
+        if (g_welcome_frame == 30) { g_island_expanded = 1; g_island_target = 100; }
+        if (g_welcome_frame == 120) { g_island_expanded = 0; g_island_target = 0; }
+        if (g_welcome_frame == 150) { g_welcome_frame = -1; }
+    } else if (g_frame_no == 1) {
+        g_welcome_frame = 0;
+    }
+    hs_island_tick();
+
+    int mx = g_shell.mouse_x, my = g_shell.mouse_y;
+    int mouse_moved = (mx != g_last_mx || my != g_last_my);
+    int animating = hs_anim_active();
+    /* 兜底: 每 60 帧(约1s@60fps) 强制全量一次, 防止漏标 dirty 造成画面停更 */
+    if ((g_frame_no % 30) == 0) g_content_dirty = 1;
+
+    /* 完全静止: 不重绘、不提交、不画光标 */
+    if (!g_content_dirty && !animating && !mouse_moved) {
+        g_skip_frames++;
+        if (g_redraw_frames + g_skip_frames >= 1800) {
+            vga_printf("[P0] frames: redraw=%d skip=%d skip_pct=%d\n",
+                       (int)g_redraw_frames, (int)g_skip_frames,
+                       (int)(g_skip_frames * 100 / (g_redraw_frames + g_skip_frames + 1)));
+            g_redraw_frames = g_skip_frames = 0;
+        }
+        return;
+    }
+    g_redraw_frames++;
+
+    if (g_content_dirty || animating) {
+    hs_png_selfcheck();
     gfx64_set_target_back();
 
     /* 检测g_shell是否被野指针写入破坏 */
@@ -3371,12 +3520,14 @@ void hpdesk_render(void)
     /* 锁屏/登录界面优先 */
     if (g_locked == 1) {
         hs_lock_screen_render();
-        gfx64_present();
+        hs_present_with_cursor(mx, my);
+        g_content_dirty = 0; g_last_mx = mx; g_last_my = my;
         return;
     }
     if (g_locked == 2) {
         hs_login_screen_render();
-        gfx64_present();
+        hs_present_with_cursor(mx, my);
+        g_content_dirty = 0; g_last_mx = mx; g_last_my = my;
         return;
     }
 
@@ -3414,7 +3565,16 @@ void hpdesk_render(void)
                 hs_notification_send("USB", "USB removed", 0, 4000);
         }
     }
-    hs_status_update();    hs_notification_render();
+    {
+        /* P0: CPU/内存/USB 等状态数值 0.5s 采样一次, 避免每帧无效重绘 */
+        static uint32_t last_status_frame = 0;
+        if (g_frame_no - last_status_frame >= 30) {
+            last_status_frame = g_frame_no;
+            hs_status_update();
+            g_content_dirty = 1;
+        }
+    }
+    hs_notification_render();
     /* V0.13.39: 网络就绪后自动检查驱动仓库(系统更新通知) */
     {
         extern int dhcp64_is_bound(void);
@@ -3458,25 +3618,13 @@ void hpdesk_render(void)
         }
     }
 
-    /* V0.54.13: 渲染鼠标指针 — 优先使用 Xcursor 主题(/usr/share/cursors/default.xcur),
-     * 尺寸按屏幕分辨率自适应(24/32/48), 热点取主题文件 xhot/yhot;
-     * 主题不可用时回退 gfx64 内置位图。 */
-    {
-        extern void cursor64_draw(int x, int y);
-        extern int cursor64_load_file(const char *path, int want);
-        extern int cursor64_pick_size(int w, int h);
-        static int cur_inited = 0;
-        if (!cur_inited) {
-            cur_inited = 1;
-            cursor64_load_file("/usr/share/cursors/default.xcur",
-                               cursor64_pick_size(g_shell.screen_width,
-                                                  g_shell.screen_height));
-        }
-        cursor64_draw(g_shell.mouse_x, g_shell.mouse_y);
-    }
+    } /* end of: 内容层重绘 (dirty/动画时) */
 
-    /* V0.13.11: 原子提交后台帧到前台 */
-    gfx64_present();
+    /* 提交: 后台内容→前台, 光标单独叠加在前台, 不污染后台缓冲 */
+    hs_present_with_cursor(mx, my);
+    g_content_dirty = 0;
+    g_last_mx = mx;
+    g_last_my = my;
 }
 
 /* ============================================================================
@@ -3485,6 +3633,7 @@ void hpdesk_render(void)
 
 void hpdesk_handle_key(int key)
 {
+    hpdesk_mark_dirty();   /* P0: 交互发生, 内容需重绘 */
     /* V0.55 P3-GUI: 首启向导优先消费全部按键 */
     {
         extern int hs_oobe_active(void);

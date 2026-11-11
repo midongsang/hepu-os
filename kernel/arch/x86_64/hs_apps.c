@@ -5,6 +5,7 @@
  * ========================================================================== */
 
 #include "hpdesk.h"
+#include "png64.h"
 #include "hs_apps.h"
 #include "hsservices.h"
 #include "hsinput.h"   /* KEY_EXT_* 扩展键统一码 */
@@ -657,6 +658,13 @@ static int f_dclick_tick = 0;         /* 双击检测: 上次点击 tick */
 static char f_status2[FS_PROMPT_MAX + 1] = "";
 static hs_window_t *v_win = 0;
 static char v_data[8192];
+
+/* V0.54.13 P0: PNG 图片查看 (png64 解码器接入点)
+ * 图片不再当文本读: 最大 128KB 原文件 -> RGBA 位图 -> 按窗口等比缩放显示 */
+static char v_png_file[131072];
+static png64_image_t v_png;
+static int v_is_png = 0;
+
 static int v_len = 0;
 static int v_scroll = 0;
 static int v_truncated = 0;
@@ -1113,6 +1121,29 @@ static void f_open_item(int idx)
     uint32_t fsz = 0;
     uint8_t fdir = 0;
     ext2_64_stat(full, &fsz, &fdir);
+
+    /* V0.54.13 P0: PNG 图片 → 解码后按像素绘制 */
+    if (fsz >= 8 && fsz <= sizeof(v_png_file)) {
+        int pn = ext2_64_read_file(full, (uint8_t *)v_png_file, sizeof(v_png_file));
+        if (pn > 8 && (uint8_t)v_png_file[0] == 0x89 &&
+            v_png_file[1] == 'P' && v_png_file[2] == 'N' && v_png_file[3] == 'G') {
+            if (v_png.rgba) png64_free(&v_png);
+            if (png64_decode((uint8_t *)v_png_file, pn, &v_png) == 0) {
+                v_is_png = 1;
+                hs_strcpyn(v_name, f_items[item], 60);
+                if (!v_win) {
+                    v_win = hs_window_create(HS_WINDOW_FLOATING, "Image", -1, -1, 520, 420);
+                    if (v_win) v_win->render = hs_viewer_render;
+                }
+                if (v_win) { hs_window_show(v_win); v_win->focus = 1; }
+                hs_strcpyn(f_status2, "Image decoded", FS_PROMPT_MAX);
+                hpdesk_mark_dirty();
+                return;
+            }
+            /* 解码失败则继续走文本查看 */
+        }
+    }
+    v_is_png = 0;
     int n = ext2_64_read_file(full, (uint8_t *)v_data, sizeof(v_data) - 1);
     if (n < 0) {
         hs_strcpyn(f_status2, "Read failed", FS_PROMPT_MAX);
@@ -1330,6 +1361,21 @@ void hs_viewer_render(hs_window_t *w)
     void *fb = gfx64_get_framebuffer();
     int W = g_shell.screen_width, H = g_shell.screen_height;
     int cx = w->x + 6, cy = w->y + 24;
+
+    /* V0.54.13 P0: PNG 位图等比缩放绘制 */
+    if (v_is_png && v_png.rgba) {
+        font64_draw_string(fb, W, H, cx, cy, v_name, g_shell.colors.accent, 13);
+        int aw = w->width - 16;
+        int ah = w->height - 52;
+        if (aw < 8 || ah < 8) return;
+        int dw = aw, dh = (int)((long)v_png.height * aw / (long)v_png.width);
+        if (dh > ah) { dh = ah; dw = (int)((long)v_png.width * ah / (long)v_png.height); }
+        int dx = w->x + 8 + (aw - dw) / 2;
+        int dy = w->y + 44 + (ah - dh) / 2;
+        gfx64_blit_rgba(dx, dy, dw, dh, v_png.rgba, (int)v_png.width, (int)v_png.height);
+        return;
+    }
+
     int cw = w->width - 12;
     font64_draw_string(fb, W, H, cx, cy, v_name, g_shell.colors.accent, 13);
     cy += 22;

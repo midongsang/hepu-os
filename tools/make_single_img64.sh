@@ -121,6 +121,11 @@ if [ -n "$LOOPDEV" ]; then
             mkdir -p /tmp/hepu_root_mnt/usr/share/cursors
             cp ${PROJECT}/assets/cursors/*.xcur /tmp/hepu_root_mnt/usr/share/cursors/ 2>/dev/null
         fi
+        # V0.54.13 P0: PNG 样本图 (/usr/share/samples/*.png)
+        if [ -d ${PROJECT}/assets/samples ]; then
+            mkdir -p /tmp/hepu_root_mnt/usr/share/samples
+            cp ${PROJECT}/assets/samples/*.png /tmp/hepu_root_mnt/usr/share/samples/ 2>/dev/null
+        fi
         cp ${PROJECT}/kernel/fonts/DejaVuSans.ttf /tmp/hepu_root_mnt/fonts/ 2>/dev/null
         # 复制桌面配置文件
         if [ -f ${PROJECT}/rootfs/etc/hepushell/config.hsqml ]; then
@@ -171,6 +176,15 @@ else
                 echo "write $xc /usr/share/cursors/$(basename $xc)" | debugfs -w $TMPDIR/rootfs.ext2 2>/dev/null
             done
             echo "  光标主题已写入 /usr/share/cursors ($(ls "$PROJECT"/assets/cursors/*.xcur 2>/dev/null | wc -l) 个)"
+        fi
+        # V0.54.13 P0: PNG 样本图
+        if [ -d "$PROJECT/assets/samples" ]; then
+            echo "mkdir /usr/share/samples" | debugfs -w $TMPDIR/rootfs.ext2 2>/dev/null
+            for sp in "$PROJECT"/assets/samples/*.png; do
+                [ -f "$sp" ] || continue
+                echo "write $sp /usr/share/samples/$(basename $sp)" | debugfs -w $TMPDIR/rootfs.ext2 2>/dev/null
+            done
+            echo "  PNG 样本已写入 /usr/share/samples"
         fi
         echo "write $PROJECT/kernel/fonts/DejaVuSans.ttf /fonts/DejaVuSans.ttf" | debugfs -w $TMPDIR/rootfs.ext2 2>/dev/null
         # 写入桌面配置文件

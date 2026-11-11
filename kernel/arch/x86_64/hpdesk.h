@@ -329,6 +329,9 @@ void hs_panel_render_all(void);
 int hpdesk_init(int width, int height);
 void hpdesk_run(void);
 void hpdesk_render(void);
+
+/* P0: 标记内容层脏, 下一帧重绘(交互/动画/数据变化时调用) */
+void hpdesk_mark_dirty(void);
 void hpdesk_handle_key(int key);
 void hpdesk_update_mouse(int x, int y);
 void hpdesk_handle_click(int x, int y);

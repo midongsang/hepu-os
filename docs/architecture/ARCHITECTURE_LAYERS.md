@@ -104,3 +104,66 @@ hpdesk 的目标是复现 [Quickshell](https://quickshell.org/about/) 的核心�
 | **保留不变** | 配置文件路径 `/etc/hepushell/`、`rootfs/etc/hepushell/` |
 
 原因：该模块早已从"终端 shell"演进为"桌面环境"，旧名与新职责错位，容易在改动定位时误判层归属。
+
+## 七、P0 渲染与资源升级（V0.54.13）
+
+此前每帧无条件重绘整屏、无动画、无图片解码，与 Quickshell 的观感差距主要来自这三点。P0 阶段一次补齐：
+
+### 1. 按需合成（离屏缓冲 + 脏矩形）
+
+`hpdesk_render()` 不再无条件绘制，帧循环里先判三件事：
+
+| 判据 | 含义 |
+|---|---|
+| `g_content_dirty` | 内容层脏（交互、数据变化、显式 `hpdesk_mark_dirty()`） |
+| `hs_anim_active()` | 有动画在跑（窗口进场、灵动岛过渡） |
+| 鼠标是否移动 | 光标位置变化 |
+
+三者皆假则整帧直接 `return`，一轮零绘制。光标**不进后台缓冲**，只在 `gfx64_present()` 之后画在前台帧上——这样鼠标移动不会触发内容重绘，且每帧提交天然覆盖上一帧的光标残影。
+
+兜底：每 30 帧强制置脏一次，防止漏标导致画面停更（最坏情况内容 0.5s 刷新一次）。
+
+实测（QEMU 静止桌面，1024×768）：每 300 帧中 `redraw=10 / skip=290`，即 **96.7% 的帧被跳过**，同时时钟仍正常走字（兜底生效）。
+
+调用链变为：
+
+```
+hpdesk_render()
+  ├─ dirty || animating ?  gfx64_set_target_back() → 壁纸/面板/窗口/菜单/通知
+  ├─ hs_present_with_cursor(mx,my)
+  │    ├─ gfx64_present()          后台 → 前台
+  │    ├─ gfx64_set_target_front()
+  │    └─ cursor64_draw(mx,my)     光标只在最前层
+  └─ 清脏、记录鼠标位置
+```
+
+标脏入口：`hpdesk_handle_click/key/right_click/mouse_up` 四个输入函数、状态数值节流点（0.5s 采样一次）、锁屏/登录切换、窗口与面板状态变化。
+
+### 2. 通用缓动
+
+`hs_ease_out_cubic(p) = 100 - (100-p)³/10000`，进度量 0..100。
+
+- **灵动岛**：`g_island_t` 每帧向 `g_island_target` 逼近 8（≈120ms @60fps），宽高由收起尺寸与 360×120 线性插值，内容在进度过半时切换，点击只设目标不直接跳变。
+- **窗口**：沿用进场时的 `anim_start/anim_dur` 滑入，`hs_anim_active()` 保证动画期间持续重绘。
+- 启动时自动演示一次展开→收回，串口可看到 `t=8,16,...,100,...,0` 的渐变序列。
+
+### 3. PNG 解码 + 图像缓存
+
+`png64.c` 自包含实现，不引 zlib：
+
+| 模块 | 覆盖范围 |
+|---|---|
+| inflate | stored / fixed huffman / dynamic huffman（RFC 1951） |
+| chunk | IHDR / PLTE / tRNS / IDAT / IEND |
+| 反滤波 | None / Sub / Up / Average / Paeth（RFC 2083） |
+| 颜色类型 | 0 灰度 / 2 RGB / 3 调色板 / 4 灰度+alpha / 6 RGBA |
+| 位深 | 8 / 16（取高字节）/ 1、2、4（灰度与调色板按位展开） |
+| 不支持 | 隔行 Adam7（返回 -3，调用方回退） |
+
+输出统一 RGBA8888，像素缓冲由 `pmm64_alloc_pages` 分配，`png64_free` 归还。错误码 -1 参数 / -2 非 PNG / -3 不支持 / -4 inflate / -5 内存 / -6 损坏。
+
+接入点：图片查看器（文件管理器打开 PNG 时解码并按窗口等比缩放绘制）、启动自检（`/usr/share/samples/sample.png`，串口打印尺寸与首像素）。
+
+> 注意：从对话上传的素材常被 CDN 转成 WebP（文件头 `RIFF`），落盘前需确认真正的 PNG 签名 `89 50 4E 47`，否则解码器返回 -2。
+
+主机回归：`tools/host-tests/png_test.c` + 5 个夹具（RGBA / RGB / 调色板透明 / 灰度 8bit / 灰度 1bit），逐像素比对，已纳入 `run_host_tests.sh`。
