@@ -14,7 +14,7 @@ SYS_MB=${HEPU_SYS_MB:-224}          # V0.13.53: 系统分区(ext2), 适配256MB�
 EXT2_LBA=13000         # ext2分区起始LBA（V0.54.6: 32位内核占至LBA11631，故后移）
 SYS_SECTORS=$((SYS_MB * 2048))      # 系统分区扇区数（三区制 P1）
 KERNEL64_LBA=2000      # 64位内核起始LBA（避开ISO元数据区域，兼容CD-ROM引导）
-KERNEL32_LBA=3400      # 32位内核起始LBA（V0.54.6: 原3000与64位内核重叠，后移）
+KERNEL32_LBA=4400      # 32位内核起始LBA（V0.57.0: 64位内核扩到1MB后从3400后移）
 
 # 清理
 rm -f $IMG
@@ -92,7 +92,7 @@ KERNEL64_SIZE=$(stat -c%s $PROJECT/build_x86_64/hepu-kernel64.bin)
 dd if=$PROJECT/build_x86_64/hepu-kernel64.bin of=$IMG bs=512 seek=$KERNEL64_LBA conv=notrunc
 echo "[5/6] 64位内核写入完成（LBA$KERNEL64_LBA，${KERNEL64_SIZE}字节）"
 
-# 5b. 写入32位内核（LBA3400+，最多4.1MB）
+# 5b. 写入32位内核（LBA4400+，最多4.1MB）
 if [ -f $PROJECT/build_v250/hepu-kernel.bin ]; then
     K32_SECTORS=$((($(stat -c%s $PROJECT/build_v250/hepu-kernel.bin) + 511) / 512))
     K32_END=$((KERNEL32_LBA + K32_SECTORS))
@@ -307,7 +307,7 @@ echo "大小: $(ls -lh $IMG | awk '{print $5}')"
 echo "布局:"
 echo "  MBR:        LBA0 (512字节)"
 echo "  Stage2:     LBA34-49 (8KB)"
-echo "  64位内核:   LBA$KERNEL64_LBA+ (最多640KB)"
+echo "  64位内核:   LBA$KERNEL64_LBA+ (最多1MB)"
 echo "  32位内核:   LBA$KERNEL32_LBA+ (4.1MB)"
 echo "  ext2根分区: LBA$EXT2_LBA+ (剩余空间)"
 echo ""

@@ -784,7 +784,12 @@ void x86_64_kernel_main(void)
         extern void khouse_entry(void);
         extern void kstat_entry(void);
         extern int process64_create_suspended(const char *name, void (*entry)(void), int priority);
-        process64_create("kbeat", ksvc_beat_entry, 2);
+        /* V0.57.0: kbeat 用最低优先级 —— 调度器是严格优先级抢占, 而桌面主循环跑在
+           idle(PID0, 优先级 0)的上下文里。kbeat 若高于 idle, 它一旦可运行就永远压住
+           主循环, 桌面停摆(表现为串口停在进程创建之后、画面停在 VBE 文字)。
+           降到与 idle 同级后, 二者在同一队列里按 scheduler_ticks 轮转, 主循环能
+           按时间片取回 CPU; 同时 kbeat 仍是真线程, 任务管理器里显示为运行态。 */
+        process64_create("kbeat", ksvc_beat_entry, 0);
         /* khouse / kstat: 有真实职责, 但目前只能登记挂起 —— 见 process64_create_suspended
          * 注释里关于 idle 不在就绪队列的说明, 不硬跑。 */
         process64_create_suspended("khouse", khouse_entry, 2);
