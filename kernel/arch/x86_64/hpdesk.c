@@ -22,11 +22,7 @@ static void hs_switcher_render(void);
 static void hs_itoa(int v, char *buf);
 
 /* V0.13.14: 统一矢量图标引擎前向声明(窗口标题栏先于定义使用) */
-static void hs_icon_wifi(int x, int y, int size, uint32_t color);
-static void hs_icon_battery(int x, int y, int size, uint32_t color, int percent);
-static void hs_icon_volume(int x, int y, int size, uint32_t color);
 static void hs_icon_settings(int x, int y, int size, uint32_t color);
-static void hs_icon_power(int x, int y, int size, uint32_t color);
 void hs_icon_folder(int x, int y, int size, uint32_t color);
 void hs_icon_doc(int x, int y, int size, uint32_t color);
 static void hs_icon_terminal(int x, int y, int size, uint32_t color);
@@ -2040,46 +2036,8 @@ static void hs_dynamic_island_render(void)
  * 摒弃"矩形段近似"画法; 单色透明底; 支持任意尺寸缩放
  * ========================================================================== */
 
-/* WiFi: 底部圆点 + 3 条标准拱形弧(凸面朝上, 开口向下) */
-static void hs_icon_wifi(int x, int y, int size, uint32_t color)
-{
-    int cx = x + size / 2;
-    int cy = y + size - size / 8;
-    gfx64_fill_circle(cx, cy, size / 10, color);               /* 底部圆点 */
-    gfx64_draw_arc(cx, cy, size * 2 / 10, 45, 135, color);     /* 弧1 */
-    gfx64_draw_arc(cx, cy, size * 34 / 100, 40, 140, color);   /* 弧2 */
-    gfx64_draw_arc(cx, cy, size * 48 / 100, 35, 145, color);   /* 弧3 */
-}
 
-/* 电池: 圆角外框 + 正极 + 单色电量填充 */
-static void hs_icon_battery(int x, int y, int size, uint32_t color, int percent)
-{
-    int w = size - 3;
-    int h = size / 2 + 2;
-    int by = y + (size - h) / 2;
-    gfx64_draw_rounded_rect(x, by, w, h, 2, color);            /* 外框 */
-    gfx64_fill_rect(x + w, by + h / 4, 2, h / 2, color);       /* 正极 */
-    int fill_w = (w - 4) * percent / 100;
-    if (fill_w > 0) gfx64_fill_rect(x + 2, by + 2, fill_w, h - 4, color);
-}
 
-/* 音量: 扬声器(多边形) + 锥形 + 声波弧 */
-static void hs_icon_volume(int x, int y, int size, uint32_t color)
-{
-    int cy = y + size / 2;
-    /* 扬声器主体 */
-    int xs1[] = { x, x + size / 4, x + size / 4, x };
-    int ys1[] = { cy - size / 5, cy - size / 5, cy + size / 5, cy + size / 5 };
-    gfx64_fill_polygon(xs1, ys1, 4, color);
-    /* 锥形 */
-    int xs2[] = { x + size / 4, x + size * 2 / 3, x + size / 4 };
-    int ys2[] = { cy - size / 5, cy, cy + size / 5 };
-    gfx64_fill_polygon(xs2, ys2, 3, color);
-    /* 声波弧(凸面朝右) */
-    int sx = x + size * 2 / 3;
-    gfx64_draw_arc(sx, cy, size / 5, 60, 120, color);
-    gfx64_draw_arc(sx, cy, size * 4 / 15, 55, 125, color);
-}
 
 /* 设置: 齿轮(8 齿 + 齿体圆 + 中心孔) */
 /* V0.57.0: 位图图标绘制。数据是 32x32 1bit(bit31=最左), 按 size 缩放,
@@ -2130,14 +2088,6 @@ static void hs_icon_settings(int x, int y, int size, uint32_t color)
     gfx64_fill_circle(cx, cy, size / 5, g_shell.colors.panel_bg); /* 中心孔 */
 }
 
-/* 电源: 大半圆弧(顶部开口) + 顶部竖线 */
-static void hs_icon_power(int x, int y, int size, uint32_t color)
-{
-    int cx = x + size / 2, cy = y + size * 11 / 20;
-    int r = size * 7 / 20;
-    gfx64_draw_arc(cx, cy, r, 200, 340, color);                /* 圆环(开口朝上) */
-    gfx64_fill_rect(cx - 1, y + size / 10, 3, r * 4 / 5, color); /* 竖线 */
-}
 
 /* 文件夹 */
 void hs_icon_folder(int x, int y, int size, uint32_t color)
@@ -2279,12 +2229,17 @@ static void hs_top_bar_render(void)
     int icon_x = g_shell.screen_width - margin - hs_sx(14);
     uint32_t fg = g_shell.colors.panel_fg;
 
-    /* 从右到左排列：电源、设置、音量、电池、WiFi */
-    icon_x -= icon_size; hs_icon_power(icon_x, icon_y, icon_size, fg);
-    icon_x -= hs_sx(8) + icon_size; hs_icon_settings(icon_x, icon_y, icon_size, fg);
-    icon_x -= hs_sx(8) + icon_size; hs_icon_volume(icon_x, icon_y, icon_size, fg);
-    icon_x -= hs_sx(8) + icon_size; hs_icon_battery(icon_x, icon_y, icon_size, fg, 75);
-    icon_x -= hs_sx(8) + icon_size; hs_icon_wifi(icon_x, icon_y, icon_size, fg);
+    /* 从右到左排列：电源、设置、音量、电池、WiFi
+     * V0.57.1: 改用与 App 图标同一套线性风格位图, 不再用各自一套分别手绘的矢量 —— 那排
+     * 图标原来线宽/圆角/重心各不相同, 并排放着像拼的。尺寸提到 18px: 32px 源图减半到
+     * 16px 时 2.5px 的线条会塌, 18px 能保住笔画。 */
+    icon_size = hs_s(20);
+    icon_y = bar_top + (bar_h - icon_size) / 2;
+    icon_x -= icon_size; hs_icon_bmp(icon_x, icon_y, icon_size, fg, hs_ico_power);
+    icon_x -= hs_sx(6) + icon_size; hs_icon_bmp(icon_x, icon_y, icon_size, fg, hs_ico_settings);
+    icon_x -= hs_sx(6) + icon_size; hs_icon_bmp(icon_x, icon_y, icon_size, fg, hs_ico_speaker);
+    icon_x -= hs_sx(6) + icon_size; hs_icon_bmp(icon_x, icon_y, icon_size, fg, hs_ico_battery);
+    icon_x -= hs_sx(6) + icon_size; hs_icon_bmp(icon_x, icon_y, icon_size, fg, hs_ico_wifi);
 }
 
 /* 桌面大时钟 */

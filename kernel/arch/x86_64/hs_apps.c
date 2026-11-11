@@ -1980,7 +1980,14 @@ static void m_render(hs_window_t *w)
         strcpy(sbuf + hs_strlen(sbuf), "%    MEM: ");
         hs_itoa(hs_process_get_mem_usage(), tmp);
         strcpy(sbuf + hs_strlen(sbuf), tmp);
-        strcpy(sbuf + hs_strlen(sbuf), "%");
+        strcpy(sbuf + hs_strlen(sbuf), "%    UP: ");
+        /* V0.57.1: uptime 直接读 PIT 计数器。原来打算由 kstat 线程缓存后显示, 但 kstat
+         * 目前只能登记挂起(见 process64_create_suspended), 显示它的缓存值会恒为 0 ——
+         * 那就成了假数据, 所以这里不走缓存。 */
+        extern uint64_t pit64_get_ms(void);
+        hs_itoa((int)(pit64_get_ms() / 1000), tmp);
+        strcpy(sbuf + hs_strlen(sbuf), tmp);
+        strcpy(sbuf + hs_strlen(sbuf), "s");
         font64_draw_string(fb, W, H, cx, cy, sbuf, g_shell.colors.accent, 12);
         cy += 18;
     }
@@ -2006,9 +2013,25 @@ static void m_render(hs_window_t *w)
     gfx64_fill_rect(cx, cy, cw, 1, g_shell.colors.border);
     cy += 6;
 
-    /* 表头 (V0.13.46: 加PID与状态列) */
-    font64_draw_string(fb, W, H, cx, cy, "PID  NAME          CPU   MEM     STATE",
-                       g_shell.colors.text_secondary, 10);
+    /* 表头 (V0.13.46: 加PID与状态列)
+     * V0.57.1: 改成分列绘制。旧实现把表头和整行都拼成一个含空格的字符串再一次性画,
+     * 而 font64 是比例字体, 空格宽度与 "0"/"16"/"100%" 的宽度不一致 —— 于是每行列位置
+     * 随数值位数漂移, 看着就是"没对齐"。现在表头与数据行共用同一组列偏移。 */
+    /* 列距按内容宽度定, 不用百分比: 520 宽的窗口按百分比摊开会让后面两列顶到右边界,
+     * 窗口被别的面板遮住时直接看不见。NAME 最长 12 字符(~84px), CPU 最长 "100%"(~28px)。 */
+    int c_pid = cx;
+    int c_name = cx + 38;
+    int c_cpu = cx + 150;
+    int c_mem = cx + 202;
+    int c_state = cx + 250;
+    {
+        uint32_t hc = g_shell.colors.text_secondary;
+        font64_draw_string(fb, W, H, c_pid, cy, "PID", hc, 10);
+        font64_draw_string(fb, W, H, c_name, cy, "NAME", hc, 10);
+        font64_draw_string(fb, W, H, c_cpu, cy, "CPU", hc, 10);
+        font64_draw_string(fb, W, H, c_mem, cy, "MEM", hc, 10);
+        font64_draw_string(fb, W, H, c_state, cy, "STATE", hc, 10);
+    }
     cy += 14;
 
     /* V0.13.39: 真实用户进程 + 内核进程, CPU 降序 */
@@ -2031,35 +2054,36 @@ static void m_render(hs_window_t *w)
 
     if (procs && pcount > 0) {
         for (int i = 0; i < pcount && cy < w->y + w->height - 28; i++) {
-            char line[96];
-            /* PID */
-            hs_itoa(procs[i].pid, tmp);
-            strcpy(line, tmp);
-            while (hs_strlen(line) < 6) strcpy(line + hs_strlen(line), " ");
-            /* NAME */
-            strcpy(line + hs_strlen(line), procs[i].name);
-            while (hs_strlen(line) < 20) strcpy(line + hs_strlen(line), " ");
-            /* CPU */
-            hs_itoa(procs[i].cpu_usage, tmp);
-            strcpy(line + hs_strlen(line), tmp);
-            strcpy(line + hs_strlen(line), "%");
-            while (hs_strlen(line) < 28) strcpy(line + hs_strlen(line), " ");
-            /* MEM */
-            hs_itoa(procs[i].mem_usage, tmp);
-            strcpy(line + hs_strlen(line), tmp);
-            while (hs_strlen(line) < 38) strcpy(line + hs_strlen(line), " ");
-            /* STATE */
-            if (procs[i].pid >= 100 && procs[i].state == 0) {
-                strcpy(line + hs_strlen(line), "RUN");
-            } else if (procs[i].pid >= 100) {
-                strcpy(line + hs_strlen(line), "idle");
-            } else {
-                strcpy(line + hs_strlen(line), "sys");
-            }
+            char tmp2[16];
             /* 运行中进程高亮 */
             int col = g_shell.colors.window_fg;
             if (procs[i].pid >= 100 && procs[i].state == 0) col = 0x52C41A;
-            font64_draw_string(fb, W, H, cx, cy, line, col, 12);
+
+            hs_itoa(procs[i].pid, tmp2);
+            font64_draw_string(fb, W, H, c_pid, cy, tmp2, col, 11);
+
+            char nmbuf[16];
+            int nl = 0;
+            while (procs[i].name[nl] && nl < 12) { nmbuf[nl] = procs[i].name[nl]; nl++; }
+            nmbuf[nl] = 0;
+            font64_draw_string(fb, W, H, c_name, cy, nmbuf, col, 11);
+
+            hs_itoa(procs[i].cpu_usage, tmp2);
+            strcpy(tmp2 + hs_strlen(tmp2), "%");
+            font64_draw_string(fb, W, H, c_cpu, cy, tmp2, col, 11);
+
+            hs_itoa(procs[i].mem_usage, tmp2);
+            font64_draw_string(fb, W, H, c_mem, cy, tmp2, col, 11);
+
+            /* V0.57.1: 内核线程标 "kthr" 而不是混在 "sys" 里 —— idle/kbeat 这类线程
+             * 有的在轮转、有的是登记挂起(见 process64_create_suspended), 统一写 sys 会
+             * 让人以为它们都在跑。 */
+            const char *st = "kthr";
+            if (procs[i].pid == 0) st = "sys";
+            else if (procs[i].pid >= 100 && procs[i].state == 0) st = "RUN";
+            else if (procs[i].pid >= 100) st = "idle";
+            font64_draw_string(fb, W, H, c_state, cy, st, col, 11);
+
             cy += 15;
         }
     }

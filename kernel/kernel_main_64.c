@@ -781,7 +781,14 @@ void x86_64_kernel_main(void)
         extern int process64_create(const char *name, void (*entry)(void), int priority);
         extern void process64_yield(void);
         extern void ksvc_beat_entry(void);
+        extern void khouse_entry(void);
+        extern void kstat_entry(void);
+        extern int process64_create_suspended(const char *name, void (*entry)(void), int priority);
         process64_create("kbeat", ksvc_beat_entry, 2);
+        /* khouse / kstat: 有真实职责, 但目前只能登记挂起 —— 见 process64_create_suspended
+         * 注释里关于 idle 不在就绪队列的说明, 不硬跑。 */
+        process64_create_suspended("khouse", khouse_entry, 2);
+        process64_create_suspended("kstat", kstat_entry, 3);
     }
 
     /* 初始化用户态进程 */

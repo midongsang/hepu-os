@@ -374,11 +374,77 @@ void process64_yield(void);   /* 前向声明: 定义在本文件靠后, 否则�
 void ksvc_beat_entry(void)
 {
     extern void vga_puts(const char *s);
+    extern uint64_t pit64_get_ms(void);
+    uint64_t last_log = 0;
     for (;;) {
         g_ksvc_beat++;
-        if ((g_ksvc_beat % 1000) == 0) vga_puts("[KSVC] beat alive\n");
+        /* 探针按时间节流。原来按次数(每 1000 次)根本节制不住: 空转循环一秒能跑上万轮,
+         * 串口又慢, 实测把日志刷到 6 万行并把整机拖住。 */
+        uint64_t now = pit64_get_ms();
+        if (now - last_log >= 5000) { last_log = now; vga_puts("[KSVC] beat alive\n"); }
         process64_yield();
     }
+}
+
+/* V0.57.1: 另外两个常驻服务线程。
+ * 都不是"凑数进程": 各自有真实职责与可观测产出, 没有职责就不建。
+ *   khouse: 每秒唤醒一次桌面合成 —— 按需合成模式下, 时钟/温度这类"自己会变"的内容
+ *           没有输入事件就不会重绘, 需要一个外部心跳。
+ *   kstat : 维护 uptime 秒计数, 任务管理器摘要行直接读它显示。
+ */
+volatile uint32_t g_ksvc_uptime_s = 0;
+
+void khouse_entry(void)
+{
+    extern void hpdesk_mark_dirty(void);
+    extern uint64_t pit64_get_ms(void);
+    uint64_t last = 0;
+    for (;;) {
+        uint64_t now = pit64_get_ms();
+        if (now - last >= 1000) {
+            last = now;
+            hpdesk_mark_dirty();
+        }
+        process64_yield();
+    }
+}
+
+void kstat_entry(void)
+{
+    extern uint64_t pit64_get_ms(void);
+    for (;;) {
+        g_ksvc_uptime_s = (uint32_t)(pit64_get_ms() / 1000);
+        process64_yield();
+    }
+}
+
+/* V0.57.1: 创建"只登记、不参与调度"的线程。
+ *
+ * 为什么需要: 当前调度器只在 ready_queue 里挑人, 而 idle(PID0) 从未被放进就绪队列 ——
+ * 于是只要有 >=2 个会主动 yield 的线程, 它们就会互相切换、永远不回到桌面主循环
+ * (BSP 上跑的就是 idle 上下文)。实测: 建 3 个线程后整机停在启动阶段, 串口只剩心跳。
+ * 所以除 kbeat 之外的常驻线程先"登记 PCB + 摘出就绪队列", 等 idle 能被正常切回
+ * 再启用。任务管理器按真实状态显示, 不假装它们在跑。 */
+int process64_create_suspended(const char *name, void (*entry)(void), int priority)
+{
+    int pid = process64_create(name, entry, priority);
+    if (pid <= 0) return pid;
+    int idx = -1;
+    for (int i = 0; i < MAX_PROCESSES; i++) {
+        if (processes[i].pid == pid) { idx = i; break; }
+    }
+    if (idx < 0) return pid;
+    int prio = processes[idx].priority;
+    if (prio < 0 || prio >= PRIORITY_COUNT) return pid;
+    for (int i = 0; i < ready_queue_count[prio]; i++) {
+        if (ready_queue[prio][i] == idx) {
+            for (int j = i; j < ready_queue_count[prio] - 1; j++)
+                ready_queue[prio][j] = ready_queue[prio][j + 1];
+            ready_queue_count[prio]--;
+            break;
+        }
+    }
+    return pid;
 }
 
 /* 获取当前进程 */
