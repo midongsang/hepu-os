@@ -57,6 +57,26 @@ static uint8_t acpi_checksum(const void *ptr, uint32_t length)
 /* 查找RSDP（在0xE0000-0xFFFFF范围内） */
 acpi_rsdp_t *acpi_find_rsdp(void)
 {
+    /* UEFI 引导线: 引导器在 ExitBootServices 后把 RSDP 物理地址写到 0x6020。
+     * UEFI 下 ACPI 表由固件经 EFI 配置表传递, 地址往往不在 EBDA/0xE0000-0xFFFFF
+     * 范围内, 沿用 BIOS 扫描方式必然扫不到 —— 所以先看这个槽位。 */
+    {
+        uint64_t hint = *(volatile uint64_t *)(uintptr_t)0x6020;
+        if (hint) {
+            /* UEFI 下 ACPI 表常在 >1GB 的物理地址(OVMF 实测约 0x3FB7D000),
+             * 低 16MB 恒等映射访问不到 —— 必须走高半区直接映射。 */
+            extern uint64_t vmm64_phys_to_ptr(uint64_t phys);
+            acpi_rsdp_t *r = (acpi_rsdp_t *)(uintptr_t)vmm64_phys_to_ptr(hint);
+            if (r->signature[0] == 'R' && r->signature[1] == 'S' &&
+                r->signature[2] == 'D' && r->signature[3] == ' ' &&
+                r->signature[4] == 'P' && r->signature[5] == 'T' &&
+                r->signature[6] == 'R' && r->signature[7] == ' ' &&
+                acpi_checksum(r, 20) == 0) {
+                return r;
+            }
+        }
+    }
+
     /* RSDP通常在以下位置：
      * 1. BIOS EBDA（0x40:0x0E指向的1KB区域）
      * 2. 0xE0000-0xFFFFF主BIOS区域
@@ -115,8 +135,8 @@ int acpi_parse_madt(void)
 
     /* RSDT 可能在 >1GB 物理地址（高内存机型），用高半区直接映射访问。
      * phys<1GB 仍走低身份映射（phys_to_virt 原样返回）。 */
-    extern uint64_t vmm64_phys_to_virt(uint64_t phys);
-    acpi_rsdt_t *rsdt = (acpi_rsdt_t *)vmm64_phys_to_virt((uint64_t)rsdt_phys);
+    extern uint64_t vmm64_phys_to_ptr(uint64_t phys);
+    acpi_rsdt_t *rsdt = (acpi_rsdt_t *)vmm64_phys_to_ptr((uint64_t)rsdt_phys);
     if (!rsdt || rsdt_phys == 0) {
         vga_puts("[ACPI] RSDT not found\n");
         return -2;
@@ -137,7 +157,7 @@ int acpi_parse_madt(void)
     acpi_madt_t *madt = 0;
 
     for (uint32_t i = 0; i < entry_count; i++) {
-        acpi_header_t *header = (acpi_header_t *)vmm64_phys_to_virt((uint64_t)rsdt->entry[i]);
+        acpi_header_t *header = (acpi_header_t *)vmm64_phys_to_ptr((uint64_t)rsdt->entry[i]);
         if (header->signature[0] == 'A' && header->signature[1] == 'P' &&
             header->signature[2] == 'I' && header->signature[3] == 'C') {
             madt = (acpi_madt_t *)header;
@@ -251,8 +271,8 @@ int acpi_init_irq_overrides(void)
         return -1;
     }
 
-    extern uint64_t vmm64_phys_to_virt(uint64_t phys);
-    acpi_rsdt_t *rsdt = (acpi_rsdt_t *)vmm64_phys_to_virt((uint64_t)rsdp->rsdt_address);
+    extern uint64_t vmm64_phys_to_ptr(uint64_t phys);
+    acpi_rsdt_t *rsdt = (acpi_rsdt_t *)vmm64_phys_to_ptr((uint64_t)rsdp->rsdt_address);
     if (!rsdt || rsdp->rsdt_address == 0) {
         acpi_reset_isa_gsi();
         return -2;
@@ -262,7 +282,7 @@ int acpi_init_irq_overrides(void)
     acpi_madt_t *madt = 0;
     for (uint32_t i = 0; i < entry_count; i++) {
         acpi_header_t *header =
-            (acpi_header_t *)vmm64_phys_to_virt((uint64_t)rsdt->entry[i]);
+            (acpi_header_t *)vmm64_phys_to_ptr((uint64_t)rsdt->entry[i]);
         if (header->signature[0] == 'A' && header->signature[1] == 'P' &&
             header->signature[2] == 'I' && header->signature[3] == 'C') {
             madt = (acpi_madt_t *)header;

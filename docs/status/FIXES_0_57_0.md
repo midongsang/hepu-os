@@ -602,6 +602,49 @@ Lua / `klibm64` 是 `-msse2`。`context_switch_64` 原本只保存 rbx/rbp/r12-r
 - `[PNG64] no sample image`：壁纸文件已写入 ext2，但桌面读取路径与镜像布局尚未对齐；
 - 当前主线不产出 `build_v250/hepu-kernel.bin`，脚本已改为"存在则打包"。
 
+
+### 1.32 UEFI 路径接 ACPI（RSDP 来自 EFI 配置表 + 修页表映射空洞）
+
+**症状**：UEFI 启动时 `[ACPI] RSDP not found`，SMP 退化为 CPUID 探测、APIC timer 校准失败。
+真机上前者会直接拖垮中断与多核。
+
+**根因（四层，逐层剥出来的）**
+
+1. **协议层**：UEFI 下 ACPI 表由固件通过 `EFI_CONFIGURATION_TABLE` 传递，地址不在
+   EBDA/`0xE0000-0xFFFFF` 内（OVMF 实测 RSDP 在 **0x3FB7D014 ≈ 1019MB**），内核沿用 BIOS 扫描方式必然扫不到。
+2. **页表层（空洞）**：内核页表对 `[0, min(total_mem,1GB))` 做恒等映射、对 `[1GB,4GB)` 做高直接映射。
+   本机 `total_mem=979MB`，于是 **`[979MB, 1GB)` 两端都不覆盖**，而固件表恰好落在这段空洞里 → `#PF`。
+3. **大页对齐**：把高映射起点改成 `low_end` 后仍崩，`#PF error=0x9`（RSVD 保留位）。
+   原因是 `low_end` 不是 2MB 对齐，2MB 大页的物理地址低 21 位非零，页表项被判非法。
+4. **调用点遗漏**：`acpi_init_irq_overrides()` 仍在用 `vmm64_phys_to_virt()`（阈值写死 1GB），
+   对 1019MB 的地址原样返回物理地址，又踩回空洞。
+
+**改动**
+
+- `hepboot_uefi.c`：新增 `find_acpi_rsdp_from_table()`，遍历配置表匹配 ACPI 2.0 GUID
+  `8868E871-E4F1-11D3-BC22-0080C73C8881`（回退 1.0 GUID），校验 `"RSD PTR "` 签名；
+  在 ExitBootServices **之前**取好地址，之后写入固定槽位 **0x6020**（低内存，与 0x6000 图形信息不冲突）。
+- `kernel/arch/x86_64/acpi.c`：`acpi_find_rsdp()` 先读 0x6020，签名/校验通过即直接用；
+  全部地址转换统一改为 `vmm64_phys_to_ptr()`。
+- `kernel/arch/x86_64/vmm64.c`：
+  - 记录 `g_low_identity_end`（恒等映射实际上限），新增 `vmm64_phys_to_ptr()` 按它判断；
+  - **高直接映射改为从 0 起覆盖 4GB**（恒等映射区重复映射无副作用，VA 不同），
+    既消除 `[total_mem,1GB)` 空洞，又保证 2MB 起点对齐。
+
+**验证（QEMU + OVMF，-smp 4）**
+```
+[ACPI] RSDP found at 0xFFFF80003FB7D014
+[ACPI] RSDT found, length=0x38 / MADT found, length=0x90
+[ACPI] CPU: apic_id=0x0..0x3  (4 个)
+[ACPI] I/O APIC: id=0x0, addr=0xFEC00000
+[ACPI] IRQ override: ISA IRQ0x0 -> GSI0x2
+[SMP] Using ACPI MADT, CPU count: 0x4
+[SMP] Starting AP 0x1 / 0x2 ...
+```
+桌面 Info 面板由 `CPU: 1 core` 变为 **`CPU: 4 cores`**；首设向导正常，无异常。
+
+**回归**：BIOS 线（stage2_64）同步复跑，映射改动不影响原路径（见下）。
+
 ---
 
 ## 四、回归基线

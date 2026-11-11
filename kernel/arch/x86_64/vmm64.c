@@ -56,6 +56,18 @@ extern void pmm64_free_page(uint64_t addr);
 #define USER_WINDOW_HIGH  0x0000000080000000ULL
 #define KERNEL_DIRECT_BASE 0xFFFF800000000000ULL
 
+/* 恒等映射实际覆盖到的物理上限。phys_to_virt 的"原样返回"不能只按 1GB 阈值判断:
+ * 物理内存只有 979MB 时, 979MB~1GB 是恒等映射与高直接映射之间的空洞,
+ * 而固件表(如 OVMF 的 ACPI, 实测在 0x3FB7D000 ≈ 1019MB)恰好落在空洞里。 */
+uint64_t g_low_identity_end = 0x1000000ULL;
+
+/* 物理地址 -> 可解引用的内核虚拟地址(供固件表等"不确定落在哪"的地址使用) */
+uint64_t vmm64_phys_to_ptr(uint64_t phys)
+{
+    if (phys < g_low_identity_end) return phys;
+    return KERNEL_DIRECT_BASE + phys;
+}
+
 /* 物理地址 -> 内核可用虚拟地址：<1GB 用低身份映射（保持现状），>=1GB 用高半区直接映射 */
 uint64_t vmm64_phys_to_virt(uint64_t phys)
 {
@@ -102,6 +114,7 @@ void vmm64_init(uint64_t pml4_addr)
     extern uint64_t pmm64_get_memory_size_mb(void);
     uint64_t total_mem = pmm64_get_memory_size_mb() * 1024 * 1024;
     uint64_t low_end = total_mem < USER_WINDOW_LOW ? total_mem : USER_WINDOW_LOW;
+    g_low_identity_end = low_end;
     for (uint64_t addr = 0; addr < low_end; addr += 0x200000) {
         if (vmm64_map_page(pml4_addr, addr, addr,
                        PAGE_PRESENT | PAGE_WRITABLE | PAGE_HUGE) != 0) {
@@ -114,7 +127,11 @@ void vmm64_init(uint64_t pml4_addr)
      * [0,1GB) 已由低身份映射覆盖，这里不重复。 */
     vga_puts("[VMM64] Mapping high direct map...\n");
     uint64_t high_end = 0x100000000ULL;  /* 4GB */
-    for (uint64_t addr = USER_WINDOW_LOW; addr < high_end; addr += 0x200000) {
+    /* 起点必须是 2MB 对齐的 0, 不能是 low_end:
+     * (1) 从固定 1GB 起 -> total_mem 不足 1GB 时 [total_mem,1GB) 是空洞, 固件表落进去 #PF;
+     * (2) 从 low_end 起 -> low_end 往往不是 2MB 对齐, 2MB 大页物理地址低 21 位非零
+     *     会置保留位, 触发 RSVD(#PF error=0x9)。恒等映射区重复映射无副作用(VA 不同)。 */
+    for (uint64_t addr = 0; addr < high_end; addr += 0x200000) {
         uint64_t va = KERNEL_DIRECT_BASE + addr;
         if (vmm64_map_page(pml4_addr, va, addr,
                        PAGE_PRESENT | PAGE_WRITABLE | PAGE_HUGE | PAGE_GLOBAL) != 0) {

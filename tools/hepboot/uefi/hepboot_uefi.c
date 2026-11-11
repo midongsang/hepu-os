@@ -907,6 +907,35 @@ static void print_hex(UINT64 val)
  * 输出: kernel_addr - 内核加载地址(0x100000), kernel_size - 内核大小
  * 返回: EFI_SUCCESS=成功
  */
+
+/* 从 EFI 配置表取 ACPI RSDP 物理地址。
+ * UEFI 下 ACPI 表由固件通过 ConfigurationTable 传递(ACPI 2.0 GUID), 地址通常在
+ * 0xE0000-0xFFFFF 之外 —— 内核沿用 BIOS 方式扫 EBDA/BIOS 区必然扫不到。
+ * 这里在 ExitBootServices 之前取好地址, 之后写到固定槽位 0x6020, 供内核优先使用。 */
+static UINT64 find_acpi_rsdp_from_table(void)
+{
+    EFI_GUID acpi20 = {0x8868e871,0xe4f1,0x11d3,
+                       {0xbc,0x22,0x00,0x80,0xc7,0x3c,0x88,0x81}};
+    EFI_GUID acpi10 = {0xeb9d2d30,0x2d88,0x11d3,
+                       {0x9a,0x16,0x00,0x90,0xef,0xf2,0xb8,0xcd}};
+    UINT64 found = 0;
+    if (!ST || !ST->ConfigurationTable) return 0;
+    for (UINTN i = 0; i < ST->NumberOfTableEntries; i++) {
+        EFI_GUID *g = &ST->ConfigurationTable[i].VendorGuid;
+        if (!CompareGuid(g, &acpi20) || !CompareGuid(g, &acpi10)) {
+            UINT64 cand = (UINT64)ST->ConfigurationTable[i].VendorTable;
+            /* 校验签名, 避免把非 RSDP 表当地址 */
+            char *sig = (char *)cand;
+            if (sig[0]=='R' && sig[1]=='S' && sig[2]=='D' && sig[3]==' '
+                && sig[4]=='P' && sig[5]=='T' && sig[6]=='R' && sig[7]==' ') {
+                found = cand;
+                if (CompareGuid(g, &acpi20)) break;  /* 优先 ACPI 2.0 */
+            }
+        }
+    }
+    return found;
+}
+
 static EFI_STATUS load_kernel_to_memory(CHAR16 *kernel_path, UINT64 *kernel_addr, UINT64 *kernel_size)
 {
     EFI_STATUS status;
@@ -1397,6 +1426,12 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
         print_hex(low_addr);
         print_str(L"\r\n");
 
+        /* ACPI RSDP: 必须在 ExitBootServices 之前从配置表取(之后不能调 BS 服务) */
+        UINT64 acpi_rsdp_addr = find_acpi_rsdp_from_table();
+        print_str(L"  [ACPI] RSDP from config table: 0x");
+        print_hex(acpi_rsdp_addr);
+        print_str(L"\r\n");
+
         /* V6.86: ExitBootServices重试循环，真机上可能需要多次重试 */
         int ebs_retries = 0;
         while (ebs_retries < 5) {
@@ -1416,6 +1451,11 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
         /* V0.10.5: ExitBootServices成功，用VGA文本输出调试信息
          * （不依赖UEFI服务，真机启动失败时可看到卡在哪） */
         debug_puts("HepuBoot: ExitBootServices OK\n");
+        /* 把 RSDP 地址交给内核: 0x6020(低内存恒等映射区, 内核 acpi_find_rsdp 优先读) */
+        *(volatile UINT64 *)0x6020 = acpi_rsdp_addr;
+        debug_puts("ACPI RSDP -> 0x6020: ");
+        debug_put_hex(acpi_rsdp_addr);
+        debug_puts("\n");
         debug_puts("kernel_entry=0x101000 mb_info=0x");
         debug_put_hex((UINT64)mb_info);
         debug_puts("\nlow_mem=0x");
