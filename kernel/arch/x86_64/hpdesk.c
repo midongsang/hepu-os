@@ -1959,9 +1959,28 @@ static void hs_dynamic_island_render(void)
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            island_x + island_w - hs_sx(100), cy, "26C Cloudy", g_shell.colors.text_secondary, hs_s(14));
         cy += hs_sy(28);
-        /* 系统状态条 */
-        font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           island_x + hs_sx(20), cy, "CPU 35%  MEM 60%  WiFi On", g_shell.colors.text_secondary, hs_s(12));
+        /* 系统状态条 (V0.56.2: 原来是写死的 "CPU 35%  MEM 60%", 与任务管理器/Info 页
+         * 的真实数据对不上; 改读同一套统计源, 避免同屏两套数值) */
+        {
+            extern int hs_process_get_cpu_usage(void);
+            extern int hs_process_get_mem_usage(void);
+            char sbuf[64];
+            char num[12];
+            int l = 0;
+            const char *p = 0;
+#define HS_CAT(s) for (p = (s); *p && l < 63; p++) sbuf[l++] = *p;
+            HS_CAT("CPU ");
+            hs_itoa(hs_process_get_cpu_usage(), num);
+            HS_CAT(num);
+            HS_CAT("%   MEM ");
+            hs_itoa(hs_process_get_mem_usage(), num);
+            HS_CAT(num);
+            HS_CAT("%   WiFi On");
+#undef HS_CAT
+            sbuf[l] = 0;
+            font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                               island_x + hs_sx(20), cy, sbuf, g_shell.colors.text_secondary, hs_s(12));
+        }
     }
 }
 
@@ -2428,6 +2447,29 @@ static int hs_sidebar_handle_wheel(int wheel)
     return 1;
 }
 
+/* V0.56.2: Apps 页图标网格的单元位置。
+ * 渲染与点击必须用同一套公式 —— 否则会出现"看得见却点不到"的错位。
+ * 返回 1 表示该单元完全落在可视区域内(可点击/可绘制)。 */
+static int hs_apps_cell_pos(int i, int *ax, int *ay)
+{
+    int sx = hs_sx(g_shell.ui.sidebar_x);
+    int sy = hs_sy(g_shell.ui.sidebar_y);
+    int sh = hs_sy(g_shell.ui.sidebar_height);
+    /* tab_y(12) + 40(内容起点) + 35(标题 "Applications" 占位) */
+    int content_y = sy + hs_sy(12) + hs_sy(40) + hs_sy(35);
+
+    int scroll = hs_sy(g_sidebar_scroll);
+    int clip_top = content_y;
+    int clip_bot = sy + sh - hs_sy(8);
+    int row_h = hs_sy(88);
+
+    int x = sx + hs_sx(20) + (i % 3) * hs_sx(80);
+    int y = content_y + (i / 3) * row_h - scroll;
+    if (ay) *ay = y;
+    if (ax) *ax = x;
+    return (y >= clip_top && y + hs_sy(70) <= clip_bot);
+}
+
 static void hs_sidebar_render(void)
 {
     int sx = hs_sx(g_shell.ui.sidebar_x);
@@ -2545,15 +2587,12 @@ static void hs_sidebar_render(void)
                            sx + hs_sx(20), content_y, "Applications", g_shell.colors.panel_fg, hs_s(18));
         content_y += hs_sy(35);
 
-        int scroll = hs_sy(g_sidebar_scroll);
         int clip_top = content_y;                 /* 网格视口顶 (标题固定) */
         int clip_bot = sy + sh - hs_sy(8);        /* 侧栏底内边距 */
-        int row_h = hs_sy(88);
         for (int i = 0; i < g_shell.app_count; i++) {
-            int ax = sx + hs_sx(20) + (i % 3) * hs_sx(80);
-            int ay = content_y + (i / 3) * row_h - scroll;
+            int ax = 0, ay = 0;
             /* 无裁剪原语: 整行剔除 — 行不完全落在视口内时跳过 */
-            if (ay < clip_top || ay + hs_sy(70) > clip_bot) continue;
+            if (!hs_apps_cell_pos(i, &ax, &ay)) continue;
             /* V0.13.15: 应用矢量图标(白, 透明底) */
             gfx64_fill_rounded_rect(ax, ay, hs_s(48), hs_s(48), hs_s(10), g_shell.colors.accent);
             uint32_t ic = 0xFDF8EF;
@@ -3313,6 +3352,28 @@ void hpdesk_handle_click(int x, int y)
             if (x >= tx && x <= tx + tab_w - hs_sx(4)) {
                 g_sidebar_tab = i;
                 g_sidebar_scroll = 0;   /* V0.55: 切页重置滚动 */
+                return;
+            }
+        }
+    }
+
+    /* V0.56.2: Apps 页图标点击。
+     * 之前该页只有渲染没有命中测试 —— 图标看得见, 点上去毫无反应,
+     * 这是"鼠标点了没反应"的真实缺陷之一。坐标复用渲染所用的
+     * hs_apps_cell_pos(), 避免两套公式漂移。 */
+    if (g_sidebar_tab == 1 && hs_panel_is_enabled("sidebar")) {
+        for (int i = 0; i < g_shell.app_count; i++) {
+            int ax = 0, ay = 0;
+            if (!hs_apps_cell_pos(i, &ax, &ay)) continue;
+            if (x >= ax - hs_sx(4) && x <= ax + hs_s(48) + hs_sx(4) &&
+                y >= ay - hs_sy(4) && y <= ay + hs_sy(70)) {
+                static const int app_map[13] = {
+                    HS_APP_TERMINAL, HS_APP_FILES, HS_APP_BROWSER, HS_APP_SETTINGS,
+                    HS_APP_EDITOR, HS_APP_CALCULATOR, HS_APP_NOTES, HS_APP_TASK,
+                    HS_APP_ABOUT, HS_APP_ABOUT, HS_APP_DEVMGR, HS_APP_DISKMGR, HS_APP_LOGVIEW
+                };
+                g_pending_app = (i < 13) ? app_map[i] : HS_APP_ABOUT;
+                hpdesk_mark_dirty();
                 return;
             }
         }

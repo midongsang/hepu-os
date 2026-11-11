@@ -1897,22 +1897,22 @@ static void m_hist_push(int *hist, int val)
 static void m_draw_curve(void *fb, int W, int H, int x, int y, int w, int h,
                          int *hist, uint32_t color, int maxv)
 {
-    /* 背景 + 边框 */
-    gfx64_fill_rect(x, y, w, h, 0x000000);
+    /* V0.56.2: 背景用主题面板色 —— 原硬编码 0x000000 在浅色主题下是三块黑块 */
+    gfx64_fill_rect(x, y, w, h, g_shell.colors.panel_bg);
     gfx64_draw_rect(x, y, w, h, g_shell.colors.border);
     /* 中位参考线 */
-    gfx64_draw_line(x, y + h / 2, x + w, y + h / 2, 0x222222);
-    /* 折线 (右起最新) */
-    int n = (m_hist_count > w / 2) ? w / 2 : m_hist_count;
-    int prev_x = -1, prev_y = -1;
+    gfx64_draw_line(x, y + h / 2, x + w, y + h / 2, g_shell.colors.border);
+    /* V0.56.2: 折线在窗口内容层上看不见, 改为柱状条(gfx64_fill_rect 已验证可用),
+     * 每个采样 2px 宽、3px 步进, 右起最新 */
+    int n = (m_hist_count > w / 3) ? w / 3 : m_hist_count;
     for (int i = 0; i < n; i++) {
         int v = hist[i];
         if (v > maxv) v = maxv;
         if (v < 0) v = 0;
-        int px = x + w - 2 - i * 2;
-        int py = y + h - 2 - (v * (h - 4)) / maxv;
-        if (prev_x >= 0) gfx64_draw_line(prev_x, prev_y, px, py, color);
-        prev_x = px; prev_y = py;
+        int px = x + w - 4 - i * 3;
+        if (px < x + 2) break;
+        int bh = (v * (h - 4)) / maxv;
+        if (bh > 0) gfx64_fill_rect(px, y + h - 2 - bh, 2, bh, color);
     }
 }
 
@@ -1924,9 +1924,7 @@ static void m_render(hs_window_t *w)
     int cw = w->width - 12;
 
     m_tick++;
-    /* 标题 */
-    font64_draw_string(fb, W, H, cx, cy, "Task Manager", g_shell.colors.accent, 16);
-    cy += 24;
+    /* V0.56.2: 标题条已由窗口管理器绘制, 这里不再重复画一遍 "Task Manager" */
 
     /* V0.13.39: 真实系统摘要 (PMM/进程/驱动) */
     extern void pmm64_get_stats(uint64_t *total, uint64_t *used, uint64_t *free);
@@ -1948,6 +1946,22 @@ static void m_render(hs_window_t *w)
     font64_draw_string(fb, W, H, cx, cy, buf, g_shell.colors.window_fg, 12);
     cy += 18;
 
+    /* V0.56.2: 整机占用摘要(用户看这里, 不必读曲线) */
+    {
+        extern int hs_process_get_cpu_usage(void);
+        extern int hs_process_get_mem_usage(void);
+        char sbuf[64];
+        strcpy(sbuf, "CPU: ");
+        hs_itoa(hs_process_get_cpu_usage(), tmp);
+        strcpy(sbuf + hs_strlen(sbuf), tmp);
+        strcpy(sbuf + hs_strlen(sbuf), "%    MEM: ");
+        hs_itoa(hs_process_get_mem_usage(), tmp);
+        strcpy(sbuf + hs_strlen(sbuf), tmp);
+        strcpy(sbuf + hs_strlen(sbuf), "%");
+        font64_draw_string(fb, W, H, cx, cy, sbuf, g_shell.colors.accent, 12);
+        cy += 18;
+    }
+
     /* 实时曲线: CPU + 网络 */
     int cpu = hs_process_get_cpu_usage();
     uint64_t tx = 0, rx = 0; uint32_t txr = 0, rxr = 0;
@@ -1956,7 +1970,7 @@ static void m_render(hs_window_t *w)
     m_hist_push(m_rx_hist, (int)(rxr / 1024));   /* KB/s */
     m_hist_push(m_tx_hist, (int)(txr / 1024));
 
-    int gh = 52, gw = cw - 80;
+    int gh = 38, gw = cw - 80;
     m_draw_curve(fb, W, H, cx, cy, gw, gh, m_cpu_hist, 0x52C41A, 100);
     font64_draw_string(fb, W, H, cx + gw + 6, cy + 6, "CPU%", 0x52C41A, 10);
     m_draw_curve(fb, W, H, cx, cy + gh + 4, gw, gh, m_rx_hist, 0x4A9EEC, 256);
@@ -2027,8 +2041,8 @@ static void m_render(hs_window_t *w)
         }
     }
 
-    /* V0.13.46: 结束进程提示条 */
-    cy += 2;
+    /* V0.13.46: 结束进程提示条 (V0.56.2: 固定贴窗口底部, 不再跟随列表溢出) */
+    cy = w->y + w->height - 16;
     if (m_kill_mode) {
         char kbuf[48];
         strcpy(kbuf, "End PID: ");

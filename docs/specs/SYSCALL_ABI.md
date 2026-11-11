@@ -1,7 +1,7 @@
 ---
 title: 赫普OS 系统调用 ABI（源码自动生成）
 status: active
-sys_version: 0.56.1
+sys_version: 0.56.2
 updated: 2026-11-01
 generator: tools/gen_syscall_doc.py
 source_of_truth: kernel/arch/x86_64/syscall64_full.c

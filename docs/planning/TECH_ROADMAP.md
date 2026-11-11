@@ -1,7 +1,7 @@
 ---
 title: TECH_ROADMAP
 status: active
-sys_version: 0.56.1
+sys_version: 0.56.2
 updated: 2026-11-01
 owner: planning
 source_of_truth: null
