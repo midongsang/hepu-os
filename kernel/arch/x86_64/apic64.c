@@ -529,15 +529,31 @@ static int apic64_calibrate_timer(void)
     apic_write(APIC_TIMER_ICR, 0xFFFFFFFFu);
 
     extern uint64_t pit64_get_ticks(void);
-    /* 2. 对齐到下一个 channel-0 tick 边界，降低起点抖动 */
+    /* V0.57.0 INT-02: 两个等待循环原来都没有上限。校准靠 PIT tick 推进，而
+       smp_init 运行在 irq64_init 之前——此时已经切到纯 APIC 模式
+       (apic64_switch_to_apic_mode)，IOAPIC 重定向表尚未配置, PIT 的 IRQ0 可能
+       根本投递不进来, pit64_get_ticks() 永不前进。无界自旋于是把整机永久卡在
+       "AP trampoline copied to 0x8000" 这一行, 只能重跑 QEMU 撞运气。
+       加有界超时: 超时直接返回 -1, 走调用方已有的 ICR=6250 回退路径,
+       启动可以继续（PIT 1kHz 仍在投递调度 tick）, 把"偶发死机"降级为"偶发降级"。 */
+    #define CAL_SPIN_LIMIT  20000000ULL   /* ≈ 数十 ms, 远超 1ms 边界的正常开销 */
+
     uint64_t t = pit64_get_ticks();
-    while (pit64_get_ticks() == t) { /* spin ≤1ms */ }
+    uint64_t spin = 0;
+    while (pit64_get_ticks() == t) {
+        if (++spin > CAL_SPIN_LIMIT) return -1;   /* PIT tick 没在动, 校准无意义 */
+        __asm__ volatile("pause" ::: "memory");
+    }
     uint64_t start_tick = pit64_get_ticks();
     uint32_t ccr_start = apic_read(APIC_TIMER_CCR);
 
-    /* 3. 等窗口结束（CAL_WINDOW_MS 个 1ms tick） */
+    /* 3. 等窗口结束（CAL_WINDOW_MS 个 1ms tick）, 同样有界 */
     uint64_t target = start_tick + CAL_WINDOW_MS;
-    while (pit64_get_ticks() < target) { /* spin */ }
+    spin = 0;
+    while (pit64_get_ticks() < target) {
+        if (++spin > CAL_SPIN_LIMIT) return -1;
+        __asm__ volatile("pause" ::: "memory");
+    }
     uint32_t ccr_end = apic_read(APIC_TIMER_CCR);
     uint64_t end_tick = pit64_get_ticks();
 

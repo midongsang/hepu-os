@@ -313,6 +313,37 @@ c_state`）。列距按内容宽度定（NAME 最长 12 字符、CPU 最长 `100
 
 素材存 `assets/icons-status64/`(64×64 PNG)。
 
+### 1.24 偶发卡在 "AP trampoline copied to 0x8000" 的根因与修复
+
+现象: QEMU 启动有相当概率停在 `[SMP] AP trampoline copied to 0x8000 (N bytes)`,
+桌面永远不出来, 重跑一次常常就好了。之前一直当成"偶发"绕过去。
+
+根因不在 trampoline 拷贝本身, 而在它后面紧接着的那一步: `apic64_init_timer()`
+→ `apic64_calibrate_timer()` 用 PIT tick 做窗口计时, 里面有两个**无界自旋**:
+
+```c
+uint64_t t = pit64_get_ticks();
+while (pit64_get_ticks() == t) { /* spin */ }        // 等下一个 1ms tick
+while (pit64_get_ticks() < target) { /* spin */ }    // 等 50ms 窗口
+```
+
+而 `smp_init()` 跑在 `irq64_init()` **之前**, 此时已经调用过
+`apic64_switch_to_apic_mode()` 切到纯 APIC 模式, 但 IOAPIC 重定向表还没配 ——
+PIT 的 IRQ0 有可能压根投递不进来, `pit64_get_ticks()` 永远不前进, 自旋就永久卡死。
+是否能投递取决于 ACPI MADT 中断源覆盖(IRQ0→GSI2)的解析结果, 所以表现为**概率性**,
+重跑一次撞到另一种时序就好。
+
+修复: 两个等待循环都加有界超时(`CAL_SPIN_LIMIT`), 超时直接 `return -1`, 走调用方
+**已经存在**的 `ICR=6250` 回退路径 —— 系统继续启动, PIT 1kHz 仍在投递调度 tick。
+把"偶发死机"降级成"偶发降级"。
+
+验证: 连续冷启动 6 次, **6/6 全部进桌面**。其中 2 次日志出现
+`[APIC] WARN: timer calibration failed`(即原先会卡死的那两次), 降级后照常启动。
+
+已知残留: 回退值 `ICR=6250` 是"假设 100MHz 总线"的历史魔数, 而 QEMU 实测约
+400MHz, 降级时 tick 会偏快约 4 倍(影响 CPU 占用率与 uptime 的精度, 不影响功能)。
+彻底解法是把校准挪到 IOAPIC 重定向配置完成之后, 或改用 TSC 校准 —— 本轮未做。
+
 ## 2.1 窗口三层阶梯投影
 
 `hs_window_shadow()`：三层圆角矩形（`k=3..1`，每层缩放 4px 递增），
