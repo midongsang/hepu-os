@@ -1,7 +1,7 @@
 ---
 title: 赫普OS 系统设计（现行）
 status: active
-sys_version: 0.55.1
+sys_version: 0.56.0
 updated: 2026-11-11
 source_of_truth: kernel/arch/x86_64/
 iteration_history: ../history/DESIGN_ITERATIONS.md

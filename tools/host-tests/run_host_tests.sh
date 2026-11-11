@@ -107,6 +107,19 @@ else
 fi
 
 echo ""
+# 6b) ext2 fsck inode 检查（V0.55.2: check_inode 接入 check_inode_tables 遍历）
+if $CC $CFLAGS $INC -o "$OUT/fsck" tools/host-tests/fsck_test.c 2>"$OUT/fsck.build.log"; then
+    if "$OUT/fsck" > "$OUT/fsck.run.log" 2>&1; then
+        ok "fsck  ($(tail -1 "$OUT/fsck.run.log" | cut -c1-60))"
+    else
+        bad "fsck (运行退出码 $?)"
+        tail -20 "$OUT/fsck.run.log" | sed 's/^/         /'
+    fi
+else
+    bad "fsck (编译失败)"
+    sed -n '1,12p' "$OUT/fsck.build.log" | sed 's/^/         /'
+fi
+
 echo "=== 结果: 通过 $PASS / 失败 $FAIL ==="
 [ "$FAIL" -eq 0 ] || exit 1
 exit 0

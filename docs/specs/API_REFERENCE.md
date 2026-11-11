@@ -1,7 +1,7 @@
 ---
 title: API_REFERENCE
 status: active
-sys_version: 0.55.1
+sys_version: 0.56.0
 updated: 2026-11-11
 owner: specs
 source_of_truth: null

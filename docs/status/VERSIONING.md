@@ -1,7 +1,7 @@
 ---
 title: VERSIONING
 status: active
-sys_version: 0.55.1
+sys_version: 0.56.0
 updated: 2026-11-11
 owner: status
 source_of_truth: null
@@ -838,6 +838,7 @@ ext2_disk_uefi.img           # 数据盘（版本无关）
 | 版本 | 日期 | 类型 | 内容 |
 |---|---|---|---|
 | 0.55.0 | 2026-11-11 | minor（普通功能发布） | P0 渲染管线升级：按需合成（脏矩形+离屏缓冲，静止帧跳过 96.7%）、通用缓动动画（ease-out cubic，灵动岛展开/收起）、PNG 解码器（自包含 inflate，含主机回归夹具） |
+| 0.56.0 | 2026-11-11 | minor（普通功能发布） | ① fsck 接入 inode 表遍历（check_inode 从"实现了但零调用"变为真实生效，并发现两套 ext2 结构定义需用编译期断言钉死布局）；② 欢迎引导可关闭（config.hsqml 新增 UI.skip_oobe）；③ 清理 pit64 遗留调试栈转储、统一 7 处过期的"0.54.12"对外版本文案 |
 | 0.55.1 | 2026-11-11 | patch（缺陷修复） | 编译告警 209→89，并修复其暴露的真实缺陷：mkfs/umask 撞号致 mkfs 被覆盖、桌面配置从未被读取、ELF 重定位不校验类型、DT_RELA 表未应用、TTF cmap 未筛 encoding、LAPIC 基址指针转换、恒真假判断等 10 类（详见 FIXES_0_55_1.md） |
 
 说明：按本规范第二位（默认版本）用于"新增常规功能/完善子系统"，P0 属新增能力而非 bug 修复，

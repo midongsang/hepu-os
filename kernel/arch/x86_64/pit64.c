@@ -105,22 +105,8 @@ void pit64_interrupt(void)
         pit_seconds++;
     }
 
-    /* V0.20.99: dump栈找用户RIP */
-    {
-        extern uint64_t g_kernel_tick64;
-        if (g_kernel_tick64 > 5000 && g_kernel_tick64 < 5010) {
-            uint64_t *stk;
-            extern void vga_puts(const char *s);
-            extern void vga_put_hex(uint64_t v);
-            __asm__ volatile("mov %%rsp, %0" : "=r"(stk));
-            vga_puts("[STACK]");
-            for (int i = 0; i < 24; i++) {
-                vga_put_hex(stk[i]);
-                vga_puts(" ");
-            }
-            vga_puts("\n");
-        }
-    }
+    /* V0.55.2: 删除 V0.20.99 遗留的调试栈转储 —— 它在 tick 5001~5009 无条件
+     * 打印 9 行 24 字的栈快照, 每次启动污染串口日志且无诊断价值。 */
 
     /* TCP 重传/超时定时器（原调用点 irq64.c 未参与构建，导致定时器永不触发） */
     extern void net64_tcp_timer(void);

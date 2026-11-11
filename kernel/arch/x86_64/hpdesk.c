@@ -237,6 +237,7 @@ static const char *default_config =
 "    titlebar_bg: #2B2930\n"
 "}\n"
 "UI {\n"
+"    skip_oobe: 0\n"
 "    clock_x: 380\n"
 "    clock_y: 200\n"
 "    clock_font_size: 48\n"
@@ -290,6 +291,12 @@ static const char *default_config =
 "    weather: 1\n"
 "    dynamic_island: 1\n"
 "}\n";
+
+/* V0.55.2: 欢迎引导(OOBE)开关 —— 由 config.hsqml 的 UI.skip_oobe 控制,
+ * 置 1 则启动直接进入桌面, 不再弹出首设向导。 */
+static int g_skip_oobe = 0;
+
+int hpdesk_skip_oobe(void) { return g_skip_oobe; }
 
 /* 从配置加载主题 */
 static void load_theme_from_config(hsqml_node_t *theme)
@@ -353,6 +360,7 @@ static void load_ui_from_config(hsqml_node_t *ui)
     g_shell.ui.font_small = hsqml_get_number(ui, "font_small", 12);
     g_shell.ui.font_normal = hsqml_get_number(ui, "font_normal", 14);
     g_shell.ui.font_large = hsqml_get_number(ui, "font_large", 18);
+    g_skip_oobe = hsqml_get_number(ui, "skip_oobe", 0);
 }
 
 static void load_panel_from_config(hsqml_node_t *panel);   /* 前置声明 */
@@ -1667,7 +1675,7 @@ static void hs_settings_window_render(hs_window_t *w)
                            rx, ry, "System Information", g_shell.colors.panel_fg, 16);
         ry += 30;
         const char *labels[] = {"OS:", "Kernel:", "CPU:", "Memory:", "Graphics:", "Filesystem:"};
-        const char *values[] = {"Hepu OS v0.55.1", "64-bit SMP", "4 cores", "2GB",
+        const char *values[] = {"Hepu OS v0.56.0", "64-bit SMP", "4 cores", "2GB",
                                 "VBE 1024x768", "ext2"};
         for (int i = 0; i < 6; i++) {
             font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
@@ -2482,7 +2490,7 @@ static void hs_sidebar_render(void)
 
         /* 系统信息 */
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           sx + hs_sx(20), content_y, "Hepu OS v0.55.1", g_shell.colors.accent, hs_s(14));
+                           sx + hs_sx(20), content_y, "Hepu OS v0.56.0", g_shell.colors.accent, hs_s(14));
         content_y += hs_sy(24);
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            sx + hs_sx(20), content_y, "Kernel: 64-bit SMP", g_shell.colors.panel_fg, hs_s(12));

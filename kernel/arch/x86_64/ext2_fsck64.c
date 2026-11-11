@@ -101,6 +101,12 @@ typedef struct {
     uint32_t i_osd2[3];
 } ext2_inode_t;
 
+/* V0.55.2: 本文件自带的结构定义与 kernel/include/ext2.h 的 packed 定义是两套。
+ * check_inode_tables 通过 ext2_read_inode(定义在 ext2_64.c, 用 ext2.h 的类型)
+ * 读取 inode, 两套布局一旦漂移就会读错字段。用编译期断言钉死尺寸。 */
+_Static_assert(sizeof(ext2_inode_t) == 128, "fsck 的 inode 布局必须与磁盘 (128B) 一致");
+_Static_assert(sizeof(ext2_group_desc_t) == 32, "fsck 的块组描述符布局必须为 32B");
+
 /* ext2目录项 */
 typedef struct {
     uint32_t inode;
@@ -246,9 +252,7 @@ static int check_group_descriptors(const ext2_superblock_t *sb,
 }
 
 /* 检查inode */
-/* V0.55.1: check_inode 已实现但 fsck 主流程目前只校验超级块/位图, 尚未遍历
- * inode 表, 因此该检查暂无调用点(功能缺口, 已在文档记录)。 */
-static __attribute__((unused)) int check_inode(const ext2_inode_t *inode, int ino)
+static int check_inode(const ext2_inode_t *inode, int ino)
 {
     int errors = 0;
 
@@ -281,6 +285,27 @@ static __attribute__((unused)) int check_inode(const ext2_inode_t *inode, int in
     return errors;
 }
 
+/* V0.55.2: 遍历所有 inode 表并调用 check_inode。
+ * 此前 fsck 只校验超级块/块组描述符/位图, inode 检查函数实现了却从未被调用。
+ * 复用 ext2_read_inode 读取(它自行处理 s_inode_size 与组号边界)。 */
+extern int ext2_read_inode(uint32_t ino, ext2_inode_t *inode);
+
+static int check_inode_tables(const ext2_superblock_t *sb, int num_groups)
+{
+    if (!sb || sb->s_inodes_per_group == 0) return 0;
+
+    uint32_t total = (uint32_t)num_groups * sb->s_inodes_per_group;
+    if (total > sb->s_inodes_count) total = sb->s_inodes_count;
+
+    int errors = 0;
+    for (uint32_t ino = 2; ino <= total; ino++) {   /* inode 1 为坏块保留 inode, 跳过 */
+        ext2_inode_t inode;
+        if (ext2_read_inode(ino, &inode) != 0) continue;
+        errors += check_inode(&inode, (int)ino);
+    }
+    return errors;
+}
+
 /* 运行完整fsck */
 int ext2_fsck_run(void *superblock_ptr, void *gdt_ptr)
 {
@@ -302,6 +327,9 @@ int ext2_fsck_run(void *superblock_ptr, void *gdt_ptr)
 
     /* 3. 检查块组描述符 */
     total_errors += check_group_descriptors(sb, gdt, num_groups);
+
+    /* 3.5 遍历并检查 inode 表 (V0.55.2 接入) */
+    total_errors += check_inode_tables(sb, num_groups);
 
     /* 4. 输出统计 */
     vga_puts("\n[FSCK64] ========================================\n");

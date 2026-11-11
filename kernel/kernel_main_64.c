@@ -187,7 +187,7 @@ void x86_64_kernel_main(void)
 
     /* 显示启动信息 */
     vga_puts("========================================\n");
-    vga_puts("  HepuOS 64-bit Kernel v0.54.12\n");
+    vga_puts("  HepuOS 64-bit Kernel v0.56.0\n");
     vga_puts("  x86_64 Long Mode\n");
     vga_puts("========================================\n\n");
 

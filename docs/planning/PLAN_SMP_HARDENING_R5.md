@@ -1,7 +1,7 @@
 ---
 title: 组合B：SMP 硬化包实施计划（PLAN_SMP_HARDENING_R5）
 status: active
-sys_version: 0.55.1
+sys_version: 0.56.0
 updated: 2026-11-11
 owner: kernel
 source_of_truth: null

@@ -136,7 +136,9 @@ void desktop64_run(void)
     {
         extern int auth64_is_configured(void);
         extern void hs_oobe_begin(void);
-        if (!auth64_is_configured()) hs_oobe_begin();
+        extern int hpdesk_skip_oobe(void);
+        /* V0.55.2: config.hsqml 的 UI.skip_oobe=1 时跳过欢迎引导 */
+        if (!auth64_is_configured() && !hpdesk_skip_oobe()) hs_oobe_begin();
     }
 
     /* 事件循环
