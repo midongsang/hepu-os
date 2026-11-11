@@ -202,8 +202,17 @@ uint32_t dns64_resolve(const char *hostname)
         }
     }
 
-    uint32_t dns_server = dhcp64_get_dns();
-    if (dns_server == 0) dns_server = 0x08080808;  /* V0.13.9: 静态 DNS 兜底 8.8.8.8 */
+    /* V0.57.0: DNS 服务器候选列表。
+     * 旧实现只有 "DHCP 给的，否则 8.8.8.8" —— QEMU 用户态网络的 DNS 在 10.0.2.3,
+     * 8.8.8.8 在受限网络里通常不可达, 于是 DHCP 未取到租约时域名永远解析失败、
+     * 天气组件一直是 '-- / N/A'。改为按顺序尝试: DHCP → 10.0.2.3(QEMU) → 8.8.8.8。 */
+    static const uint32_t dns_fallback[] = {0x0A000203u, 0x08080808u};
+    uint32_t dns_candidates[3];
+    int dns_n = 0;
+    uint32_t dns_dhcp = dhcp64_get_dns();
+    if (dns_dhcp) dns_candidates[dns_n++] = dns_dhcp;
+    for (int i = 0; i < 2; i++) dns_candidates[dns_n++] = dns_fallback[i];
+    uint32_t dns_server = dns_candidates[0];
 
     if (dns_udp_sock < 0) {
         dns_udp_sock = udp64_bind(DNS_CLIENT_PORT);
@@ -228,16 +237,19 @@ uint32_t dns64_resolve(const char *hostname)
     q->qclass = htons16(DNS_CLASS_IN);
     pos += sizeof(dns_question_t);
 
-    /* 发送查询 — V0.13.9: 重试以通过 ARP 解析 (ip64_send 遇未解析 MAC 返回 -2) */
-    int sret = udp64_send(dns_server, DNS_CLIENT_PORT, DNS_SERVER_PORT, packet, pos);
-    if (sret < 0) {
+    /* 发送查询 — V0.13.9: 重试以通过 ARP 解析 (ip64_send 遇未解析 MAC 返回 -2)
+     * V0.57.0: 逐个候选服务器尝试, 每个最多重发 8 次 */
+    int sret = -1;
+    for (int ci = 0; ci < dns_n && sret < 0; ci++) {
+        dns_server = dns_candidates[ci];
+        sret = udp64_send(dns_server, DNS_CLIENT_PORT, DNS_SERVER_PORT, packet, pos);
         extern void net64_poll(void);
-        for (int p = 0; p < 8 && sret < 0; p++) {  /* V0.13.41: 重试降为8次, 无对端时快速失败 */
+        for (int p = 0; p < 8 && sret < 0; p++) {
             net64_poll();  /* 泵网络: 收 ARP 应答填表 */
             sret = udp64_send(dns_server, DNS_CLIENT_PORT, DNS_SERVER_PORT, packet, pos);
         }
-        if (sret < 0) return 0;
     }
+    if (sret < 0) return 0;
 
     /* 等待响应（简化：轮询几次） */
     extern void net64_poll(void);  /* V0.13.9: 收包泵 (原缺失导致 DNS 永等) */

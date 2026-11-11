@@ -6,6 +6,8 @@
 #   -smp 1       : -smp 4 必卡在 0x8000
 #   -device qemu-xhci + usb-mouse : 输入走 XHCI; HMP mouse_button 对 USB 鼠标无效,
 #                                   注入按钮必须用 QMP input-send-event
+#   -netdev user + rtl8139 : 内核网卡驱动是 RTL8139, QEMU 默认网卡型号不匹配,
+#                            于是 DHCP 一直拿不到租约、天气永远抓不到
 #   偶发卡在 "[SMP] AP trampoline copied to 0x8000" : 重试一次即可
 
 IMG=${IMG:-/tmp/hepu64_single.img}
@@ -16,7 +18,7 @@ PID=${PID:-/tmp/qemu.pid}
 
 qemu_common_args() {
     # 注意: 必须是单行输出 —— 带反斜杠续行的 echo 结果在 $(...) 里会变成字面参数
-    echo "-drive format=raw,file=${IMG} -m 1024 -smp 1 -monitor unix:${MON},server,nowait -qmp unix:${QMP},server,nowait -serial file:${SERIAL} -device qemu-xhci -device usb-kbd -device usb-mouse -vga std"
+    echo "-drive format=raw,file=${IMG} -m 1024 -smp 1 -monitor unix:${MON},server,nowait -qmp unix:${QMP},server,nowait -serial file:${SERIAL} -device qemu-xhci -device usb-kbd -device usb-mouse -vga std -net none -netdev user,id=n0 -device rtl8139,netdev=n0"
 }
 
 stop_qemu() {
