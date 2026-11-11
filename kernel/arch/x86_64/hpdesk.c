@@ -2239,7 +2239,7 @@ static void hs_top_bar_render(void)
     icon_x -= hs_sx(6) + icon_size; hs_icon_bmp(icon_x, icon_y, icon_size, fg, hs_ico_settings);
     icon_x -= hs_sx(6) + icon_size; hs_icon_bmp(icon_x, icon_y, icon_size, fg, hs_ico_speaker);
     icon_x -= hs_sx(6) + icon_size; hs_icon_bmp(icon_x, icon_y, icon_size, fg, hs_ico_battery);
-    icon_x -= hs_sx(6) + icon_size; hs_icon_bmp(icon_x, icon_y, icon_size, fg, hs_ico_wifi);
+    icon_x -= hs_sx(6) + icon_size; hs_icon_bmp(icon_x, icon_y, icon_size, fg, hs_ico_wifi_std);
 }
 
 /* 桌面大时钟 */
@@ -2643,15 +2643,15 @@ static void hs_sidebar_render(void)
                 const uint32_t *ico = hs_ico_menu;
                 switch (i) {
                     case 0:  ico = hs_ico_menu_bar; break;  /* Terminal: 命令行横幅 */
-                    case 1:  ico = hs_ico_home;     break;  /* Files: 主目录 */
+                    case 1:  ico = hs_ico_home_v2;  break;  /* Files: 主目录 */
                     case 2:  ico = hs_ico_search;   break;  /* Browser: 检索 */
                     case 3:  ico = hs_ico_settings; break;  /* Settings: 齿轮 */
                     case 4:  ico = hs_ico_mail;     break;  /* Editor: 文档/信件 */
                     case 5:  ico = hs_ico_add;      break;  /* Calculator: 运算 */
-                    case 6:  ico = hs_ico_menu;     break;  /* Notes: 笔记网格 */
+                    case 6:  ico = hs_ico_doc_list; break;  /* Notes: 带字文档 */
                     case 7:  ico = hs_ico_clock;    break;  /* Task Manager: 性能时钟 */
-                    case 8:  ico = hs_ico_cast;     break;  /* Store: 分发 */
-                    case 9:  ico = hs_ico_slider;   break;  /* Info: 参数面板 */
+                    case 8:  ico = hs_ico_grid_all; break;  /* Store: 应用网格 */
+                    case 9:  ico = hs_ico_sliders;  break;  /* Info: 参数面板 */
                     case 10: ico = hs_ico_settings; break;
                     case 11: ico = hs_ico_download; break;  /* Disk Manager: 存储 */
                     default: ico = hs_ico_menu;     break;
