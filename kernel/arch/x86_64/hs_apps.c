@@ -202,7 +202,7 @@ static void t_exec(const char *line)
     if (strcmp(cmd, "echo") == 0) { t_put(arg); return; }
     if (strcmp(cmd, "whoami") == 0) { t_put("user"); return; }
     if (strcmp(cmd, "ver") == 0 || strcmp(cmd, "version") == 0) {
-        t_put("Hepu OS v0.56.2 (x86_64)");
+        t_put("Hepu OS v0.57.0 (x86_64)");
         return;
     }
     if (strcmp(cmd, "date") == 0) {
@@ -1894,14 +1894,30 @@ static void m_hist_push(int *hist, int val)
     if (m_hist_count < M_HIST) m_hist_count++;
 }
 
+/* V0.57.0: 本文件的颜色混合(刻度线用), 与 hpdesk.c 的 static helper 各自私有 */
+static uint32_t hs_apps_mix(uint32_t a, uint32_t b, int pct)
+{
+    if (pct < 0) pct = 0;
+    if (pct > 100) pct = 100;
+    int ar = (a >> 16) & 0xFF, ag = (a >> 8) & 0xFF, ab = a & 0xFF;
+    int br = (b >> 16) & 0xFF, bg2 = (b >> 8) & 0xFF, bb = b & 0xFF;
+    return (uint32_t)((((ar * (100 - pct) + br * pct) / 100) << 16) |
+                      (((ag * (100 - pct) + bg2 * pct) / 100) << 8) |
+                      ((ab * (100 - pct) + bb * pct) / 100));
+}
+
 static void m_draw_curve(void *fb, int W, int H, int x, int y, int w, int h,
                          int *hist, uint32_t color, int maxv)
 {
     /* V0.56.2: 背景用主题面板色 —— 原硬编码 0x000000 在浅色主题下是三块黑块 */
     gfx64_fill_rect(x, y, w, h, g_shell.colors.panel_bg);
     gfx64_draw_rect(x, y, w, h, g_shell.colors.border);
-    /* 中位参考线 */
-    gfx64_draw_line(x, y + h / 2, x + w, y + h / 2, g_shell.colors.border);
+    /* V0.57.0: 25/50/75% 三条刻度线。draw_line 在窗口内容层不可见, 统一用 1px 填充 */
+    for (int q = 1; q <= 3; q++) {
+        int gy = y + h - 2 - (h - 4) * q / 4;
+        gfx64_fill_rect(x + 2, gy, w - 4, 1,
+                        hs_apps_mix(g_shell.colors.panel_bg, g_shell.colors.border, 55));
+    }
     /* V0.56.2: 折线在窗口内容层上看不见, 改为柱状条(gfx64_fill_rect 已验证可用),
      * 每个采样 2px 宽、3px 步进, 右起最新 */
     int n = (m_hist_count > w / 3) ? w / 3 : m_hist_count;
@@ -2065,7 +2081,7 @@ hs_window_t *hs_terminal_create(void)
     t_win = hs_window_create(HS_WINDOW_FLOATING, "Terminal", -1, -1, 520, 340);
     if (t_win) {
         t_win->render = t_render;
-        t_put("Hepu Terminal v0.56.2");
+        t_put("Hepu Terminal v0.57.0");
         t_put("Type 'help' for commands.");
         extern void vga_puts(const char *s);
         vga_puts("[HSAPPS] terminal created\n");

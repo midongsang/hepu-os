@@ -251,20 +251,18 @@ void hs_input_poll(void)
          * 渲染坐标恒为 (0,0)、光标画到屏幕左上角外而"消失"。此处自行累加并钳制;
          * 初始位置取屏幕中心, 避免从 (0,0) 起算。 */
         static int xhci_cx = -1, xhci_cy = -1;
-        static int last_px = -1, last_py = -1;
         if (xhci_cx < 0) { xhci_cx = g_sw / 2; xhci_cy = g_sh / 2; }
         int dx = 0, dy = 0;
         xhci64_mouse_get(&dx, &dy, 0, 0);
         if (dx || dy) {
             xhci_cx += dx; xhci_cy += dy;
-        } else {
-            /* XHCI 本帧无增量: 若 PS/2 鼠标确有位移则跟随 (QEMU HMP/老平台兼容),
-             * 用位移判定而非坐标非零, 避免 PS/2 初始坐标反向覆盖 USB 光标 */
-            int px = 0, py = 0;
-            mouse64_get_pos(&px, &py);
-            if (px != last_px || py != last_py) { xhci_cx = px; xhci_cy = py; }
-            last_px = px; last_py = py;
         }
+        /* V0.57.0: USB 鼠标在位时**不再**用 PS/2 坐标兜底。
+         * 旧实现在 USB 本帧无增量时跟随 PS/2 的绝对坐标 —— 而 QEMU 的
+         * mouse_move / input-send-event 会把事件同时广播给 PS/2 和 USB,
+         * PS/2 侧坐标与 USB 累加坐标各自演进, 于是每按一次键/点一次鼠标,
+         * 光标就被 PS/2 的旧坐标拽回去(实测点击时坐标从 (90,75) 跳到 (27,7)),
+         * 点击自然全部落空 —— 这正是"鼠标看着能动但点不中"的根因。 */
         if (xhci_cx < 0) xhci_cx = 0;
         if (xhci_cy < 0) xhci_cy = 0;
         if (xhci_cx > g_sw - 1) xhci_cx = g_sw - 1;

@@ -1,7 +1,7 @@
 ---
 title: 任务管理器假数据与天气组件空白修复（0.56.1）
 status: active
-sys_version: 0.56.2
+sys_version: 0.57.0
 updated: 2026-11-11
 owner: status
 source_of_truth: kernel/arch/x86_64/

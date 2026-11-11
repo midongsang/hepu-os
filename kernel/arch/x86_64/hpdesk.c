@@ -1454,6 +1454,35 @@ void hpdesk_tile_focused(int dir)
     w->state = HS_WINDOW_STATE_NORMAL;
 }
 
+/* V0.57.0: 颜色混合(按百分比向 b 靠拢), 用于悬停底色与投影渐变 */
+static uint32_t hs_mix_color(uint32_t a, uint32_t b, int pct)
+{
+    if (pct < 0) pct = 0;
+    if (pct > 100) pct = 100;
+    int ar = (a >> 16) & 0xFF, ag = (a >> 8) & 0xFF, ab = a & 0xFF;
+    int br = (b >> 16) & 0xFF, bg2 = (b >> 8) & 0xFF, bb = b & 0xFF;
+    int r = (ar * (100 - pct) + br * pct) / 100;
+    int g = (ag * (100 - pct) + bg2 * pct) / 100;
+    int bl = (ab * (100 - pct) + bb * pct) / 100;
+    return (uint32_t)((r << 16) | (g << 8) | bl);
+}
+
+/* V0.57.0: 窗口投影 —— 三层阶梯圆角, 由外向内加深, 近似柔和阴影。
+ * 之前窗口直接压在桌面上, 层叠关系全靠边框区分, 多个窗口重叠时分不清谁在前面。 */
+static void hs_window_shadow(const hs_window_t *w)
+{
+    int r = hs_s(g_shell.ui.corner_radius);
+    uint32_t base = g_shell.colors.window_bg;
+    for (int k = 3; k >= 1; k--) {
+        int d = k * hs_s(4);
+        /* 由外向内逐渐加深向黑靠拢: 外层最浅, 贴近窗口处最深, 光源假定在窗口上方 */
+        uint32_t c = hs_mix_color(base, 0x000000, 10 + (3 - k) * 9);
+        gfx64_fill_rounded_rect(w->x - d, w->y - d + hs_sy(6),
+                                w->width + d * 2, w->height + d * 2,
+                                r + d, c);
+    }
+}
+
 void hs_window_render_all(void)
 {
     /* 按z_order从底到顶渲染 */
@@ -1478,6 +1507,11 @@ void hs_window_render_all(void)
                 w->x -= hs_sx(24) * (100 - ease) / 100;
                 w->y += hs_sy(16) * (100 - ease) / 100;
             }
+        }
+
+        /* V0.57.0: 投影(仅浮动窗口, 最大化/面板不画) */
+        if (w->type == HS_WINDOW_FLOATING && w->state != HS_WINDOW_STATE_MAXIMIZED) {
+            hs_window_shadow(w);
         }
 
         /* 窗口背景 */
@@ -1692,7 +1726,7 @@ static void hs_settings_window_render(hs_window_t *w)
             k = strlen(mem_str);
             strcpy(mem_str + k, " MB");
         }
-        const char *values[] = {"Hepu OS v0.56.2", "64-bit SMP", cpu_str, mem_str,
+        const char *values[] = {"Hepu OS v0.57.0", "64-bit SMP", cpu_str, mem_str,
                                 "VBE 1024x768", "ext2"};
         for (int i = 0; i < 6; i++) {
             font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
@@ -2489,7 +2523,12 @@ static void hs_sidebar_render(void)
     const char *tabs[] = {"Info", "Apps", "Weather"};
     for (int i = 0; i < 3; i++) {
         int tx = sx + hs_sx(12) + i * tab_w;
-        uint32_t bg = (i == g_sidebar_tab) ? g_shell.colors.accent : g_shell.colors.panel_bg;
+        /* V0.57.0: 悬停反馈 —— 未选中的标签在指针下轻微染上强调色 */
+        int tab_hov = (g_shell.mouse_x >= tx && g_shell.mouse_x < tx + tab_w - hs_sx(4) &&
+                       g_shell.mouse_y >= tab_y && g_shell.mouse_y < tab_y + hs_sy(28));
+        uint32_t bg = (i == g_sidebar_tab) ? g_shell.colors.accent
+                     : (tab_hov ? hs_mix_color(g_shell.colors.panel_bg, g_shell.colors.accent, 28)
+                                : g_shell.colors.panel_bg);
         uint32_t fg = (i == g_sidebar_tab) ? hs_on_accent() : g_shell.colors.panel_fg;
         gfx64_fill_rounded_rect(tx, tab_y, tab_w - hs_sx(4), hs_sy(28), hs_s(8), bg);
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
@@ -2554,7 +2593,7 @@ static void hs_sidebar_render(void)
 
         /* 系统信息 */
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           sx + hs_sx(20), content_y, "Hepu OS v0.56.2", g_shell.colors.accent, hs_s(14));
+                           sx + hs_sx(20), content_y, "Hepu OS v0.57.0", g_shell.colors.accent, hs_s(14));
         content_y += hs_sy(24);
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            sx + hs_sx(20), content_y, "Kernel: 64-bit SMP", g_shell.colors.panel_fg, hs_s(12));
@@ -2593,6 +2632,16 @@ static void hs_sidebar_render(void)
             int ax = 0, ay = 0;
             /* 无裁剪原语: 整行剔除 — 行不完全落在视口内时跳过 */
             if (!hs_apps_cell_pos(i, &ax, &ay)) continue;
+            /* V0.57.0: 悬停高亮 —— 指针在单元内时垫一层淡强调色底座 */
+            if (g_shell.mouse_x >= ax && g_shell.mouse_x < ax + hs_s(48) &&
+                g_shell.mouse_y >= ay && g_shell.mouse_y < ay + hs_sy(70)) {
+                /* 底座比图标大一圈(每边 6px)并加外描边, 否则底座会被图标完全盖住看不出变化 */
+                gfx64_fill_rounded_rect(ax - hs_s(6), ay - hs_s(6), hs_s(60), hs_s(60),
+                                        hs_s(14),
+                                        hs_mix_color(g_shell.colors.panel_bg, g_shell.colors.accent, 26));
+                gfx64_draw_rounded_rect(ax - hs_s(6), ay - hs_s(6), hs_s(60), hs_s(60),
+                                        hs_s(14), g_shell.colors.accent);
+            }
             /* V0.13.15: 应用矢量图标(白, 透明底) */
             gfx64_fill_rounded_rect(ax, ay, hs_s(48), hs_s(48), hs_s(10), g_shell.colors.accent);
             uint32_t ic = 0xFDF8EF;
@@ -3352,6 +3401,9 @@ void hpdesk_handle_click(int x, int y)
             if (x >= tx && x <= tx + tab_w - hs_sx(4)) {
                 g_sidebar_tab = i;
                 g_sidebar_scroll = 0;   /* V0.55: 切页重置滚动 */
+                /* V0.57.0: 切页必须显式请求重绘 —— 按需合成下不然页面外观不变,
+                 * 看起来就像"点了标签没反应"。 */
+                hpdesk_mark_dirty();
                 return;
             }
         }
@@ -3501,12 +3553,51 @@ static void hs_dock_render(void)
 }
 
 /* 鼠标更新：跟踪位置 */
+/* V0.57.0: 悬停目标编号 —— 0..2 侧栏标签, 100+i Apps 图标, -1 无。
+ * 用途: 只有在悬停目标变化时才请求重绘, 既保住按需渲染的收益(不再全屏 60fps 重画),
+ * 又让悬停高亮真的能出现 —— 之前 update_mouse 完全不 mark_dirty,
+ * 按需合成下"移动指针"不会触发任何重绘, 悬停状态永远刷不出来。 */
+static int hs_hover_id(int x, int y)
+{
+    if (!hs_panel_is_enabled("sidebar")) return -1;
+    int sx = hs_sx(g_shell.ui.sidebar_x), sy = hs_sy(g_shell.ui.sidebar_y);
+    int sw = hs_sx(g_shell.ui.sidebar_width), sh = hs_sy(g_shell.ui.sidebar_height);
+    if (x < sx || x > sx + sw || y < sy || y > sy + sh) return -1;
+
+    int tab_y = sy + hs_sy(12), tab_h = hs_sy(28), tab_w = (sw - hs_sx(24)) / 3;
+    if (y >= tab_y && y <= tab_y + tab_h) {
+        for (int i = 0; i < 3; i++) {
+            int tx = sx + hs_sx(12) + i * tab_w;
+            if (x >= tx && x <= tx + tab_w - hs_sx(4)) return i;
+        }
+        return -1;
+    }
+    if (g_sidebar_tab == 1) {
+        for (int i = 0; i < g_shell.app_count; i++) {
+            int ax = 0, ay = 0;
+            if (!hs_apps_cell_pos(i, &ax, &ay)) continue;
+            if (x >= ax && x < ax + hs_s(48) && y >= ay && y < ay + hs_sy(70)) return 100 + i;
+        }
+    }
+    return -1;
+}
+
 void hpdesk_update_mouse(int x, int y)
 {
     g_shell.mouse_x = x;
     g_shell.mouse_y = y;
     /* 窗口拖拽移动 */
     hs_window_drag_move(x, y);
+
+    /* V0.57.0: 悬停目标变化 → 触发一次重绘 */
+    static int last_hover = -2;
+    int now_hover = hs_hover_id(x, y);
+    /* 指针处于侧栏内时也持续重绘: 光线/时钟之外的"指针在面板上"这一状态本身就是脏的 */
+    int in_sidebar = (now_hover != -1);
+    if (now_hover != last_hover || in_sidebar) {
+        last_hover = now_hover;
+        hpdesk_mark_dirty();
+    }
 }
 
 /* 鼠标按下：检测窗口标题栏启动拖拽 */
@@ -5076,6 +5167,9 @@ int hpdesk_fetch_weather(void)
         strcpy(g_weather_desc, desc);
     }
     g_weather_ok = 1;
+    /* V0.57.0: 数据到手必须请重绘 —— 按需合成下不标脏, 桌面右下角组件会一直
+     * 停在抓取前的 "-- / N/A" 占位(而 Weather 页因切页重绘能显示, 两处观感不一致)。 */
+    hpdesk_mark_dirty();
     vga_puts("[WX] weather fetched\n");
     return 1;
 }

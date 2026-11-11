@@ -1,7 +1,7 @@
 ---
 title: COMPATIBILITY_LAYER
 status: active
-sys_version: 0.56.2
+sys_version: 0.57.0
 updated: 2026-11-01
 owner: planning
 source_of_truth: null

@@ -177,7 +177,8 @@ typedef struct {
     uint32_t is_mouse;
     uint32_t vid, pid;
     uint8_t kbd_report[8];
-    uint32_t mouse_dx, mouse_dy, mouse_btn;
+    int32_t mouse_dx, mouse_dy;   /* V0.57.0: 允许负增量并跨报告累加 */
+    uint32_t mouse_btn;
     uint32_t kbd_new;
 } xhci_dev_t;
 
@@ -573,9 +574,18 @@ static void xhci_handle_transfer_evt(xhci_trb_t *evt)
             if (cc == XHCI_CC_SUCCESS) {
                 uint8_t *r = e->buf;
                 if (e->proto == 2 && e->int_len >= 3) {   /* 鼠标 */
-                    d->mouse_btn = r[0] & 0x07;
-                    d->mouse_dx = (int8_t)r[1];
-                    d->mouse_dy = (int8_t)r[2];
+                    uint32_t nb = r[0] & 0x07;
+                    int32_t ndx = (int8_t)r[1], ndy = (int8_t)r[2];
+                    /* V0.57.0 两处修正:
+                     * 1) 原实现是"赋值"而非累加, 同一轮询周期内来两条报告时前一条位移被覆盖丢失;
+                     * 2) 按钮状态变化的报告里, 主机常把上一次未消费的位移重复带一遍,
+                     *    旧实现照单全收 → 每按/松一次键光标就"弹"回上一段位移处,
+                     *    表现为"看着能动、点哪都不中"。按钮沿报告只更新按钮, 不吃位移。 */
+                    if (nb == d->mouse_btn) {
+                        d->mouse_dx += ndx;
+                        d->mouse_dy += ndy;
+                    }
+                    d->mouse_btn = nb;
                 } else if (e->proto == 1 && e->int_len >= 8) { /* 键盘 */
                     for (int i = 0; i < 8; i++) d->kbd_report[i] = r[i];
                     d->kbd_new = 1;
