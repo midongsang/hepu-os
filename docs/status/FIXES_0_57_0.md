@@ -556,6 +556,52 @@ Lua / `klibm64` 是 `-msse2`。`context_switch_64` 原本只保存 rbx/rbp/r12-r
 **说明**：该用例能证明"保存/恢复路径正确且没引入回归"，但它无法反证"不加 fxsave 一定出错"
 （kbeat 本身不碰浮点）。这条改动的价值在于给后续 FreeType 这类重度用浮点的库铺地基。
 
+
+### 1.31 UEFI 引导线接进 64 位主线（第一条不依赖 16 位实模式的启动链）
+
+**背景**：`docs/boot/BOOTLOADER_DECISION_LIMINE.md` 判断"UEFI 线是能编译、没接线"。
+本次把它接上线并端到端验证：OVMF → `hepboot_uefi.efi` → 64 位内核 → 桌面 + 首设向导。
+
+**三处断点（都是"看起来通、实际不通"）**
+
+| # | 断点 | 现象 | 根因 |
+|---|------|------|------|
+| 1 | `hepboot_uefi.c` 64 位分支写 `jump_to_kernel_64(0x10000c, ...)` | 内核已加载到 0x100000，跳过去落在空内存 | 入口地址是从 BIOS 线"32 位壳在 0x10000"抄来的；UEFI 线并不加载那段壳，64 位 flat 镜像的入口就是 0x100000（与 `stage2_64.S` 的 `jmp 0x100000` 一致） |
+| 2 | `build_uefi_dual.py` 的 `PROJECT` 写死另一会话的绝对路径；内核被放进 `EFI/BOOT/` | 脚本跑不动；即便跑动，引导器读的是根目录 `\KERNEL64.BIN`，找不到文件 | 路径常量写死 + 文件落位与引导器读取路径不一致 |
+| 3 | 自研 GPT/FAT32 生成器 | OVMF 报 `failed to load Boot0002 "UEFI QEMU HARDDISK": Not Found`，随后掉 PXE | 见下 |
+
+**断点 3 的两个硬伤（逐个定位）**
+
+1. **GPT 分区表数组 CRC 一直是 0**：`create_gpt_partition_table()` 先算 header CRC 再写分区数组，
+   且偏移 88 的 entries CRC 从没写入。OVMF 校验失配 → **整张 GPT 被丢弃** → 视为无启动盘。
+2. **只写主表、缺备份表**：标准 GPT 要求磁盘末尾有一份 header + entries。
+3. 补完 1、2 后仍不通，继续定位到 **FAT32 的 FSInfo 结构签名**：
+   偏移 484 必须是 `rrAa`（0x61417272），实现写成了 `RRaA`（0x41615252），且尾部签名缺失。
+   这类错误 mtools 能容忍（`mdir` 读得出来），但 UEFI FatPkg 不容忍。
+
+**最终方案（构建期用成熟工具，运行时零外部依赖）**
+
+- GPT：`sgdisk --clear` + `-n 1:2048:+128M -t 1:ef00` + `-n 2:... -t 2:8300`（主/备表与 CRC 由工具保证）；
+- ESP：`mkfs.vfat -F 32 -s 1 -n HEPU_ESP` + `mmd`/`mcopy` 写 `EFI/BOOT/BOOTX64.EFI`、`KERNEL64.BIN`、`HEPBOOT.CFG`；
+- 根分区：仍用 `mkfs.ext2` + `debugfs` 写 `/fonts/DejaVuSans.ttf` 与 `/wallpaper.png`；
+- 自研 `create_gpt_partition_table()` / `FAT32Generator` 保留在源码里作研究对照，不再用于出镜像。
+
+**关键取舍**：FAT32 簇数必须 ≥ 65525（128MB 分区若用 8 扇区/簇只有 32768 簇，严格实现直接判非法）。
+`mkfs.vfat -s 1` 得到 258016 簇，满足要求。
+
+**验证（端到端）**
+- `make -C tools/gnuefi && make -C tools/hepboot/uefi` → 75,835 B PE32+ EFI；
+- `python3 tools/build_uefi_dual.py` → 256MB GPT 镜像；
+- QEMU + OVMF（`OVMF_CODE_4M.fd`）启动 → 串口出现 `[SMP] BSP APIC timer enabled` … `[Hepu Desktop] Initialized (2048x1536)`、
+  `[DESKTOP64] Desktop running with mouse support`、`[OOBE-GUI] first boot`；
+- 截图确认状态栏、Info 侧栏、Settings、Quick Controls、首设向导 1/4 全部正常。
+
+**已知限制（本次未处理，非阻塞）**
+- UEFI 路径下 `[ACPI] RSDP not found`：内核仍按 BIOS 方式扫内存找 RSDP，UEFI 启动时应从
+  配置表（`EFI_CONFIGURATION_TABLE` 的 ACPI GUID）转交——影响 SMP/timer 精度，不影响启动；
+- `[PNG64] no sample image`：壁纸文件已写入 ext2，但桌面读取路径与镜像布局尚未对齐；
+- 当前主线不产出 `build_v250/hepu-kernel.bin`，脚本已改为"存在则打包"。
+
 ---
 
 ## 四、回归基线

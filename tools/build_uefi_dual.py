@@ -12,7 +12,7 @@ import uuid
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from fat32_generator import create_esp_partition
 
-PROJECT = "/home/user/Doubao/chats/38448056008342018/extracted/os-source/hepu_os_src/hepu-os"
+PROJECT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 IMG_PATH = "/tmp/hepu_uefi_dual.img"
 IMG_SIZE = 256 * 1024 * 1024  # 256MB
 
@@ -94,7 +94,35 @@ def create_gpt_partition_table(img):
     img.seek(1024)
     img.write(part_entries)
 
-    print(f"[GPT] 分区表创建完成")
+    # 关键: 分区数组写完后必须回填 entries CRC, 再重算 header CRC。
+    # 原实现先算 header CRC 再写数组, 且 entries CRC(偏移 88) 一直是 0 ——
+    # OVMF 校验失配会直接丢弃整个 GPT, 表现就是 "Boot ... Not Found" 然后掉 PXE。
+    ent_crc = zlib.crc32(bytes(part_entries)) & 0xFFFFFFFF
+    struct.pack_into('<I', gpt_header, 88, ent_crc)
+    struct.pack_into('<I', gpt_header, 16, 0)   # header CRC 计算时该字段必须按 0 算
+    hdr_crc = zlib.crc32(bytes(gpt_header[:92])) & 0xFFFFFFFF
+    struct.pack_into('<I', gpt_header, 16, hdr_crc)
+    img.seek(512)
+    img.write(gpt_header)
+
+    # 备份 GPT: 标准 GPT 必须在磁盘末尾保留一份 header + entries。
+    # 只写主表时, 严格实现(OVMF)会在校验/切换时判分区表不可信 —— 表现为 ESP 里的
+    # BOOTX64.EFI 明明存在, 固件却报 "Boot ... Not Found" 然后掉 PXE。
+    last_lba = (IMG_SIZE // 512) - 1
+    img.seek((last_lba - 32) * 512)
+    img.write(part_entries)
+
+    bkp = bytearray(gpt_header)
+    struct.pack_into('<Q', bkp, 24, last_lba)        # MyLBA
+    struct.pack_into('<Q', bkp, 32, 1)               # AlternateLBA
+    struct.pack_into('<Q', bkp, 72, last_lba - 32)   # PartitionEntryLBA
+    struct.pack_into('<I', bkp, 16, 0)
+    bcrc = zlib.crc32(bytes(bkp[:92])) & 0xFFFFFFFF
+    struct.pack_into('<I', bkp, 16, bcrc)
+    img.seek(last_lba * 512)
+    img.write(bkp)
+
+    print(f"[GPT] 分区表创建完成 (entries CRC={ent_crc:08x}, header CRC={hdr_crc:08x}, backup@{last_lba})")
     print(f"  ESP: LBA {ESP_START}-{ESP_START+ESP_SECTORS-1} ({ESP_SIZE//1024//1024}MB)")
     print(f"  DATA: LBA {DATA_START}-{DATA_START+DATA_SECTORS-1} ({DATA_SIZE//1024//1024}MB)")
 
@@ -110,18 +138,22 @@ def create_fat32_esp(img):
         files['/EFI/BOOT/BOOTX64.EFI'] = f.read()
     print(f"  /EFI/BOOT/BOOTX64.EFI ({len(files['/EFI/BOOT/BOOTX64.EFI'])} bytes)")
 
-    # 64位内核
+    # 64位内核 —— 必须放 ESP 根目录: 引导器读的是 \\KERNEL64.BIN
     with open(f"{PROJECT}/build_x86_64/hepu-kernel64.bin", 'rb') as f:
-        files['/EFI/BOOT/KERNEL64.BIN'] = f.read()
-    print(f"  KERNEL64.BIN ({len(files['/EFI/BOOT/KERNEL64.BIN'])} bytes)")
+        files['/KERNEL64.BIN'] = f.read()
+    print(f"  KERNEL64.BIN ({len(files['/KERNEL64.BIN'])} bytes)")
 
-    # 32位内核
-    with open(f"{PROJECT}/build_v250/hepu-kernel.bin", 'rb') as f:
-        files['/EFI/BOOT/KERNEL32.BIN'] = f.read()
-    print(f"  KERNEL32.BIN ({len(files['/EFI/BOOT/KERNEL32.BIN'])} bytes)")
+    # 32位内核(可选, 当前主线不产出该文件)
+    k32 = f"{PROJECT}/build_v250/hepu-kernel.bin"
+    if os.path.exists(k32):
+        with open(k32, 'rb') as f:
+            files['/KERNEL32.BIN'] = f.read()
+        print(f"  KERNEL32.BIN ({len(files['/KERNEL32.BIN'])} bytes)")
+    else:
+        print("  KERNEL32.BIN: 跳过(无 build_v250/hepu-kernel.bin)")
 
-    # 配置文件
-    files['/EFI/BOOT/HEPBOOT.CFG'] = b"# HepuBoot UEFI Configuration v0.10.71\ntimeout=5\ndefault=0\nkernel_arch=64\ncmdline=\n"
+    # 配置文件 —— 同样在根目录
+    files['/HEPBOOT.CFG'] = b"# HepuBoot UEFI Configuration v0.57.0\ntimeout=5\ndefault=0\nkernel_arch=64\ncmdline=\n"
 
     # 生成FAT32分区
     esp_data = create_esp_partition(ESP_SIZE, files)
@@ -151,6 +183,13 @@ def create_ext2_data(img):
                        capture_output=True)
         print("  写入 /fonts/DejaVuSans.ttf")
 
+    # 壁纸: 桌面 hs_wallpaper_png() 读 /wallpaper.png
+    wp = f"{PROJECT}/assets/samples/wallpaper.png"
+    if os.path.exists(wp):
+        subprocess.run(['debugfs', '-w', ext2_tmp,
+                        '-R', f'write {wp} /wallpaper.png'], capture_output=True)
+        print("  写入 /wallpaper.png")
+
     # 将ext2分区写入主镜像
     with open(ext2_tmp, 'rb') as f:
         ext2_data = f.read()
@@ -160,25 +199,78 @@ def create_ext2_data(img):
     os.remove(ext2_tmp)
     print("[EXT2] 根分区创建完成")
 
+
+def create_gpt_via_sgdisk(img_path):
+    """标准 GPT: 用 sgdisk 生成(主表+备份表+CRC 都由工具保证)。
+    自研 create_gpt_partition_table() 保留作教学/研究, 但它产出的表 OVMF 不认
+    (见 docs/status/FIXES_0_57_0.md §1.31), 构建期以本实现为准。"""
+    print("[GPT] 使用 sgdisk 生成标准分区表...")
+    subprocess.run(['sgdisk', '--clear', img_path], capture_output=True)
+    subprocess.run(['sgdisk',
+                    '-n', f'1:{ESP_START}:{ESP_START + ESP_SECTORS - 1}',
+                    '-t', '1:ef00', '-c', '1:EFI System Partition', img_path], capture_output=True)
+    subprocess.run(['sgdisk',
+                    '-n', f'2:{DATA_START}:{DATA_START + DATA_SECTORS - 1}',
+                    '-t', '2:8300', '-c', '2:HepuOS Root', img_path], capture_output=True)
+    print(f"[GPT] ESP LBA {ESP_START}-{ESP_START+ESP_SECTORS-1}, "
+          f"DATA LBA {DATA_START}-{DATA_START+DATA_SECTORS-1}")
+
+
+def create_fat32_esp_tool(img_path):
+    """标准 FAT32 ESP: mkfs.vfat 造卷 + mtools 写文件。
+    自研 FAT32Generator 的 FSInfo/簇链细节不足以让 OVMF 识别, 构建期以本实现为准。"""
+    print("[FAT32] 使用 mkfs.vfat + mcopy 生成 ESP...")
+    esp_tmp = "/tmp/hepu_esp_build.img"
+    files = {}
+    with open(f"{PROJECT}/tools/hepboot/uefi/hepboot_uefi.efi", 'rb') as f:
+        files['EFI/BOOT/BOOTX64.EFI'] = f.read()
+    with open(f"{PROJECT}/build_x86_64/hepu-kernel64.bin", 'rb') as f:
+        files['KERNEL64.BIN'] = f.read()
+    k32 = f"{PROJECT}/build_v250/hepu-kernel.bin"
+    if os.path.exists(k32):
+        with open(k32, 'rb') as f:
+            files['KERNEL32.BIN'] = f.read()
+    files['HEPBOOT.CFG'] = (b"# HepuBoot UEFI Configuration v0.57.0\n"
+                            b"timeout=5\ndefault=0\nkernel_arch=64\ncmdline=\n")
+
+    subprocess.run(['dd', 'if=/dev/zero', f'of={esp_tmp}', 'bs=512',
+                    f'count={ESP_SECTORS}', 'status=none'], check=True)
+    subprocess.run(['mkfs.vfat', '-F', '32', '-s', '1', '-n', 'HEPU_ESP', esp_tmp],
+                   capture_output=True, check=True)
+    env = dict(os.environ, MTOOLS_SKIP_CHECK='1')
+    subprocess.run(['mmd', '-i', esp_tmp, '::/EFI', '::/EFI/BOOT'], env=env, capture_output=True)
+    for name, data in files.items():
+        tmp = '/tmp/' + name.replace('/', '_')
+        with open(tmp, 'wb') as f:
+            f.write(data)
+        subprocess.run(['mcopy', '-i', esp_tmp, tmp, f'::{name}'], env=env, check=True)
+        print(f"  {name} ({len(data)} bytes)")
+
+    with open(esp_tmp, 'rb') as f:
+        esp_data = f.read()
+    with open(img_path, 'r+b') as img:
+        img.seek(ESP_START * 512)
+        img.write(esp_data)
+    os.remove(esp_tmp)
+    print("[FAT32] ESP分区创建完成")
+
+
 def main():
     print("=== HepuOS 双内核 UEFI 镜像构建 ===")
-
-    # 创建镜像文件
     with open(IMG_PATH, 'wb') as img:
         img.truncate(IMG_SIZE)
 
-        create_gpt_partition_table(img)
-        create_fat32_esp(img)
+    create_gpt_via_sgdisk(IMG_PATH)
+    create_fat32_esp_tool(IMG_PATH)
+
+    with open(IMG_PATH, 'r+b') as img:
         create_ext2_data(img)
 
     size = os.path.getsize(IMG_PATH)
-    print(f"\n=== 构建完成 ===")
-    print(f"  镜像: {IMG_PATH}")
-    print(f"  大小: {size} bytes ({size//1024//1024}MB)")
-    print(f"\n镜像布局:")
-    print(f"  GPT分区表")
-    print(f"  ESP分区 (FAT32, 128MB): /EFI/BOOT/BOOTX64.EFI + kernel64.bin + kernel32.bin")
-    print(f"  DATA分区 (ext2, 120MB): 根文件系统 + /fonts/")
+    print(f"\n=== 构建完成 ===\n  镜像: {IMG_PATH}\n  大小: {size} bytes ({size//1024//1024}MB)")
+    print("  布局: GPT | ESP(FAT32 128MB, EFI/BOOT/BOOTX64.EFI + KERNEL64.BIN + HEPBOOT.CFG)"
+          " | Root(ext2 120MB)")
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()

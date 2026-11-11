@@ -1450,8 +1450,12 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
         if (boot_mode == 0) {
             /* 64位内核: 直接在长模式下跳转 */
             debug_puts("Kernel arch: x86_64 (64-bit)\n");
-            debug_puts("Kernel entry: 0x10000c\n");
-            jump_to_kernel_64(0x10000c, (UINT64)mb_info, 0x8F000);
+            /* 64 位 flat 镜像由 load_kernel_to_memory() 原样铺到 0x100000,
+             * 入口就是镜像首字节(与 BIOS 线 stage2_64 的 jmp 0x100000 一致)。
+             * 旧值 0x10000c 是照抄"32 位壳在 0x10000"的写法, 而 UEFI 线并不
+             * 加载那段壳, 跳过去必然落在空内存。 */
+            debug_puts("Kernel entry: 0x100000\n");
+            jump_to_kernel_64(0x100000, (UINT64)mb_info, 0x8F000);
         } else {
             /* 32位内核: 切换到32位保护模式再跳转 */
             debug_puts("Kernel arch: i386 (32-bit)\n");

@@ -7,7 +7,14 @@ import struct
 import os
 
 class FAT32Generator:
-    def __init__(self, size_bytes, sector_size=512, sectors_per_cluster=8):
+    def __init__(self, size_bytes, sector_size=512, sectors_per_cluster=None):
+        # FAT32 规范要求簇数 >= 65525, 否则严格实现(含 OVMF)会判定不是合法 FAT32。
+        # 128MB 分区按 8 扇区/簇只有 32768 簇 -> 必须按容量自动选簇大小。
+        if sectors_per_cluster is None:
+            data_bytes = size_bytes * 0.96
+            sectors_per_cluster = 1
+            while data_bytes / (sector_size * sectors_per_cluster) < 70000 and sectors_per_cluster < 64:
+                sectors_per_cluster *= 2
         self.sector_size = sector_size
         self.sectors_per_cluster = sectors_per_cluster
         self.cluster_size = sector_size * sectors_per_cluster
@@ -113,7 +120,8 @@ class FAT32Generator:
         """创建FS信息扇区"""
         fsinfo = bytearray(512)
         fsinfo[0:4] = b'RRaA'
-        fsinfo[484:488] = b'RRaA'
+        fsinfo[508:512] = b'\x00\x00\x55\xaa'  # FSInfo 尾部签名
+        fsinfo[484:488] = b'rrAa'   # 结构签名必须是 'rrAa', 原实现错写成 'RRaA'
         struct.pack_into('<I', fsinfo, 488, 0xFFFFFFFF)  # 空闲簇数
         struct.pack_into('<I', fsinfo, 492, self.root_dir_cluster)  # 下一个空闲簇
         fsinfo[510] = 0x55

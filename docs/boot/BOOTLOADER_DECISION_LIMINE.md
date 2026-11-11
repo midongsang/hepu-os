@@ -65,7 +65,10 @@ make -C tools/hepboot/uefi       # 出 hepboot_uefi.efi
 
 ### 2.4 但 UEFI 线目前没接进 64 位主线（这才是真问题）
 
-- `hepboot_uefi.c:550` 写死 `KERNEL_PATH L"\\hepu-kernel.bin"`（32 位壳），不是 64 位产物；
+> 更正：初稿写"`KERNEL_PATH` 写死 32 位壳"，实为误读——`KERNEL64_PATH`/`KERNEL32_PATH` 已按
+> "64 位优先、失败回退 32 位"实现（`hepboot_uefi.c:551-552`、L1200-1205）。真正的不通点在别处（见 2.5 补记）。
+
+- 实际断点是 `jump_to_kernel_64(0x10000c, ...)`：内核已加载到 0x100000，却跳到 32 位壳的入口地址；
 - `tools/build_uefi_dual.py` 的 `PROJECT` 常量指向**另一个会话的绝对路径**（`.../38448056008342018/extracted/os-source/...`），当前环境跑不通；
 - `tools/hepboot/uefi/build_uefi_image.sh` 依赖 `build_v250/hepu-kernel.bin`，该目录在当前仓库不存在。
 
@@ -73,10 +76,15 @@ make -C tools/hepboot/uefi       # 出 hepboot_uefi.efi
 
 ### 2.5 Limine 不是即插即用 —— 内核当前没有 multiboot 头
 
+> 更正：初稿据 `multiboot_entry.S` 判定"没有 multiboot header"，漏看了 `entry_64.S` 头部的
+> `.multiboot` 段——它**确实**有 multiboot1 头（`0x1BADB002`）。但产物是 flat binary、
+> 无 ELF 段表，Limine 走 ELF 路径读不到；走 multiboot 路径又需要 header 落在文件前 8KB 内，
+> 而当前布局是先放代码、header 位置不由构建保证。所以"需要适配"的结论不变，理由更正为下面两条。
+
 | 事实 | 证据 |
 |------|------|
-| 64 位内核产物是 flat binary（`file` → `data`），由 stage2 按固定物理地址直接铺入 1MB 区 | `build_x86_64/hepu-kernel64.bin`（780,544 B） |
-| 内核里有 multiboot **入口函数**，但**没有 multiboot header**（`grep -c 0x1BADB002 multiboot_entry.S` → 0） | `kernel/arch/x86_64/multiboot_entry.S` |
+| 64 位内核产物是 flat binary（`file` → `data`），由 stage2 按固定物理地址直接铺入 1MB 区 | `build_x86_64/hepu-kernel64.bin`（780,672 B） |
+| `entry_64.S` 头部有 multiboot1 头（`0x1BADB002`），但产物非 ELF、头位置不由链接保证 | `kernel/arch/x86_64/entry_64.S` L10-22 |
 | MB2 魔数只有定义、没有使用：入口只把 EAX 存进 ESI、EBX 存进 EDI，不区分协议 | `multiboot_entry.S` L10-11 定义、L25-26 取参 |
 
 后果：**Limine/GRUB 现在无法自动识别并加载这个内核**。要以 Limine 为主引导，至少要做四件事（见第四节），其中"multiboot2 信息表与现有 MB1 解析并存"和"Limine 进入时的页表/HHDM 假设与自建恒等映射"是真正的返工点。
@@ -134,3 +142,4 @@ make -C tools/hepboot/uefi       # 出 hepboot_uefi.efi
 - `docs/guides/REAL_HARDWARE_TEST.md`（真机缺口清单）
 - 源码：`tools/hepboot/*.S`、`tools/hepboot/uefi/*`、`kernel/arch/x86_64/multiboot_entry.S`、`kernel/arch/x86_64/Makefile`、`tools/build_uefi_dual.py`、`tools/make_single_img64.sh`
 - 实测：`make -C tools/gnu-efi && make -C tools/hepboot/uefi` → 75,835 B PE32+ EFI 应用
+- 实测（后续）：`tools/build_uefi_dual.py` + OVMF 端到端启动到桌面成功，见 `docs/status/FIXES_0_57_0.md` §1.31
