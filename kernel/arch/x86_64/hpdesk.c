@@ -252,7 +252,7 @@ static const char *default_config =
 "    sidebar_height: 500\n"
 "    cc_margin_right: 384\n"
 "    cc_y: 108\n"
-"    cc_width: 360\n"
+"    cc_width: 280\n"
 "    cc_height: 440\n"
 "    bar_height: 36\n"
 "    island_width: 120\n"
@@ -343,7 +343,7 @@ static void load_ui_from_config(hsqml_node_t *ui)
     g_shell.ui.sidebar_height = hsqml_get_number(ui, "sidebar_height", 500);
     g_shell.ui.cc_margin_right = hsqml_get_number(ui, "cc_margin_right", 384);
     g_shell.ui.cc_y = hsqml_get_number(ui, "cc_y", 108);
-    g_shell.ui.cc_width = hsqml_get_number(ui, "cc_width", 360);
+    g_shell.ui.cc_width = hsqml_get_number(ui, "cc_width", 280);
     g_shell.ui.cc_height = hsqml_get_number(ui, "cc_height", 440);
     g_shell.ui.bar_height = hsqml_get_number(ui, "bar_height", 40);
     g_shell.ui.island_width = hsqml_get_number(ui, "island_width", 120);
@@ -2844,17 +2844,23 @@ static int g_cc_page = 0;
 
 static void cc_geometry(int *cx, int *cy, int *cw, int *ch)
 {
-    int w = g_shell.ui.cc_width;
+    /* 宽度跟随 hs_sx() 缩放, 与左侧 sidebar 同一基准(280), 两栏在高 DPI 下等宽。
+     * 高度与内部纵向坐标保持基准像素, 避免卡片被压扁重叠。 */
+    int w = hs_sx(g_shell.ui.cc_width);
     int h = g_shell.ui.cc_height;
-    if (w < 300) w = 360;
+    if (w < hs_sx(280)) w = hs_sx(280);
     if (h < 320) h = 440;
+    int max_w = g_shell.screen_width * 3 / 5;
+    if (max_w > 0 && w > max_w) w = max_w;
+    int max_h = g_shell.screen_height * 19 / 20;
+    if (max_h > 0 && h > max_h) h = max_h;
     *cw = w;
     *ch = h;
-    *cx = g_shell.screen_width - g_shell.ui.cc_margin_right;
+    *cx = g_shell.screen_width - w - hs_sx(24);
     if (*cx < 0) *cx = 0;
-    if (*cx + w > g_shell.screen_width) *cx = g_shell.screen_width - w - 8;
-    *cy = g_shell.ui.cc_y;
-    if (*cy + h > g_shell.screen_height) *cy = g_shell.screen_height - h - 8;
+    *cy = hs_sy(g_shell.ui.cc_y);
+    if (*cy + h > g_shell.screen_height) *cy = g_shell.screen_height - h - hs_sy(8);
+    if (*cy < 0) *cy = 0;
 }
 
 /* 开关卡片：开启态用强调色填充，关闭态用次要表面 */
@@ -4227,7 +4233,7 @@ int hpdesk_init(int width, int height)
     g_shell.ui.sidebar_height = 500;
     g_shell.ui.cc_margin_right = 384;
     g_shell.ui.cc_y = 108;
-    g_shell.ui.cc_width = 360;
+    g_shell.ui.cc_width = 280;
     g_shell.ui.cc_height = 440;
     g_shell.ui.bar_height = 40;
     g_shell.ui.island_width = 120;
