@@ -1692,7 +1692,7 @@ static void hs_settings_window_render(hs_window_t *w)
             k = strlen(mem_str);
             strcpy(mem_str + k, " MB");
         }
-        const char *values[] = {"Hepu OS v0.56.1", "64-bit SMP", cpu_str, mem_str,
+        const char *values[] = {"Hepu OS v0.56.2", "64-bit SMP", cpu_str, mem_str,
                                 "VBE 1024x768", "ext2"};
         for (int i = 0; i < 6; i++) {
             font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
@@ -2554,7 +2554,7 @@ static void hs_sidebar_render(void)
 
         /* 系统信息 */
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           sx + hs_sx(20), content_y, "Hepu OS v0.56.1", g_shell.colors.accent, hs_s(14));
+                           sx + hs_sx(20), content_y, "Hepu OS v0.56.2", g_shell.colors.accent, hs_s(14));
         content_y += hs_sy(24);
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            sx + hs_sx(20), content_y, "Kernel: 64-bit SMP", g_shell.colors.panel_fg, hs_s(12));
