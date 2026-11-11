@@ -55,6 +55,7 @@ source_of_truth: frontmatter of docs/*
 - [组合B：SMP 硬化包实施计划（PLAN_SMP_HARDENING_R5）](planning/PLAN_SMP_HARDENING_R5.md)
 - [赫普OS 开发路线图（唯一优先级来源）](planning/ROADMAP.md)
 - [RUST](planning/RUST.md)
+- [SMP 决策对比：选项 A 完整硬化 vs 选项 B 显式单核声明（R5）](planning/SMP_DECISION_A_VS_B_R5.md)
 - [STORAGE_MEMORY](planning/STORAGE_MEMORY.md)
 - [SYSTEM_VERIFICATION](planning/SYSTEM_VERIFICATION.md)
 - [TECH_ROADMAP](planning/TECH_ROADMAP.md)
