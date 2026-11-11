@@ -116,6 +116,11 @@ if [ -n "$LOOPDEV" ]; then
         mkdir -p /tmp/hepu_root_mnt/fonts
         mkdir -p /tmp/hepu_root_mnt/boot
         mkdir -p /tmp/hepu_root_mnt/etc/hepushell
+        # V0.54.13: Xcursor 光标主题 (/usr/share/cursors/*.xcur)
+        if [ -d ${PROJECT}/assets/cursors ]; then
+            mkdir -p /tmp/hepu_root_mnt/usr/share/cursors
+            cp ${PROJECT}/assets/cursors/*.xcur /tmp/hepu_root_mnt/usr/share/cursors/ 2>/dev/null
+        fi
         cp ${PROJECT}/kernel/fonts/DejaVuSans.ttf /tmp/hepu_root_mnt/fonts/ 2>/dev/null
         # 复制HepuShell配置文件
         if [ -f ${PROJECT}/rootfs/etc/hepushell/config.hsqml ]; then
@@ -156,6 +161,17 @@ else
     # 使用debugfs写入字体文件和用户态程序
     if command -v debugfs &>/dev/null; then
         echo "mkdir /fonts" | debugfs -w $TMPDIR/rootfs.ext2 2>/dev/null
+        # V0.54.13: Xcursor 光标主题
+        if [ -d "$PROJECT/assets/cursors" ]; then
+            echo "mkdir /usr" | debugfs -w $TMPDIR/rootfs.ext2 2>/dev/null
+            echo "mkdir /usr/share" | debugfs -w $TMPDIR/rootfs.ext2 2>/dev/null
+            echo "mkdir /usr/share/cursors" | debugfs -w $TMPDIR/rootfs.ext2 2>/dev/null
+            for xc in "$PROJECT"/assets/cursors/*.xcur; do
+                [ -f "$xc" ] || continue
+                echo "write $xc /usr/share/cursors/$(basename $xc)" | debugfs -w $TMPDIR/rootfs.ext2 2>/dev/null
+            done
+            echo "  光标主题已写入 /usr/share/cursors ($(ls "$PROJECT"/assets/cursors/*.xcur 2>/dev/null | wc -l) 个)"
+        fi
         echo "write $PROJECT/kernel/fonts/DejaVuSans.ttf /fonts/DejaVuSans.ttf" | debugfs -w $TMPDIR/rootfs.ext2 2>/dev/null
         # 写入HepuShell配置文件
         if [ -f "$PROJECT/rootfs/etc/hepushell/config.hsqml" ]; then

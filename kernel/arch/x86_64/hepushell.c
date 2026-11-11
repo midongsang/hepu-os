@@ -117,6 +117,53 @@ static int g_wallpaper_style = 0;
 static int g_wallpaper_dirty = 0;
 static const char *g_wallpaper_names[] = {"Classic", "Dusk", "Ocean"};
 
+/* V0.54.13: 桌面背景色预设色板 + 持久化 (Settings/Appearance 页与右键面板共用) */
+static int g_color_panel_visible = 0;
+
+static const uint32_t g_color_presets[9] = {
+    0xF7F3EA, 0xFAF6EE, 0xE8DFD0,   /* 暖白系 */
+    0x1C1B1F, 0x243447, 0x2E3440,   /* 深灰系 */
+    0x0B3B4F, 0x1B3A2F, 0x3A1F2B,   /* 冷蓝 / 松绿 / 酒红 */
+};
+
+/* 把 "#RRGGBB" 写进配置文件的 Theme.background 行 */
+static void hs_save_bg_color(uint32_t c)
+{
+    extern int ext2_64_read_file(const char *path, uint8_t *buffer, uint32_t max_size);
+    extern int ext2_64_write_file(const char *path, const uint8_t *data, uint32_t size);
+    static char buf[4096];
+    static const char hx[] = "0123456789ABCDEF";
+
+    int n = ext2_64_read_file("/etc/hepushell/config.hsqml", (uint8_t *)buf, 4095);
+    if (n <= 0) return;
+    buf[n] = 0;
+
+    char hex[8];
+    hex[0] = '#';
+    hex[1] = hx[(c >> 20) & 0xF];
+    hex[2] = hx[(c >> 16) & 0xF];
+    hex[3] = hx[(c >> 12) & 0xF];
+    hex[4] = hx[(c >> 8) & 0xF];
+    hex[5] = hx[(c >> 4) & 0xF];
+    hex[6] = hx[c & 0xF];
+    hex[7] = 0;
+
+    for (int i = 0; i + 12 < n; i++) {
+        if (buf[i] == 'b' && buf[i+1] == 'a' && buf[i+2] == 'c' &&
+            buf[i+3] == 'k' && buf[i+4] == 'g' && buf[i+5] == 'r' &&
+            buf[i+6] == 'o' && buf[i+7] == 'u' && buf[i+8] == 'n' &&
+            buf[i+9] == 'd' && buf[i+10] == ':') {
+            int j = i + 10;
+            while (j < n && buf[j] != '#' && buf[j] != '\n') j++;
+            if (j < n && buf[j] == '#' && j + 7 <= n) {
+                for (int k = 0; k < 7; k++) buf[j + k] = hex[k];
+                ext2_64_write_file("/etc/hepushell/config.hsqml", (uint8_t *)buf, (uint32_t)n);
+            }
+            break;
+        }
+    }
+}
+
 /* 右键菜单状态 */
 static int g_context_menu_visible = 0;
 static int g_context_menu_x = 0;
@@ -131,7 +178,7 @@ static int g_drag_offset_y;
 static int g_dragging;
 
 /* 设置窗口当前页面 */
-static int g_settings_page = 2;  /* 0=Appearance, 1=Panels, 2=System, 3=About */
+static int g_settings_page = 0;  /* 0=Appearance, 1=Panels, 2=System, 3=About */
 static int g_settings_storage_ry = 0; /* V0.13.39: 存储管理行点击区域 */
 static int g_settings_reg_ry = 0;    /* V0.13.39: 注册表查看行 */
 static int g_settings_assoc_ry = 0;  /* V0.13.39: 文件关联查看行 */
@@ -1479,6 +1526,18 @@ static void hs_settings_window_render(hs_window_t *w)
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            rx + 84, ry, g_wallpaper_names[g_wallpaper_style],
                            g_shell.colors.accent, 12);
+        /* V0.54.13: 桌面背景色 3x3 色板 (点击应用并写回 config.hsqml) */
+        ry += 24;
+        font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                           rx, ry, "Desktop:", g_shell.colors.panel_fg, 12);
+        for (int i = 0; i < 9; i++) {
+            int bx = rx + 76 + (i % 3) * 22;
+            int by = ry - 4 + (i / 3) * 22;
+            gfx64_fill_rect(bx, by, 16, 16, g_color_presets[i]);
+            uint32_t bc = (g_shell.colors.bg == g_color_presets[i])
+                        ? g_shell.colors.panel_fg : g_shell.colors.border;
+            gfx64_draw_rounded_rect(bx, by, 16, 16, 3, bc);
+        }
     } else if (g_settings_page == 1) {
         /* Panels */
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
@@ -2647,9 +2706,9 @@ static int g_menu_file_mode = 0;   /* V0.13.39: 1=文件管理器右键菜单 */
 static void hs_context_menu_render(void)
 {
     const char *f_items[] = {"Open", "Delete", "New Folder", "Rename", "Refresh", "Up Dir", "---", "Close Menu"};
-    const char *items[] = {"New Window", "Change Theme", "Settings", "About", "---", "Lock Screen"};
+    const char *items[] = {"New Window", "Change Theme", "Settings", "About", "---", "Lock Screen", "Desktop Color"};
     const char **items_p = g_menu_file_mode ? f_items : items;
-    int item_count = g_menu_file_mode ? 8 : 6;
+    int item_count = g_menu_file_mode ? 8 : 7;
     int menu_w = 180;
     int item_h = 32;
     int menu_h = item_count * item_h + 8;
@@ -2674,12 +2733,81 @@ static void hs_context_menu_render(void)
     }
 }
 
+/* ============================================================================
+ * V0.54.13: 桌面配色面板 — 图形化更换桌面背景色, 并持久化到 config.hsqml
+ * 此前背景色只能靠改代码/手改配置文件, 这里点选预设色块即时生效并写回配置
+ * ========================================================================== */
+#define HS_COLOR_PANEL_W 320
+#define HS_COLOR_PANEL_H 340
+
+static void hs_color_panel_geometry(int *px, int *py)
+{
+    *px = (g_shell.screen_width - HS_COLOR_PANEL_W) / 2;
+    *py = (g_shell.screen_height - HS_COLOR_PANEL_H) / 2;
+    if (*px < 0) *px = 0;
+    if (*py < 0) *py = 0;
+}
+
+
+static void hs_color_panel_render(void)
+{
+    if (!g_color_panel_visible) return;
+    int x, y;
+    hs_color_panel_geometry(&x, &y);
+    void *fb = gfx64_get_framebuffer();
+
+    gfx64_fill_rounded_rect(x, y, HS_COLOR_PANEL_W, HS_COLOR_PANEL_H, 12,
+                            g_shell.colors.window_bg);
+    gfx64_draw_rounded_rect(x, y, HS_COLOR_PANEL_W, HS_COLOR_PANEL_H, 12,
+                            g_shell.colors.border);
+    font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                       x + 20, y + 18, "Desktop Color", g_shell.colors.window_fg, 18);
+
+    /* 当前色小预览 */
+    gfx64_fill_rect(x + HS_COLOR_PANEL_W - 56, y + 16, 36, 20, g_shell.colors.bg);
+    gfx64_draw_rounded_rect(x + HS_COLOR_PANEL_W - 56, y + 16, 36, 20, 3,
+                            g_shell.colors.border);
+
+    for (int i = 0; i < 9; i++) {
+        int cx = x + 20 + (i % 3) * 96;
+        int cy = y + 56 + (i / 3) * 92;
+        gfx64_fill_rect(cx, cy, 80, 80, g_color_presets[i]);
+        uint32_t bc = (g_shell.colors.bg == g_color_presets[i])
+                    ? g_shell.colors.accent : g_shell.colors.border;
+        gfx64_draw_rounded_rect(cx, cy, 80, 80, 6, bc);
+    }
+}
+
+static int hs_color_panel_handle_click(int x, int y)
+{
+    if (!g_color_panel_visible) return 0;
+    int px, py;
+    hs_color_panel_geometry(&px, &py);
+    if (x < px || x > px + HS_COLOR_PANEL_W ||
+        y < py || y > py + HS_COLOR_PANEL_H) {
+        g_color_panel_visible = 0;      /* 点面板外关闭 */
+        return 1;
+    }
+    for (int i = 0; i < 9; i++) {
+        int cx = px + 20 + (i % 3) * 96;
+        int cy = py + 56 + (i / 3) * 92;
+        if (x >= cx && x <= cx + 80 && y >= cy && y <= cy + 80) {
+            g_shell.colors.bg = g_color_presets[i];
+            g_wallpaper_style = 0;      /* 纯色桌面 */
+            hs_save_bg_color(g_color_presets[i]);
+            g_color_panel_visible = 0;
+            return 1;
+        }
+    }
+    return 1;
+}
+
 static void hs_context_menu_handle_click(int x, int y)
 {
     const char *f_items[] = {"Open", "Delete", "New Folder", "Rename", "Refresh", "Up Dir", "---", "Close Menu"};
-    const char *items[] = {"New Window", "Change Theme", "Settings", "About", "---", "Lock Screen"};
+    const char *items[] = {"New Window", "Change Theme", "Settings", "About", "---", "Lock Screen", "Desktop Color"};
     const char **items_p = g_menu_file_mode ? f_items : items;
-    int item_count = g_menu_file_mode ? 8 : 6;
+    int item_count = g_menu_file_mode ? 8 : 7;
     int menu_w = 180;
     int item_h = 32;
     int menu_h = item_count * item_h + 8;
@@ -2717,6 +2845,7 @@ static void hs_context_menu_handle_click(int x, int y)
             case 2: g_pending_app = HS_APP_SETTINGS; break;
             case 3: g_pending_app = HS_APP_ABOUT; break;
             case 5: g_locked = 1; break;
+            case 6: g_color_panel_visible = 1; break;   /* V0.54.13: 桌面配色面板 */
         }
         g_context_menu_visible = 0;
     }
@@ -2731,6 +2860,9 @@ void hepushell_handle_click(int x, int y)
         extern int hs_oobe_handle_click(int x, int y);
         if (hs_oobe_active()) { hs_oobe_handle_click(x, y); return; }
     }
+
+    /* V0.54.13: 桌面配色面板优先接管点击 */
+    if (hs_color_panel_handle_click(x, y)) return;
 
     /* 控制中心绘制在窗口之上，优先接管该区域点击 */
     if (!g_locked && g_shell.panel_registry[HS_PANEL_CONTROL_CENTER].enabled && !g_context_menu_visible) {
@@ -2981,6 +3113,18 @@ void hepushell_handle_click(int x, int y)
                     int wp_y = w->y + 188;
                     if (x >= sw_x && x <= sw_x + 150 && y >= wp_y && y <= wp_y + 20) {
                         hs_wallpaper_cycle();
+                        return;
+                    }
+                }
+                /* V0.54.13: 桌面背景色 3x3 色板点击 */
+                for (int i = 0; i < 9; i++) {
+                    int bx = sw_x + 76 + (i % 3) * 22;
+                    int by = w->y + 208 + (i / 3) * 22;
+                    if (x >= bx && x <= bx + 16 && y >= by && y <= by + 16) {
+                        g_shell.colors.bg = g_color_presets[i];
+                        g_wallpaper_style = 0;
+                        hs_save_bg_color(g_color_presets[i]);
+                        vga_puts("[SETTINGS] desktop color applied\n");
                         return;
                     }
                 }
@@ -3296,6 +3440,9 @@ void hepushell_render(void)
         hs_context_menu_render();
     }
 
+    /* V0.54.13: 桌面配色面板 */
+    hs_color_panel_render();
+
     /* V0.13.10: 窗口切换器（最顶层浮层） */
     if (g_sw_active) {
         hs_switcher_render();
@@ -3311,9 +3458,22 @@ void hepushell_render(void)
         }
     }
 
-    /* V0.13.62: 渲染鼠标指针 (此前桌面从未绘制指针 — 多鼠标/无线输入可见性修复) */
-    extern void gfx64_draw_mouse_cursor(int x, int y, uint32_t color);
-    gfx64_draw_mouse_cursor(g_shell.mouse_x, g_shell.mouse_y, 0xE6E1E5);
+    /* V0.54.13: 渲染鼠标指针 — 优先使用 Xcursor 主题(/usr/share/cursors/default.xcur),
+     * 尺寸按屏幕分辨率自适应(24/32/48), 热点取主题文件 xhot/yhot;
+     * 主题不可用时回退 gfx64 内置位图。 */
+    {
+        extern void cursor64_draw(int x, int y);
+        extern int cursor64_load_file(const char *path, int want);
+        extern int cursor64_pick_size(int w, int h);
+        static int cur_inited = 0;
+        if (!cur_inited) {
+            cur_inited = 1;
+            cursor64_load_file("/usr/share/cursors/default.xcur",
+                               cursor64_pick_size(g_shell.screen_width,
+                                                  g_shell.screen_height));
+        }
+        cursor64_draw(g_shell.mouse_x, g_shell.mouse_y);
+    }
 
     /* V0.13.11: 原子提交后台帧到前台 */
     gfx64_present();
