@@ -10,6 +10,8 @@ supersedes: null
 
 # Hepu OS 桌面外壳开发指南（参考 Clavis Shell 实现）
 
+> 分层职责（gfx64 / hpdesk / hsqml / hs_apps 各管什么、终端在哪一层）见 [ARCHITECTURE_LAYERS.md](ARCHITECTURE_LAYERS.md)。
+
 > 本文档把参考视频（宿主 Arch Linux + niri + Clavis Shell 桌面演示）中展示的系统功能与交互，
 > 对照参考项目源码（`extracted/os-source/hepu_os_src/ref_projects/quickshell/`），
 > 逐项给出 Hepu OS 的落地开发路径。

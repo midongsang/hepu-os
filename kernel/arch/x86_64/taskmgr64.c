@@ -177,12 +177,12 @@ void taskmgr64_draw(void *fb, int fb_w, int fb_h, int x, int y, int w, int h)
     /* 网络面板：上传/下载实时速率 + 总量，挂 net_hal（实际驱动 RTL8139/e1000 通用计数器） */
     extern void net_hal_get_stats(int idx, uint64_t *tx_pkts, uint64_t *rx_pkts,
                                   uint64_t *tx_bytes, uint64_t *rx_bytes);
-    extern int hepushell_get_tick(void);
+    extern int hpdesk_get_tick(void);
     uint64_t ntx = 0, nrx = 0;
     net_hal_get_stats(0, 0, 0, &ntx, &nrx);
     /* 速率：累计字节差 / tick 差（KB/s） */
     static uint64_t s_ntx = 0, s_nrx = 0, s_tick = 0;
-    uint64_t now = (uint64_t)hepushell_get_tick();
+    uint64_t now = (uint64_t)hpdesk_get_tick();
     int ntr = 0, nrr = 0;
     if (s_tick && now > s_tick) {
         uint64_t dt = now - s_tick;

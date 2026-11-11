@@ -1,10 +1,10 @@
 /* ============================================================================
  * hs_apps.c — 应用窗口实现 (V0.13.10 重建)
  * 终端 / 文件管理器 / 任务管理器
- * 渲染由 hepushell 窗口系统调用 (w->render 回调), 键盘经 hs_apps_handle_key
+ * 渲染由 hpdesk 窗口系统调用 (w->render 回调), 键盘经 hs_apps_handle_key
  * ========================================================================== */
 
-#include "hepushell.h"
+#include "hpdesk.h"
 #include "hs_apps.h"
 #include "hsservices.h"
 #include "hsinput.h"   /* KEY_EXT_* 扩展键统一码 */
@@ -1411,8 +1411,8 @@ void hs_files_click(int x, int y)
             int gi = f_scroll + rel;
             if (gi >= 0 && gi < f_match_count) {
                 /* 双击检测: 同一项 400ms 内再次点击 → 打开 */
-                extern int hepushell_get_tick(void);
-                int now = hepushell_get_tick();
+                extern int hpdesk_get_tick(void);
+                int now = hpdesk_get_tick();
                 int same = (f_sel == gi);
                 f_sel = gi;
                 if (same && now - f_dclick_tick < 400) {
@@ -1431,8 +1431,8 @@ void hs_files_click(int x, int y)
         int rel = ((x - (f_win->x + 6 + 6)) / gs) + ((y - cy) / (gs + 8)) * cols;
         int gi = f_scroll + rel;
         if (rel >= 0 && gi >= 0 && gi < f_match_count) {
-            extern int hepushell_get_tick(void);
-            int now = hepushell_get_tick();
+            extern int hpdesk_get_tick(void);
+            int now = hpdesk_get_tick();
             int same = (f_sel == gi);
             f_sel = gi;
             if (same && now - f_dclick_tick < 400) {

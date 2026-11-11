@@ -1,10 +1,10 @@
 /* ============================================================================
  * 赫普OS - 系统工具窗口 (V0.55)
  * 设备管理器 (PCI/USB/驱动) / 磁盘管理 (容量/分区/挂载/fsck) / 日志查看器
- * 渲染由 hepushell 窗口系统调用 (w->render), 键鼠经 hepushell 转发
+ * 渲染由 hpdesk 窗口系统调用 (w->render), 键鼠经 hpdesk 转发
  * ========================================================================== */
 
-#include "hepushell.h"
+#include "hpdesk.h"
 #include "hs_systools.h"
 #include "hsinput.h"
 #include "klog64.h"

@@ -1,6 +1,6 @@
 /* ============================================================================
- * 赫普OS 64位 - 图形桌面运行器（HepuShell 专用）
- * V0.13.3: 移除经典桌面（desktop64_draw 等），统一由 HepuShell 承担全部桌面渲染
+ * 赫普OS 64位 - 图形桌面运行器（Hepu Desktop 专用）
+ * V0.13.3: 移除经典桌面（desktop64_draw 等），统一由 Hepu Desktop 承担全部桌面渲染
  * 参考现代系统（Windows DWM / Wayland compositor）：单一合成器 + 分层渲染
  * ========================================================================== */
 
@@ -11,15 +11,15 @@ extern void vga_puts(const char *s);
 extern void gfx64_init_from_bootloader(void);
 extern void gfx64_get_info(int *width, int *height, int *bpp);
 
-/* HepuShell 接口 */
-extern int hepushell_init(int width, int height);
-extern void hepushell_render(void);
-extern void hepushell_handle_key(int key);
-extern void hepushell_update_mouse(int x, int y);
-extern void hepushell_mouse_down(int x, int y);
-extern void hepushell_mouse_up(int x, int y);
-extern void hepushell_handle_click(int x, int y);
-extern void hepushell_handle_right_click(int x, int y);
+/* Hepu Desktop 接口 */
+extern int hpdesk_init(int width, int height);
+extern void hpdesk_render(void);
+extern void hpdesk_handle_key(int key);
+extern void hpdesk_update_mouse(int x, int y);
+extern void hpdesk_mouse_down(int x, int y);
+extern void hpdesk_mouse_up(int x, int y);
+extern void hpdesk_handle_click(int x, int y);
+extern void hpdesk_handle_right_click(int x, int y);
 
 /* 输入 */
 extern int keyboard64_haschar(void);
@@ -86,7 +86,7 @@ int desktop64_init(void)
     return 0;
 }
 
-/* 桌面主循环：HepuShell 事件循环（鼠标/键盘/渲染/点击） */
+/* 桌面主循环：Hepu Desktop 事件循环（鼠标/键盘/渲染/点击） */
 void desktop64_run(void)
 {
     if (!desktop_initialized) {
@@ -96,12 +96,12 @@ void desktop64_run(void)
         }
     }
 
-    /* HepuShell：启动即初始化 */
-    static int hepushell_started = 0;
-    if (!hepushell_started) {
-        hepushell_init(screen_width, screen_height);
-        hepushell_started = 1;
-        vga_puts("[DESKTOP64] HepuShell started as default desktop\n");
+    /* Hepu Desktop：启动即初始化 */
+    static int hpdesk_started = 0;
+    if (!hpdesk_started) {
+        hpdesk_init(screen_width, screen_height);
+        hpdesk_started = 1;
+        vga_puts("[DESKTOP64] Hepu Desktop started as default desktop\n");
     }
 
 
@@ -162,8 +162,8 @@ void desktop64_run(void)
         if (!wx_done) {
             if (++wx_tick >= 60) {
                 wx_done = 1;
-                extern void hepushell_fetch_weather(void);
-                hepushell_fetch_weather();
+                extern void hpdesk_fetch_weather(void);
+                hpdesk_fetch_weather();
             }
         }
 
@@ -180,13 +180,13 @@ void desktop64_run(void)
         /* 渲染：仅每 ~16ms(≈60fps) 一次，输入/网络仍每轮处理保证低延迟 */
         if (now - last_render_ms >= 16) {
             last_render_ms = now;
-            hepushell_render();
+            hpdesk_render();
         }
 
-        /* V0.13.7 P4: HepuShell Dock/启动器图标点击的应用启动请求 */
+        /* V0.13.7 P4: Hepu Desktop Dock/启动器图标点击的应用启动请求 */
         if (g_pending_app != 0) {
-            hepushell_handle_pending_app();
-            vga_puts("[DESKTOP64] Pending app request handled by HepuShell\n");
+            hpdesk_handle_pending_app();
+            vga_puts("[DESKTOP64] Pending app request handled by Hepu Desktop\n");
             g_pending_app = 0;
         }
 

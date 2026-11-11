@@ -1,10 +1,10 @@
 /* ============================================================================
- * 赫普OS - HepuShell 高级功能实现
+ * 赫普OS - Hepu Desktop 高级功能实现
  * V0.10.170
  * ========================================================================== */
 
 #include "hsextras.h"
-#include "hepushell.h"
+#include "hpdesk.h"
 
 extern void vga_puts(const char *s);
 extern void gfx64_fill_rect(int x, int y, int w, int h, uint32_t color);
@@ -372,7 +372,7 @@ void hs_theme_apply(hs_theme_def_t *theme)
     if (!theme) return;
     g_current_theme = theme;
 
-    /* 应用到HepuShell */
+    /* 应用到Hepu Desktop */
     g_shell.colors.bg = theme->bg;
     g_shell.colors.panel_bg = theme->panel_bg;
     g_shell.colors.panel_fg = theme->panel_fg;

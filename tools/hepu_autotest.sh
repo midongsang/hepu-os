@@ -112,7 +112,7 @@ cp "$SERIAL_LOG" "$RESULT_DIR/${TEST_NAME}_serial.log"
 
 # 检查关键日志
 echo "--- 关键启动日志 ---"
-grep -E "\[TTF64\]|\[GFX64\]|\[HepuShell\]|Kernel|panic|error|fault|exception" "$SERIAL_LOG" | head -20 || echo "(无匹配)"
+grep -E "\[TTF64\]|\[GFX64\]|\[Hepu Desktop\]|Kernel|panic|error|fault|exception" "$SERIAL_LOG" | head -20 || echo "(无匹配)"
 
 # 检查是否有panic或异常
 if grep -qiE "panic|kernel panic|double fault|general protection|page fault" "$SERIAL_LOG"; then

@@ -1,10 +1,10 @@
 /* ============================================================================
- * 赫普OS - HepuShell IPC 接口实现
+ * 赫普OS - Hepu Desktop IPC 接口实现
  * V0.10.164
  * ========================================================================== */
 
 #include "hsipc.h"
-#include "hepushell.h"
+#include "hpdesk.h"
 
 extern void vga_puts(const char *s);
 
@@ -55,7 +55,7 @@ int hsipc_init(void)
     channel_count = 0;
 
     /* 创建默认通道 */
-    hsipc_create_channel("hepushell");
+    hsipc_create_channel("hpdesk");
     hsipc_create_channel("notifications");
 
     ipc_initialized = 1;
@@ -161,7 +161,7 @@ int hsipc_poll_channel(int channel)
     return channels[channel].message_count;
 }
 
-/* 处理HepuShell命令 */
+/* 处理Hepu Desktop命令 */
 void hsipc_handle_shell_command(const char *cmd)
 {
     if (!cmd) return;
@@ -172,42 +172,42 @@ void hsipc_handle_shell_command(const char *cmd)
 
     /* reload - 重新加载配置 */
     if (str_cmp(cmd, "reload") == 0) {
-        hepushell_reload();
+        hpdesk_reload();
         return;
     }
 
     /* theme mono/default - 切换主题 */
     if (str_cmp(cmd, "theme mono") == 0) {
-        hepushell_set_theme(HS_THEME_MONO);
+        hpdesk_set_theme(HS_THEME_MONO);
         vga_puts("[HSIPC] Theme: mono\n");
         return;
     }
     if (str_cmp(cmd, "theme default") == 0) {
-        hepushell_set_theme(HS_THEME_LIGHT);
+        hpdesk_set_theme(HS_THEME_LIGHT);
         vga_puts("[HSIPC] Theme: default (light)\n");
         return;
     }
 
     /* workspace N - 切换工作区 */
     if (cmd[0] >= '1' && cmd[0] <= '9' && cmd[1] == 0) {
-        hepushell_switch_workspace(cmd[0] - '1');
+        hpdesk_switch_workspace(cmd[0] - '1');
         return;
     }
 
     /* launcher - 切换启动器 */
     if (str_cmp(cmd, "launcher") == 0) {
-        hepushell_toggle_launcher();
+        hpdesk_toggle_launcher();
         return;
     }
 }
 
-/* 发送命令到HepuShell */
+/* 发送命令到Hepu Desktop */
 int hsipc_send_command(const char *command)
 {
     if (!ipc_initialized) hsipc_init();
 
-    int channel = hsipc_find_channel("hepushell");
-    if (channel < 0) channel = hsipc_create_channel("hepushell");
+    int channel = hsipc_find_channel("hpdesk");
+    if (channel < 0) channel = hsipc_create_channel("hpdesk");
 
     return hsipc_send_message(channel, HSIPC_CMD_EXEC,
                               command, str_len(command));
@@ -218,7 +218,7 @@ void hsipc_process_messages(void)
 {
     if (!ipc_initialized) return;
 
-    int channel = hsipc_find_channel("hepushell");
+    int channel = hsipc_find_channel("hpdesk");
     if (channel < 0) return;
 
     hsipc_message_t msg;
@@ -226,7 +226,7 @@ void hsipc_process_messages(void)
         if (msg.type == HSIPC_CMD_EXEC) {
             hsipc_handle_shell_command(msg.data);
         } else if (msg.type == HSIPC_CMD_RELOAD) {
-            hepushell_reload();
+            hpdesk_reload();
         }
     }
 }

@@ -122,7 +122,7 @@ if [ -n "$LOOPDEV" ]; then
             cp ${PROJECT}/assets/cursors/*.xcur /tmp/hepu_root_mnt/usr/share/cursors/ 2>/dev/null
         fi
         cp ${PROJECT}/kernel/fonts/DejaVuSans.ttf /tmp/hepu_root_mnt/fonts/ 2>/dev/null
-        # 复制HepuShell配置文件
+        # 复制桌面配置文件
         if [ -f ${PROJECT}/rootfs/etc/hepushell/config.hsqml ]; then
             cp ${PROJECT}/rootfs/etc/hepushell/config.hsqml /tmp/hepu_root_mnt/etc/hepushell/ 2>/dev/null
         fi
@@ -173,7 +173,7 @@ else
             echo "  光标主题已写入 /usr/share/cursors ($(ls "$PROJECT"/assets/cursors/*.xcur 2>/dev/null | wc -l) 个)"
         fi
         echo "write $PROJECT/kernel/fonts/DejaVuSans.ttf /fonts/DejaVuSans.ttf" | debugfs -w $TMPDIR/rootfs.ext2 2>/dev/null
-        # 写入HepuShell配置文件
+        # 写入桌面配置文件
         if [ -f "$PROJECT/rootfs/etc/hepushell/config.hsqml" ]; then
             echo "mkdir /etc" | debugfs -w $TMPDIR/rootfs.ext2 2>/dev/null
             echo "mkdir /drivers" | debugfs -w $TMPDIR/rootfs.ext2 2>/dev/null

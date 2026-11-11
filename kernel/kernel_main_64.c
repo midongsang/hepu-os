@@ -976,22 +976,22 @@ void x86_64_kernel_main(void)
     vga_puts("[INIT] Initializing AC'97 audio...\n");
     ac97_init();
 
-    /* 初始化HepuShell IPC */
+    /* 初始化Hepu Desktop IPC */
     extern int hsipc_init(void);
-    vga_puts("[INIT] Initializing HepuShell IPC...\n");
+    vga_puts("[INIT] Initializing Hepu Desktop IPC...\n");
     hsipc_init();
 
-    /* 初始化HepuShell服务 */
+    /* 初始化Hepu Desktop服务 */
     extern int hs_services_init(void);
-    vga_puts("[INIT] Initializing HepuShell services...\n");
+    vga_puts("[INIT] Initializing Hepu Desktop services...\n");
     hs_services_init();
 
-    /* 初始化HepuShell高级功能 */
+    /* 初始化Hepu Desktop高级功能 */
     extern int hs_lock_init(const char *);
     extern int hs_animation_init(void);
     extern int hs_theme_engine_init(void);
     extern int hs_plugin_init(void);
-    vga_puts("[INIT] Initializing HepuShell extras...\n");
+    vga_puts("[INIT] Initializing Hepu Desktop extras...\n");
     hs_lock_init("hepu");
     hs_animation_init();
     hs_theme_engine_init();

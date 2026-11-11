@@ -1,5 +1,5 @@
 /* ============================================================================
- * 赫普OS - HepuShell IPC 接口
+ * 赫普OS - Hepu Desktop IPC 接口
  * 基于内核消息队列的进程间通信
  * V0.10.164
  * ========================================================================== */
@@ -22,7 +22,7 @@ typedef enum {
     HSIPC_CMD_THEME,        /* 切换主题 */
     HSIPC_CMD_WORKSPACE,    /* 切换工作区 */
     HSIPC_CMD_LAUNCHER,     /* 切换启动器 */
-    HSIPC_CMD_QUIT,         /* 退出HepuShell */
+    HSIPC_CMD_QUIT,         /* 退出Hepu Desktop */
     HSIPC_CMD_EXEC,         /* 执行命令 */
     HSIPC_MSG_NOTIFY,       /* 通知消息 */
     HSIPC_MSG_RESPONSE,     /* 响应消息 */
@@ -59,7 +59,7 @@ int hsipc_poll_channel(int channel);
 void hsipc_process_messages(void);
 int hsipc_send_command(const char *command);
 
-/* HepuShell IPC 命令处理 */
+/* Hepu Desktop IPC 命令处理 */
 void hsipc_handle_shell_command(const char *cmd);
 
 #endif /* HSIPC_H */

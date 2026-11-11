@@ -1,10 +1,10 @@
 /* ============================================================================
- * 赫普OS - HepuShell 服务集成实现
+ * 赫普OS - Hepu Desktop 服务集成实现
  * V0.10.169
  * ========================================================================== */
 
 #include "hsservices.h"
-#include "hepushell.h"
+#include "hpdesk.h"
 #include "math64.h"
 #include "process64.h"
 

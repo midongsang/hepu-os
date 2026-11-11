@@ -63,7 +63,7 @@ run_one heap "-DKHEAP_HOST_TEST" tools/host-tests/heap_test.c $ARCH/kheap64.c
 # 4) ELF64 加载器（校验/边界/重定位）
 run_one elf "" tools/host-tests/elf_test.c $ARCH/elf64.c
 
-# 5) HepuShell 窗口槽位分配/回收（回归：反复开关 32 次后槽位耗尽无法再开窗）
+# 5) hpdesk 窗口槽位分配/回收（回归：反复开关 32 次后槽位耗尽无法再开窗）
 run_one winslot "" tools/host-tests/winslot_test.c
 
 # 6) ext2 共享算法（需要镜像夹具：现场生成，测试内含相对路径）

@@ -4,7 +4,7 @@
  * ========================================================================== */
 #include "hsinput.h"
 #include "hstouch.h"
-#include "hepushell.h"
+#include "hpdesk.h"
 
 /* 屏幕尺寸 */
 static int g_sw = 1024;
@@ -32,13 +32,13 @@ extern int mouse64_get_left(void);
 extern int mouse64_get_right(void);
 extern void shell64_run(void);
 /* P3: 窗口/工作区交互钩子 */
-extern void hepushell_switch_workspace(int ws);
-extern void hepushell_cycle_window_focus(void);
-extern void hepushell_close_focused_window(void);
+extern void hpdesk_switch_workspace(int ws);
+extern void hpdesk_cycle_window_focus(void);
+extern void hpdesk_close_focused_window(void);
 
 /* ============================================================================
  * P3 统一组合快捷键引擎 (参考 Windows Win+ / macOS Cmd+ 习惯)
- * 组合键优先于单键处理, 消费后不再下发 hepushell_handle_key
+ * 组合键优先于单键处理, 消费后不再下发 hpdesk_handle_key
  * mod: bit0=Ctrl bit1=Shift bit2=Alt
  * ========================================================================== */
 int hs_handle_shortcut(int key, int mod)
@@ -46,45 +46,45 @@ int hs_handle_shortcut(int key, int mod)
     int ctrl = mod & 0x01, shift = mod & 0x02, alt = mod & 0x04;
 
     /* P17.2: 窗口切换器激活时 Esc 关闭 (拦截 shell 入口) */
-    extern int hepushell_switcher_active(void);
-    extern void hepushell_switcher_close(void);
-    if (hepushell_switcher_active() && key == 27) {
-        hepushell_switcher_close();
+    extern int hpdesk_switcher_active(void);
+    extern void hpdesk_switcher_close(void);
+    if (hpdesk_switcher_active() && key == 27) {
+        hpdesk_switcher_close();
         return 1;
     }
     /* P17.2: Alt+Tab 调出/循环窗口切换器 (Windows 惯例) */
     if (alt && !ctrl && !shift && (key == '\t' || key == 0x0F)) {
-        extern void hepushell_switcher_next(void);
-        hepushell_switcher_next();
+        extern void hpdesk_switcher_next(void);
+        hpdesk_switcher_next();
         return 1;
     }
 
     /* Ctrl+Alt+Delete: 锁屏 (参考 Windows 安全键) */
     if (ctrl && alt && key == 0x53) {  /* 0x53=Delete usage/扫描码 */
-        extern void hepushell_lock(void);
-        hepushell_lock();
+        extern void hpdesk_lock(void);
+        hpdesk_lock();
         return 1;
     }
     /* Ctrl+Alt+方向: 工作区切换 (参考 Linux 桌面) */
     if (ctrl && alt) {
-        if (key == 0xE3) { hepushell_switch_workspace_delta(1); return 1; }   /* 上=下一个 */
-        if (key == 0xE2) { hepushell_switch_workspace_delta(-1); return 1; }  /* 下=上一个 */
+        if (key == 0xE3) { hpdesk_switch_workspace_delta(1); return 1; }   /* 上=下一个 */
+        if (key == 0xE2) { hpdesk_switch_workspace_delta(-1); return 1; }  /* 下=上一个 */
     }
     /* Ctrl+Tab / Ctrl+Shift+Tab: 工作区循环 (参考浏览器标签) */
     if (ctrl && !alt && (key == '\t' || key == 0x0F)) {
-        hepushell_switch_workspace_delta(shift ? -1 : 1);
+        hpdesk_switch_workspace_delta(shift ? -1 : 1);
         return 1;
     }
     /* Alt+Tab / Alt+Shift+Tab: 窗口焦点循环 (参考 Windows) */
     if (alt && !ctrl) {
         if (key == '\t' || key == 0x0F) {
-            hepushell_cycle_window_focus();
+            hpdesk_cycle_window_focus();
             return 1;
         }
     }
     /* Ctrl+W: 关闭焦点窗口 */
     if (ctrl && !alt && (key == 'w' || key == 'W')) {
-        hepushell_close_focused_window();
+        hpdesk_close_focused_window();
         return 1;
     }
     /* Ctrl+S: 编辑器保存 (V0.54.7) */
@@ -94,12 +94,12 @@ int hs_handle_shortcut(int key, int mod)
     }
     /* Ctrl+L: 锁屏; Ctrl+T: 主题 (与单键一致但组合触发) */
     if (ctrl && !alt) {
-        if (key == 'l' || key == 'L') { extern void hepushell_lock(void); hepushell_lock(); return 1; }
-        if (key == 't' || key == 'T') { extern void hepushell_toggle_theme(void); hepushell_toggle_theme(); return 1; }
+        if (key == 'l' || key == 'L') { extern void hpdesk_lock(void); hpdesk_lock(); return 1; }
+        if (key == 't' || key == 'T') { extern void hpdesk_toggle_theme(void); hpdesk_toggle_theme(); return 1; }
         /* Ctrl+E: 打开代码编辑器 (V0.54.7) */
         if (key == 'e' || key == 'E') { extern int g_pending_app; g_pending_app = 5; return 1; }
         /* Ctrl+1..9: 工作区直达 */
-        if (key >= '1' && key <= '9') { hepushell_switch_workspace(key - '1'); return 1; }
+        if (key >= '1' && key <= '9') { hpdesk_switch_workspace(key - '1'); return 1; }
     }
     /* V0.13.9: Win/Super 键快捷键 (参考 Windows Super 键习惯; mod bit3=Win) */
     if (mod & 0x08) {
@@ -129,31 +129,31 @@ int hs_handle_shortcut(int key, int mod)
         }
         /* Win+D: 显示桌面 (最小化所有窗口) */
         if (key == 'd' || key == 'D') {
-            extern void hepushell_show_desktop(void);
-            hepushell_show_desktop();
+            extern void hpdesk_show_desktop(void);
+            hpdesk_show_desktop();
             return 1;
         }
         /* Win+L: 锁屏 */
         if (key == 'l' || key == 'L') {
-            extern void hepushell_lock(void);
-            hepushell_lock();
+            extern void hpdesk_lock(void);
+            hpdesk_lock();
             return 1;
         }
         /* Win+R: 打开启动器/运行 */
         if (key == 'r' || key == 'R') {
-            extern void hepushell_toggle_launcher(void);
-            hepushell_toggle_launcher();
+            extern void hpdesk_toggle_launcher(void);
+            hpdesk_toggle_launcher();
             return 1;
         }
         /* V0.13.16: Win+←/→ 单窗口平铺(参考Windows Snap) */
         if (key == KEY_EXT_LEFT) {
-            extern void hepushell_tile_focused(int dir);
-            hepushell_tile_focused(-1);
+            extern void hpdesk_tile_focused(int dir);
+            hpdesk_tile_focused(-1);
             return 1;
         }
         if (key == KEY_EXT_RIGHT) {
-            extern void hepushell_tile_focused(int dir);
-            hepushell_tile_focused(1);
+            extern void hpdesk_tile_focused(int dir);
+            hpdesk_tile_focused(1);
             return 1;
         }
     }
@@ -219,7 +219,7 @@ void hs_input_poll(void)
                 shell64_run();
                 return;
             }
-            hepushell_handle_key(key);
+            hpdesk_handle_key(key);
         }
     } else if (keyboard64_haschar()) {
         int key = keyboard64_getchar();
@@ -231,7 +231,7 @@ void hs_input_poll(void)
                 shell64_run();
                 return;
             }
-            hepushell_handle_key(key);
+            hpdesk_handle_key(key);
         }
     }
 
@@ -273,7 +273,7 @@ void hs_input_poll(void)
     } else {
         mouse64_get_pos(&mx, &my);
     }
-    hepushell_update_mouse(mx, my);
+    hpdesk_update_mouse(mx, my);
 
     /* 左键 (下降沿按下 / 上升沿释放+点击)
      * V0.13.41: 多源按钮合流 — tablet/usb/PS2 任一按下都生效,
@@ -299,19 +299,19 @@ void hs_input_poll(void)
     extern int mouse64_take_click(void);
     extern int usb64_tablet_take_click(void);
     int fast_click = mouse64_take_click() | usb64_tablet_take_click();
-    if (left && !last_left) hepushell_mouse_down(mx, my);
+    if (left && !last_left) hpdesk_mouse_down(mx, my);
     if (!left && last_left) {
-        hepushell_mouse_up(mx, my);
-        hepushell_handle_click(mx, my);
+        hpdesk_mouse_up(mx, my);
+        hpdesk_handle_click(mx, my);
     } else if (!left && !last_left && fast_click) {
-        hepushell_mouse_down(mx, my);
-        hepushell_mouse_up(mx, my);
-        hepushell_handle_click(mx, my);
+        hpdesk_mouse_down(mx, my);
+        hpdesk_mouse_up(mx, my);
+        hpdesk_handle_click(mx, my);
     }
     last_left = left;
 
     /* 右键 */
-    if (right && !last_right) hepushell_handle_right_click(mx, my);
+    if (right && !last_right) hpdesk_handle_right_click(mx, my);
     last_right = right;
 
     /* V0.13.9: 滚轮 → 桌面 (USB 鼠标优先, tablet 次之, PS/2 兜底) */
@@ -326,7 +326,7 @@ void hs_input_poll(void)
         wheel += g_wheel_acc;   /* 兼容外部 hs_input_wheel 注入 */
         g_wheel_acc = 0;
         if (wheel != 0) {
-            hepushell_update_wheel(wheel);
+            hpdesk_update_wheel(wheel);
         }
     }
 }
@@ -354,25 +354,25 @@ void hs_touch_report(int type, int id, int x, int y)
     /* 手势 → 桌面动作 */
     switch (g.gesture) {
     case HS_GESTURE_TAP:
-        hepushell_mouse_down(g.x, g.y);
-        hepushell_mouse_up(g.x, g.y);
-        hepushell_handle_click(g.x, g.y);
+        hpdesk_mouse_down(g.x, g.y);
+        hpdesk_mouse_up(g.x, g.y);
+        hpdesk_handle_click(g.x, g.y);
         break;
     case HS_GESTURE_DRAG:
-        hepushell_mouse_down(g.x, g.y);
-        hepushell_update_mouse(g.x, g.y);
+        hpdesk_mouse_down(g.x, g.y);
+        hpdesk_update_mouse(g.x, g.y);
         break;
     case HS_GESTURE_LONG_PRESS:
-        hepushell_handle_right_click(g.x, g.y);
+        hpdesk_handle_right_click(g.x, g.y);
         break;
     case HS_GESTURE_SWIPE:
-        if (g.scroll_delta < 0) hepushell_switch_workspace_delta(1);
-        else if (g.scroll_delta > 0) hepushell_switch_workspace_delta(-1);
+        if (g.scroll_delta < 0) hpdesk_switch_workspace_delta(1);
+        else if (g.scroll_delta > 0) hpdesk_switch_workspace_delta(-1);
         break;
     case HS_GESTURE_PINCH:
         /* 捏合缩放: 缩放焦点窗口 (参考 Wayland 窗口缩放) */
-        if (g.pinch_scale > 256) hepushell_pinch_resize(1);
-        else if (g.pinch_scale < 256) hepushell_pinch_resize(-1);
+        if (g.pinch_scale > 256) hpdesk_pinch_resize(1);
+        else if (g.pinch_scale < 256) hpdesk_pinch_resize(-1);
         break;
     default:
         break;

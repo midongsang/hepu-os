@@ -1,10 +1,10 @@
 /* ============================================================================
- * 赫普OS - HepuShell 桌面环境实现
+ * 赫普OS - Hepu Desktop 桌面环境实现
  * 复现 Quickshell 核心功能
  * V0.10.160
  * ========================================================================== */
 
-#include "hepushell.h"
+#include "hpdesk.h"
 #include "l10n64.h"
 #include "hsqml.h"
 #include "hs_apps.h"
@@ -96,7 +96,7 @@ static int hs_s(int v)  {
 }
 
 /* 全局实例 */
-hepushell_t g_shell;
+hpdesk_t g_shell;
 
 /* 渲染帧计数 (动画时基, 桌面循环约 60fps) */
 static uint32_t g_frame_no;
@@ -185,7 +185,7 @@ static int g_settings_assoc_ry = 0;  /* V0.13.39: 文件关联查看行 */
 
 /* 内置默认配置（hsqml格式） — 对齐 quickshell/Clavis: M3 tonal-spot dark */
 static const char *default_config =
-"// HepuShell 默认配置 - 对齐 quickshell/Clavis (Material You tonal-spot dark)\n"
+"// Hepu Desktop 默认配置 - 对齐 quickshell/Clavis (Material You tonal-spot dark)\n"
 "Theme {\n"
 "    mode: \"dark\"\n"
 "    name: \"clavis-m3\"\n"
@@ -353,7 +353,7 @@ static void load_panel_from_config(hsqml_node_t *panel)
         else if (str_cmp(type, "volume") == 0) wtype = HS_WIDGET_VOLUME;
         else if (str_cmp(type, "network") == 0) wtype = HS_WIDGET_NETWORK;
 
-        hepushell_add_widget(position, wtype);
+        hpdesk_add_widget(position, wtype);
     }
 }
 
@@ -367,7 +367,7 @@ static int hs_read_config_file(char *buf, int max_len)
 }
 
 /* 加载配置 */
-static int hepushell_load_config(const char *config)
+static int hpdesk_load_config(const char *config)
 {
     (void)config;
     /* 完全跳过配置加载，使用硬编码默认值 */
@@ -459,7 +459,7 @@ void hs_theme_init(hs_theme_colors_t *colors, hs_theme_t theme)
     }
 }
 
-void hepushell_set_theme(hs_theme_t theme)
+void hpdesk_set_theme(hs_theme_t theme)
 {
     g_shell.theme = theme;
     hs_theme_init(&g_shell.colors, theme);
@@ -633,7 +633,7 @@ static void hs_wallpaper_sample_theme(void)
             if (ss > best_s) { best_s = ss; best = px; }
         }
     }
-    hepushell_set_theme(g_shell.theme);  /* 重置默认色板再取色, 避免叠加旋转 */
+    hpdesk_set_theme(g_shell.theme);  /* 重置默认色板再取色, 避免叠加旋转 */
     if (best) {
         hs_theme_apply_source_color(best);
         g_shell.theme_source = best;
@@ -648,7 +648,7 @@ static void hs_wallpaper_cycle(void)
     g_wallpaper_style = (g_wallpaper_style + 1) % 3;
     if (g_wallpaper_style == 0) {
         /* 回 Classic: 恢复默认色板, 无需采样 */
-        hepushell_set_theme(g_shell.theme);
+        hpdesk_set_theme(g_shell.theme);
         g_shell.theme_source = 0xD0BCFF;
     } else {
         g_wallpaper_dirty = 1;      /* 下一帧壁纸绘制完成后采样 */
@@ -788,7 +788,7 @@ void hs_panel_render(hs_panel_t *panel)
     }
 }
 
-void hepushell_add_widget(hs_panel_pos_t panel, hs_widget_type_t type)
+void hpdesk_add_widget(hs_panel_pos_t panel, hs_widget_type_t type)
 {
     hs_panel_t *p = (panel == HS_PANEL_TOP) ?
                     &g_shell.top_panel : &g_shell.bottom_panel;
@@ -1001,7 +1001,7 @@ void hs_launcher_handle_key(int key)
     }
 }
 
-void hepushell_toggle_launcher(void)
+void hpdesk_toggle_launcher(void)
 {
     g_shell.launcher_visible = !g_shell.launcher_visible;
     g_shell.launcher_input[0] = 0;
@@ -1308,7 +1308,7 @@ void hs_window_tile(void)
 }
 
 /* V0.13.16: 单窗口平铺 (Win+←/→, 参考Windows Snap) */
-void hepushell_tile_focused(int dir)
+void hpdesk_tile_focused(int dir)
 {
     hs_window_t *w = hs_window_get_focused();
     if (!w || w->type != HS_WINDOW_FLOATING) return;
@@ -1655,7 +1655,7 @@ static void hs_settings_window_render(hs_window_t *w)
                            rx, ry, "Inspired by Quickshell", g_shell.colors.panel_fg, 12);
         ry += 24;
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           rx, ry, "HepuShell Desktop Environment", g_shell.colors.panel_fg, 12);
+                           rx, ry, "Hepu Desktop Environment", g_shell.colors.panel_fg, 12);
         ry += 24;
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            rx, ry, "(c) 2026 Hepu OS Project", g_shell.colors.accent, 12);
@@ -1666,7 +1666,7 @@ static void hs_settings_window_render(hs_window_t *w)
  * 工作区
  * ========================================================================== */
 
-void hepushell_switch_workspace(int ws)
+void hpdesk_switch_workspace(int ws)
 {
     if (ws < 0 || ws >= HS_MAX_WORKSPACES) return;
     g_shell.current_workspace = ws;
@@ -1677,7 +1677,7 @@ void hepushell_switch_workspace(int ws)
  * 应用注册
  * ========================================================================== */
 
-void hepushell_add_app(const char *name, const char *command, const char *icon)
+void hpdesk_add_app(const char *name, const char *command, const char *icon)
 {
     if (g_shell.app_count >= HS_MAX_APPS) return;
     hs_app_t *app = &g_shell.apps[g_shell.app_count];
@@ -1755,7 +1755,7 @@ int hs_panel_is_enabled(const char *name)
 void hs_panel_render_all(void)
 {
     /* 按层级顺序渲染所有启用的面板（顶部面板优先，避免累积corruption）
-     * 控制中心是常驻侧栏，绘制在窗口之上，见 hepushell_render */
+     * 控制中心是常驻侧栏，绘制在窗口之上，见 hpdesk_render */
     int order[] = {
         HS_PANEL_TOP_BAR,
         HS_PANEL_DYNAMIC_ISLAND,
@@ -2851,8 +2851,8 @@ static void hs_context_menu_handle_click(int x, int y)
     }
 }
 
-/* HepuShell鼠标点击处理（由desktop64主循环调用） */
-void hepushell_handle_click(int x, int y)
+/* Hepu Desktop鼠标点击处理（由desktop64主循环调用） */
+void hpdesk_handle_click(int x, int y)
 {
     /* V0.55 P3-GUI: 首启向导模态拦截点击 */
     {
@@ -3101,7 +3101,7 @@ void hepushell_handle_click(int x, int y)
                 for (int i = 0; i < HS_THEME_PRESET_COUNT; i++) {
                     int bx = sw_x + i * 28;
                     if (x >= bx && x <= bx + 20 && y >= sw_y && y <= sw_y + 20) {
-                        hepushell_set_theme(g_shell.theme);  /* 重置为当前主题默认色板 */
+                        hpdesk_set_theme(g_shell.theme);  /* 重置为当前主题默认色板 */
                         hs_theme_apply_source_color(g_theme_presets[i]);
                         g_shell.theme_source = g_theme_presets[i];
                         vga_puts("[SETTINGS] theme source color applied\n");
@@ -3182,8 +3182,8 @@ void hepushell_handle_click(int x, int y)
     }
 
 }
-/* HepuShell右键点击处理（显示上下文菜单） */
-void hepushell_handle_right_click(int x, int y)
+/* Hepu Desktop右键点击处理（显示上下文菜单） */
+void hpdesk_handle_right_click(int x, int y)
 {
     /* V0.55 P3-GUI: 首启向导期间不弹桌面右键菜单 */
     {
@@ -3279,7 +3279,7 @@ static void hs_dock_render(void)
 }
 
 /* 鼠标更新：跟踪位置 */
-void hepushell_update_mouse(int x, int y)
+void hpdesk_update_mouse(int x, int y)
 {
     g_shell.mouse_x = x;
     g_shell.mouse_y = y;
@@ -3288,7 +3288,7 @@ void hepushell_update_mouse(int x, int y)
 }
 
 /* 鼠标按下：检测窗口标题栏启动拖拽 */
-void hepushell_mouse_down(int x, int y)
+void hpdesk_mouse_down(int x, int y)
 {
     /* V0.55 P3-GUI: 首启向导期间禁止拖拽桌面窗口 */
     {
@@ -3340,7 +3340,7 @@ void hepushell_mouse_down(int x, int y)
 }
 
 /* 鼠标释放：结束拖拽 */
-void hepushell_mouse_up(int x, int y)
+void hpdesk_mouse_up(int x, int y)
 {
     (void)x; (void)y;
     hs_window_drag_end();
@@ -3352,7 +3352,7 @@ void hepushell_mouse_up(int x, int y)
 
 extern void gfx64_set_target_back(void);
 extern void gfx64_present(void);
-void hepushell_render(void)
+void hpdesk_render(void)
 {
     /* V0.13.11: 双缓冲原子帧 — 全部绘制到后台缓冲, 帧末一次性提交(消除撕裂/半帧) */
     g_frame_no++;
@@ -3361,8 +3361,8 @@ void hepushell_render(void)
     /* 检测g_shell是否被野指针写入破坏 */
     if (g_shell.canary_start != 0xDEADBEEF || g_shell.canary_end != 0xCAFEBABE) {
         extern void vga_puts(const char *s);
-        vga_puts("[HEPUSHELL] g_shell corruption detected! reinit\n");
-        hepushell_init(g_shell.screen_width, g_shell.screen_height);
+        vga_puts("[HPDESK] g_shell corruption detected! reinit\n");
+        hpdesk_init(g_shell.screen_width, g_shell.screen_height);
     }
 
     /* 每帧重新初始化面板注册表，防止野指针破坏render函数指针 */
@@ -3483,7 +3483,7 @@ void hepushell_render(void)
  * 键盘处理
  * ========================================================================== */
 
-void hepushell_handle_key(int key)
+void hpdesk_handle_key(int key)
 {
     /* V0.55 P3-GUI: 首启向导优先消费全部按键 */
     {
@@ -3559,7 +3559,7 @@ void hepushell_handle_key(int key)
     /* C键循环切换取色器预设源色（对齐 quickshell matugen seed） */
     if (key == 'c' || key == 'C') {
         static int preset_idx = 0;
-        hepushell_set_theme(g_shell.theme);  /* 重置为当前主题默认色板 */
+        hpdesk_set_theme(g_shell.theme);  /* 重置为当前主题默认色板 */
         preset_idx = (preset_idx + 1) % HS_THEME_PRESET_COUNT;
         hs_theme_apply_source_color(g_theme_presets[preset_idx]);
         g_shell.theme_source = g_theme_presets[preset_idx];
@@ -3582,13 +3582,13 @@ void hepushell_handle_key(int key)
 
     /* 工作区切换 Alt+1..9 简化为数字键 */
     if (key >= '1' && key <= '9') {
-        hepushell_switch_workspace(key - '1');
+        hpdesk_switch_workspace(key - '1');
         return;
     }
 
     /* Super/Win 键切换启动器（简化为空格） */
     if (key == ' ') {
-        hepushell_toggle_launcher();
+        hpdesk_toggle_launcher();
         return;
     }
 
@@ -3624,7 +3624,7 @@ void hepushell_handle_key(int key)
  * 初始化
  * ========================================================================== */
 
-int hepushell_init(int width, int height)
+int hpdesk_init(int width, int height)
 {
     g_shell.canary_start = 0xDEADBEEF;
     g_shell.canary_end = 0xCAFEBABE;
@@ -3657,7 +3657,7 @@ int hepushell_init(int width, int height)
     hs_panel_registry_init();
 
     /* 初始化主题（对齐 quickshell/Clavis: M3 tonal-spot dark） */
-    hepushell_set_theme(HS_THEME_DARK);
+    hpdesk_set_theme(HS_THEME_DARK);
     g_shell.theme_source = 0xD0BCFF;  /* 默认取色器源色 = Lavender */
 
     /* 设置UI配置默认值（配置加载会覆盖） */
@@ -3698,7 +3698,7 @@ int hepushell_init(int width, int height)
     hs_panel_init(&g_shell.bottom_panel, HS_PANEL_BOTTOM, HS_PANEL_HEIGHT);
 
     /* 从配置加载主题和面板 */
-    hepushell_load_config(NULL);
+    hpdesk_load_config(NULL);
 
     /* 初始化工作区 */
     for (int i = 0; i < HS_MAX_WORKSPACES; i++) {
@@ -3728,24 +3728,24 @@ int hepushell_init(int width, int height)
     hs_status_init();
 
     /* 注册默认应用 */
-    hepushell_add_app("Terminal", "terminal", "[>]");
-    hepushell_add_app("Files", "files", "[/]");
-    hepushell_add_app("Browser", "browser", "[@]");
-    hepushell_add_app("Settings", "settings", "[*]");
-    hepushell_add_app("Editor", "editor", "[~]");
-    hepushell_add_app("Calculator", "calc", "[=]");
-    hepushell_add_app("Notes", "notes", "[#]");
-    hepushell_add_app("Task Manager", "taskmgr", "[!]");
-    hepushell_add_app("App Store", "store", "[$]");
-    hepushell_add_app("About", "about", "[?]");
+    hpdesk_add_app("Terminal", "terminal", "[>]");
+    hpdesk_add_app("Files", "files", "[/]");
+    hpdesk_add_app("Browser", "browser", "[@]");
+    hpdesk_add_app("Settings", "settings", "[*]");
+    hpdesk_add_app("Editor", "editor", "[~]");
+    hpdesk_add_app("Calculator", "calc", "[=]");
+    hpdesk_add_app("Notes", "notes", "[#]");
+    hpdesk_add_app("Task Manager", "taskmgr", "[!]");
+    hpdesk_add_app("App Store", "store", "[$]");
+    hpdesk_add_app("About", "about", "[?]");
     /* V0.55: 系统工具 */
-    hepushell_add_app("Device Manager", "devmgr", "[D]");
-    hepushell_add_app("Disk Manager", "diskmgr", "[S]");
-    hepushell_add_app("Log Viewer", "logview", "[L]");
+    hpdesk_add_app("Device Manager", "devmgr", "[D]");
+    hpdesk_add_app("Disk Manager", "diskmgr", "[S]");
+    hpdesk_add_app("Log Viewer", "logview", "[L]");
 
     g_shell.initialized = 1;
 
-    vga_puts("[HepuShell] Initialized (");
+    vga_puts("[Hepu Desktop] Initialized (");
     char buf[8];
     itoa_hs(width, buf);
     vga_puts(buf);
@@ -3760,40 +3760,40 @@ int hepushell_init(int width, int height)
 
 static int g_frame_tick = 0;   /* V0.13.39: 帧计数(双击检测) */
 
-int hepushell_get_tick(void) { return g_frame_tick; }
+int hpdesk_get_tick(void) { return g_frame_tick; }
 
-void hepushell_run(void)
+void hpdesk_run(void)
 {
     if (!g_shell.initialized) return;
 
     /* 主循环由外部调用渲染和键盘处理 */
     g_frame_tick++;
-    hepushell_render();
+    hpdesk_render();
 }
 
 /* 重新加载配置 */
-int hepushell_reload(void)
+int hpdesk_reload(void)
 {
     if (!g_shell.initialized) return -1;
 
-    vga_puts("[HepuShell] Reloading configuration...\n");
+    vga_puts("[Hepu Desktop] Reloading configuration...\n");
 
     /* 重置面板 */
     hs_panel_init(&g_shell.top_panel, HS_PANEL_TOP, HS_PANEL_HEIGHT);
     hs_panel_init(&g_shell.bottom_panel, HS_PANEL_BOTTOM, HS_PANEL_HEIGHT);
 
     /* 重新加载配置 */
-    int result = hepushell_load_config(NULL);
+    int result = hpdesk_load_config(NULL);
 
     if (result == 0) {
-        vga_puts("[HepuShell] Configuration reloaded successfully\n");
+        vga_puts("[Hepu Desktop] Configuration reloaded successfully\n");
     } else {
-        vga_puts("[HepuShell] Configuration reload failed, using defaults\n");
+        vga_puts("[Hepu Desktop] Configuration reload failed, using defaults\n");
         /* 回退到默认小部件 */
-        hepushell_add_widget(HS_PANEL_TOP, HS_WIDGET_WORKSPACES);
-        hepushell_add_widget(HS_PANEL_TOP, HS_WIDGET_CPU);
-        hepushell_add_widget(HS_PANEL_TOP, HS_WIDGET_MEMORY);
-        hepushell_add_widget(HS_PANEL_BOTTOM, HS_WIDGET_CLOCK);
+        hpdesk_add_widget(HS_PANEL_TOP, HS_WIDGET_WORKSPACES);
+        hpdesk_add_widget(HS_PANEL_TOP, HS_WIDGET_CPU);
+        hpdesk_add_widget(HS_PANEL_TOP, HS_WIDGET_MEMORY);
+        hpdesk_add_widget(HS_PANEL_BOTTOM, HS_WIDGET_CLOCK);
     }
 
     /* 重新平铺窗口 */
@@ -3819,7 +3819,7 @@ void hs_tray_init(void)
     hs_tray_add_icon("Battery", "[B]");
 
     /* 欢迎通知 */
-    hs_notification_send("Welcome to Hepu OS", "HepuShell desktop loaded", 0, 5000);
+    hs_notification_send("Welcome to Hepu OS", "Hepu Desktop loaded", 0, 5000);
 
     /* 创建设置浮动窗口 */
     hs_window_manager_init();
@@ -4690,7 +4690,7 @@ static void hs_itoa(int v, char *buf)
 }
 
 /* 天气拉取: open-meteo 常德 (29.03N/111.69E) */
-void hepushell_fetch_weather(void)
+void hpdesk_fetch_weather(void)
 {
     extern int http64_get(const char *url, uint8_t *response, int max_response);
     extern int http64_get_status(const uint8_t *response);
@@ -4758,9 +4758,9 @@ static void hs_switcher_build(void)
     if (g_sw_count > 12) g_sw_count = 12;
 }
 
-int hepushell_switcher_active(void) { return g_sw_active; }
+int hpdesk_switcher_active(void) { return g_sw_active; }
 
-void hepushell_switcher_next(void)
+void hpdesk_switcher_next(void)
 {
     if (!g_sw_active) {
         hs_switcher_build();
@@ -4784,7 +4784,7 @@ void hepushell_switcher_next(void)
     }
 }
 
-void hepushell_switcher_close(void)
+void hpdesk_switcher_close(void)
 {
     if (!g_sw_active) return;
     /* 关闭选中窗口 (× 语义) */
@@ -4824,7 +4824,7 @@ static void hs_switcher_render(void)
 }
 
 /* ---- 窗口焦点循环 (Alt+Tab 未激活时) ---- */
-void hepushell_cycle_window_focus(void)
+void hpdesk_cycle_window_focus(void)
 {
     if (g_wm.window_count <= 0) return;
     int start = g_wm.focus_window;
@@ -4840,14 +4840,14 @@ void hepushell_cycle_window_focus(void)
 }
 
 /* ---- 关闭聚焦窗口 ---- */
-void hepushell_close_focused_window(void)
+void hpdesk_close_focused_window(void)
 {
     if (g_wm.focus_window < 0) return;
     hs_window_recycle(g_wm.focus_window);
 }
 
 /* ---- 主题切换 (Light → Dark → Mono 循环) ---- */
-void hepushell_toggle_theme(void)
+void hpdesk_toggle_theme(void)
 {
     g_shell.theme = (hs_theme_t)(((int)g_shell.theme + 1) % 3);
     hs_theme_init(&g_shell.colors, g_shell.theme);
@@ -4855,22 +4855,22 @@ void hepushell_toggle_theme(void)
 }
 
 /* ---- 锁屏 ---- */
-void hepushell_lock(void)
+void hpdesk_lock(void)
 {
     if (g_locked == 0) g_locked = 1;
 }
 
 /* ---- 工作区相对切换 ---- */
-void hepushell_switch_workspace_delta(int delta)
+void hpdesk_switch_workspace_delta(int delta)
 {
     int ws = g_shell.current_workspace + delta;
     if (ws < 0) ws = 0;
     if (ws >= HS_MAX_WORKSPACES) ws = HS_MAX_WORKSPACES - 1;
-    if (ws != g_shell.current_workspace) hepushell_switch_workspace(ws);
+    if (ws != g_shell.current_workspace) hpdesk_switch_workspace(ws);
 }
 
 /* ---- 显示桌面 (最小化全部窗口) ---- */
-void hepushell_show_desktop(void)
+void hpdesk_show_desktop(void)
 {
     for (int i = 0; i < g_wm.window_count; i++) {
         if (g_wm.windows[i].visible) g_wm.windows[i].visible = 0;
@@ -4880,7 +4880,7 @@ void hepushell_show_desktop(void)
 
 /* ---- 滚轮 (桌面缩放占位: 无终端滚动目标时调节 UI 缩放) ---- */
 static int g_ui_scale_v = 100;
-void hepushell_update_wheel(int wheel)
+void hpdesk_update_wheel(int wheel)
 {
     /* 应用窗口滚动优先(系统工具/终端等), 否则保留 UI 缩放 */
     if (!hs_systools_handle_wheel(wheel)) hs_apps_handle_wheel(wheel);
@@ -4902,7 +4902,7 @@ static void hs_app_placeholder_render(hs_window_t *w)
                        "App content rebuilding (V0.54.12)", g_shell.colors.text_secondary, 12);
 }
 
-void hepushell_handle_pending_app(void)
+void hpdesk_handle_pending_app(void)
 {
     if (g_pending_app == HS_APP_NONE) return;
     int app = g_pending_app;

@@ -5,14 +5,14 @@
 #ifndef HS_SYSTOOLS_H
 #define HS_SYSTOOLS_H
 
-#include "hepushell.h"
+#include "hpdesk.h"
 
 /* 窗口创建 */
 hs_window_t *hs_devmgr_create(void);
 hs_window_t *hs_diskmgr_create(void);
 hs_window_t *hs_logview_create(void);
 
-/* 键盘/滚轮/点击 (hepushell.c 调用; 返回 1=已消费) */
+/* 键盘/滚轮/点击 (hpdesk.c 调用; 返回 1=已消费) */
 int hs_systools_handle_key(int key);
 int hs_systools_handle_wheel(int delta);
 int hs_systools_click(int x, int y);

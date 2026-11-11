@@ -1,12 +1,12 @@
 /* ============================================================================
- * 赫普OS 主机端测试 - HepuShell 窗口槽位分配/回收不变量
+ * 赫普OS 主机端测试 - Hepu Desktop 窗口槽位分配/回收不变量
  *
- * 背景: hepushell.c 旧实现用 window_count 线性追加窗口槽, 关闭只置 visible=0,
+ * 背景: hpdesk.c 旧实现用 window_count 线性追加窗口槽, 关闭只置 visible=0,
  * 不回收槽位也不从 z_order 移除, 反复打开/关闭 32 次(HS_MAX_WINDOWS)后
  * hs_window_create 恒返回 NULL, 系统再也打不开任何窗口。
  *
  * 本测试为自包含纯逻辑回归: 下列 win_create / win_recycle 的核心算法
- * 必须与 kernel/arch/x86_64/hepushell.c 的 hs_window_create / hs_window_recycle
+ * 必须与 kernel/arch/x86_64/hpdesk.c 的 hs_window_create / hs_window_recycle
  * 保持逐行一致(图形/标题等无关字段已省略)。
  * 编译: gcc -fsanitize=address,undefined winslot_test.c
  * ========================================================================== */
@@ -16,7 +16,7 @@
 
 #define HS_MAX_WINDOWS 32
 
-/* 与 hepushell.h hs_window_t 中参与分配判定的字段对应 */
+/* 与 hpdesk.h hs_window_t 中参与分配判定的字段对应 */
 typedef struct {
     int id;        /* -1=空闲槽; >=0=已占用(即使 visible=0: 最小化/布局隐藏) */
     int visible;

@@ -1,11 +1,11 @@
 /* ============================================================================
- * 赫普OS - HepuShell 桌面环境
+ * 赫普OS - Hepu Desktop 桌面环境
  * 复现 Quickshell 核心功能：面板、小部件、启动器、窗口管理
  * V0.10.160
  * ========================================================================== */
 
-#ifndef HEPUSHELL_H
-#define HEPUSHELL_H
+#ifndef HPDESK_H
+#define HPDESK_H
 
 #include <stdint.h>
 #include <stddef.h>
@@ -251,7 +251,7 @@ typedef struct {
     void (*render)(void);
 } hs_panel_registry_t;
 
-/* HepuShell 主结构 */
+/* Hepu Desktop 主结构 */
 typedef struct {
     uint32_t canary_start;  /* 头部canary，检测结构前越界写入 */
     int initialized;
@@ -314,10 +314,10 @@ typedef struct {
         int brightness;  /* 0-100 */
     } cc;
     uint32_t canary_end;  /* 尾部canary，检测结构后越界写入 */
-} hepushell_t;
+} hpdesk_t;
 
 /* 全局实例 */
-extern hepushell_t g_shell;
+extern hpdesk_t g_shell;
 
 /* 面板注册表API */
 void hs_panel_registry_init(void);
@@ -326,27 +326,27 @@ int hs_panel_is_enabled(const char *name);
 void hs_panel_render_all(void);
 
 /* API */
-int hepushell_init(int width, int height);
-void hepushell_run(void);
-void hepushell_render(void);
-void hepushell_handle_key(int key);
-void hepushell_update_mouse(int x, int y);
-void hepushell_handle_click(int x, int y);
-void hepushell_handle_right_click(int x, int y);
-void hepushell_mouse_down(int x, int y);
-void hepushell_mouse_up(int x, int y);
-void hepushell_update_wheel(int delta);  /* V0.13.5: 滚轮累积 (滚动/缩放预留) */
+int hpdesk_init(int width, int height);
+void hpdesk_run(void);
+void hpdesk_render(void);
+void hpdesk_handle_key(int key);
+void hpdesk_update_mouse(int x, int y);
+void hpdesk_handle_click(int x, int y);
+void hpdesk_handle_right_click(int x, int y);
+void hpdesk_mouse_down(int x, int y);
+void hpdesk_mouse_up(int x, int y);
+void hpdesk_update_wheel(int delta);  /* V0.13.5: 滚轮累积 (滚动/缩放预留) */
 
 /* P3 组合快捷键钩子 (hsinput 引擎调用) */
-void hepushell_lock(void);
-void hepushell_toggle_theme(void);
-void hepushell_switch_workspace_delta(int delta);
-void hepushell_cycle_window_focus(void);
-void hepushell_close_focused_window(void);
+void hpdesk_lock(void);
+void hpdesk_toggle_theme(void);
+void hpdesk_switch_workspace_delta(int delta);
+void hpdesk_cycle_window_focus(void);
+void hpdesk_close_focused_window(void);
 
 /* V0.13.7 P4: 消费应用启动请求 (Dock/启动器图标) */
-void hepushell_handle_pending_app(void);
-void hepushell_pinch_resize(int dir);  /* V0.13.8 P5: 触摸捏合缩放 */
+void hpdesk_handle_pending_app(void);
+void hpdesk_pinch_resize(int dir);  /* V0.13.8 P5: 触摸捏合缩放 */
 
 /* 应用启动请求（Dock图标点击时设置，desktop64主循环检测并启动） */
 #define HS_APP_NONE 0
@@ -363,13 +363,13 @@ void hepushell_pinch_resize(int dir);  /* V0.13.8 P5: 触摸捏合缩放 */
 #define HS_APP_DISKMGR 11  /* V0.55: 磁盘管理 */
 #define HS_APP_LOGVIEW 12  /* V0.55: 日志查看器 */
 extern int g_pending_app;
-void hepushell_set_theme(hs_theme_t theme);
-void hepushell_add_widget(hs_panel_pos_t panel, hs_widget_type_t type);
-void hepushell_add_app(const char *name, const char *command, const char *icon);
-void hepushell_toggle_launcher(void);
-void hepushell_show_desktop(void);
-void hepushell_switch_workspace(int ws);
-int hepushell_reload(void);  /* 重新加载配置 */
+void hpdesk_set_theme(hs_theme_t theme);
+void hpdesk_add_widget(hs_panel_pos_t panel, hs_widget_type_t type);
+void hpdesk_add_app(const char *name, const char *command, const char *icon);
+void hpdesk_toggle_launcher(void);
+void hpdesk_show_desktop(void);
+void hpdesk_switch_workspace(int ws);
+int hpdesk_reload(void);  /* 重新加载配置 */
 
 /* 主题 */
 void hs_theme_init(hs_theme_colors_t *colors, hs_theme_t theme);
@@ -468,4 +468,4 @@ void hs_workspace_move_window(hs_window_t *win, int ws);
 void hs_workspace_send_to_next(void);
 void hs_workspace_send_to_prev(void);
 
-#endif /* HEPUSHELL_H */
+#endif /* HPDESK_H */
