@@ -42,12 +42,26 @@ void eth64_update_mac(void)
 {
     if (!eth_initialized) return;
     uint8_t mac[6];
-    if (e1000_get_mac(mac) != 0) return;
     int valid = 0;
-    for (int i = 0; i < 6; i++) if (mac[i] != 0) valid = 1;
-    if (!valid) return;
+    /* V0.57.0: 优先取 RTL8139 的真实 MAC。
+     * eth64_init 里那段注释写着"从RTL8139获取MAC地址", 实际调的却是 e1000_get_mac,
+     * 那时 e1000 还没初始化, 于是落进"默认 MAC"分支(00:1A:36:...)。而 RTL8139 硬件
+     * 按自身 IDR(52:54:00:...) 做地址过滤, slirp/对端也按帧里的源 MAC 回应 ——
+     * 源 MAC 与硬件 MAC 不一致时, 应答帧会被本机网卡过滤丢弃, 表现为 ARP 永不应答。 */
+    extern int rtl8139_available(void);
+    extern void rtl8139_get_mac(uint8_t *mac);
+    if (rtl8139_available()) {
+        rtl8139_get_mac(mac);
+        for (int i = 0; i < 6; i++) if (mac[i] != 0) valid = 1;
+    }
+    if (!valid) {
+        if (e1000_get_mac(mac) != 0) return;
+        valid = 0;
+        for (int i = 0; i < 6; i++) if (mac[i] != 0) valid = 1;
+        if (!valid) return;
+    }
     for (int i = 0; i < 6; i++) eth_devices[0].mac[i] = mac[i];
-    vga_puts("[ETH64] MAC updated from e1000: ");
+    vga_puts("[ETH64] MAC updated: ");
     for (int i = 0; i < 6; i++) { vga_put_hex(mac[i]); if (i < 5) vga_puts(":"); }
     vga_puts("\n");
 }
@@ -133,7 +147,14 @@ int eth64_send(const uint8_t *data, uint32_t length)
     if (!eth_initialized || !data || length == 0) return -1;
     if (length > ETH_FRAME_MAX) return -1;
 
-    int ret = e1000_send(data, length);
+    /* V0.57.0: 先走 RTL8139 —— 本机/QEMU 的网卡就是它。
+     * 旧实现只有 e1000_send, RTL8139 驱动初始化得再好也发不出一个帧,
+     * 于是 ARP 解析不到、DHCP 发不出、DNS 永远超时。 */
+    extern int rtl8139_available(void);
+    extern int rtl8139_send(const uint8_t *data, uint32_t length);
+    int ret = -1;
+    if (rtl8139_available()) ret = rtl8139_send(data, length);
+    if (ret <= 0) ret = e1000_send(data, length);
     if (ret > 0) {
         eth_devices[0].tx_packets++;
         eth_devices[0].tx_bytes += ret;
@@ -147,7 +168,11 @@ int eth64_recv(uint8_t *buffer, uint32_t max_length)
 {
     if (!eth_initialized || !buffer || max_length == 0) return 0;
 
-    int ret = e1000_recv(buffer, max_length);
+    extern int rtl8139_available(void);
+    extern int rtl8139_recv(uint8_t *buffer, uint32_t max_size);
+    int ret = -1;
+    if (rtl8139_available()) ret = rtl8139_recv(buffer, max_length);
+    if (ret <= 0) ret = e1000_recv(buffer, max_length);
     if (ret > 0) {
         eth_devices[0].rx_packets++;
         eth_devices[0].rx_bytes += ret;

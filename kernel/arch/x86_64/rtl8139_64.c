@@ -27,11 +27,14 @@
 #define REG_9346CR      0x50    /* 93C46命令寄存器 */
 #define REG_CONFIG1     0x52    /* 配置1 */
 
-/* 命令寄存器位 */
-#define CMD_RESET       0x10
-#define CMD_RX_ENABLE   0x08
-#define CMD_TX_ENABLE   0x04
+/* 命令寄存器位 (CR, offset 0x37) — V0.57.0 修正:
+ * 手册: bit0=BUFE(只读,缓冲空) bit1=RE(保留) bit2=RCV(接收使能) bit3=TXC(发送使能) bit4=RESET。
+ * 旧值 RESET=0x10 / RX=0x08 / TX=0x04 —— RESET 落到了 bit4=保留位(软复位从未执行),
+ * 且 RX/TX 两位互换了名字(合起来写 0x0C 时恰好都对, 但只要单独用就会张冠李戴)。 */
 #define CMD_RX_EMPTY    0x01
+#define CMD_RX_ENABLE   0x04
+#define CMD_TX_ENABLE   0x08
+#define CMD_RESET       0x10
 
 /* 中断状态位 */
 #define ISR_ROK         0x01
@@ -40,10 +43,17 @@
 
 /* 接收配置位 */
 #define RCR_AAP         0x01
-#define RCR_APM         0x02
-#define RCR_AM          0x04
-#define RCR_AB          0x08
+/* V0.57.0: RCR 位定义修正。
+ * 按 RTL8139 手册, RCR[2:0]=RBLEN(接收缓冲长度), bit3=AAP, bit4=APM, bit5=AM, bit6=AB, bit7=WRAP。
+ * 旧常量把 APM/AM/AB 写成 0x02/0x04/0x08 —— 正好落在 RBLEN 与 AAP 上:
+ * RCR 被配成低 3 位 = 0b110(=6), 即"64K+16 接收缓冲", 而驱动只分配了 8192+16,
+ * 硬件 DMA 直接写出界, 于是 RX 永远收不到帧(ISR 只有 TOK、没有 ROK),
+ * ARP 得不到应答, DHCP/DNS/天气全线失败。 */
+#define RCR_APM         0x10
+#define RCR_AM          0x20
+#define RCR_AB          0x40
 #define RCR_WRAP        0x80
+#define RCR_RBLEN_8K    0x00    /* RBLEN=0 → 8K+16, 与 rtl_rx_buffer 尺寸匹配 */
 
 /* 发送状态位 */
 #define TSD_OWN         0x2000  /* 网卡拥有（正在发送） */
@@ -149,6 +159,7 @@ int rtl8139_init(void)
     for (int i = 0; i < 100000; i++) {
         if (!(rtl_inb(rtl_io_base + REG_CMD) & CMD_RESET)) break;
     }
+    for (volatile int d = 0; d < 200000; d++);   /* 复位后给硬件一点时间(约 5ms) */
 
     /* 读取MAC地址 */
     for (int i = 0; i < 6; i++) {
@@ -166,7 +177,9 @@ int rtl8139_init(void)
     rtl_outl(rtl_io_base + REG_RBSTART, rx_buf_phys);
 
     /* 配置接收：接受物理地址匹配+广播+多播，无wrap */
-    rtl_outl(rtl_io_base + REG_RCR, RCR_APM | RCR_AB | RCR_AM | RCR_WRAP);
+    /* V0.57.0: 同时置 AAP(接受所有目的地址), 先排除"地址过滤把应答丢掉"这一层;
+     * 收包链路确认通后可以再收回只保留 APM/AB/AM。 */
+    rtl_outl(rtl_io_base + REG_RCR, RCR_RBLEN_8K | RCR_APM | RCR_AB | RCR_AM | RCR_AAP | RCR_WRAP);
 
     /* 配置发送：默认 */
     rtl_outl(rtl_io_base + REG_TCR, 0x00000600);
@@ -180,14 +193,18 @@ int rtl8139_init(void)
     /* 启用接收和发送 */
     rtl_outb(rtl_io_base + REG_CMD, CMD_RX_ENABLE | CMD_TX_ENABLE);
 
-    /* 初始化接收偏移 */
+    /* 初始化接收偏移 (CAPR 指向缓冲末尾=读指针落后写指针 0xFFF0, 表示"空") */
     rtl_rx_offset = 0;
-    rtl_outw(rtl_io_base + REG_CAPR, 0);
+    rtl_outw(rtl_io_base + REG_CAPR, 0xFFF0);   /* 与 8139too 一致 */
 
     rtl_initialized = 1;
     vga_puts("[OK] RTL8139 initialized\n");
     return 0;
 }
+
+/* V0.57.0: 供以太网抽象层判定/取 MAC —— 之前 eth64_send/recv 只接 e1000,
+ * RTL8139 初始化成功也发不出任何帧。 */
+int rtl8139_available(void) { return rtl_initialized; }
 
 /* 发送数据包 */
 int rtl8139_send(const uint8_t *data, uint32_t length)
@@ -208,10 +225,6 @@ int rtl8139_send(const uint8_t *data, uint32_t length)
 
     /* 设置发送地址（物理地址）— V0.13.9: 虚拟→物理转换 */
     uint32_t data_phys = (uint32_t)rtl_virt_to_phys(rtl_tx_buffer);
-    /* 临时调试: 打印 虚拟 vs 物理 */
-    { extern void vga_puts(const char*); extern void vga_put_hex(uint64_t);
-      vga_puts("[RTL] tx va="); vga_put_hex((uint64_t)(uintptr_t)data);
-      vga_puts(" pa="); vga_put_hex(data_phys); vga_puts("\n"); }
     rtl_outl(rtl_io_base + REG_TSAD0, data_phys);
 
     /* 设置发送长度并启动发送 (V0.13.9: QEMU rtl8139 要求 bit13=0(host owns 清) 才接管; 0x8000 会被写掩码抹除) */
@@ -223,10 +236,6 @@ int rtl8139_send(const uint8_t *data, uint32_t length)
         rtl_tx_count++;
     }
 
-    { extern void vga_puts(const char*); extern void vga_put_hex(uint64_t);
-      vga_puts("[RTL] tsd="); vga_put_hex(rtl_inl(rtl_io_base + REG_TSD0));
-      vga_puts(" tsa="); vga_put_hex(rtl_inl(rtl_io_base + REG_TSAD0));
-      vga_puts(" isr="); vga_put_hex(rtl_inw(rtl_io_base + 0x3E)); vga_puts("\n"); }  /* 临时调试 */
     return ret;
 }
 

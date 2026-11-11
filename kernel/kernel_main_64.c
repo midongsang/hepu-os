@@ -1021,6 +1021,10 @@ void x86_64_kernel_main(void)
     if (nic_ok) {
         /* V0.13.9: 静态 IP (10.0.2.15/24) — 测试环境无 DHCP 服务器 */
         eth64_set_ip(0x0A00020F, 0xFFFFFF00, 0x0A000202);  /* 10.0.2.15 / 10.0.2.2 */
+        /* V0.57.0: 网卡初始化后再回写一次真实 MAC (eth64_init 早于网卡 init,
+         * 当时只能拿到全 0 而退化成硬编码 MAC, 会让应答帧被硬件过滤丢掉) */
+        extern void eth64_update_mac(void);
+        eth64_update_mac();
         vga_puts("[OK] Network up (RTL8139 + TCP/IP, static 10.0.2.15)\n");
         klog64_log("[BOOT] network up (RTL8139, static IP)");
     } else {

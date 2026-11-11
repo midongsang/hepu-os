@@ -249,7 +249,9 @@ uint32_t dns64_resolve(const char *hostname)
             sret = udp64_send(dns_server, DNS_CLIENT_PORT, DNS_SERVER_PORT, packet, pos);
         }
     }
-    if (sret < 0) return 0;
+    if (sret < 0) {
+        return 0;
+    }
 
     /* 等待响应（简化：轮询几次） */
     extern void net64_poll(void);  /* V0.13.9: 收包泵 (原缺失导致 DNS 永等) */
