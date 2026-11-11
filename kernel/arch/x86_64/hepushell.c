@@ -3313,7 +3313,7 @@ void hepushell_render(void)
 
     /* V0.13.62: 渲染鼠标指针 (此前桌面从未绘制指针 — 多鼠标/无线输入可见性修复) */
     extern void gfx64_draw_mouse_cursor(int x, int y, uint32_t color);
-    gfx64_draw_mouse_cursor(g_shell.mouse_x, g_shell.mouse_y, 0x303030);
+    gfx64_draw_mouse_cursor(g_shell.mouse_x, g_shell.mouse_y, 0xE6E1E5);
 
     /* V0.13.11: 原子提交后台帧到前台 */
     gfx64_present();

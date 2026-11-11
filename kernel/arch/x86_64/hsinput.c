@@ -246,7 +246,30 @@ void hs_input_poll(void)
     } else if (usb64_mouse_available()) {
         usb64_mouse_get(&mx, &my, 0, 0);
     } else if (xhci64_present() && xhci64_mouse_available()) {
-        xhci64_mouse_get(&mx, &my, 0, 0);
+        /* V0.54.12: xhci64_mouse_get 返回的是每帧**增量**(dx/dy), 不是绝对坐标;
+         * 旧实现把它当绝对坐标直接赋给 g_shell.mouse_x/y, 导致多鼠标源并存时
+         * 渲染坐标恒为 (0,0)、光标画到屏幕左上角外而"消失"。此处自行累加并钳制;
+         * 初始位置取屏幕中心, 避免从 (0,0) 起算。 */
+        static int xhci_cx = -1, xhci_cy = -1;
+        static int last_px = -1, last_py = -1;
+        if (xhci_cx < 0) { xhci_cx = g_sw / 2; xhci_cy = g_sh / 2; }
+        int dx = 0, dy = 0;
+        xhci64_mouse_get(&dx, &dy, 0, 0);
+        if (dx || dy) {
+            xhci_cx += dx; xhci_cy += dy;
+        } else {
+            /* XHCI 本帧无增量: 若 PS/2 鼠标确有位移则跟随 (QEMU HMP/老平台兼容),
+             * 用位移判定而非坐标非零, 避免 PS/2 初始坐标反向覆盖 USB 光标 */
+            int px = 0, py = 0;
+            mouse64_get_pos(&px, &py);
+            if (px != last_px || py != last_py) { xhci_cx = px; xhci_cy = py; }
+            last_px = px; last_py = py;
+        }
+        if (xhci_cx < 0) xhci_cx = 0;
+        if (xhci_cy < 0) xhci_cy = 0;
+        if (xhci_cx > g_sw - 1) xhci_cx = g_sw - 1;
+        if (xhci_cy > g_sh - 1) xhci_cy = g_sh - 1;
+        mx = xhci_cx; my = xhci_cy;
     } else {
         mouse64_get_pos(&mx, &my);
     }
