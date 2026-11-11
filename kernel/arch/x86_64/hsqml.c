@@ -302,7 +302,15 @@ static void parser_parse_property(parser_t *p, hsqml_node_t *node)
     }
 
     /* 从属性池分配 */
-    if (p->result->prop_pool_count >= HSQML_MAX_PROPS_TOTAL) return;
+    if (p->result->prop_pool_count >= HSQML_MAX_PROPS_TOTAL) {
+        /* 旧实现静默丢弃, 配置后半段整体失效且无从察觉 */
+        p->result->error = 1;
+        const char *m = "too many properties";
+        int i = 0;
+        while (m[i] && i < HSQML_MAX_STR_LEN - 1) { p->result->error_msg[i] = m[i]; i++; }
+        p->result->error_msg[i] = 0;
+        return;
+    }
     hsqml_property_t *prop = &p->result->prop_pool[p->result->prop_pool_count++];
 
     /* 清零属性 */
@@ -411,6 +419,15 @@ int hsqml_parse(const char *source, hsqml_result_t *result)
         if (!lexer_next(&lex, tok)) break;
         parser.token_count++;
         if (tok->type == TOK_EOF) break;
+    }
+    /* 旧上限只有256个token, 默认配置(约300个)尾部一直被静默截断,
+     * 且截断点落在半个节点上会让解析卡死。超限必须显式报错。 */
+    if (parser.token_count >= HSQML_MAX_TOKENS - 1) {
+        result->error = 2;
+        const char *m = "config too large (token limit)";
+        int i = 0;
+        while (m[i] && i < HSQML_MAX_STR_LEN - 1) { result->error_msg[i] = m[i]; i++; }
+        result->error_msg[i] = 0;
     }
     /* 添加EOF token（带边界检查） */
     if (parser.token_count < HSQML_MAX_TOKENS) {

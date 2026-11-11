@@ -11,12 +11,12 @@
 #include <stddef.h>
 
 /* 最大配置：指针数组+属性池，大幅减小体积 */
-#define HSQML_MAX_NODES         16
-#define HSQML_MAX_PROPS_PER_NODE 32
-#define HSQML_MAX_PROPS_TOTAL    128
+#define HSQML_MAX_NODES         32
+#define HSQML_MAX_PROPS_PER_NODE 96
+#define HSQML_MAX_PROPS_TOTAL    640
 #define HSQML_MAX_CHILDREN       8
 #define HSQML_MAX_STR_LEN        64
-#define HSQML_MAX_TOKENS         256
+#define HSQML_MAX_TOKENS         1024
 
 /* Token类型 */
 typedef enum {

@@ -726,6 +726,34 @@ Lua / `klibm64` 是 `-msse2`。`context_switch_64` 原本只保存 rbx/rbp/r12-r
 **遗留**：Settings 窗口内部仍是 1024 基准的固定坐标，若要跟随缩放，需要连同 `hs_settings_window_render`
 的绘制与命中一起改造（工作量约等于重写一个面板）。
 
+
+### 1.36 配置解析器 256 token 静默截断（加一行配置就卡死桌面的根因）
+
+**现象**：在内置默认配置里加一行 `ui_scale: 100`，编译通过，但整机停在启动画面
+（`HepuOS 64-bit Graphics / VBE Linear Framebuffer`），串口日志止于 `config: no file, using built-in defaults`，
+既没有 parse failed 也没有成功日志。移除该行后立即恢复正常。
+
+**定位**
+1. 先怀疑是新增键不被支持 → 不是，`hsqml_get_number` 对缺失键返回默认值；
+2. 注意到成功日志 `config: N sections` **从来没打印过**，说明解析一直不算真正成功；
+3. 查 `hsqml.c` 词法阶段：`while (parser.token_count < HSQML_MAX_TOKENS - 1)`，
+   `HSQML_MAX_TOKENS` 只有 **256**，循环到上限就**静默停止**，不报错；
+4. 内置默认配置约 9700 字节、300+ 个 token → 尾部一直被丢弃。
+   现有配置的截断点正好落在完整节点边界，语法侥幸可解析；
+   新增一行把截断点挪进半个节点中间 → 语法分析进入异常路径并卡死。
+
+**修法**
+- `hsqml.h`：`MAX_TOKENS 256→1024`、`MAX_PROPS_TOTAL 128→640`、`MAX_NODES 16→32`、`PROPS_PER_NODE 32→96`
+  （`parser` 本就是 `static`，不占内核线程栈；增大部分落在 BSS，内核 bin 仍 781968 B < 1MB）；
+- `hsqml.c`：token 超限与属性池超限都改为**显式置 error + error_msg**，不再静默丢弃。
+
+**验证**：`ui_scale: 100` 保留在配置中，桌面正常启动，日志首次打印
+`[Hepu Desktop] config: 3 sections, background=0x1c1b1f` —— 三个 section 全部生效，桌面外观与修复前一致。
+
+**影响面说明**：此前默认配置中位于第 256 个 token 之后的项（主题色板后半段、字体、面板几何等）
+从未被应用，系统实际一直在用硬编码默认值运行。此修复后这些配置真正生效，
+后续显示设置（`ui_scale`、`resolution`）也才可能通过配置下发。
+
 ---
 
 ## 四、回归基线

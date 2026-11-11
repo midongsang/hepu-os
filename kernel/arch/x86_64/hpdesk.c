@@ -258,6 +258,7 @@ static const char *default_config =
 "    cc_margin_right: 384\n"
 "    cc_y: 108\n"
 "    cc_width: 280\n"
+"    ui_scale: 100\n"
 "    cc_height: 440\n"
 "    bar_height: 36\n"
 "    island_width: 120\n"
