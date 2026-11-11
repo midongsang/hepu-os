@@ -2040,6 +2040,49 @@ static void hs_dynamic_island_render(void)
 
 
 /* 设置: 齿轮(8 齿 + 齿体圆 + 中心孔) */
+/* V0.57.1: 64x64 版位图绘制, 按目标像素做覆盖采样 —— 每个目标像素统计它覆盖到的
+ * 源像素里有多少是墨, 过半就点亮。原来的 32->size 直接映射在缩小时会整像素跳过,
+ * 2px 宽的线条会成段消失(状态栏 20px 时尤其明显)。同行连续点亮的像素合并成一段再画,
+ * 避免 24x24 逐像素调用 576 次 fill_rect。 */
+static void hs_icon_bmp64(int x, int y, int size, uint32_t color, uint32_t bg,
+                          const uint64_t *bits)
+{
+    if (!bits || size <= 0) return;
+    for (int ty = 0; ty < size; ty++) {
+        int sy0 = ty * 64 / size, sy1 = (ty + 1) * 64 / size;
+        if (sy1 <= sy0) sy1 = sy0 + 1;
+        int run = -1, run_level = 0;
+        for (int tx = 0; tx <= size; tx++) {
+            int level = 0;
+            if (tx < size) {
+                int sx0 = tx * 64 / size, sx1 = (tx + 1) * 64 / size;
+                if (sx1 <= sx0) sx1 = sx0 + 1;
+                int ink = 0, tot = 0;
+                for (int sy = sy0; sy < sy1; sy++)
+                    for (int sx = sx0; sx < sx1; sx++) {
+                        tot++;
+                        if ((bits[sy] >> (63 - sx)) & 1u) ink++;
+                    }
+                /* 4 级覆盖率 + 混色: 1-bit 二值化在 24px 下边缘全是台阶, 用覆盖比例
+                 * 分档混背景色, 相当于给位图做了抗锯齿。 */
+                if (ink * 4 >= tot * 3) level = 3;
+                else if (ink * 2 >= tot) level = 2;
+                else if (ink > 0) level = 1;
+            }
+            if (level != run_level || (level && run < 0)) {
+                if (run >= 0) {
+                    uint32_t c = (run_level >= 3) ? color
+                               : (run_level == 2) ? hs_mix_color(bg, color, 62)
+                               : hs_mix_color(bg, color, 30);
+                    gfx64_fill_rect(x + run, y + ty, tx - run, 1, c);
+                }
+                run = level ? tx : -1;
+                run_level = level;
+            }
+        }
+    }
+}
+
 /* V0.57.0: 位图图标绘制。数据是 32x32 1bit(bit31=最左), 按 size 缩放,
  * 目标色由调用方给 —— 这样同一套图标在浅/深主题、选中/未选中状态下都能用。
  * 每像素落成一个矩形块, 缩小时按 >=1px 保证细线不被吃掉。 */
@@ -2233,12 +2276,12 @@ static void hs_top_bar_render(void)
      * V0.57.1: 改用与 App 图标同一套线性风格位图, 不再用各自一套分别手绘的矢量 —— 那排
      * 图标原来线宽/圆角/重心各不相同, 并排放着像拼的。尺寸提到 18px: 32px 源图减半到
      * 16px 时 2.5px 的线条会塌, 18px 能保住笔画。 */
-    icon_size = hs_s(20);
+    icon_size = hs_s(24);   /* 状态栏高 36px, 24px 图标上下各留 6px */
     icon_y = bar_top + (bar_h - icon_size) / 2;
-    icon_x -= icon_size; hs_icon_bmp(icon_x, icon_y, icon_size, fg, hs_ico_power);
-    icon_x -= hs_sx(6) + icon_size; hs_icon_bmp(icon_x, icon_y, icon_size, fg, hs_ico_settings);
-    icon_x -= hs_sx(6) + icon_size; hs_icon_bmp(icon_x, icon_y, icon_size, fg, hs_ico_speaker);
-    icon_x -= hs_sx(6) + icon_size; hs_icon_bmp(icon_x, icon_y, icon_size, fg, hs_ico_battery);
+    icon_x -= icon_size; hs_icon_bmp64(icon_x, icon_y, icon_size, fg, g_shell.colors.panel_bg, hs_ico64_power64);
+    icon_x -= hs_sx(6) + icon_size; hs_icon_bmp64(icon_x, icon_y, icon_size, fg, g_shell.colors.panel_bg, hs_ico64_gear64);
+    icon_x -= hs_sx(6) + icon_size; hs_icon_bmp64(icon_x, icon_y, icon_size, fg, g_shell.colors.panel_bg, hs_ico64_speaker64);
+    icon_x -= hs_sx(6) + icon_size; hs_icon_bmp64(icon_x, icon_y, icon_size, fg, g_shell.colors.panel_bg, hs_ico64_battery64);
     icon_x -= hs_sx(6) + icon_size; hs_icon_bmp(icon_x, icon_y, icon_size, fg, hs_ico_wifi_std);
 }
 
