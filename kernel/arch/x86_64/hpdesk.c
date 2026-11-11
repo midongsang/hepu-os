@@ -2693,6 +2693,15 @@ static int hs_sidebar_handle_wheel(int wheel)
     int sy = hs_sy(g_shell.ui.sidebar_y);
     int sw = hs_sx(g_shell.ui.sidebar_width);
     int sh = hs_sy(g_shell.ui.sidebar_height);
+    /* 高倍缩放下外框会超出屏幕(150% 时 sy=150 + sh=1500 > 1536),
+     * 导致面板底部被裁、内容被迫滚动、并挤压底部 dock。外框必须钳制在屏内。
+     * 宽度同理: 侧栏 + Quick Controls 两栏在高倍缩放下会重叠。 */
+    {
+        int max_sh = g_shell.screen_height - sy - hs_sy(16);
+        if (max_sh > 0 && sh > max_sh) sh = max_sh;
+        int max_sw = g_shell.screen_width * 2 / 5;
+        if (max_sw > 0 && sw > max_sw) sw = max_sw;
+    }
     if (g_shell.mouse_x < sx || g_shell.mouse_x > sx + sw ||
         g_shell.mouse_y < sy || g_shell.mouse_y > sy + sh)
         return 0;
