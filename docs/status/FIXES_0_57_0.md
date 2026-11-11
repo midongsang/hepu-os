@@ -176,6 +176,19 @@ RTL8139 的接收侧在 QEMU 上始终拿不到 ROK（详见 1.9 的遗留说明
 （ARP → DNS → HTTP → 天气）实测通过，`tools/dev/qemu-common.sh` 的默认网卡切到 e1000。
 RTL8139 驱动与 `rtl8139_available()` 判定都保留，真机上仍会优先走 RTL。
 
+### 1.15 侧栏 Info 页百分比是固定三位补零
+
+`CPU 000 / MEM 003 / DSK 009` —— 看着像码表而不是百分比。改为 `hs_pct_str()`
+输出 `0% / 3% / 9% / 100%`。
+
+### 1.16 任务管理器进程表只有 idle，看着像"没接数据"
+
+`PROC: 1`，列表只有 PID 0。根因是桌面与驱动都还没注册成调度进程（进程模型补齐是
+独立工程，不是本版能顺手做完的）。本版不改动调度，改为在进程表下方增加
+**KERNEL SERVICES (drivers loaded)** 区块，用 `drv_get_all()` 列出真正注册进驱动框架的
+驱动与其状态（实拍：IDE / RTC / PIT / PS2 Keyboard / PS2 Mouse / PCI / RTL8139 / AHCI
+全部 ACTIVE）。面板显示的是真实注册结果，不是凑数的假进程。
+
 ## 2.1 窗口三层阶梯投影
 
 `hs_window_shadow()`：三层圆角矩形（`k=3..1`，每层缩放 4px 递增），

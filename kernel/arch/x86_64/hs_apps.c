@@ -9,6 +9,7 @@
 #include "hs_apps.h"
 #include "hsservices.h"
 #include "hsinput.h"   /* KEY_EXT_* 扩展键统一码 */
+#include "../../shared/drivers/driver_framework.h"
 
 /* 外部图形/系统接口 */
 extern void gfx64_fill_rect(int x, int y, int w, int h, uint32_t color);
@@ -2060,6 +2061,35 @@ static void m_render(hs_window_t *w)
             if (procs[i].pid >= 100 && procs[i].state == 0) col = 0x52C41A;
             font64_draw_string(fb, W, H, cx, cy, line, col, 12);
             cy += 15;
+        }
+    }
+
+    /* V0.57.0: 内核服务/驱动清单。
+     * 进程表一直只有 idle(PID 0) —— 桌面与驱动都还没注册成调度进程, 表格看着像
+     * "没接上数据"。这里把真正注册进驱动框架的驱动列出来, 让面板反映系统里确实
+     * 在跑什么, 而不是用假进程凑数(进程模型补齐是另一件事, 见 FIXES 遗留)。 */
+    {
+        extern int drv_get_all(drv_desc_t **out, int max);
+        static const char *svc_state[] = {"UNLOAD", "LOADED", "PROBED", "ACTIVE", "SUSP", "ERROR"};
+        drv_desc_t *ds[DRV_MAX_COUNT];
+        int dn = drv_get_all(ds, DRV_MAX_COUNT);
+        if (dn > 0 && cy + 20 < w->y + w->height - 22) {
+            cy += 4;
+            gfx64_fill_rect(cx, cy, cw, 1, g_shell.colors.border);
+            cy += 6;
+            font64_draw_string(fb, W, H, cx, cy, "KERNEL SERVICES (drivers loaded)",
+                               g_shell.colors.text_secondary, 10);
+            cy += 14;
+            for (int i = 0; i < dn && cy < w->y + w->height - 22; i++) {
+                char sline[96];
+                strcpy(sline, ds[i]->name ? ds[i]->name : "?");
+                while (hs_strlen(sline) < 20) strcpy(sline + hs_strlen(sline), " ");
+                int stt = (int)ds[i]->state;
+                strcpy(sline + hs_strlen(sline),
+                       (stt >= 0 && stt < 6) ? svc_state[stt] : "?");
+                font64_draw_string(fb, W, H, cx, cy, sline, g_shell.colors.window_fg, 11);
+                cy += 14;
+            }
         }
     }
 

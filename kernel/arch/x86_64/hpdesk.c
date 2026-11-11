@@ -1455,6 +1455,17 @@ void hpdesk_tile_focused(int dir)
 }
 
 /* V0.57.0: 颜色混合(按百分比向 b 靠拢), 用于悬停底色与投影渐变 */
+/* V0.57.0: 百分比文本 —— 旧的固定三位写法("000"/"003"/"009")在侧栏 Info 页上
+ * 看着像码表而不是百分比, 改成 "0%"/"3%"/"100%"。 */
+static void hs_pct_str(int v, char *out)
+{
+    if (v < 0) v = 0;
+    if (v > 100) v = 100;
+    if (v >= 100) { out[0] = '1'; out[1] = '0'; out[2] = '0'; out[3] = '%'; out[4] = 0; return; }
+    if (v >= 10)  { out[0] = (char)('0' + v / 10); out[1] = (char)('0' + v % 10); out[2] = '%'; out[3] = 0; return; }
+    out[0] = (char)('0' + v); out[1] = '%'; out[2] = 0;
+}
+
 static uint32_t hs_mix_color(uint32_t a, uint32_t b, int pct)
 {
     if (pct < 0) pct = 0;
@@ -2561,7 +2572,7 @@ static void hs_sidebar_render(void)
         gfx64_fill_rounded_rect(sx + hs_sx(70), content_y + hs_sy(2), hs_sx(180 * cpu_p / 100), hs_sy(12), hs_s(4), g_shell.colors.accent);
         {
             char pc[8];
-            pc[0] = '0' + cpu_p / 100 % 10; pc[1] = '0' + cpu_p / 10 % 10; pc[2] = '0' + cpu_p % 10; pc[3] = '%'; pc[4] = 0;
+            hs_pct_str(cpu_p, pc);
             font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                                sx + hs_sx(255), content_y, pc, g_shell.colors.panel_fg, hs_s(12));
         }
@@ -2574,7 +2585,7 @@ static void hs_sidebar_render(void)
         gfx64_fill_rounded_rect(sx + hs_sx(70), content_y + hs_sy(2), hs_sx(180 * mem_p / 100), hs_sy(12), hs_s(4), g_shell.colors.accent);
         {
             char pc[8];
-            pc[0] = '0' + mem_p / 100 % 10; pc[1] = '0' + mem_p / 10 % 10; pc[2] = '0' + mem_p % 10; pc[3] = '%'; pc[4] = 0;
+            hs_pct_str(mem_p, pc);
             font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                                sx + hs_sx(255), content_y, pc, g_shell.colors.panel_fg, hs_s(12));
         }
@@ -2587,7 +2598,7 @@ static void hs_sidebar_render(void)
         gfx64_fill_rounded_rect(sx + hs_sx(70), content_y + hs_sy(2), hs_sx(180 * dsk_p / 100), hs_sy(12), hs_s(4), g_shell.colors.accent);
         {
             char pc[8];
-            pc[0] = '0' + dsk_p / 100 % 10; pc[1] = '0' + dsk_p / 10 % 10; pc[2] = '0' + dsk_p % 10; pc[3] = '%'; pc[4] = 0;
+            hs_pct_str(dsk_p, pc);
             font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                                sx + hs_sx(255), content_y, pc, g_shell.colors.panel_fg, hs_s(12));
         }
