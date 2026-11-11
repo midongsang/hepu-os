@@ -427,11 +427,58 @@ QEMU 实测约 31MHz)。本轮想把偏差也消掉, 结论如下。
   （`Input handler not found`，需 tablet 设备）；`rel` 可用，但系统对增量有缩放。
   `query-mice` 显示 `QEMU HID Mouse` 为 current。
 
+
+---
+
+### 1.26 桌面主循环被内核线程饿死（长期"重跑一次就好"的偶发卡住）
+
+**现象**：冷启动偶发停在 `[PROC64] Created process: khouse` 之后，画面停在深蓝
+VBE 文字（截图取 (100,300) 为 `(0,0,128)`），重跑一次通常就好。
+
+**取证**：用截图采样判据（浅色面板 ≈ `(250,246,238)`）把卡点分成两类（早卡 / 深卡），
+再读 `process64_schedule()`：调度是**严格优先级抢占**（从 `PRIORITY_REALTIME` 往下扫），
+同优先级内才按 `scheduler_ticks % total` 加权轮转。桌面主循环跑在 idle(PID0, 优先级 0)
+的上下文里，而 `kbeat` 建出来是优先级 **2** —— 它一旦可运行就永远压住 idle，
+主循环再也拿不到 CPU。偶发性来自 kbeat 首次可运行的时刻与主循环推进的竞态。
+
+**修复**：`kbeat` 优先级 2 → **0**，与 idle 同级，进同一就绪队列按 tick 轮转。
+`context_switch_64` 用 `ret`（不是 `iretq`）且保存 rsp/rbp/rbx/r12-r15，
+所以 idle 首次被切出时其上下文被自然保存，同级轮转后能被正确切回。
+
+**验证**：连续 4 次冷启动 4/4 进桌面；此前同镜像 6 次里必现 1~2 次卡住。
+
+### 1.27 内核加载区 640KB → 1MB
+
+64 位内核已 637880 B（≈623KB），stage2 上限 640KB（20 块 × 32KB），余量只有 17KB，
+任何第三方库都塞不进去。改 `stage2_64.S` 块数 20 → 32（1MB），32 位内核整体后移
+LBA3400 → 4400（`make_single_img64.sh` 的 `KERNEL32_LBA` 同步）。安全性依据：
+`pmm64.c` 用链接符号 `&_end` 动态取内核结束地址，多读进 `.bss` 的部分被入口清零覆盖。
+
+### 1.28 B 组第一项：stb_image 接入（壁纸支持 JPG）
+
+- 新增 `third_party/stb/stb_image.h`（v2.30，283010 B）+ `kernel/arch/x86_64/jpeg64.c/.h`。
+- 只开 `STBI_ONLY_JPEG`（PNG 已有 png64），其余解码器被预处理器剪掉，代码段仅 18.8KB。
+- 分配器：页级 bump（`pmm64_alloc_pages`，物理地址当虚拟地址，前提是核段恒等映射），
+  壁纸常驻不回收。
+- 壁纸：`hs_wallpaper_png()` 先读 `wallpaper.png`，失败回退 `wallpaper.jpg`，
+  渲染统一走 `src_px/sw/sh`。
+
+**三个必须踩过去的坑**（内核环境与用户态不同）：
+1. **`__thread` 不可用**：stb 的 `stbi__vertically_flip_on_load_local/_set` 是线程局部，
+   内核未设 FS 基址 → `cmpl $0x0,%fs:0xfffffffffffffff8` → `vector=0xE CR2=0xFFFFFFFFFFFFFFF8`。
+   修：`#define STBI_NO_THREAD_LOCALS`。
+2. **`assert` 无实现**：链接期 `undefined reference to 'assert'`。修：`#define STBI_ASSERT(x) ((void)0)`
+   （stb 官方支持覆盖）。
+3. **`-mno-sse` 与 SIMD 分支冲突**：`SSE register return with SSE disabled`。修：`#define STBI_NO_SIMD`。
+
+**验证**：内核 637880 → 652472 B（+14.6KB，1MB 上限内）；`[JPEG64] decoded 1024x768`，
+壁纸顶部像素 `(26,94,193)` 与测试图渐变一致，桌面正常。
+
 ---
 
 ## 四、回归基线
 
-- 全量干净重建：**0 error / 89 warning**（`-Wunused-parameter` 基线不变）
+- 全量干净重建：**0 error / 90 warning**（`-Wunused-parameter` 基线 +1，来自 jpeg64 新增参数）
 - 主机测试：**8/8**
 - 文档检查：`python3 tools/check_docs.py` **0 warn 0 error**
 - QEMU 冒烟：`tools/dev/smoke-test.sh` 通过（颜色数 912，无致命错误关键字）

@@ -7,6 +7,7 @@
 #include "hpdesk.h"
 #include "hs_icons_data.h"   /* V0.57.0: 系统图标位图集(32x32 1bit) */
 #include "png64.h"
+#include "jpeg64.h"
 
 extern void vga_printf(const char *fmt, ...);
 #include "l10n64.h"
@@ -690,18 +691,30 @@ static void hs_wallpaper_vgradient(uint32_t c1, uint32_t c2)
 
 /* V0.55.0 P0: PNG 壁纸 — /usr/share/wallpapers/wallpaper.png 存在则优先使用(解一次缓存) */
 static png64_image_t g_wp_png;
+static jpeg64_image_t g_wp_jpg;
 static int g_wp_tried = 0;
+static int g_wp_is_jpeg = 0;
 
+/* V0.57.0 B组: 壁纸先找 PNG, 没有再找 JPG(stb_image)。两者统一成
+ * g_wp_px/w/h 供渲染 —— 原来只支持 PNG, 用户放一张 .jpg 进去就是纯色背景。 */
 static int hs_wallpaper_png(void)
 {
-    if (g_wp_tried) return g_wp_png.rgba ? 1 : 0;
+    if (g_wp_tried) {
+        return (g_wp_png.rgba || g_wp_jpg.rgba) ? 1 : 0;
+    }
     g_wp_tried = 1;
     extern int ext2_64_read_file(const char *path, uint8_t *buffer, uint32_t max_size);
     static uint8_t wp_raw[262144];
+
     int n = ext2_64_read_file("/usr/share/wallpapers/wallpaper.png", wp_raw, sizeof(wp_raw));
-    if (n <= 8) return 0;
-    if (png64_decode(wp_raw, n, &g_wp_png) != 0) return 0;
-    return g_wp_png.rgba ? 1 : 0;
+    if (n > 8 && png64_decode(wp_raw, n, &g_wp_png) == 0 && g_wp_png.rgba) return 1;
+
+    n = ext2_64_read_file("/usr/share/wallpapers/wallpaper.jpg", wp_raw, sizeof(wp_raw));
+    if (n > 8 && jpeg64_decode(wp_raw, n, &g_wp_jpg) == 0 && g_wp_jpg.rgba) {
+        g_wp_is_jpeg = 1;
+        return 1;
+    }
+    return 0;
 }
 
 static void hs_wallpaper_render(void)
@@ -709,11 +722,13 @@ static void hs_wallpaper_render(void)
     int w = g_shell.screen_width, h = g_shell.screen_height;
     if (hs_wallpaper_png()) {
         /* 覆盖式铺满: 按屏幕比例取源图中心区域, 避免拉伸变形 */
-        int sw = (int)g_wp_png.width, sh = (int)g_wp_png.height;
+        uint8_t *src_px = g_wp_is_jpeg ? g_wp_jpg.rgba : g_wp_png.rgba;
+        int sw = (int)(g_wp_is_jpeg ? g_wp_jpg.width : g_wp_png.width);
+        int sh = (int)(g_wp_is_jpeg ? g_wp_jpg.height : g_wp_png.height);
         int dw = w, dh = (int)((long)sh * w / (long)sw);
         if (dh < h) { dh = h; dw = (int)((long)sw * h / (long)sh); }
         int dx = (w - dw) / 2, dy = (h - dh) / 2;
-        gfx64_blit_rgba(dx, dy, dw, dh, g_wp_png.rgba, sw, sh);
+        gfx64_blit_rgba(dx, dy, dw, dh, src_px, sw, sh);
         return;
     }
     if (g_wallpaper_style == 1) {

@@ -37,6 +37,7 @@ C_SOURCES = \
     $(ARCH_DIR)/gfx64.c \
     $(ARCH_DIR)/cursor64.c \
     $(ARCH_DIR)/png64.c \
+    $(ARCH_DIR)/jpeg64.c \
     $(ARCH_DIR)/vg64.c \
     $(ARCH_DIR)/net64.c \
     $(ARCH_DIR)/net64_eth.c \
