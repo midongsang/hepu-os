@@ -1,7 +1,7 @@
 ---
 title: Hepu 完整开发路线图
 status: active
-sys_version: 0.54.12
+sys_version: 0.55.0
 updated: 2026-11-03
 owner: planning
 source_of_truth: null

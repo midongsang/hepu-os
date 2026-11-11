@@ -1,7 +1,7 @@
 ---
 title: 赫普OS 开发路线图（唯一优先级来源）
 status: active
-sys_version: 0.54.12
+sys_version: 0.55.0
 updated: 2026-11-11
 owner: planning
 source_of_truth: kernel/arch/x86_64/Makefile

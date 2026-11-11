@@ -202,7 +202,7 @@ static void t_exec(const char *line)
     if (strcmp(cmd, "echo") == 0) { t_put(arg); return; }
     if (strcmp(cmd, "whoami") == 0) { t_put("user"); return; }
     if (strcmp(cmd, "ver") == 0 || strcmp(cmd, "version") == 0) {
-        t_put("Hepu OS v0.54.12 (x86_64)");
+        t_put("Hepu OS v0.55.0 (x86_64)");
         return;
     }
     if (strcmp(cmd, "date") == 0) {
@@ -659,7 +659,7 @@ static char f_status2[FS_PROMPT_MAX + 1] = "";
 static hs_window_t *v_win = 0;
 static char v_data[8192];
 
-/* V0.54.13 P0: PNG 图片查看 (png64 解码器接入点)
+/* V0.55.0 P0: PNG 图片查看 (png64 解码器接入点)
  * 图片不再当文本读: 最大 128KB 原文件 -> RGBA 位图 -> 按窗口等比缩放显示 */
 static char v_png_file[131072];
 static png64_image_t v_png;
@@ -1122,7 +1122,7 @@ static void f_open_item(int idx)
     uint8_t fdir = 0;
     ext2_64_stat(full, &fsz, &fdir);
 
-    /* V0.54.13 P0: PNG 图片 → 解码后按像素绘制 */
+    /* V0.55.0 P0: PNG 图片 → 解码后按像素绘制 */
     if (fsz >= 8 && fsz <= sizeof(v_png_file)) {
         int pn = ext2_64_read_file(full, (uint8_t *)v_png_file, sizeof(v_png_file));
         if (pn > 8 && (uint8_t)v_png_file[0] == 0x89 &&
@@ -1362,7 +1362,7 @@ void hs_viewer_render(hs_window_t *w)
     int W = g_shell.screen_width, H = g_shell.screen_height;
     int cx = w->x + 6, cy = w->y + 24;
 
-    /* V0.54.13 P0: PNG 位图等比缩放绘制 */
+    /* V0.55.0 P0: PNG 位图等比缩放绘制 */
     if (v_is_png && v_png.rgba) {
         font64_draw_string(fb, W, H, cx, cy, v_name, g_shell.colors.accent, 13);
         int aw = w->width - 16;

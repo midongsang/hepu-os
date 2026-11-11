@@ -125,6 +125,9 @@ if [ -n "$LOOPDEV" ]; then
         if [ -d ${PROJECT}/assets/samples ]; then
             mkdir -p /tmp/hepu_root_mnt/usr/share/samples
             cp ${PROJECT}/assets/samples/*.png /tmp/hepu_root_mnt/usr/share/samples/ 2>/dev/null
+            # PNG 壁纸
+            mkdir -p /tmp/hepu_root_mnt/usr/share/wallpapers
+            cp ${PROJECT}/assets/samples/wallpaper.png /tmp/hepu_root_mnt/usr/share/wallpapers/ 2>/dev/null
         fi
         cp ${PROJECT}/kernel/fonts/DejaVuSans.ttf /tmp/hepu_root_mnt/fonts/ 2>/dev/null
         # 复制桌面配置文件
@@ -185,6 +188,12 @@ else
                 echo "write $sp /usr/share/samples/$(basename $sp)" | debugfs -w $TMPDIR/rootfs.ext2 2>/dev/null
             done
             echo "  PNG 样本已写入 /usr/share/samples"
+            # PNG 壁纸
+            echo "mkdir /usr/share/wallpapers" | debugfs -w $TMPDIR/rootfs.ext2 2>/dev/null
+            if [ -f "$PROJECT/assets/samples/wallpaper.png" ]; then
+                echo "write $PROJECT/assets/samples/wallpaper.png /usr/share/wallpapers/wallpaper.png" | debugfs -w $TMPDIR/rootfs.ext2 2>/dev/null
+                echo "  PNG 壁纸已写入 /usr/share/wallpapers"
+            fi
         fi
         echo "write $PROJECT/kernel/fonts/DejaVuSans.ttf /fonts/DejaVuSans.ttf" | debugfs -w $TMPDIR/rootfs.ext2 2>/dev/null
         # 写入桌面配置文件

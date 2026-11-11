@@ -1,7 +1,7 @@
 ---
 title: V0.33 开发路线板
 status: active
-sys_version: 0.54.12
+sys_version: 0.55.0
 updated: 2026-11-11
 owner: kernel
 source_of_truth: ../planning/ROADMAP.md

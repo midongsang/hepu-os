@@ -1,7 +1,7 @@
 ---
 title: VERSIONING
 status: active
-sys_version: 0.54.12
+sys_version: 0.55.0
 updated: 2026-11-11
 owner: status
 source_of_truth: null
@@ -831,4 +831,13 @@ ext2_disk_uefi.img           # 数据盘（版本无关）
 
 - 保留：`historical-milestones-v1`（历史里程碑源码包，超 100MB 仓库限制部分）
 - 代码历史未改动：上述提交仍在 `main` 分支，仅删除 tag 与 Release 页面
-- 版本号口径不变：当前源码版本仍为 **0.54.12**，镜像由 `tools/make_single_img64.sh` 本地构建
+- 版本号口径不变：当时源码版本为 **0.54.12**，镜像由 `tools/make_single_img64.sh` 本地构建
+
+## 版本推进记录
+
+| 版本 | 日期 | 类型 | 内容 |
+|---|---|---|---|
+| 0.55.0 | 2026-11-11 | minor（普通功能发布） | P0 渲染管线升级：按需合成（脏矩形+离屏缓冲，静止帧跳过 96.7%）、通用缓动动画（ease-out cubic，灵动岛展开/收起）、PNG 解码器（自包含 inflate，含主机回归夹具） |
+
+说明：按本规范第二位（默认版本）用于"新增常规功能/完善子系统"，P0 属新增能力而非 bug 修复，
+故推进 minor 至 0.55.0，bug 位归零。重要版本仍为 0（未由用户确认为里程碑）。

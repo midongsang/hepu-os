@@ -1,7 +1,7 @@
 ---
 title: ARCHITECTURE_LAYERS
 status: active
-sys_version: 0.54.12
+sys_version: 0.55.0
 updated: 2026-11-11
 owner: architecture
 source_of_truth: kernel/arch/x86_64/Makefile
@@ -145,6 +145,7 @@ hpdesk_render()
 
 - **灵动岛**：`g_island_t` 每帧向 `g_island_target` 逼近 8（≈120ms @60fps），宽高由收起尺寸与 360×120 线性插值，内容在进度过半时切换，点击只设目标不直接跳变。
 - **窗口**：沿用进场时的 `anim_start/anim_dur` 滑入，`hs_anim_active()` 保证动画期间持续重绘。
+- **弹出浮层**（右键菜单、桌面配色面板）：`g_menu_t` / `g_color_t` 复用同一缓动，起点比目标位置低 12px，ease-out 后归位，消除"瞬间弹出"。
 - 启动时自动演示一次展开→收回，串口可看到 `t=8,16,...,100,...,0` 的渐变序列。
 
 ### 3. PNG 解码 + 图像缓存
@@ -162,7 +163,13 @@ hpdesk_render()
 
 输出统一 RGBA8888，像素缓冲由 `pmm64_alloc_pages` 分配，`png64_free` 归还。错误码 -1 参数 / -2 非 PNG / -3 不支持 / -4 inflate / -5 内存 / -6 损坏。
 
-接入点：图片查看器（文件管理器打开 PNG 时解码并按窗口等比缩放绘制）、启动自检（`/usr/share/samples/sample.png`，串口打印尺寸与首像素）。
+接入点：
+
+1. **图片查看器** —— 文件管理器打开 PNG 时解码并按窗口等比缩放绘制。
+2. **PNG 壁纸** —— `/usr/share/wallpapers/wallpaper.png` 存在则优先于内置三种渐变样式；
+   首次使用时解码并缓存（`g_wp_png`），按屏幕比例居中覆盖，不拉伸变形。
+   打包入口在 `assets/samples/wallpaper.png` → 镜像 `/usr/share/wallpapers/`。
+3. **启动自检** —— `/usr/share/samples/sample.png`，串口打印尺寸与首像素。
 
 > 注意：从对话上传的素材常被 CDN 转成 WebP（文件头 `RIFF`），落盘前需确认真正的 PNG 签名 `89 50 4E 47`，否则解码器返回 -2。
 

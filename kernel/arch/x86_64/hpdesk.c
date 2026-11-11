@@ -5,6 +5,7 @@
  * ========================================================================== */
 
 #include "hpdesk.h"
+#include "png64.h"
 
 extern void vga_printf(const char *fmt, ...);
 #include "l10n64.h"
@@ -106,7 +107,7 @@ static uint32_t g_frame_no;
 /* 前向声明（定义在后面） */
 static int g_sidebar_tab;
 static int g_island_expanded;
-/* V0.54.13 P0: 灵动岛展开/收起缓动 (ease-out cubic, 0..100) */
+/* V0.55.0 P0: 灵动岛展开/收起缓动 (ease-out cubic, 0..100) */
 static int g_island_t = 0;        /* 当前进度: 0=收起 100=展开 */
 static int g_island_target = 0;   /* 目标进度 */
 static int hs_ease_out_cubic(int p)
@@ -116,6 +117,18 @@ static int hs_ease_out_cubic(int p)
     int m = 100 - p;
     return 100 - (m * m * m) / 10000;
 }
+/* V0.55.0 P0: 弹出浮层滑入缓动 (0..100, 与灵动岛共用 ease-out cubic) */
+static int g_menu_t = 0, g_menu_target = 0;
+static int g_color_t = 0, g_color_target = 0;
+
+static void hs_pop_tick(int *t, int *target)
+{
+    if (*t == *target) return;
+    int step = 10;
+    if (*t < *target) { *t += step; if (*t > *target) *t = *target; }
+    else { *t -= step; if (*t < *target) *t = *target; }
+}
+
 static void hs_island_tick(void)
 {
     if (g_island_t == g_island_target) return;
@@ -142,7 +155,7 @@ static int g_wallpaper_style = 0;
 static int g_wallpaper_dirty = 0;
 static const char *g_wallpaper_names[] = {"Classic", "Dusk", "Ocean"};
 
-/* V0.54.13: 桌面背景色预设色板 + 持久化 (Settings/Appearance 页与右键面板共用) */
+/* V0.55.0: 桌面背景色预设色板 + 持久化 (Settings/Appearance 页与右键面板共用) */
 static int g_color_panel_visible = 0;
 
 static const uint32_t g_color_presets[9] = {
@@ -627,9 +640,34 @@ static void hs_wallpaper_vgradient(uint32_t c1, uint32_t c2)
     }
 }
 
+/* V0.55.0 P0: PNG 壁纸 — /usr/share/wallpapers/wallpaper.png 存在则优先使用(解一次缓存) */
+static png64_image_t g_wp_png;
+static int g_wp_tried = 0;
+
+static int hs_wallpaper_png(void)
+{
+    if (g_wp_tried) return g_wp_png.rgba ? 1 : 0;
+    g_wp_tried = 1;
+    extern int ext2_64_read_file(const char *path, uint8_t *buffer, uint32_t max_size);
+    static uint8_t wp_raw[262144];
+    int n = ext2_64_read_file("/usr/share/wallpapers/wallpaper.png", wp_raw, sizeof(wp_raw));
+    if (n <= 8) return 0;
+    if (png64_decode(wp_raw, n, &g_wp_png) != 0) return 0;
+    return g_wp_png.rgba ? 1 : 0;
+}
+
 static void hs_wallpaper_render(void)
 {
     int w = g_shell.screen_width, h = g_shell.screen_height;
+    if (hs_wallpaper_png()) {
+        /* 覆盖式铺满: 按屏幕比例取源图中心区域, 避免拉伸变形 */
+        int sw = (int)g_wp_png.width, sh = (int)g_wp_png.height;
+        int dw = w, dh = (int)((long)sh * w / (long)sw);
+        if (dh < h) { dh = h; dw = (int)((long)sw * h / (long)sh); }
+        int dx = (w - dw) / 2, dy = (h - dh) / 2;
+        gfx64_blit_rgba(dx, dy, dw, dh, g_wp_png.rgba, sw, sh);
+        return;
+    }
     if (g_wallpaper_style == 1) {
         /* Dusk: 紫→橙渐变天空 + 径向渐变落日 */
         hs_wallpaper_vgradient(0x2B1B3D, 0xE8834A);
@@ -1551,7 +1589,7 @@ static void hs_settings_window_render(hs_window_t *w)
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            rx + 84, ry, g_wallpaper_names[g_wallpaper_style],
                            g_shell.colors.accent, 12);
-        /* V0.54.13: 桌面背景色 3x3 色板 (点击应用并写回 config.hsqml) */
+        /* V0.55.0: 桌面背景色 3x3 色板 (点击应用并写回 config.hsqml) */
         ry += 24;
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            rx, ry, "Desktop:", g_shell.colors.panel_fg, 12);
@@ -1586,7 +1624,7 @@ static void hs_settings_window_render(hs_window_t *w)
                            rx, ry, "System Information", g_shell.colors.panel_fg, 16);
         ry += 30;
         const char *labels[] = {"OS:", "Kernel:", "CPU:", "Memory:", "Graphics:", "Filesystem:"};
-        const char *values[] = {"Hepu OS v0.54.12", "64-bit SMP", "4 cores", "2GB",
+        const char *values[] = {"Hepu OS v0.55.0", "64-bit SMP", "4 cores", "2GB",
                                 "VBE 1024x768", "ext2"};
         for (int i = 0; i < 6; i++) {
             font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
@@ -2402,7 +2440,7 @@ static void hs_sidebar_render(void)
 
         /* 系统信息 */
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           sx + hs_sx(20), content_y, "Hepu OS v0.54.12", g_shell.colors.accent, hs_s(14));
+                           sx + hs_sx(20), content_y, "Hepu OS v0.55.0", g_shell.colors.accent, hs_s(14));
         content_y += hs_sy(24);
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            sx + hs_sx(20), content_y, "Kernel: 64-bit SMP", g_shell.colors.panel_fg, hs_s(12));
@@ -2742,7 +2780,8 @@ static void hs_context_menu_render(void)
     int menu_h = item_count * item_h + 8;
 
     int mx = g_context_menu_x;
-    int my = g_context_menu_y;
+    /* P0: 弹出滑入 — 起点低于目标位置 12px, ease-out 后归位 */
+    int my = g_context_menu_y + (int)(12 * (100 - hs_ease_out_cubic(g_menu_t)) / 100);
     if (mx + menu_w > g_shell.screen_width) mx = g_shell.screen_width - menu_w;
     if (my + menu_h > g_shell.screen_height) my = g_shell.screen_height - menu_h;
 
@@ -2762,7 +2801,7 @@ static void hs_context_menu_render(void)
 }
 
 /* ============================================================================
- * V0.54.13: 桌面配色面板 — 图形化更换桌面背景色, 并持久化到 config.hsqml
+ * V0.55.0: 桌面配色面板 — 图形化更换桌面背景色, 并持久化到 config.hsqml
  * 此前背景色只能靠改代码/手改配置文件, 这里点选预设色块即时生效并写回配置
  * ========================================================================== */
 #define HS_COLOR_PANEL_W 320
@@ -2782,6 +2821,8 @@ static void hs_color_panel_render(void)
     if (!g_color_panel_visible) return;
     int x, y;
     hs_color_panel_geometry(&x, &y);
+    /* P0: 弹出滑入 */
+    y += (int)(12 * (100 - hs_ease_out_cubic(g_color_t)) / 100);
     void *fb = gfx64_get_framebuffer();
 
     gfx64_fill_rounded_rect(x, y, HS_COLOR_PANEL_W, HS_COLOR_PANEL_H, 12,
@@ -2873,7 +2914,7 @@ static void hs_context_menu_handle_click(int x, int y)
             case 2: g_pending_app = HS_APP_SETTINGS; break;
             case 3: g_pending_app = HS_APP_ABOUT; break;
             case 5: g_locked = 1; break;
-            case 6: g_color_panel_visible = 1; break;   /* V0.54.13: 桌面配色面板 */
+            case 6: g_color_panel_visible = 1; g_color_t = 0; g_color_target = 100; break;   /* V0.55.0: 桌面配色面板 */
         }
         g_context_menu_visible = 0;
     }
@@ -2890,7 +2931,7 @@ void hpdesk_handle_click(int x, int y)
         if (hs_oobe_active()) { hs_oobe_handle_click(x, y); return; }
     }
 
-    /* V0.54.13: 桌面配色面板优先接管点击 */
+    /* V0.55.0: 桌面配色面板优先接管点击 */
     if (hs_color_panel_handle_click(x, y)) return;
 
     /* 控制中心绘制在窗口之上，优先接管该区域点击 */
@@ -3145,7 +3186,7 @@ void hpdesk_handle_click(int x, int y)
                         return;
                     }
                 }
-                /* V0.54.13: 桌面背景色 3x3 色板点击 */
+                /* V0.55.0: 桌面背景色 3x3 色板点击 */
                 for (int i = 0; i < 9; i++) {
                     int bx = sw_x + 76 + (i % 3) * 22;
                     int by = w->y + 208 + (i / 3) * 22;
@@ -3227,6 +3268,7 @@ void hpdesk_handle_right_click(int x, int y)
     g_context_menu_y = y;
     g_menu_file_mode = hs_files_hit(x, y) ? 1 : 0;
     g_context_menu_visible = 1;
+    g_menu_t = 0; g_menu_target = 100;   /* P0: 菜单滑入 */
 }
 
 /* 底部Dock栏 */
@@ -3390,7 +3432,7 @@ extern int cursor64_load_file(const char *path, int want);
 extern int cursor64_pick_size(int w, int h);
 
 /* ============================================================================
- * V0.54.13 P0: 按需合成（离屏缓冲按需提交 + 光标独立层）
+ * V0.55.0 P0: 按需合成（离屏缓冲按需提交 + 光标独立层）
  *
  * 旧行为: 每帧无条件把壁纸/面板/窗口/文字全量重画到后台缓冲再 present,
  *         60fps 下即使画面完全静止也在满负荷跑软件光栅。
@@ -3409,7 +3451,7 @@ static int g_welcome_frame = -1;
 
 void hpdesk_mark_dirty(void) { g_content_dirty = 1; }
 
-/* V0.54.13 P0: PNG 解码链路自检 (ext2 读取 -> pmm 分配 -> inflate -> 反滤波)
+/* V0.55.0 P0: PNG 解码链路自检 (ext2 读取 -> pmm 分配 -> inflate -> 反滤波)
  * 首次渲染时跑一次, 串口打印尺寸与首像素, 供无人值守验证使用 */
 static void hs_png_selfcheck(void)
 {
@@ -3417,7 +3459,6 @@ static void hs_png_selfcheck(void)
     if (done) return;
     done = 1;
     extern int ext2_64_read_file(const char *path, uint8_t *buffer, uint32_t max_size);
-    extern int png64_decode(const uint8_t *data, int len, void *out);
     static uint8_t raw[131072];
     int n = ext2_64_read_file("/usr/share/samples/sample.png", raw, sizeof(raw));
     if (n <= 0) {
@@ -3426,17 +3467,16 @@ static void hs_png_selfcheck(void)
     }
     vga_printf("[PNG64] read n=%d sig=%d,%d,%d,%d\n",
                n, raw[0], raw[1], raw[2], raw[3]);
-    typedef struct { uint32_t w, h; uint8_t *rgba; } im_t;
-    im_t img;
-    img.w = img.h = 0;
+    png64_image_t img;
+    img.width = img.height = 0;
     img.rgba = 0;
     int rc = png64_decode(raw, n, &img);
-    if (rc != 0 || !img.rgba || img.w == 0) {
+    if (rc != 0 || !img.rgba || img.width == 0) {
         vga_printf("[PNG64] decode FAILED rc=%d\n", rc);
         return;
     }
     vga_printf("[PNG64] decoded %dx%d px0=%d,%d,%d,%d\n",
-               (int)img.w, (int)img.h,
+               (int)img.width, (int)img.height,
                img.rgba[0], img.rgba[1], img.rgba[2], img.rgba[3]);
 }
 
@@ -3453,6 +3493,8 @@ static void hs_cursor_init_once(void)
 static int hs_anim_active(void)
 {
     if (g_island_t != g_island_target) return 1;
+    if (g_menu_t != g_menu_target) return 1;
+    if (g_color_t != g_color_target) return 1;
     for (int i = 0; i < g_wm.window_count; i++) {
         hs_window_t *w = &g_wm.windows[i];
         if (w->visible && w->anim_dur) return 1;
@@ -3483,6 +3525,8 @@ void hpdesk_render(void)
         g_welcome_frame = 0;
     }
     hs_island_tick();
+    hs_pop_tick(&g_menu_t, &g_menu_target);
+    hs_pop_tick(&g_color_t, &g_color_target);
 
     int mx = g_shell.mouse_x, my = g_shell.mouse_y;
     int mouse_moved = (mx != g_last_mx || my != g_last_my);
@@ -3600,7 +3644,7 @@ void hpdesk_render(void)
         hs_context_menu_render();
     }
 
-    /* V0.54.13: 桌面配色面板 */
+    /* V0.55.0: 桌面配色面板 */
     hs_color_panel_render();
 
     /* V0.13.10: 窗口切换器（最顶层浮层） */
@@ -5048,7 +5092,7 @@ static void hs_app_placeholder_render(hs_window_t *w)
     font64_draw_string(fb, W, H, w->x + 24, w->y + 40, w->title,
                        g_shell.colors.window_fg, 16);
     font64_draw_string(fb, W, H, w->x + 24, w->y + 70,
-                       "App content rebuilding (V0.54.12)", g_shell.colors.text_secondary, 12);
+                       "App content rebuilding (V0.55.0)", g_shell.colors.text_secondary, 12);
 }
 
 void hpdesk_handle_pending_app(void)

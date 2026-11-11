@@ -1,5 +1,5 @@
 /* ============================================================================
- * 赫普OS - PNG 解码器 (V0.54.13 P0)
+ * 赫普OS - PNG 解码器 (V0.55.0 P0)
  *
  * 自包含实现，不依赖 zlib：
  *   - DEFLATE/inflate (stored + fixed huffman + dynamic huffman, RFC 1951)

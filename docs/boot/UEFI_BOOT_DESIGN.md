@@ -1,7 +1,7 @@
 ---
 title: UEFI_BOOT_DESIGN
 status: active
-sys_version: 0.54.12
+sys_version: 0.55.0
 updated: 2026-11-01
 owner: boot
 source_of_truth: null
