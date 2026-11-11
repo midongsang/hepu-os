@@ -772,6 +772,18 @@ void x86_64_kernel_main(void)
     vga_puts("[INIT] Initializing 64-bit process manager...\n");
     process64_init();
 
+    /* V0.57.0: 注册常驻内核服务线程。
+     * 进程模型此前是空转的 —— create / 就绪队列 / context_switch_64 三件套都在,
+     * 但除了一行被注释掉的 init 之外, 全系统没有任何地方创建过 PCB, 所以任务管理器
+     * 永远只有 idle(PID 0)、PROC: 1。这里创建真实线程: 每个都是"无限循环 + 主动让出",
+     * 不返回(返回会 ret 到未定义地址), 也不做重活(不抢桌面主循环的轮询)。 */
+    {
+        extern int process64_create(const char *name, void (*entry)(void), int priority);
+        extern void process64_yield(void);
+        extern void ksvc_beat_entry(void);
+        process64_create("kbeat", ksvc_beat_entry, 2);
+    }
+
     /* 初始化用户态进程 */
     vga_puts("[INIT] Initializing 64-bit user process support...\n");
     user_process_init();

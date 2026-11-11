@@ -306,8 +306,15 @@ int process64_create(const char *name, void (*entry)(void), int priority)
     uint64_t stack_phys = pmm64_alloc_pages(4);  /* 4页 = 16KB */
     if (!stack_phys) {
         vga_puts("[PROC64] Failed to allocate stack\n");
+        /* V0.57.0: 失败即回收槽位。原实现直接 return -1, 把已经 memset 过、pid 已分配的
+         * PCB 留在 READY 之外却又不是 UNUSED 的状态 —— 反复失败会耗尽 32 个槽位。 */
+        processes[idx].state = PROC_STATE_UNUSED;
+        processes[idx].pid = -1;
         return -1;
     }
+    /* 注意: pmm64_alloc_pages 返回的是物理地址, 这里直接当虚拟地址用 —— 依赖内核段
+     * 恒等映射(rdi 覆盖全部 RAM)。一旦以后引入非恒等映射的内核地址空间, 这里必须先把
+     * 物理页映射进内核虚拟区再写栈顶, 否则就是往映射外的地址写。 */
     processes[idx].stack = (uint8_t *)stack_phys;
 
     /* 设置线程栈：栈顶压入入口地址，context_switch的ret会跳转 */
@@ -355,6 +362,23 @@ int process64_create(const char *name, void (*entry)(void), int priority)
     vga_puts(")\n");
 
     return processes[idx].pid;
+}
+
+/* V0.57.0: 常驻内核服务线程入口。
+ * 契约: 内核线程入口永不返回(返回会 ret 到栈顶之上的未定义地址), 且必须主动让出,
+ * 否则单核上会把桌面主循环饿死。这里只做一次计数 + yield, 不做重活。 */
+volatile uint64_t g_ksvc_beat = 0;
+
+void process64_yield(void);   /* 前向声明: 定义在本文件靠后, 否则会隐式声明成 int() */
+
+void ksvc_beat_entry(void)
+{
+    extern void vga_puts(const char *s);
+    for (;;) {
+        g_ksvc_beat++;
+        if ((g_ksvc_beat % 1000) == 0) vga_puts("[KSVC] beat alive\n");
+        process64_yield();
+    }
 }
 
 /* 获取当前进程 */

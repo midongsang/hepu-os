@@ -189,6 +189,31 @@ RTL8139 驱动与 `rtl8139_available()` 判定都保留，真机上仍会优先�
 驱动与其状态（实拍：IDE / RTC / PIT / PS2 Keyboard / PS2 Mouse / PCI / RTL8139 / AHCI
 全部 ACTIVE）。面板显示的是真实注册结果，不是凑数的假进程。
 
+### 1.17 进程模型只建了 idle：优化器是空转的，从来没创建过线程
+
+现象：任务管理器 `PROC: 1`，进程表只有 PID 0，看着像"没接数据"。
+
+现场：`process64_init()` 只建 idle(PID0)；`process64_create` / `ready_queue` /
+`context_switch_64`(entry_64.S:477) 这套东西**都是齐的**，调度器也确实会真的切 CPU
+上下文。缺的只有一件事：**全系统没有任何地方创建过 PCB**。`kernel_main_64.c:418`
+那行 `process64_create("init", 0x200000, 0x300000)` 不但被注释掉了，参数本身也是错位的
+（`0x200000` 被当函数指针、`0x300000` 被当优先级，进 create 后被夹成 PRIORITY_NORMAL）。
+
+修复：初始化后注册常驻服务线程 `kbeat`（PID 1），入口 `ksvc_beat_entry()` 是
+"计数 + `process64_yield()`"的无限循环。串口探针 `[KSVC] beat alive` 每 1000 次打一行，
+实测连续运行 25 秒稳定、桌面输入不受影响、任务管理器 `PROC: 2` 且两行都在。
+
+同时修同模块两处隐患：
+
+- `process64_create` 栈分配失败时直接 `return -1`，已 memset、已分配 pid 的槽位既不是
+  READY 也不是 UNUSED，反复失败会漏光 32 个槽位 —— 改为失败即置回 `UNUSED` + `pid=-1`。
+- `processes[idx].stack = (uint8_t *)stack_phys` 把物理地址直接当虚拟地址用，只在核段
+  恒等映射下成立 —— 就地加注释写明这个前提，避免以后引入非恒等映射时踩雷。
+
+遗留（未做，如实记录）：`kbeat` 目前只是心跳，还没有承担真实工作。把网络轮询、指标采样
+从桌面主循环挪进线程，要先解决"线程与主循环同时调 `net64_poll` 抢网卡"的并发问题，
+属于下一步。
+
 ## 2.1 窗口三层阶梯投影
 
 `hs_window_shadow()`：三层圆角矩形（`k=3..1`，每层缩放 4px 递增），
