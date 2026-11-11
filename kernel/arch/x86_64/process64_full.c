@@ -43,7 +43,21 @@ typedef struct {
     uint64_t rip, rflags;
     uint64_t cs, ss, ds, es, fs, gs;
     uint64_t cr3;
-} __attribute__((packed)) process_context_t;
+    /* V0.57.0: SSE/FPU 状态保存区。
+     * 内核主体用 -mno-sse 编, 但 Lua(以及将来的 FreeType)是 -msse2 —— 一旦
+     * 线程切换不保存 xmm, 两个线程的浮点状态会互相污染, 表现为"偶发数字错误"。
+     * FXSAVE 要求 512 字节缓冲且 16 字节对齐: 结构整体 aligned(16), cr3 结束在
+     * [200], 这里用 8 字节占位把 fx_area 推到 [208] (208 = 13*16)。 */
+    uint64_t _fxpad;
+    uint8_t fx_area[512];
+} __attribute__((packed, aligned(16))) process_context_t;
+
+/* 汇编(entry_64.S 的 fxsave 208(%rdi) / fxrstor 208(%rsi))写死了 fx_area 的偏移,
+ * 结构一改就会静默保存/恢复到错误位置 —— 用编译期断言把它钉住。 */
+_Static_assert(__builtin_offsetof(process_context_t, fx_area) == 208,
+               "fx_area 必须在 context 偏移 208, 与 entry_64.S 的 fxsave/fxrstor 一致");
+_Static_assert((__builtin_offsetof(process_context_t, fx_area) % 16) == 0,
+               "FXSAVE 缓冲必须 16 字节对齐");
 
 /* 进程控制块 */
 typedef struct {
@@ -71,6 +85,9 @@ typedef struct {
     uint64_t signal_handlers[32];  /* signal handler函数指针 */
     int pending_signals;       /* 待处理信号位图 */
 } process_t;
+
+_Static_assert((__builtin_offsetof(process_t, context) % 16) == 0,
+               "process_context_t 在 PCB 里要 16 字节对齐, 否则 fx_area 失配");
 
 extern void vga_puts(const char *s);
 extern void vga_put_hex(uint64_t val);
@@ -136,6 +153,16 @@ static void proc_memset(void *dst, uint8_t val, int n) {
 }
 
 /* 初始化进程管理 */
+
+/* FXSAVE 区的默认值: 全 0 的 MXCSR 会屏蔽所有 SSE 异常, 全 0 的 FCW 会让 x87
+ * 在有异常时行为怪异; 两者都用 Intel 复位后的标准值。 */
+static void proc_init_fx(process_t *p)
+{
+    uint8_t *fx = p->context.fx_area;
+    *(uint16_t *)(fx + 0)  = 0x037F;   /* FCW: 64 位精度, 所有异常屏蔽 */
+    *(uint32_t *)(fx + 24) = 0x1F80;   /* MXCSR: 所有异常屏蔽 + round-to-nearest */
+}
+
 void process64_init(void)
 {
     for (int i = 0; i < MAX_PROCESSES; i++) {
@@ -167,6 +194,7 @@ void process64_init(void)
     processes[0].time_slice = 10;
     processes[0].context.rsp = 0;  /* 运行时由context_switch保存 */
     processes[0].context.rbp = 0;
+    proc_init_fx(&processes[0]);
     proc_memset(processes[0].name, 0, 32);
     processes[0].name[0] = 'i'; processes[0].name[1] = 'd';
     processes[0].name[2] = 'l'; processes[0].name[3] = 'e';
@@ -260,6 +288,7 @@ int process64_create(const char *name, void (*entry)(void), int priority)
 
     /* 初始化PCB */
     proc_memset(&processes[idx], 0, sizeof(process_t));
+    proc_init_fx(&processes[idx]);
     processes[idx].pid = next_pid++;
     processes[idx].state = PROC_STATE_READY;
     processes[idx].priority = (priority >= 0 && priority < PRIORITY_COUNT) ? priority : PRIORITY_NORMAL;

@@ -527,6 +527,35 @@ LBA3400 → 4400（`make_single_img64.sh` 的 `KERNEL32_LBA` 同步）。安全�
   里补 `fxsave/fxrstor`。
 - 精度是多项式实现（约 1e-9 相对误差），不是 libm 的 0.5ulp。
 
+
+### 1.30 线程切换保存 SSE/FPU 状态（补齐浮点 ABI 技术债）
+
+**背景**：接入 stb 与 Lua 后，二进制里出现两套浮点 ABI —— 内核主体 `-mno-sse`，
+Lua / `klibm64` 是 `-msse2`。`context_switch_64` 原本只保存 rbx/rbp/r12-r15/rsp，
+**不保存 xmm/MXCSR**。一旦两个线程都用浮点，切换就会互相污染，症状是"偶发数字错误"，
+且极难定位（不报错、不崩）。
+
+**改动**
+1. `process_context_t` 增加 `fx_area[512]`（FXSAVE 格式）+ `_fxpad` 占位，
+   让它在 context 偏移 **208**（= 13×16，满足 FXSAVE 的 16 字节对齐要求）。
+2. `context_switch_64` 在保存 GPR 之后 `fxsave 208(%rdi)`，在加载 GPR 之前
+   `fxrstor 208(%rsi)`；旧进程指针为 NULL 时跳过保存。
+3. `proc_init_fx()` 给新进程的 fx_area 写 Intel 复位标准值（FCW=0x037F、MXCSR=0x1F80）——
+   全 0 的 MXCSR 会屏蔽全部 SSE 异常、全 0 的 FCW 让 x87 行为怪异，不能用 memset 凑数。
+   idle(PID0) 与 `process64_create` 都走这个初始化。
+4. 三处 `_Static_assert` 钉住偏移：`offsetof(process_context_t, fx_area) == 208`、
+   该偏移 16 对齐、`offsetof(process_t, context)` 16 对齐。汇编里写死的 208 一旦与
+   C 结构脱节，就会静默保存/恢复到错误位置 —— 用编译期断言堵住这条缝。
+
+**验证**
+- 全量重建 **0 error / 90 warning**（基线不变）。
+- 压力用例：Lua 里 `for i=1,200000 do acc=acc+1.0/3.0 end`，期间被 kbeat 反复抢占，
+  输出 `acc=66666.6666`（精确值 66666.66666…，`%.4f` 四舍五入正确）。
+- 连续 3 次冷启动：自检通过、浮点值一致、桌面正常。
+
+**说明**：该用例能证明"保存/恢复路径正确且没引入回归"，但它无法反证"不加 fxsave 一定出错"
+（kbeat 本身不碰浮点）。这条改动的价值在于给后续 FreeType 这类重度用浮点的库铺地基。
+
 ---
 
 ## 四、回归基线

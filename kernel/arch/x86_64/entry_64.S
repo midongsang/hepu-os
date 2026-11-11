@@ -484,7 +484,7 @@ context_switch_64:
      * [96]=r12, [104]=r13, [112]=r14, [120]=r15,
      * [128]=rip, [136]=rflags,
      * [144]=cs, [152]=ss, [160]=ds, [168]=es, [176]=fs, [184]=gs,
-     * [192]=cr3
+     * [192]=cr3, [200]=_fxpad, [208..719]=fx_area (FXSAVE 区)
      */
 
     /* 保存旧进程寄存器 */
@@ -496,12 +496,22 @@ context_switch_64:
     movq %r14, 112(%rdi)    /* 保存R14 */
     movq %r15, 120(%rdi)    /* 保存R15 */
 
+    /* SSE/FPU 状态: FXSAVE 要求 16 字节对齐缓冲, fx_area 在 [208]。
+     * 内核主体是 -mno-sse, 但 Lua/FreeType 这类第三方库是 -msse2, 不保存 xmm
+     * 就会在两个线程之间互相污染。 */
+    testq %rdi, %rdi
+    jz 9f
+    fxsave 208(%rdi)
+9:
+
     /* 切换页表（CR3）- 实现用户空间隔离 */
     movq 192(%rsi), %rax    /* 加载新进程CR3 */
     testq %rax, %rax        /* 检查是否为0（内核线程无独立页表） */
     jz 1f
     movq %rax, %cr3         /* 切换CR3 */
 1:
+    /* 恢复新进程的 SSE/FPU 状态(在加载 GPR 之前做, 不依赖任何 GPR) */
+    fxrstor 208(%rsi)
 
     /* 加载新进程寄存器 */
     movq 56(%rsi), %rsp     /* 加载栈指针 */

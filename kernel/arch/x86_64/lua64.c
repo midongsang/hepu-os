@@ -74,6 +74,9 @@ int lua64_selftest(void)
         "print('sqrt2='..string.format('%.6f', math.sqrt(2)))\n"
         "local t={} for i=1,5 do t[i]=i*i end\n"
         "print('table='..table.concat(t,','))\n"
+        "local acc=0.0\n"
+        "for i=1,200000 do acc=acc+1.0/3.0 end\n"
+        "print('acc='..string.format('%.4f',acc))\n"
         "return 'ok'\n";
     lua_State *L = lua64_newstate();
     if (!L) { vga_printf("[LUA64] no state\n"); return -1; }
