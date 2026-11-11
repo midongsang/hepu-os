@@ -5,7 +5,7 @@
 [![Build](https://github.com/midongsang/hepu-os/actions/workflows/ci.yml/badge.svg)](https://github.com/midongsang/hepu-os/actions/workflows/ci.yml)
 [![Release](https://github.com/midongsang/hepu-os/actions/workflows/release.yml/badge.svg)](https://github.com/midongsang/hepu-os/actions/workflows/release.yml)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPLv3-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-v0.54.12-brightgreen.svg)](https://github.com/midongsang/hepu-os/releases)
+[![Version](https://img.shields.io/badge/version-v0.54.12-brightgreen.svg)](#当前版本)
 [![Kernel size](https://img.shields.io/badge/kernel-586KB-blue.svg)](#当前版本)
 [![glibc 动态链接](https://img.shields.io/badge/glibc-✓-brightgreen.svg)](#核心特性)
 [![ext2](https://img.shields.io/badge/ext2-✓-brightgreen.svg)](#核心特性)

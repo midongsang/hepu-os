@@ -35,7 +35,7 @@ python3 tools/gui_test.py --qemu /usr/bin/qemu-system-x86_64 \
   - MINOR 跳级（如 `v0.54` → `v0.55`）= 大功能合并
   - PATCH 递增（如 `v0.54.6` → `v0.54.7`）= 修复 + 仓库整理
 - **哪个分支看**：所有开发在 `main`，**没有** develop/feature 分支
-- **Release 页面**：每个 tag 都在 [Releases](https://github.com/midongsang/hepu-os/releases) 挂 `hepu64_single.img`（256MB）
+- **Release 页面**：当前仓库已清空版本发布，仅保留 `historical-milestones-v1` 历史里程碑源码归档；镜像由 `tools/make_single_img64.sh` 本地构建
 
 ## 构建依赖
 
