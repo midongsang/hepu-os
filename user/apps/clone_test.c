@@ -48,6 +48,10 @@ int main(void)
 
     long spin = 0;
     while (!g_child_done && spin < 300000000L) spin++;
+    /* V0.58.1: 忙等期间如果时钟中断没来得及把子线程切上来, 这里必须让出 CPU
+     * 再等一轮 —— 父线程一直占着 CPU 的话, 子线程能否上电全看中断时机,
+     * 实测 6 次里有 2 次报 "child never ran"(不是崩溃, 是纯时序竞态)。 */
+    for (int k = 0; k < 40 && !g_child_done; k++) sleep(10);
 
     if (g_child_done && g_child_count > 0)
         puts("PASS: child ran in shared address space, both counters advanced\n");

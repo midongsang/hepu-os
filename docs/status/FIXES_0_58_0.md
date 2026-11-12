@@ -305,3 +305,22 @@ PASS: child ran in shared address space, both counters advanced
 ```
 顺序说明链路是完整的：子线程跑完计数 → 退出并切回父 → 父看到 `g_child_done`
 打 PASS → 正常 `exit(0)`。`PASS=1 FAIL=0 EXCEPTION=0` 连续两次，桌面正常。
+
+## §1.89 任务管理器显示用户线程表
+
+**动机**：任务管理器此前只画 `process64` 内核线程与用户进程，用户态 uthread
+完全不可见 —— "clone 到底跑没跑"只能看串口。
+
+**做法**：
+- `uthread64.c` 新增只读统计接口 `uthread_get_stats()` / `uthread_snapshot()` /
+  `uthread_get_last_exit()`，并在 `uthread_create` 里记账累计数与最近一次
+  clone 的创建者/被创建者 tid；`uthread_exit_current()` 里记录 thread_exit 的授受关系。
+- 任务管理器摘要区新增两行：`THREADS  total: N   active: M`，
+  以及 `clone: tid P -> C  RUNNING` / `thread_exit: tid A -> B (handed off)`。
+
+**验证**：内核 828,168 B（+1.3KB），编译无警告；启动串口可读到
+`[UTHREAD] created tid=0x3E8`、`thread exit tid=0x3E8 -> tid=0x64`、`PASS`。
+
+**已知限制**：`clone_test` 在 autorun 里同步执行完就退出，任务管理器被打开时
+线程表通常已空（只剩累计数与授受关系）—— 要看"运行中"的线程需要让演示进程
+常驻，这需要异步 exec（当前内核只支持同步 `user_process_exec`），未在本版实施。

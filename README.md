@@ -27,6 +27,17 @@
 
 *Hepu OS v0.58.0 桌面：System Info、Settings 与 Quick Controls*
 
+**线程自检实证**（串口，同一镜像）：
+
+```
+[UTHREAD] created tid=0x3E8 owner=0x0
+[UTHREAD] thread exit tid=0x3E8 -> switch to tid=0x64
+PASS: child ran in shared address space, both counters advanced
+```
+
+任务管理器摘要区新增 `THREADS  total/active` 与 `clone: tid P -> C` /
+`thread_exit: tid A -> B` 两行，用于在桌面里直接确认线程状态。
+
 ## 核心特性
 
 - **64位长模式内核**：约807KB（826,824字节），-O2优化，113个源码模块

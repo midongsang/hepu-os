@@ -34,7 +34,15 @@ typedef struct {
 
 static uthread_t g_ut[MAX_UTHREADS];
 static int g_ut_cur = -1;
+void uthread_note_exit_redirect(int from_tid, int to_tid);
 static int g_next_tid = 1000;
+
+/* V0.58.1: 给任务管理器看的线程统计（只读快照，不参与调度决策） */
+static int g_ut_total_created = 0;   /* 累计 clone 出的线程数 */
+static int g_ut_last_parent_tid = 0; /* 最近一次 clone 的创建者 tid */
+static int g_ut_last_child_tid  = 0; /* 最近一次 clone 出的线程 tid */
+static int g_ut_last_exit_from  = 0; /* 最近一次 thread_exit 退出的 tid */
+static int g_ut_last_exit_to    = 0; /* 它把执行权交给了谁 */
 
 extern void vga_puts(const char *s);
 extern void vga_put_hex(uint64_t v);
@@ -120,6 +128,10 @@ int uthread_create(int owner, uint64_t rip, uint64_t rsp, uint64_t fsbase)
             g_ut[i].rip = rip;
             g_ut[i].rsp = rsp;
             g_ut[i].rflags = 0x202;             /* IF=1，否则收不到时钟 */
+            g_ut_total_created++;
+            g_ut_last_parent_tid = (g_ut_cur >= 0 && g_ut[g_ut_cur].used)
+                                 ? g_ut[g_ut_cur].tid : 0;
+            g_ut_last_child_tid = g_ut[i].tid;
             vga_puts("[UTHREAD] created tid=");
             vga_put_hex((uint64_t)g_ut[i].tid);
             vga_puts(" owner=");
@@ -187,6 +199,7 @@ int uthread_exit_current(void)
     g_ut[cur].used = 0;        /* kstack_top 保留，槽位复用 */
     g_ut_cur = next;
     g_thr_redirect_flag = 1;
+    uthread_note_exit_redirect(g_ut[cur].tid, g_ut[next].tid);
 
     vga_puts("[UTHREAD] thread exit tid=");
     vga_put_hex((uint64_t)g_ut[cur].tid);
@@ -255,4 +268,53 @@ void uthread_timer_tick(uint64_t *f)
     int next_i = idx[(pos + 1) % n];
     g_ut_cur = next_i;
     ut_restore(&g_ut[next_i], f);
+}
+
+/* ============================================================================
+ * V0.58.1: 只读统计 —— 任务管理器 / 文档取证用
+ * ----------------------------------------------------------------------------
+ * 这里只读 g_ut[] 与计数器，不改任何调度状态，也不会引入新的全局单值槽。
+ * ========================================================================== */
+int uthread_get_stats(int *total, int *active, int *last_parent, int *last_child)
+{
+    int act = 0;
+    for (int i = 0; i < MAX_UTHREADS; i++)
+        if (g_ut[i].used) act++;
+    if (total)       *total       = g_ut_total_created;
+    if (active)      *active      = act;
+    if (last_parent) *last_parent = g_ut_last_parent_tid;
+    if (last_child)  *last_child  = g_ut_last_child_tid;
+    return act;
+}
+
+/* 逐项快照：供界面列出活跃线程（slot, tid, owner, state, rip） */
+int uthread_snapshot(int idx, int *tid, int *owner, int *state, uint64_t *rip)
+{
+    int seen = 0;
+    for (int i = 0; i < MAX_UTHREADS; i++) {
+        if (!g_ut[i].used) continue;
+        if (seen == idx) {
+            if (tid)   *tid   = g_ut[i].tid;
+            if (owner) *owner = g_ut[i].owner;
+            if (state) *state = g_ut[i].state;
+            if (rip)   *rip   = g_ut[i].rip;
+            return 1;
+        }
+        seen++;
+    }
+    return 0;
+}
+
+/* 记录授受关系（thread_exit 重定向成功后调用） */
+void uthread_note_exit_redirect(int from_tid, int to_tid)
+{
+    g_ut_last_exit_from = from_tid;
+    g_ut_last_exit_to   = to_tid;
+}
+
+/* 最近一次 thread_exit 的去向（0 表示还没发生过） */
+void uthread_get_last_exit(int *from_tid, int *to_tid)
+{
+    if (from_tid) *from_tid = g_ut_last_exit_from;
+    if (to_tid)   *to_tid   = g_ut_last_exit_to;
 }

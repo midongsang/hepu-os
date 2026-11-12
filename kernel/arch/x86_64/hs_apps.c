@@ -3545,6 +3545,46 @@ static void m_render(hs_window_t *w)
         cy += MC(18);
     }
 
+    /* V0.58.1: 用户线程表快照（clone 真线程）。
+     * 旧版任务管理器只画 process64 内核线程与用户进程, 用户态 uthread 完全不可见,
+     * 于是"clone 到底跑没跑"只能看串口。这里把 uthread 表的累计数与最近一次
+     * clone/exit 授受关系直接摊在界面上。 */
+    {
+        extern int uthread_get_stats(int *total, int *active, int *last_p, int *last_c);
+        extern void uthread_get_last_exit(int *from_tid, int *to_tid);
+        int tot = 0, act = 0, lp = 0, lc = 0, xf = 0, xt = 0;
+        uthread_get_stats(&tot, &act, &lp, &lc);
+        uthread_get_last_exit(&xf, &xt);
+        char tbuf[96];
+        strcpy(tbuf, "THREADS  total: ");
+        hs_itoa(tot, tmp); strcpy(tbuf + hs_strlen(tbuf), tmp);
+        strcpy(tbuf + hs_strlen(tbuf), "   active: ");
+        hs_itoa(act, tmp); strcpy(tbuf + hs_strlen(tbuf), tmp);
+        font64_draw_string(fb, W, H, cx, cy, tbuf, g_shell.colors.text_secondary, MC(11));
+        cy += MC(15);
+
+        char cbuf[96];
+        if (act > 0) {
+            strcpy(cbuf, "clone: tid ");
+            hs_itoa(lp, tmp); strcpy(cbuf + hs_strlen(cbuf), tmp);
+            strcpy(cbuf + hs_strlen(cbuf), " -> ");
+            hs_itoa(lc, tmp); strcpy(cbuf + hs_strlen(cbuf), tmp);
+            strcpy(cbuf + hs_strlen(cbuf), "  RUNNING (shared aspace)");
+            font64_draw_string(fb, W, H, cx, cy, cbuf, 0x52C41A, MC(11));
+        } else if (xf > 0) {
+            strcpy(cbuf, "thread_exit: tid ");
+            hs_itoa(xf, tmp); strcpy(cbuf + hs_strlen(cbuf), tmp);
+            strcpy(cbuf + hs_strlen(cbuf), " -> tid ");
+            hs_itoa(xt, tmp); strcpy(cbuf + hs_strlen(cbuf), tmp);
+            strcpy(cbuf + hs_strlen(cbuf), "  (handed off)");
+            font64_draw_string(fb, W, H, cx, cy, cbuf, g_shell.colors.text_secondary, MC(11));
+        } else {
+            strcpy(cbuf, "clone: none yet");
+            font64_draw_string(fb, W, H, cx, cy, cbuf, g_shell.colors.text_secondary, MC(11));
+        }
+        cy += MC(15);
+    }
+
     /* 实时曲线: CPU + 网络 */
     int cpu = hs_process_get_cpu_usage();
     uint64_t tx = 0, rx = 0; uint32_t txr = 0, rxr = 0;
