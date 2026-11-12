@@ -682,6 +682,34 @@ static int f_kind(int item);
 static int f_fs_menu __attribute__((unused)) = 0;   /* 0=桌面菜单, 1=文件菜单 */
 static int f_dclick_tick = 0;         /* 双击检测: 上次点击 tick */
 static char f_status2[FS_PROMPT_MAX + 1] = "";
+
+/* FS P2: 分片拷贝/移动任务状态 (实现见 f_do_paste 之前; 结构需前置供 f_render 使用) */
+#define F_JOB_Q 24
+#define F_JOB_PER_FRAME 1
+static struct {
+    int active;
+    int kind;                        /* 1=copy 2=move */
+    int ok, fail, done;
+    char why[24];
+    int qh, qt;                      /* 目录 BFS 队列 */
+    char qs[F_JOB_Q][FS_PATH_MAX];
+    char qd[F_JOB_Q][FS_PATH_MAX];
+    int cur_n, cur_i;
+    char names[FS_COPY_ENTRIES][256];
+    uint8_t types[FS_COPY_ENTRIES];
+    uint32_t sizes[FS_COPY_ENTRIES];
+    int top_i, top_n;
+    int topdir_n;
+    char tdsrc[FS_CLIP_MAX][FS_PATH_MAX];   /* 顶层目录源(移动时整树删除) */
+    char ts[FS_CLIP_MAX][FS_PATH_MAX];
+    char td[FS_CLIP_MAX][FS_PATH_MAX];
+    char tn[FS_CLIP_MAX][64];
+    char cur_name[64];
+} f_job;
+static void f_job_step(void);
+static void f_job_cancel(void);
+static int f_job_cancel_hit(int x, int y);
+
 static hs_window_t *v_win = 0;
 /* Viewer(460x400) 与 Image(520x420) 共用同一个 render, 基准宽由打开时记录 */
 static int v_base_w = 460;
@@ -937,6 +965,9 @@ static int f_kind(int item)
 
 static void f_render(hs_window_t *w)
 {
+    /* FS P2: 有分片任务在跑就推进一步, 并保持 dirty 让下一帧继续 —— 这样
+     * 拷贝期间画面/光标都不冻, 进度条也能动 */
+    if (f_job.active) { f_job_step(); hpdesk_mark_dirty(); }
     void *fb = gfx64_get_framebuffer();
     int W = g_shell.screen_width, H = g_shell.screen_height;
     int cx = w->x + FS(6), cy = w->y + FS(26);
@@ -1154,7 +1185,31 @@ static void f_render(hs_window_t *w)
     /* 状态栏 (两行) */
     font64_draw_string(fb, W, H, cx, cy + ch + FS(4), f_status,
                        g_shell.colors.text_secondary, FS(10));
-    if (f_status2[0])
+    if (f_job.active) {
+        char msg[80], tmp[8];
+        strcpy(msg, f_job.kind == 2 ? "Moving " : "Copying ");
+        hs_itoa(f_job.ok, tmp);
+        strcpy(msg + hs_strlen(msg), tmp);
+        strcpy(msg + hs_strlen(msg), " items  ");
+        hs_strcpyn(msg + hs_strlen(msg), f_job.cur_name, 40);
+        font64_draw_string(fb, W, H, cx, cy + ch + FS(16), msg, g_shell.colors.accent, FS(12));
+
+        /* 右端 Cancel 按钮(热区由 f_job_cancel_hit 共用同一套几何) */
+        int cbw = FS(52), cbx = cx + cw - cbw, cby = cy + ch + FS(12);
+        gfx64_fill_rounded_rect(cbx, cby, cbw, FS(17), FS(4), g_shell.colors.accent);
+        font64_draw_string(fb, W, H, cbx + FS(7), cby + FS(2), "Cancel",
+                           g_shell.colors.panel_fg, FS(11));
+
+        /* 窗口底部等长动画条: 无总条目数时用 done 做相位, 表明还在推进 */
+        int ty = cy + ch + FS(30);
+        int sw = FS(90);
+        int track = cw;
+        int span = track - sw;
+        int sx = cx + (span > FS(8) ? (int)(((unsigned)f_job.done * FS(45)) % (unsigned)span) : 0);
+        gfx64_fill_rect(cx, ty, track, FS(2), g_shell.colors.border);
+        gfx64_fill_rect(sx, ty, sw, FS(2), g_shell.colors.accent);
+    }
+    else if (f_status2[0])
         font64_draw_string(fb, W, H, cx, cy + ch + FS(16), f_status2,
                            g_shell.colors.accent, FS(12));
     else
@@ -1357,60 +1412,195 @@ static void f_do_copy(int cut)
     hs_strcpyn(f_status2, msg, FS_PROMPT_MAX);
 }
 
+/* ============================================================================
+ * FS P2: 分片拷贝/移动任务
+ * 此前 f_do_paste 在渲染线程里同步跑完整个 copy_tree, 拷大目录时桌面连光标
+ * 都僵住。这里改成状态机: 每帧只处理固定数量的条目, 帧与帧之间正常 present,
+ * 于是进度条会动、光标能跟手、还能随时取消。任务仍是单线程 (与 ext2 无并发)。
+ * ========================================================================== */
+
+static void f_job_report(void);      /* 前向: 结束时汇报 */
+
+static void f_job_finish(void)
+{
+    f_job.active = 0;
+    /* 移动: 顶层目录的子树此刻已全部拷完, 整体删源 */
+    if (f_job.kind == 2) {
+        for (int i = 0; i < f_job.topdir_n; i++)
+            ext2_64_delete_tree(f_job.tdsrc[i]);
+    }
+    f_job_report();
+}
+
+static int f_job_push_dir(const char *s, const char *d)
+{
+    if (f_job.qt >= F_JOB_Q) return -1;
+    hs_strcpyn(f_job.qs[f_job.qt], s, FS_PATH_MAX);
+    hs_strcpyn(f_job.qd[f_job.qt], d, FS_PATH_MAX);
+    f_job.qt++;
+    return 0;
+}
+
+/* 取下一个条目并处理(K 个/帧) */
+static void f_job_step(void)
+{
+    if (!f_job.active) return;
+    for (int k = 0; k < F_JOB_PER_FRAME && f_job.active; k++) {
+        /* 1) 顶层文件 */
+        if (f_job.top_i < f_job.top_n) {
+            int i = f_job.top_i++;
+            hs_strcpyn(f_job.cur_name, f_job.tn[i], 64);
+            int rc = f_copy_file(f_job.ts[i], f_job.td[i]);
+            if (rc == -2) { f_job.fail++; hs_strcpyn(f_job.why, "file too large", 24); }
+            else if (rc != 0) { f_job.fail++; hs_strcpyn(f_job.why, "copy failed", 24); }
+            else {
+                f_job.ok++;
+                if (f_job.kind == 2) ext2_64_delete_file(f_job.ts[i]);
+            }
+            f_job.done++;
+            continue;
+        }
+        /* 2) 目录队列 */
+        if (f_job.cur_n == 0) {
+            if (f_job.qh >= f_job.qt) { f_job_finish(); return; }
+            int n = ext2_64_list_dir_entries_ex(f_job.qs[f_job.qh], f_job.names,
+                                                f_job.types, f_job.sizes, FS_COPY_ENTRIES);
+            if (n < 0 || n >= FS_COPY_ENTRIES) {
+                f_job.fail++;
+                hs_strcpyn(f_job.why, n < 0 ? "list failed" : "dir > 64 entries", 24);
+                f_job.qh++; f_job.cur_n = 0;
+                continue;
+            }
+            if (n == 0) { f_job.qh++; f_job.cur_n = 0; continue; }   /* 空目录, 已在建时落盘 */
+            f_job.cur_n = n; f_job.cur_i = 0;
+            continue;
+        }
+        int i = f_job.cur_i++;
+        {
+            char sp[FS_PATH_MAX], dp[FS_PATH_MAX];
+            hs_strcpyn(f_job.cur_name, f_job.names[i], 64);
+            if (f_join(sp, FS_PATH_MAX, f_job.qs[f_job.qh], f_job.names[i]) != 0 ||
+                f_join(dp, FS_PATH_MAX, f_job.qd[f_job.qh], f_job.names[i]) != 0) {
+                f_job.fail++; hs_strcpyn(f_job.why, "path too long", 24);
+            } else if (f_job.types[i]) {
+                if (ext2_64_mkdir(dp) != 0) { f_job.fail++; hs_strcpyn(f_job.why, "mkdir failed", 24); }
+                else if (f_job_push_dir(sp, dp) == 0) { f_job.ok++; }
+                else { f_job.fail++; hs_strcpyn(f_job.why, "too many dirs", 24); }
+            } else {
+                int rc = f_copy_file(sp, dp);
+                if (rc == -2) { f_job.fail++; hs_strcpyn(f_job.why, "file too large", 24); }
+                else if (rc != 0) { f_job.fail++; hs_strcpyn(f_job.why, "copy failed", 24); }
+                else {
+                    f_job.ok++;
+                    if (f_job.kind == 2) ext2_64_delete_file(sp);
+                }
+            }
+            f_job.done++;
+        }
+        if (f_job.cur_i >= f_job.cur_n) { f_job.qh++; f_job.cur_n = 0; }
+    }
+}
+
+/* 启动: 剪贴板里逐个预检, 目录 mkdir 后入队, 文件进顶层表 */
+static void f_job_start(int kind)
+{
+    f_job.active = 0; f_job.kind = kind;
+    f_job.ok = 0; f_job.fail = 0; f_job.done = 0; f_job.why[0] = 0;
+    f_job.qh = 0; f_job.qt = 0; f_job.cur_n = 0; f_job.cur_i = 0;
+    f_job.top_i = 0; f_job.top_n = 0; f_job.topdir_n = 0; f_job.cur_name[0] = 0;
+
+    for (int i = 0; i < f_clip_count; i++) {
+        char dst[FS_PATH_MAX];
+        if (f_join(dst, FS_PATH_MAX, f_path, f_clip_names[i]) != 0) {
+            f_job.fail++; hs_strcpyn(f_job.why, "path too long", 24); continue;
+        }
+        uint32_t sz = 0; uint8_t isdir = 0;
+        if (ext2_64_stat(dst, &sz, &isdir) == 0) {
+            f_job.fail++; hs_strcpyn(f_job.why, "target exists", 24); continue;
+        }
+        if (ext2_64_stat(f_clip_paths[i], &sz, &isdir) != 0) {
+            f_job.fail++; hs_strcpyn(f_job.why, "source missing", 24); continue;
+        }
+        if (isdir) {
+            if (ext2_64_mkdir(dst) != 0) { f_job.fail++; hs_strcpyn(f_job.why, "mkdir failed", 24); continue; }
+            if (f_job_push_dir(f_clip_paths[i], dst) != 0) { f_job.fail++; hs_strcpyn(f_job.why, "too many dirs", 24); continue; }
+            f_job.ok++;
+            if (f_job.topdir_n < FS_CLIP_MAX) {
+                hs_strcpyn(f_job.tdsrc[f_job.topdir_n], f_clip_paths[i], FS_PATH_MAX);
+                f_job.topdir_n++;
+            }
+        } else {
+            int t = f_job.top_n;
+            if (t >= FS_CLIP_MAX) { f_job.fail++; hs_strcpyn(f_job.why, "too many items", 24); continue; }
+            hs_strcpyn(f_job.ts[t], f_clip_paths[i], FS_PATH_MAX);
+            hs_strcpyn(f_job.td[t], dst, FS_PATH_MAX);
+            hs_strcpyn(f_job.tn[t], f_clip_names[i], 64);
+            f_job.top_n++;
+        }
+    }
+
+    if (f_job.top_n == 0 && f_job.qt == 0) { f_job_report(); return; }
+    f_job.active = 1;
+    f_job.cur_n = 0; f_job.cur_i = 0; f_job.qh = 0;
+    hs_strcpyn(f_status2, kind == 2 ? "Moving..." : "Copying...", FS_PROMPT_MAX);
+}
+
+static void f_job_cancel(void)
+{
+    if (!f_job.active) return;
+    f_job.active = 0;
+    char msg[96]; char tmp[8];
+    strcpy(msg, "Cancelled after ");
+    hs_itoa(f_job.ok, tmp); strcpy(msg + hs_strlen(msg), tmp);
+    strcpy(msg + hs_strlen(msg), " items");
+    hs_strcpyn(f_status2, msg, FS_PROMPT_MAX);
+    f_refresh();
+}
+
+static void f_job_report(void)
+{
+    char msg[96]; char tmp[8];
+    strcpy(msg, f_job.kind == 2 ? "Moved " : "Copied ");
+    hs_itoa(f_job.ok, tmp); strcpy(msg + hs_strlen(msg), tmp);
+    strcpy(msg + hs_strlen(msg), f_job.ok == 1 ? " item" : " items");
+    if (f_job.fail > 0) {
+        strcpy(msg + hs_strlen(msg), ", ");
+        hs_itoa(f_job.fail, tmp);
+        strcpy(msg + hs_strlen(msg), tmp);
+        strcpy(msg + hs_strlen(msg), " failed");
+        if (f_job.why[0]) {
+            strcpy(msg + hs_strlen(msg), " (");
+            strcpy(msg + hs_strlen(msg), f_job.why);
+            strcpy(msg + hs_strlen(msg), ")");
+        }
+    }
+    hs_strcpyn(f_status2, msg, FS_PROMPT_MAX);
+    if (f_job.fail == 0) { f_clip_count = 0; f_clip_mode = 0; }
+    f_refresh();
+}
+
 static void f_do_paste(void)
 {
     if (f_clip_mode == 0 || f_clip_count == 0) {
         hs_strcpyn(f_status2, "Clipboard is empty", FS_PROMPT_MAX);
         return;
     }
-
-    int ok = 0, fail = 0;
-    const char *why = 0;
-    for (int i = 0; i < f_clip_count; i++) {
-        char dst[FS_PATH_MAX];
-        if (f_join(dst, FS_PATH_MAX, f_path, f_clip_names[i]) != 0) { fail++; why = "path too long"; continue; }
-
-        uint32_t sz = 0;
-        uint8_t isdir = 0;
-        if (ext2_64_stat(dst, &sz, &isdir) == 0) { fail++; why = "target exists"; continue; }
-        if (ext2_64_stat(f_clip_paths[i], &sz, &isdir) != 0) { fail++; why = "source missing"; continue; }
-
-        int rc = isdir ? f_copy_tree(f_clip_paths[i], dst)
-                       : f_copy_file(f_clip_paths[i], dst);
-        if (rc == -2) { fail++; why = "file too large"; continue; }
-        if (rc == -3) { fail++; why = "too many entries"; continue; }
-        if (rc != 0) { fail++; continue; }
-
-        if (f_clip_mode == 2) {
-            if (isdir) ext2_64_delete_tree(f_clip_paths[i]);
-            else ext2_64_delete_file(f_clip_paths[i]);
-        }
-        ok++;
+    if (f_job.active) {
+        hs_strcpyn(f_status2, "Busy: a file job is running", FS_PROMPT_MAX);
+        return;
     }
+    /* P2: 不再同步跑完整个目录树, 改为启动分片任务(每帧推进, 可取消) */
+    f_job_start(f_clip_mode);
+}
 
-    /* 结果汇报: 成功/失败分别计数, 失败附最后一个原因 (旧版中途 return, 前面已成功的项连计数都没有) */
-    {
-        char msg[96]; char tmp[8];
-        strcpy(msg, f_clip_mode == 2 ? "Moved " : "Copied ");
-        hs_itoa(ok, tmp);
-        strcpy(msg + hs_strlen(msg), tmp);
-        strcpy(msg + hs_strlen(msg), ok == 1 ? " item" : " items");
-        if (fail > 0) {
-            strcpy(msg + hs_strlen(msg), ", ");
-            hs_itoa(fail, tmp);
-            strcpy(msg + hs_strlen(msg), tmp);
-            strcpy(msg + hs_strlen(msg), " failed");
-            if (why) {
-                strcpy(msg + hs_strlen(msg), " (");
-                hs_strcpyn(msg + hs_strlen(msg), why, 24);
-                strcpy(msg + hs_strlen(msg), ")");
-            }
-        }
-        hs_strcpyn(f_status2, msg, FS_PROMPT_MAX);
-    }
-    if (fail == 0) { f_clip_count = 0; f_clip_mode = 0; }
-    f_refresh();
-    f_clear_marks();
+/* 取消热区: 与渲染用同一套几何 */
+static int f_job_cancel_hit(int x, int y)
+{
+    if (!f_job.active) return 0;
+    int cx = f_win->x + FS(6), cy = f_win->y + FS(26);
+    int cw = f_win->width - FS(12), ch = f_win->height - FS(26) - FS(40);
+    int cbx = cx + cw - FS(52), cby = cy + ch + FS(12);
+    return (x >= cbx && y >= cby && x <= cx + cw && y <= cby + FS(17));
 }
 
 static void f_props_open(void)
@@ -1513,8 +1703,10 @@ void hs_viewer_render(hs_window_t *w)
 
 void hs_files_cycle_view(void) { f_view_mode = !f_view_mode; f_scroll = 0; }
 
+
 void hs_files_click(int x, int y)
 {
+    if (f_job_cancel_hit(x, y)) { f_job_cancel(); return; }
     extern void vga_puts(const char *s);
     if (!f_win || !f_win->visible) return;
     /* V0.13.39: 路径栏右侧 USB 按钮点击 */
@@ -2120,6 +2312,7 @@ void hs_files_key(int key)
 
 static void f_handle_key(int key)
 {
+    if (f_job.active && key == 0x01) { f_job_cancel(); return; }   /* Esc */
     hs_files_key(key);
 }
 
