@@ -3268,11 +3268,29 @@ static void cc_slider_card(void *fb, int x, int y, int w, int h,
                       g_shell.colors.accent);
 }
 
+/* 把颜色按比例压暗(保留 k%, 用于绘制浮层投影的阶梯暗边)。
+ * 面板底色本身接近纯黑, 直接给纯黑投影在深色壁纸上看不出来,
+ * 所以用"面板色 × 系数"而非固定黑色, 保证在任何主题下都能拉开层次。 */
+static uint32_t hs_dim(uint32_t c, int k)
+{
+    int r = (int)((c >> 16) & 0xFF) * k / 100;
+    int g = (int)((c >> 8) & 0xFF) * k / 100;
+    int b = (int)(c & 0xFF) * k / 100;
+    return (uint32_t)(0xFF000000u | ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b);
+}
+
 static void hs_control_center_render(void)
 {
     int cx, cy, cw, ch;
     cc_geometry(&cx, &cy, &cw, &ch);
 
+    /* 浮层层次: QC 会压住天气卡(设计稿里两者纵向本就叠 60 逻辑像素),
+     * 之前两块同色卡片叠在一起像"画错了"。这里加两层阶梯暗边做投影,
+     * 让被压住的组件自然退到后面 —— 不改任何几何, 只改观感。 */
+    gfx64_fill_rounded_rect(cx - hs_s(1), cy + hs_s(6), cw + hs_s(5), ch + hs_s(8),
+                            hs_s(15), hs_dim(g_shell.colors.window_bg, 22));
+    gfx64_fill_rounded_rect(cx, cy + hs_s(3), cw + hs_s(2), ch + hs_s(4),
+                            hs_s(13), hs_dim(g_shell.colors.window_bg, 48));
     gfx64_fill_rounded_rect(cx, cy, cw, ch, hs_s(12), g_shell.colors.window_bg);
     gfx64_draw_rounded_rect(cx, cy, cw, ch, hs_s(12), g_shell.colors.border);
 
