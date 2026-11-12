@@ -1,7 +1,7 @@
 ---
 title: 模块化设计准则（MODULARITY）
 status: active
-sys_version: 0.57.0
+sys_version: 0.58.0
 updated: 2026-11-01
 owner: planning
 source_of_truth: null

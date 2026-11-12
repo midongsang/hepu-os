@@ -1,7 +1,7 @@
 ---
 title: GUI
 status: active
-sys_version: 0.57.0
+sys_version: 0.58.0
 updated: 2026-11-12
 owner: architecture
 source_of_truth: null

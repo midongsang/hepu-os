@@ -1,7 +1,7 @@
 ---
 title: 赫普OS 驱动操作接口（DRIVER_OPS）
 status: active
-sys_version: 0.57.0
+sys_version: 0.58.0
 updated: 2026-11-11
 owner: specs
 source_of_truth: kernel/shared/drivers/driver_framework.h

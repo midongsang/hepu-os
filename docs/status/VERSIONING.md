@@ -1,8 +1,8 @@
 ---
 title: VERSIONING
 status: active
-sys_version: 0.57.0
-updated: 2026-11-11
+sys_version: 0.58.0
+updated: 2026-11-13
 owner: status
 source_of_truth: null
 supersedes: null
@@ -107,12 +107,51 @@ supersedes: null
 
 ## 当前版本
 
-**0.54.12**
+**0.58.0**
 - 重要版本：0
-- 默认版本：54
-- bug版本：12
+- 默认版本：58
+- bug版本：0
 
 > 版本号以本文件 frontmatter `sys_version` 为唯一事实源。以下为历史迭代记录。
+
+**0.58.0 迭代内容（2026-11-13，clone 真线程 + 用户线程调度闭环）**
+
+一、用户线程成为真正的调度单元（`1e27708` → `cff8dbe`）
+- 新增 `kernel/arch/x86_64/uthread64.c`：每条用户执行流有独立
+  `raw[15]/rip/rflags/rsp/fsbase` 上下文，由时钟中断轮转
+- 关键：用户态时钟实际走 **PIT → IRQ0（vector 32）**，不是 APIC 的 `vector 0x40`；
+  轮转接错源会"从不触发"
+- `process64_tick()` 在用户态 tick 里不再 `process64_schedule()`（否则
+  `context_switch` 换栈，中断返回从别人栈上弹寄存器，表现为 `rip=0`、rax 变垃圾）
+
+二、IRQ 帧偏移根因（`cff8dbe`）
+- `entry_64.S` 的 `IRQ_ENTRY` 在压完 15 个 GPR **之后**才压 `ds`/`es`，
+  两者在栈的最低地址，真实布局 `f[0]=es f[1]=ds f[2]=r15 … f[16]=rax`
+- 此前按 `f[0]=r15` 算，整体差 2 槽：写 rax 其实写进 rbx，子线程拿到的仍是
+  父的返回值，`test %rax,%rax; jne` 直接跳进父分支
+- 定位手段：QEMU `-d int`（16.5 MB 硬追踪，捞子线程栈上 1249 条中断，
+  `IP` 全落在父分支循环头）+ gdbstub 条件断点，未引入任何外部依赖
+- 修复后实测 `PASS: child ran in shared address space, both counters advanced`
+
+三、收尾 #PF 的两个独立根因（`0f1bea6`）
+- `uthread_clear_owner` 在 `sys_exit` 路径里释放**当前正在使用**的内核栈页，
+  返回路径踩在已回收页上，栈里的 `rcx`（`sysretq` 的 RIP）被写成 0
+  → 返回即跳地址 0 取指（`error=0x15 rip=0x0`）。改为槽位复用、不随退出释放
+- `crt0.S` 用 32 位 `int $0x80` 退出，在被 clone 切换过的上下文里返回不可靠
+
+四、线程退出接口（`49caa55`）
+- `SYS_HEPU_THREAD_EXIT = 235`，`SYS_MAX` 229 → 236；用户侧 `ulib.h thread_exit()`
+- 语义：结束当前用户线程、不终止整进程；在 syscall 内核栈上重建目标线程返回帧，
+  `sysretq` 直接落到兄弟线程
+- 号位教训：209 实际被 `[SYSCALL_UMASK]` 占用（`grep SYS_` 看不见另一套前缀），
+  重复下标 GCC 静默覆盖；顺带把长期漏登记的 `SYS_HEPU_PS`（227）补进 ABI 表
+
+五、验证
+- 三次独立启动 `PASS=1 FAIL=0 EXCEPTION=0`，三个 autorun 程序全部正常退出，
+  桌面正常加载（`hepu_thread_exit_final.png`）
+- 内核 826,824 B（上限 1 MB）；`check_docs` warns=0 errors=0
+
+### 历史版本内容（0.54.12）
 
 ### 双内核版本边界
 
@@ -731,6 +770,7 @@ ext2_disk_uefi.img           # 数据盘（版本无关）
 
 | 版本 | 日期 | 主要内容 |
 |------|------|---------|
+| 0.58.0 | 2026-11-13 | clone 真线程落地：用户线程调度单元 `uthread64`、IRQ 帧偏移根因（ds/es 压顶致 rax 写进 rbx）、每线程独立内核栈、收尾 #PF 两处根因（内核栈 use-after-free + crt0 的 32 位 int 0x80）、线程退出接口 `SYS_HEPU_THREAD_EXIT=235`；三次运行 `PASS=1 FAIL=0 EXCEPTION=0`（详见 FIXES_0_58_0.md） |
 | 0.54.12 | 2026-11-11 | 桌面稳定性(窗口槽位泄漏/PIT 中断冻结)+安全止血包 6P0+12P1(LAPIC 校准至真实 1kHz、writev/clone/sigaction/reboot/mkfs 加固)+文档真值对齐+SMP 计划与决策对比+真机上机 checklist(41 缺口/7 硬阻塞) |
 | 0.13.68 | 2026-10-28 | 安全修复集成:严格用户窗口+页表校验堵系统调用任意读写;ELF/堆/fd/ext2加固;栈对齐修复#GP;sec_test回归;更正审计文档(漏洞A未修复) |
 | 0.13.67 | 2026-10-27 | XHCI复合HID:单设备多HID接口多中断端点(EP1..EP15 IN/DCI3..31),上下文扩到DCI31,一次Configure全Add,按DCI路由;面向无线接收器 |
@@ -840,6 +880,7 @@ ext2_disk_uefi.img           # 数据盘（版本无关）
 | 0.55.0 | 2026-11-11 | minor（普通功能发布） | P0 渲染管线升级：按需合成（脏矩形+离屏缓冲，静止帧跳过 96.7%）、通用缓动动画（ease-out cubic，灵动岛展开/收起）、PNG 解码器（自包含 inflate，含主机回归夹具） |
 | 0.56.1 | 2026-11-11 | patch（缺陷修复） | 任务管理器的 CPU/内存是 tick 编造公式、PMM `used` 口径漏掉启动期占用导致 MEM 恒 0%、天气组件失败即永久空白且不显示占位（详见 FIXES_0_56_1.md） |
 | 0.56.2 | 2026-11-11 | patch（缺陷修复） | Apps 页应用图标只渲染无命中测试（点了没反应）、任务管理器曲线区硬编码黑底/提示条溢出/曲线不可见、灵动岛 `CPU 35% MEM 60%` 为写死文案（详见 FIXES_0_56_2.md） |
+| 0.58.0 | 2026-11-13 | minor（普通功能发布） | clone 从 ENOSYS 空桩升级为真线程：共享父地址空间、独立用户栈、子 rax=0、每线程独立内核栈、共享页表引用计数、两线程交替运行与共享内存可见全部实证；新增用户线程调度单元 `uthread64.c` 与线程退出接口 `SYS_HEPU_THREAD_EXIT=235`；修复 IRQ 帧偏移差 2 槽、内核栈 use-after-free、crt0 的 32 位退出路径三类结构性缺陷（详见 FIXES_0_58_0.md） |
 | 0.57.0 | 2026-11-11 | minor（普通功能发布） | 图形层增强：窗口三层阶梯投影、侧栏标签与 Apps 图标悬停反馈、任务管理器 25/50/75% 刻度线；输入链路两处真实缺陷修复——按钮沿报告重复上报位移导致"点击落空"、PS/2 坐标覆盖 USB 累加坐标导致光标被拽回；配套 `tools/dev/` 五个开发脚本（详见 FIXES_0_57_0.md） |
 | 0.56.0 | 2026-11-11 | minor（普通功能发布） | ① fsck 接入 inode 表遍历（check_inode 从"实现了但零调用"变为真实生效，并发现两套 ext2 结构定义需用编译期断言钉死布局）；② 欢迎引导可关闭（config.hsqml 新增 UI.skip_oobe）；③ 清理 pit64 遗留调试栈转储、统一 7 处过期的"0.54.12"对外版本文案 |
 | 0.55.1 | 2026-11-11 | patch（缺陷修复） | 编译告警 209→89，并修复其暴露的真实缺陷：mkfs/umask 撞号致 mkfs 被覆盖、桌面配置从未被读取、ELF 重定位不校验类型、DT_RELA 表未应用、TTF cmap 未筛 encoding、LAPIC 基址指针转换、恒真假判断等 10 类（详见 FIXES_0_55_1.md） |

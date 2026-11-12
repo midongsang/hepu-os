@@ -1,7 +1,7 @@
 ---
 title: AUDIT_64BIT
 status: active
-sys_version: 0.57.0
+sys_version: 0.58.0
 updated: 2026-11-11
 owner: security
 source_of_truth: kernel/arch/x86_64/user_access64.c

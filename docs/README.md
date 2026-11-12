@@ -1,8 +1,8 @@
 ---
 title: 赫普OS 文档索引
 status: active
-sys_version: 0.57.0
-updated: 2026-11-12
+sys_version: 0.58.0
+updated: 2026-11-13
 generator: tools/gen_docs_index.py
 source_of_truth: frontmatter of docs/*
 ---
@@ -86,6 +86,7 @@ source_of_truth: frontmatter of docs/*
 - [任务管理器假数据与天气组件空白修复（0.56.1）](status/FIXES_0_56_1.md)
 - [FIXES_0_56_2](status/FIXES_0_56_2.md)
 - [FIXES 0.57.0](status/FIXES_0_57_0.md)
+- [FIXES 0.58.0](status/FIXES_0_58_0.md)
 - [赫普OS 未关闭问题清单](status/OPEN_BUGS.md)
 - [V0.33 开发路线板](status/PROGRESS_V033.md)
 - [VERSIONING](status/VERSIONING.md)

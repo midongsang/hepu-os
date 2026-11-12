@@ -1,7 +1,7 @@
 ---
 title: FIXES_0_56_2
 status: active
-sys_version: 0.57.0
+sys_version: 0.58.0
 updated: 2026-11-11
 owner: status
 source_of_truth: null

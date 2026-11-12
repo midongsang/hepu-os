@@ -1,7 +1,7 @@
 ---
 title: 双视图交互方案（VIEW_SWITCH）
 status: active
-sys_version: 0.57.0
+sys_version: 0.58.0
 updated: 2026-11-02
 owner: planning
 source_of_truth: null
