@@ -682,6 +682,7 @@ static int f_sort_desc = 0;
 static int f_kind(int item);
 static void f_job_report(void);
 static void f_tree_reveal(void);
+static void f_tree_sync(void);
 static int f_tree_row_at(int x, int y);
 static int f_job_push_dir(const char *src, const char *dst);
 /* V0.55.1: 文件菜单状态当前未被使用(统一走桌面菜单), 先标注保留意图 */
@@ -978,6 +979,7 @@ static void f_refresh(void)
         hs_strcpyn(buf + hs_strlen(buf), f_filter, 32);
     }
     hs_strcpyn(f_status, buf, 63);
+    f_tree_sync();     /* 先让已展开的节点跟上磁盘(新建/删除后树才看得见变化) */
     f_tree_reveal();   /* 树自动展开到当前目录, 否则进去以后看不出自己在哪 */
 }
 
@@ -1300,6 +1302,11 @@ int hs_files_drag_end(int x, int y)
     /* 拖到左树节点: 目标是树里的那个目录(可能根本不在右栏的父目录里) */
     if (dtree >= 0 && dtree < f_tree_n) {
         char srcp[FS_PATH_MAX];
+        if (strcmp(f_tree_path[dtree], f_path) == 0) {
+            hs_strcpyn(f_status2, "Already in this folder", FS_PROMPT_MAX);
+            f_refresh();
+            return 1;
+        }
         if (f_join(srcp, FS_PATH_MAX, f_path, f_items[src]) != 0)
             hs_strcpyn(f_status2, "Path too long", FS_PROMPT_MAX);
         else
@@ -1504,7 +1511,7 @@ static void f_tree_collapse(int i)
     }
     f_tree_n -= cut;
     f_tree_exp[i] = 0;
-    f_tree_sel = -1;
+    f_tree_sel = i;   /* 留在被折叠的节点上, 别把高亮清空让人找不着位置 */
 }
 
 static void f_tree_init(void)
@@ -1514,6 +1521,23 @@ static void f_tree_init(void)
     f_tree_depth[0] = 0; f_tree_exp[0] = 0;
     f_tree_n = 1;
     f_tree_expand(0);
+}
+
+/* 目录内容变过(新建/删除/移动完成)后重新对一遍已展开节点的子目录,
+ * 否则新建的目录在树里看不见 —— 得先折叠再展开才刷新出来 */
+static void f_tree_sync(void)
+{
+    for (int i = f_tree_n - 1; i >= 0; i--) {
+        if (!f_tree_exp[i]) continue;
+        int n = ext2_64_list_dir_entries_ex(f_tree_path[i], f_tnm, f_ttp, f_tsz, FS_TREE_CHILD);
+        if (n < 0) continue;
+        int cnt = 0;
+        for (int k = 0; k < n; k++) if (f_ttp[k]) cnt++;
+        int have = 0, d = f_tree_depth[i] + 1;
+        for (int k = i + 1; k < f_tree_n && f_tree_depth[k] >= d; k++)
+            if (f_tree_depth[k] == d) have++;
+        if (cnt != have) { f_tree_collapse(i); f_tree_expand(i); }
+    }
 }
 
 /* 把树展开到 f_path: 从根逐级往下找"是 f_path 前缀"的子节点 */
@@ -1564,14 +1588,8 @@ static void f_tree_label(int i, char *out, int cap)
 /* 左栏点击: 返回 1 = 已消费。点目录 = 跳过去并展开; 点已展开的 = 折叠 */
 int hs_files_tree_click(int x, int y)
 {
-    if (!f_win || !f_win->visible) return 0;
-    int tx = f_win->x + FS(6);
-    int tw = FS(FS_TREE_W);
-    if (x < tx || x > tx + tw) return 0;
-    int top = f_tree_top(), rh = FS(16);
-    if (y < top) return 0;
-    int r = (y - top) / rh;
-    if (r < 0 || r >= f_tree_rows() || r >= f_tree_n) return 0;
+    int r = f_tree_row_at(x, y);
+    if (r < 0) return 0;
 
     if (f_tree_exp[r]) {
         f_tree_collapse(r);
@@ -2596,8 +2614,8 @@ void hs_files_click(int x, int y)
 
     /* 列头: 点击切排序(同列再次点击切换升降) */
     if (f_view_mode == 0) {
-        int cx0 = f_win->x + FS(6) + FS(140) + FS(8);       /* 只覆盖右栏 */
-        int cw0 = f_win->width - FS(12) - FS(140) - FS(8);
+        int cx0 = f_win->x + FS(6) + FS(FS_TREE_W) + FS(8);  /* 只覆盖右栏 */
+        int cw0 = f_win->width - FS(12) - FS(FS_TREE_W) - FS(8);
         int hy = f_win->y + FS(26) + FS(44);
         if (y >= hy && y <= hy + FS(16)) {
             int key = -1;
@@ -3783,6 +3801,7 @@ void hs_apps_handle_wheel(int delta)
         if (t_scroll > 0) t_scroll--;
     }
 }
+
 
 
 
