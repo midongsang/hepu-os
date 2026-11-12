@@ -22,7 +22,7 @@ supersedes: DEVELOPMENT_ROADMAP.md, PRIORITY_ROADMAP.md, X86_64_DEVELOPMENT_PLAN
 | # | 事项 | 源码落点 | 依据 | 状态 | 验收 |
 |---|------|---------|------|------|------|
 | P0-1 | 安装器闭环：MBR+mkfs+引导区+内核拷贝 | `user/apps/install64/install64.c` | STORAGE_MEMORY_PLAN | ✅ **代码完成 (v0.19.2)**，待真机双盘验证 | 空盘装完可重启进桌面 |
-| P0-2 | 安全地基：地址空间隔离 / SMEP / SMAP / W^X / fork COW | `user_aspace64.c` / `vmm64.c` / `irq64_simple.c` / `user_access64.c` / `swap64.c` | AUDIT_64BIT + OPEN_BUGS SEC-01/02/04/05/07/18 | ⚠️ **隔离主路径已完成；fork/clone 地址空间复制与部分安全项未闭环**。已完成（SEC-01 主路径）：每进程私有 PML4/PDPT 默认开（`Makefile:205` `USER_ISOLATION ?= 1`）、SMEP/SMAP 按 CR4 真实状态门控、brk 分页 + EFER.NXE + PT_NX（用户堆 W^X）、ELF 边界检查 + 用户指针逐页校验、ring3 异常只终止自身。边界：物理内存 >1GB 时内核恒等映射覆盖用户窗口，自动退回旧模式（`user_aspace64.c:76-77`）。未闭环（SEC-02 部分）：COW 缺页框架 `vmm64_try_cow`（`vmm64.c:432-457`，PAGE_COW bit9）在单进程/缺页路径可用；fork 已接入该框架（`uaspace_fork_copy` 深拷贝 PDPT/PD/PT + 物理页共享 + 清 W + `UA_COW`，`user_aspace64.c:165`，由 `sys_fork` 调用 `syscall64_full.c:1875`）；**clone 未接入**——`sys_clone` 无条件共享父页表指针（`syscall64_full.c:931` `child+24 = parent page_table`），未做私有副本也未打 COW 标记。仍待解决：SEC-04 capability/uid 能力模型未建（裸盘/reboot/mkfs 仅 PID==0 临时闸；真实用户进程 PID 恒 ≥100，`user_process.c:289/629`）；SEC-05 `sys_readdir` 静态 `names[64][256]`/`types[64]` 不可重入（`syscall64_full.c:1606-1607`）；SEC-07 路径 ≥255 截断而非拒绝（`syscall64_full.c:451`）；SEC-18 ext2 偶发挂死根因未复现。 | 用户程序直接访问内核地址触发 #PF 且只终止该进程；fork/clone 私有副本与能力模型为后续项 |
+| P0-2 | 安全地基：地址空间隔离 / SMEP / SMAP / W^X / fork COW | `user_aspace64.c` / `vmm64.c` / `irq64_simple.c` / `user_access64.c` / `swap64.c` | AUDIT_64BIT + OPEN_BUGS SEC-01/02/04/05/07/18 | ⚠️ **隔离主路径已完成；fork/clone 地址空间复制与部分安全项未闭环**。已完成（SEC-01 主路径）：每进程私有 PML4/PDPT 默认开（`Makefile:205` `USER_ISOLATION ?= 1`）、SMEP/SMAP 按 CR4 真实状态门控、brk 分页 + EFER.NXE + PT_NX（用户堆 W^X）、ELF 边界检查 + 用户指针逐页校验、ring3 异常只终止自身。边界：物理内存 >1GB 时内核恒等映射覆盖用户窗口，自动退回旧模式（`user_aspace64.c:76-77`）。未闭环（SEC-02 部分）：COW 缺页框架 `vmm64_try_cow`（`vmm64.c:432-457`，PAGE_COW bit9）在单进程/缺页路径可用；fork 已接入该框架（`uaspace_fork_copy` 深拷贝 PDPT/PD/PT + 物理页共享 + 清 W + `UA_COW`，`user_aspace64.c:165`，由 `sys_fork` 调用 `syscall64_full.c:1875`）；**clone 未实现**——`sys_clone` 原偏移全错、空实现，v0.57.1 改为返回 ENOSYS；原共享父页表指针（`syscall64_full.c:931` `child+24 = parent page_table`），未做私有副本也未打 COW 标记。仍待解决：SEC-04 capability/uid 能力模型未建（裸盘/reboot/mkfs 仅 PID==0 临时闸；真实用户进程 PID 恒 ≥100，`user_process.c:289/629`）；SEC-05 `sys_readdir` 静态 `names[64][256]`/`types[64]` 不可重入（`syscall64_full.c:1606-1607`）；SEC-07 路径 ≥255 截断而非拒绝（`syscall64_full.c:451`）；SEC-18 ext2 偶发挂死根因未复现。 | 用户程序直接访问内核地址触发 #PF 且只终止该进程；fork/clone 私有副本与能力模型为后续项 |
 | P0-3 | 高 LBA 读回 / USB 大容量存储写路径 / sendkey 验证 | `ext2_64.c` / `usb64.c` / `keyboard64.c` | VERSIONING 已知限制 | ⚠️ **sendkey QEMU 端到端已验证；存储读写与真机仍待验证**。sendkey：PS/2 链路每次按键 `g_kbd_irq_count` +2（`keyboard64.c:144/148`），环形缓冲 head/tail 前移并被消费（`keyboard64.c:33-34/277-282`）；HMP `sendkey 2` 使 OOBE 从 1/4 推进到 2/4（像素差 73616 px），账户页输入 h/e/p/u 回显 "hepu"（`tools/gui_test.py:173/221-222`）；挂 `-device piix3-usb-uhci -device usb-kbd` 后走 USB HID 队列同样可用；OOBE 语言页只绑定数字键 1/2（Tab/方向键/回车在该页未绑定属应用设计），真机仍待验证。控制器口径：64 位 `usb64.c` 先探 UHCI（PIIX3 0x7020/0x7112，`usb64.c:342-343`），无则回退 EHCI（`ehci64.c`）/XHCI（`xhci64.c`，`usb64.c:347/357-358`）；Makefile:102-104 编 usb64/ehci64/xhci64。USB BOT 写路径 `usb_storage_write_sectors`（`usb64.c:560`，挂 `storage_hal64.c:97-98`）代码已在，真机写盘待验证；高 LBA 读回待真机。 | sendkey 真机通过；USB 写盘与高 LBA 实机通过 |
 | P0-4 | 消除硬编码 PROJECT_ROOT | `kernel/arch/x86_64/Makefile` | 实测 | ✅ **已完成 (v0.18.5)** | 换路径直接 make |
 | P0-5 | 蓝牙输入栈（USB BT 适配器 HCI/L2CAP/HID-over-GATT） | `kernel/arch/x86_64/usb64_bt.c`（待建） | 用户需求：无线鼠标/键盘（2.4G HID 已支持，蓝牙鼠标需 BT 栈） | 未开始 | 蓝牙鼠标可配对并驱动指针 |
@@ -30,7 +30,7 @@ supersedes: DEVELOPMENT_ROADMAP.md, PRIORITY_ROADMAP.md, X86_64_DEVELOPMENT_PLAN
 
 > **依赖说明**：
 > - P0-5 蓝牙栈与 P0-6 驱动签名涉及不可信输入，须带 fuzz 与签名校验
-> - P0-2 安全地基 2026-11-11 复核：隔离主路径已关闭（SEC-01）；COW 缺页框架已就位（`vmm64.c:432-457` + `swap64` 缺页路径），fork 私有副本已接入 COW（`uaspace_fork_copy`），clone 仍共享父页表（SEC-02 部分）；进程级 swap 换出未接入内存压力主循环（P1-4）；capability 模型、readdir 静态表、路径长度策略、SEC-18 根因仍待解决
+> - P0-2 安全地基 2026-11-11 复核：隔离主路径已关闭（SEC-01）；COW 缺页框架已就位（`vmm64.c:432-457` + `swap64` 缺页路径），fork 私有副本已接入 COW（`uaspace_fork_copy`），clone 返回 ENOSYS（SEC-02 部分）；进程级 swap 换出未接入内存压力主循环（P1-4）；capability 模型、readdir 静态表、路径长度策略、SEC-18 根因仍待解决
 
 ---
 
@@ -97,7 +97,7 @@ supersedes: DEVELOPMENT_ROADMAP.md, PRIORITY_ROADMAP.md, X86_64_DEVELOPMENT_PLAN
 | ELF64 加载器 + 边界检查 | v0.13.43~v0.13.68 | `elf64.c` |
 | 每进程私有 PML4 地址空间隔离（默认开启） | v0.14 | `user_aspace64.c` |
 | 高半区直接映射 / RAM>1GB 支持 | v0.15 | `vmm64.c` |
-| COW 缺页框架（fork 已接入；clone 仍共享父页表，SEC-02 部分） | v0.15~v0.18 | `vmm64.c:432-457` + `swap64.c`；clone 共享父页表 `syscall64_full.c:931` |
+| COW 缺页框架（fork 已接入；clone 改为 ENOSYS，SEC-02 部分） | v0.15~v0.18 | `vmm64.c:432-457` + `swap64.c`；clone 共享父页表 `syscall64_full.c:931` |
 | SMEP + SMAP + brk 分页 NX/W^X | v0.16~v0.18 | `irq64_simple.c` + `vmm64.c` |
 | 用户指针逐页校验 + ring3 异常只终止自身 | v0.13.68 | `user_access64.c` + `lib64.c` |
 

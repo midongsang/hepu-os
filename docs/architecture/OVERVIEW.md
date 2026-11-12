@@ -181,7 +181,7 @@ supersedes: null
 | SMEP（内核不可执行用户页） | ✅ | `irq64_simple.c`（CR4.SMEP） |
 | SMAP（ring0 不可访问用户页） | ✅ | `irq64_simple.c`（CR4.SMAP，copy_*_user 用 STAC/CLAC） |
 | brk 分页 + NX/W^X | ✅ | `vmm64.c`（用户堆带 PT_NX） |
-| fork COW + 独立地址空间 | ⚠️ fork 已接入 / clone 未接入 | fork 走 `uaspace_fork_copy`（深拷贝页表 + 共享物理页 + 清 W + `UA_COW` 标记，`user_aspace64.c:165`，由 `sys_fork` 调用 `syscall64_full.c:1875`）；**`sys_clone` 仍无条件共享父页表**（`syscall64_full.c:931` `child+24 = parent page_table`），未判 `CLONE_VM` 也未打 COW 标记 → 线程共享地址空间是"直接共享"，跨线程隔离与缺页路径未闭环（见 `OPEN_BUGS` SEC-02） |
+| fork COW + 独立地址空间 | ⚠️ fork 已接入 / clone 未实现（ENOSYS） | fork 走 `uaspace_fork_copy`（深拷贝页表 + 共享物理页 + 清 W + `UA_COW` 标记，`user_aspace64.c:165`，由 `sys_fork` 调用 `syscall64_full.c:1875`）；**clone 未实现**：原 `sys_clone` 结构体偏移全错（active 写到 rip 位、页表写到 rflags 位），子槽永不调度，属返回 pid 的空实现；v0.57.1 已改为返回 `-38 ENOSYS`，真线程需 trampoline + 独立内核栈（见 `OPEN_BUGS` SEC-02、`FIXES_0_57_0.md` §1.82） |
 | 用户程序异常只终止自身 | ✅ | vec40 用户异常 trampoline，不再整机 hlt |
 | 加密原语 | ⚠️ XTEA/XTS 在用，公钥/摘要套件已编入但上层调用有限 | `kernel/crypto/` 共 11 个文件 3552 行全部编入（Makefile:85-95）：XTEA + XTS 页级加密（`crypto.c:33/168`）为在用路径；AES-128/256(-GCM/CBC)、SHA-256/512、HMAC、HKDF、ECDHE、RSA、X.509 代码已编译，主要供 TLS 子模块（`tls_crypto.c:48-55`）与 `auth64.c:71` 使用；RSA/X.509 证书校验暂无独立上层调用方 |
 | Secure Boot 签名验证 | ❌ | 仓库内无对应源码，引导器不传签名校验 |

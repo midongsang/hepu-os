@@ -914,45 +914,29 @@ static int64_t sys_listen(int s, int backlog) { (void)s;(void)backlog; return 0;
 static int64_t sys_getsockname(int s, uint64_t addr, uint64_t addrlen) { (void)s;(void)addr;(void)addrlen; return 0; }
 static int64_t sys_getpeername(int s, uint64_t addr, uint64_t addrlen) { (void)s;(void)addr;(void)addrlen; return 0; }
 static int64_t sys_socketpair(int domain, int type, int proto, int fds) { (void)domain;(void)type;(void)proto;(void)fds; return -1; }
-/* V0.20.87: clone - 线程创建 (共享地址空间) */
-static int64_t sys_clone(int flags, uint64_t stack, uint64_t parent_tid, uint64_t child_tid, uint64_t tls) {
-    extern int current_user_proc;
-    /* user_process_t 布局: pid(4) active(4) rip(8) rsp(8) rflags(8) page_table(8) ... */
-    extern uint8_t user_procs[];  /* 实际数组 */
-    /* 找空闲槽位: active偏移=8, 每槽=128字节 */
-    int idx = -1;
-    for (int i = 0; i < 8; i++) {
-        if (!*(volatile int *)(user_procs + i*128 + 8)) { idx = i; break; }
-    }
-    if (idx < 0) return -11;
-
-    uint8_t *parent = user_procs + current_user_proc*128;
-    uint8_t *child = user_procs + idx*128;
-
-    *(volatile int *)(child + 8) = 1;          /* active */
-    *(volatile int *)(child + 0) = 200 + idx; /* pid */
-    *(volatile uint64_t *)(child + 24) = *(volatile uint64_t *)(parent + 24); /* page_table */
-    *(volatile uint64_t *)(child + 16) = *(volatile uint64_t *)(parent + 16); /* rflags */
-    *(volatile uint64_t *)(child + 88) = 0;   /* blocked */
-    *(volatile uint64_t *)(child + 96) = 0;   /* futex_wait_addr */
-
-    /* V0.54.12(R4 SC-02): child_tid 写前校验用户窗口并走 copy_to_user。
-       旧实现 ring0 裸写未校验，用户传内核地址即构成 4 字节任意内核写。 */
-    if (child_tid) {
-        if (!hepu_is_user_address(child_tid, 4)) return -1;  /* EFAULT */
-        uint32_t tid_val = (uint32_t)(200 + idx);
-        if (copy_to_user((void *)child_tid, &tid_val, 4) != 0) return -1;
-    }
-
-    /* 设置 TLS (fsbase)：V0.54.12(R4) 校验落在用户窗口，防止 FS_BASE
-       指向内核/MMIO；保留 wrmsr 最小改动，统一记账留待后续架构轮。 */
-    if (tls) {
-        if (!hepu_is_user_address(tls, 1)) return -1;
-        uint64_t tls_val = tls;
-        __asm__ volatile("wrmsr" : : "c"(0xC0000100), "a"((uint32_t)tls_val), "d"((uint32_t)(tls_val>>32)));
-    }
-
-    return 200 + idx;
+/* V0.57.1: clone 诚实化（原实现从未生效，且偏移全错）
+ *
+ * 原实现用一组魔数偏移写 user_process_t：
+ *   写 active(+8) / rflags(+24) / page_table(+24) / blocked(+88) / futex(+96)。
+ * 但 user_process.c 中真实布局是：
+ *   pid(0) active(4) rip(8) rsp(16) rflags(24) page_table(32) ...
+ * 于是：active 被写到 rip 位（+8），真正的 active(+4) 永远是 0 →
+ *   **那个槽位永远不会被调度**，clone 只是返回了一个 pid，等于空实现；
+ * 同时 page_table 被写成 rflags（+24），真正的 page_table(+32) 从未赋值 →
+ *   一旦有人改成"置 active=1"，子线程会带着脏页表跑，属更危险的坏状态。
+ *
+ * 真正的线程创建还需要：子线程入口 trampoline（Linux 语义是子方返回 0 并跳到
+ * stack 上的 start_routine）、每线程独立内核栈、子 rax 清零、以及共享页表的
+ * 引用计数。这些都没有实现，所以这里明确返回 ENOSYS(-38)，让调用方（glibc
+ * pthread_create 等）立刻得到错误，而不是拿到一个永远不运行的假线程。
+ *
+ * 参考：fork 路径是完整可用的（sys_fork → uaspace_fork_copy，真 COW）。
+ * 需要并发时请用 fork + 共享内存/管道，不要依赖 clone。
+ */
+static int64_t sys_clone(int flags, uint64_t stack, uint64_t parent_tid,
+                         uint64_t child_tid, uint64_t tls) {
+    (void)flags; (void)stack; (void)parent_tid; (void)child_tid; (void)tls;
+    return HEPU_ENOSYS;
 }
 static int64_t sys_creat(const char *path, int mode) { (void)path;(void)mode; return 3; }
 static int64_t sys_link(const char *oldp, const char *newp) { (void)oldp;(void)newp; return 0; }

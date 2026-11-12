@@ -2509,3 +2509,55 @@ USB 按钮的点击热区一直用裸像素（`+6`、`-12`、`12*len+4`），而
 和内核代码无关，记一笔免得下次误判成回归。
 
 内核 824,008 B，干净版回归正常。
+
+## 1.82 clone 诚实化（原实现从未生效，偏移全错）
+
+### 症状
+
+文档 `OPEN_BUGS` SEC-02 一直写「clone 子线程共享父页表、未接入 COW」，本轮核对发现
+**真实情况比这更糟**：`sys_clone` 根本没生效过。
+
+### 根因
+
+`sys_clone` 用一组魔数偏移写 `user_process_t`，而结构体真实布局是
+`pid(0) active(4) rip(8) rsp(16) rflags(24) page_table(32)`：
+
+| 代码写的偏移 | 实际落在 | 后果 |
+|---|---|---|
+| `+8` ← 1（想写 active） | **rip** | 真正的 `active(+4)` 永远是 0 → 该槽位永不被调度 |
+| `+24` ← 父 page_table | **rflags** | 页表从未写入，`page_table(+32)` 保持脏值 |
+| `+16` ← 父 rflags | **rsp** | 栈指针被写成 0x202 一类标志值 |
+| `+88/+96` ← 0 | kill_requested / start_tick 一带 | 越界覆盖邻近字段 |
+
+找空槽时读的也是 `+8`（rip）→ 判活逻辑同样错位。
+
+所以 `clone` 只是「返回了一个 pid」，子槽永不运行；一旦有人把 active 改对，
+子线程会带着脏页表启动，是更危险的坏状态。
+
+### 修改
+
+`syscall64_full.c` 的 `sys_clone` 改为明确返回 `HEPU_ENOSYS (-38)`，
+并把上述差距写进注释：真线程需要①子线程入口 trampoline（Linux 语义为子方返回 0
+并跳到 stack 上的 start_routine）②每线程独立内核栈 ③子 rax 清零 ④共享页表引用计数。
+
+无调用方（`grep 'clone(' user/ kernel/` 只有 sys_clone 与 wrap_clone），
+最大并发路径仍是 fork（真 COW，`uaspace_fork_copy`）。
+
+### 验证
+
+启动序列插入一次性自检（挂在 desktop64 进入事件循环前，同步执行），串口输出：
+
+```
+[CLONE-SELFTEST] PASS rc=-38 ENOSYS (flags=0 and CLONE_VM)
+```
+
+覆盖 flags=0 与 CLONE_VM 两条路径，均返回 -38。自检块用 `/* TEMP-VERIFY */`
+包起来，验完即删，`grep -rn 'TEMP-VERIFY' kernel/arch/x86_64/*.c` 为空，重编后
+串口不再出现该行，桌面正常（15:59 实机截图）。
+
+内核 823,752 B。
+
+### 连带文档
+
+SEC-02、ROADMAP P0-2、OVERVIEW 3.6 的「clone 共享父页表」全部改为
+「clone 未实现，返回 ENOSYS」——避免下一轮又照着旧措辞去修一个不存在的行为。
