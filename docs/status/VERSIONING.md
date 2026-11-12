@@ -116,7 +116,7 @@ supersedes: null
 
 **0.58.0 迭代内容（2026-11-13，clone 真线程 + 用户线程调度闭环）**
 
-一、用户线程成为真正的调度单元（`1e27708` → `cff8dbe`）
+一、用户线程成为真正的调度单元（`d050de0` → `49435ae`）
 - 新增 `kernel/arch/x86_64/uthread64.c`：每条用户执行流有独立
   `raw[15]/rip/rflags/rsp/fsbase` 上下文，由时钟中断轮转
 - 关键：用户态时钟实际走 **PIT → IRQ0（vector 32）**，不是 APIC 的 `vector 0x40`；
@@ -124,7 +124,7 @@ supersedes: null
 - `process64_tick()` 在用户态 tick 里不再 `process64_schedule()`（否则
   `context_switch` 换栈，中断返回从别人栈上弹寄存器，表现为 `rip=0`、rax 变垃圾）
 
-二、IRQ 帧偏移根因（`cff8dbe`）
+二、IRQ 帧偏移根因（`49435ae`）
 - `entry_64.S` 的 `IRQ_ENTRY` 在压完 15 个 GPR **之后**才压 `ds`/`es`，
   两者在栈的最低地址，真实布局 `f[0]=es f[1]=ds f[2]=r15 … f[16]=rax`
 - 此前按 `f[0]=r15` 算，整体差 2 槽：写 rax 其实写进 rbx，子线程拿到的仍是
@@ -133,13 +133,13 @@ supersedes: null
   `IP` 全落在父分支循环头）+ gdbstub 条件断点，未引入任何外部依赖
 - 修复后实测 `PASS: child ran in shared address space, both counters advanced`
 
-三、收尾 #PF 的两个独立根因（`0f1bea6`）
+三、收尾 #PF 的两个独立根因（`0b585b8`）
 - `uthread_clear_owner` 在 `sys_exit` 路径里释放**当前正在使用**的内核栈页，
   返回路径踩在已回收页上，栈里的 `rcx`（`sysretq` 的 RIP）被写成 0
   → 返回即跳地址 0 取指（`error=0x15 rip=0x0`）。改为槽位复用、不随退出释放
 - `crt0.S` 用 32 位 `int $0x80` 退出，在被 clone 切换过的上下文里返回不可靠
 
-四、线程退出接口（`49caa55`）
+四、线程退出接口（`2226f2e`）
 - `SYS_HEPU_THREAD_EXIT = 235`，`SYS_MAX` 229 → 236；用户侧 `ulib.h thread_exit()`
 - 语义：结束当前用户线程、不终止整进程；在 syscall 内核栈上重建目标线程返回帧，
   `sysretq` 直接落到兄弟线程
