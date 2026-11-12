@@ -2905,11 +2905,29 @@ static void hs_sidebar_render(void)
         /* V0.57.0: 悬停反馈 —— 未选中的标签在指针下轻微染上强调色 */
         int tab_hov = (g_shell.mouse_x >= tx && g_shell.mouse_x < tx + tab_w - hs_sx(4) &&
                        g_shell.mouse_y >= tab_y && g_shell.mouse_y < tab_y + hs_sy(28));
-        uint32_t bg = (i == g_sidebar_tab) ? g_shell.colors.accent
+        uint32_t sel = g_shell.colors.accent;
+        {
+            /* 壁纸采样在深色壁纸下会给出很暗的 accent, 选中块与面板底几乎同色,
+             * 深色字压深色底 -> 150% 实测整块"消失"。这里对过暗的 accent 亮化,
+             * 并按其最终亮度选字色, 保证选中态始终可分辨。 */
+            int r0 = (sel >> 16) & 0xFF, g0 = (sel >> 8) & 0xFF, b0 = sel & 0xFF;
+            int lum0 = (r0 * 77 + g0 * 151 + b0 * 28) >> 8;
+            if (lum0 < 80) sel = hs_mix_color(sel, 0xFFFFFF, 55);
+        }
+        uint32_t bg = (i == g_sidebar_tab) ? sel
                      : (tab_hov ? hs_mix_color(g_shell.colors.panel_bg, g_shell.colors.accent, 28)
                                 : g_shell.colors.panel_bg);
-        uint32_t fg = (i == g_sidebar_tab) ? hs_on_accent() : g_shell.colors.panel_fg;
-        gfx64_fill_rounded_rect(tx, tab_y, tab_w - hs_sx(4), hs_sy(28), hs_s(8), bg);
+        uint32_t fg = g_shell.colors.panel_fg;
+        if (i == g_sidebar_tab) {
+            int r1 = (sel >> 16) & 0xFF, g1 = (sel >> 8) & 0xFF, b1 = sel & 0xFF;
+            int lum1 = (r1 * 77 + g1 * 151 + b1 * 28) >> 8;
+            fg = (lum1 > 140) ? 0x003544 : 0xF2F5F7;
+        }
+        /* 色板里的 accent 是 6 位色(alpha 字节 0), 而 vg 填充走 alpha 混合:
+         * alpha=0 被当作全透明, 选中块整块不落像素 —— 文字却按"亮底"选了深色,
+         * 结果 150% 下整个 tab 像消失。这里统一补不透明位。 */
+        gfx64_fill_rounded_rect(tx, tab_y, tab_w - hs_sx(4), hs_sy(28), hs_s(8),
+                                bg | 0xFF000000u);
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            tx + (tab_w - hs_sx(4) - hs_sx(32)) / 2, tab_y + hs_sy(7),
                            tabs[i], fg, hs_s(14));
@@ -2943,7 +2961,7 @@ static void hs_sidebar_render(void)
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            sx + hs_sx(20), content_y, "CPU", g_shell.colors.panel_fg, hs_s(14));
         gfx64_fill_rounded_rect(s_bar_x, content_y + hs_sy(2), s_bar_w, hs_sy(12), hs_s(4), g_shell.colors.border);
-        gfx64_fill_rounded_rect(s_bar_x, content_y + hs_sy(2), s_bar_w * cpu_p / 100, hs_sy(12), hs_s(4), g_shell.colors.accent);
+        gfx64_fill_rounded_rect(s_bar_x, content_y + hs_sy(2), s_bar_w * cpu_p / 100, hs_sy(12), hs_s(4), g_shell.colors.accent | 0xFF000000u);
         {
             char pc[8];
             hs_pct_str(cpu_p, pc);
@@ -2956,7 +2974,7 @@ static void hs_sidebar_render(void)
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            sx + hs_sx(20), content_y, "MEM", g_shell.colors.panel_fg, hs_s(14));
         gfx64_fill_rounded_rect(s_bar_x, content_y + hs_sy(2), s_bar_w, hs_sy(12), hs_s(4), g_shell.colors.border);
-        gfx64_fill_rounded_rect(s_bar_x, content_y + hs_sy(2), s_bar_w * mem_p / 100, hs_sy(12), hs_s(4), g_shell.colors.accent);
+        gfx64_fill_rounded_rect(s_bar_x, content_y + hs_sy(2), s_bar_w * mem_p / 100, hs_sy(12), hs_s(4), g_shell.colors.accent | 0xFF000000u);
         {
             char pc[8];
             hs_pct_str(mem_p, pc);
@@ -2969,7 +2987,7 @@ static void hs_sidebar_render(void)
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            sx + hs_sx(20), content_y, "DSK", g_shell.colors.panel_fg, hs_s(14));
         gfx64_fill_rounded_rect(s_bar_x, content_y + hs_sy(2), s_bar_w, hs_sy(12), hs_s(4), g_shell.colors.border);
-        gfx64_fill_rounded_rect(s_bar_x, content_y + hs_sy(2), s_bar_w * dsk_p / 100, hs_sy(12), hs_s(4), g_shell.colors.accent);
+        gfx64_fill_rounded_rect(s_bar_x, content_y + hs_sy(2), s_bar_w * dsk_p / 100, hs_sy(12), hs_s(4), g_shell.colors.accent | 0xFF000000u);
         {
             char pc[8];
             hs_pct_str(dsk_p, pc);
@@ -4205,6 +4223,9 @@ void hpdesk_render(void)
         {
             int cap_w = g_shell.screen_width * 2 / 5;
             int cap_h = g_shell.screen_height - sys_ - hs_sy(16);
+            vga_printf("[GEOM] theme accent=0x%x panel_bg=0x%x panel_fg=0x%x tab=%d\n",
+                       g_shell.colors.accent, g_shell.colors.panel_bg,
+                       g_shell.colors.panel_fg, g_sidebar_tab);
             vga_printf("[GEOM] sidebar clamped: w=%d h=%d right=%d bottom=%d (caps %d/%d)\n",
                        sws > cap_w ? cap_w : sws, shs > cap_h ? cap_h : shs,
                        sxs + (sws > cap_w ? cap_w : sws), sys_ + (shs > cap_h ? cap_h : shs),
@@ -4876,13 +4897,17 @@ void hs_notification_render(void)
         if (n->timeout > 0 && age > life) { n->visible = 0; continue; }
 
         int x, y;
+        /* 顶部锚点必须用"顶栏实际高度"(bar_height 经 hs_sy 缩放), 而不是常量
+         * HS_PANEL_HEIGHT=40。200% 下顶栏实际 160px, 通知卡却从 y=48 起,
+         * 正好盖在右上角 wifi/电池/音量图标上。 */
+        int top_bottom = hs_sy(g_shell.ui.bar_height) + hs_sy(8);
         int right_side = (g_notif_pos == 0 || g_notif_pos == 2);
         if (g_notif_pos == 0) {      /* 右上: 向下堆叠 */
             x = g_shell.screen_width - w - 8;
-            y = HS_PANEL_HEIGHT + 8 + popup_count * (h + gap);
+            y = top_bottom + popup_count * (h + gap);
         } else if (g_notif_pos == 1) { /* 左上 */
             x = 8;
-            y = HS_PANEL_HEIGHT + 8 + popup_count * (h + gap);
+            y = top_bottom + popup_count * (h + gap);
         } else if (g_notif_pos == 2) { /* 右下: 向上堆叠 */
             x = g_shell.screen_width - w - 8;
             y = g_shell.screen_height - 40 - (popup_count + 1) * (h + gap);
