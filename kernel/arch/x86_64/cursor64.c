@@ -21,10 +21,20 @@ extern int ext2_64_read_file(const char *path, uint8_t *buffer, uint32_t max_siz
 #define XCUR_IMAGE    0xFFFD0002u
 #define XCUR_HDR_SIZE 36u
 
-static uint32_t g_px[CUR_MAX_DIM * CUR_MAX_DIM];
-static int g_w, g_h, g_hot_x, g_hot_y;
-static int g_ready;
-static int g_nominal;          /* 实际选中的名义尺寸，用于诊断 */
+/* 多形态: 每种形态各留一份已解码位图, 切换形态只切指针, 不重复读盘。
+ * 每槽 48x48 上限 —— 实际 want 只可能是 24/32/48(见 cursor64_pick_size),
+ * 48*48*4B*4 槽 ≈ 36KB, 对内核体积可接受; 超过 48 的图不装载, 免得撑爆。 */
+#define CUR_KIND_MAX  4
+#define CUR_SLOT_DIM  48
+typedef struct {
+    uint32_t px[CUR_SLOT_DIM * CUR_SLOT_DIM];
+    int w, h, hot_x, hot_y;
+    int ready;
+    int nominal;
+} cur_slot_t;
+
+static cur_slot_t g_slot[CUR_KIND_MAX];
+static int g_active;
 
 static uint32_t rd32(const uint8_t *p)
 {
@@ -33,8 +43,9 @@ static uint32_t rd32(const uint8_t *p)
 }
 
 /* 解析内存中的 xcur 数据；want = 期望的名义尺寸(像素) */
-int cursor64_load_blob(const uint8_t *b, uint32_t len, int want)
+int cursor64_load_blob(int kind, const uint8_t *b, uint32_t len, int want)
 {
+    if (kind < 0 || kind >= CUR_KIND_MAX) return -10;
     if (len < 16) return -1;
     if (!(b[0] == 'X' && b[1] == 'c' && b[2] == 'u' && b[3] == 'r')) return -2;
 
@@ -60,36 +71,50 @@ int cursor64_load_blob(const uint8_t *b, uint32_t len, int want)
     uint32_t xh = rd32(c + 24), yh = rd32(c + 28);
 
     if (hs != XCUR_HDR_SIZE) return -6;
-    if (w == 0 || h == 0 || w > CUR_MAX_DIM || h > CUR_MAX_DIM) return -7;
+    if (w == 0 || h == 0 || w > CUR_SLOT_DIM || h > CUR_SLOT_DIM) return -7;
     if (best_pos + XCUR_HDR_SIZE + w * h * 4u > len) return -8;
 
+    cur_slot_t *sl = &g_slot[kind];
     const uint8_t *p = c + XCUR_HDR_SIZE;
     for (uint32_t j = 0; j < h; j++)
         for (uint32_t i = 0; i < w; i++)
-            g_px[j * w + i] = rd32(p + 4u * (j * w + i));
+            sl->px[j * w + i] = rd32(p + 4u * (j * w + i));
 
-    g_w = (int)w; g_h = (int)h;
-    g_hot_x = (xh < w) ? (int)xh : (int)(w / 2);
-    g_hot_y = (yh < h) ? (int)yh : (int)(h / 2);
-    g_nominal = (int)best_nom;
-    g_ready = 1;
+    sl->w = (int)w; sl->h = (int)h;
+    sl->hot_x = (xh < w) ? (int)xh : (int)(w / 2);
+    sl->hot_y = (yh < h) ? (int)yh : (int)(h / 2);
+    sl->nominal = (int)best_nom;
+    sl->ready = 1;
     return 0;
 }
 
-/* 从根文件系统读取 xcur 文件并装载 */
-int cursor64_load_file(const char *path, int want)
+/* 从根文件系统读取 xcur 文件并装载到指定形态槽 */
+int cursor64_load_kind(int kind, const char *path, int want)
 {
     static uint8_t buf[64 * 1024];
     int n = ext2_64_read_file(path, buf, (uint32_t)sizeof(buf));
     if (n <= 0) return -9;
-    return cursor64_load_blob(buf, (uint32_t)n, want);
+    return cursor64_load_blob(kind, buf, (uint32_t)n, want);
 }
 
-int cursor64_ready(void)      { return g_ready; }
-int cursor64_size(void)       { return g_w; }
-int cursor64_nominal(void)    { return g_nominal; }
-int cursor64_hotspot_x(void)  { return g_hot_x; }
-int cursor64_hotspot_y(void)  { return g_hot_y; }
+/* 兼容旧调用点: 未指定形态时装到 0 号槽(箭头) */
+int cursor64_load_file(const char *path, int want)
+{
+    return cursor64_load_kind(0, path, want);
+}
+
+void cursor64_set_kind(int kind)
+{
+    if (kind < 0 || kind >= CUR_KIND_MAX) return;
+    if (!g_slot[kind].ready) return;      /* 该形态没装: 保持当前, 不闪 */
+    g_active = kind;
+}
+int cursor64_kind(void)       { return g_active; }
+int cursor64_ready(void)      { return g_slot[g_active].ready || g_slot[0].ready; }
+int cursor64_size(void)       { return g_slot[g_active].ready ? g_slot[g_active].w : g_slot[0].w; }
+int cursor64_nominal(void)    { return g_slot[g_active].ready ? g_slot[g_active].nominal : g_slot[0].nominal; }
+int cursor64_hotspot_x(void)  { return g_slot[g_active].ready ? g_slot[g_active].hot_x : g_slot[0].hot_x; }
+int cursor64_hotspot_y(void)  { return g_slot[g_active].ready ? g_slot[g_active].hot_y : g_slot[0].hot_y; }
 
 /* 按屏幕分辨率推荐名义尺寸：1024/768→24, 1280/1440→32, 更高→48 */
 int cursor64_pick_size(int screen_w, int screen_h)
@@ -103,15 +128,17 @@ int cursor64_pick_size(int screen_w, int screen_h)
 /* 绘制当前光标（热点对齐），未装载时回退内置位图 */
 void cursor64_draw(int x, int y)
 {
-    if (!g_ready) {
+    const cur_slot_t *sl = &g_slot[g_active];
+    if (!sl->ready) sl = &g_slot[0];     /* 回退箭头 */
+    if (!sl->ready) {
         gfx64_draw_mouse_cursor(x, y, 0xE6E1E5);
         return;
     }
-    x -= g_hot_x;
-    y -= g_hot_y;
-    for (int j = 0; j < g_h; j++) {
-        for (int i = 0; i < g_w; i++) {
-            uint32_t p = g_px[j * g_w + i];
+    x -= sl->hot_x;
+    y -= sl->hot_y;
+    for (int j = 0; j < sl->h; j++) {
+        for (int i = 0; i < sl->w; i++) {
+            uint32_t p = sl->px[j * sl->w + i];
             int a = (int)(p >> 24);
             if (!a) continue;
             uint32_t rgb = p & 0xFFFFFFu;

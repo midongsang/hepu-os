@@ -1644,6 +1644,67 @@ int hs_files_hit(int x, int y)
     return 1;
 }
 
+/* ============================================================================
+ * 右键菜单 / 光标形态(V0.57.1)
+ * ========================================================================== */
+void hs_files_menu_action(int id)
+{
+    if (id >= 0 && id <= 5) { hs_files_do_action(id); return; }
+    if (id == 6) { f_do_copy(0); return; }
+    if (id == 7) { f_do_copy(1); return; }
+    if (id == 8) { f_do_paste(); return; }
+    if (id == 9) { f_props_open(); return; }
+    if (id == 10) {
+        f_prompt_start(FS_PROMPT_MKFILE, "newfile.txt");
+        hs_strcpyn(f_status2, "Enter to create, Tab to cancel", FS_PROMPT_MAX);
+        return;
+    }
+}
+
+/* 在点击点弹出文件操作菜单。标签内容随"有选中项 / 剪贴板非空"变化,
+ * 免得给用户看一堆此刻点了没反应的项目。 */
+int hs_files_open_ctx(int x, int y)
+{
+    extern void hs_ctx_open(int x, int y, const char *const *labels,
+                            const int *ids, int n, int owner);
+    const char *labs[9];
+    int ids[9];
+    int n = 0;
+    int has_sel = (f_match_count > 0);
+    if (has_sel) {
+        labs[n] = "Open";        ids[n++] = 0;
+        labs[n] = "Rename";      ids[n++] = 5;
+        labs[n] = "Copy";        ids[n++] = 6;
+        labs[n] = "Cut";         ids[n++] = 7;
+        labs[n] = "Delete";      ids[n++] = 1;
+        labs[n] = "Properties";  ids[n++] = 9;
+    }
+    if (f_clip_count > 0) {
+        labs[n] = f_clip_mode == 2 ? "Paste (move)" : "Paste (copy)";
+        ids[n++] = 8;
+    }
+    labs[n] = "New folder";      ids[n++] = 4;
+    labs[n] = "Refresh";         ids[n++] = 2;
+    hs_ctx_open(x, y, labs, ids, n, 1);
+    return 1;
+}
+
+/* 光标形态: -1=不在本窗口, 0=箭头, 1=手型(可点), 2=文本 */
+int hs_files_cursor_kind(int x, int y)
+{
+    if (!f_win || !f_win->visible) return -1;
+    if (x < f_win->x || x > f_win->x + f_win->width) return -1;
+    if (y < f_win->y || y > f_win->y + f_win->height) return -1;
+    if (y <= f_win->y + FS(26)) return 0;              /* 标题栏 */
+    int cy0 = f_win->y + FS(26);
+    int ch = f_win->height - FS(26) - FS(40);
+    int by = cy0 + ch - FS(24);
+    if (y >= by && y <= by + FS(22))
+        return (f_prompt != FS_PROMPT_NONE || f_del_confirm) ? 2 : 0;
+    if (y <= cy0 + FS(20)) return 1;                   /* 路径栏 */
+    return 1;                                          /* 位置条/列头/列表 */
+}
+
 void hs_files_do_action(int action)
 {
     /* 0=Open 1=Delete 2=Refresh 3=Up 4=NewFolder 5=Rename */

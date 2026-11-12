@@ -308,9 +308,14 @@ void hs_input_poll(void)
     }
     last_left = left;
 
-    /* 右键 */
-    if (right && !last_right) hpdesk_handle_right_click(mx, my);
-    last_right = right;
+    /* 右键: 上升沿弹上下文菜单(V0.57.1 统一入口 —— 原 hpdesk_handle_right_click
+     * 那套固定像素菜单已下线, 改走带缩放/贴边翻转/悬停反馈的新实现) */
+    {
+        static int last_right = 0;
+        extern void hpdesk_right_click(int x, int y);
+        if (right && !last_right) hpdesk_right_click(mx, my);
+        last_right = right;
+    }
 
     /* V0.13.9: 滚轮 → 桌面 (USB 鼠标优先, tablet 次之, PS/2 兜底) */
     {
@@ -361,7 +366,7 @@ void hs_touch_report(int type, int id, int x, int y)
         hpdesk_update_mouse(g.x, g.y);
         break;
     case HS_GESTURE_LONG_PRESS:
-        hpdesk_handle_right_click(g.x, g.y);
+        { extern void hpdesk_right_click(int x, int y); hpdesk_right_click(g.x, g.y); }
         break;
     case HS_GESTURE_SWIPE:
         if (g.scroll_delta < 0) hpdesk_switch_workspace_delta(1);

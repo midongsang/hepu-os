@@ -229,14 +229,37 @@ static void hs_save_bg_color(uint32_t c)
     }
 }
 
-/* 右键菜单状态 */
-static int g_context_menu_visible = 0;
-static int g_context_menu_x = 0;
-static int g_context_menu_y = 0;
+/* 右键菜单: 由 g_ctx(见下) 统一承载, 旧的 g_context_menu_* 那套已下线 */
 /* V0.13.39: 通知位置配置 (0=右上 1=左上 2=右下 3=左下) */
 static int g_notif_pos = 0;
 
 /* 窗口拖拽状态（定义在后面） */
+/* 右键菜单状态(定义提前: hpdesk_handle_click 在渲染函数之前就要用到) */
+#define HS_CTX_MAX 9
+static struct {
+    int open;
+    int x, y, w, h;
+    int count;
+    int owner;                        /* 0=桌面 1=Files 2=通用窗口 */
+    char label[HS_CTX_MAX][28];
+    int  id[HS_CTX_MAX];
+} g_ctx;
+
+#define HS_CTX_D_REFRESH 0
+#define HS_CTX_D_FILES   1
+#define HS_CTX_D_SETTING 2
+#define HS_CTX_D_TASK    3
+#define CUR_ARROW 0
+#define CUR_LINK  1
+#define CUR_TEXT  2
+#define CUR_MOVE  3
+
+static int  hs_ctx_hit_item(int x, int y);
+static void hs_ctx_menu_render(void);
+void hs_ctx_close(void);
+void hs_ctx_open(int x, int y, const char *const *labels, const int *ids, int n, int owner);
+void hpdesk_right_click(int x, int y);
+
 static hs_window_t *g_drag_window;
 static int g_drag_offset_x;
 static int g_drag_offset_y;
@@ -2274,7 +2297,6 @@ static void hs_settings_window_render(hs_window_t *w)
 }
 #undef SETK
 
-
 /* ============================================================================
  * 工作区
  * ========================================================================== */
@@ -2497,7 +2519,6 @@ static void hs_dynamic_island_render(void)
 
 
 
-
 /* 设置: 齿轮(8 齿 + 齿体圆 + 中心孔) */
 /* V0.57.1: 64x64 版位图绘制, 按目标像素做覆盖采样 —— 每个目标像素统计它覆盖到的
  * 源像素里有多少是墨, 过半就点亮。原来的 32->size 直接映射在缩小时会整像素跳过,
@@ -2607,7 +2628,6 @@ static void hs_icon_settings(int x, int y, int size, uint32_t color)
     gfx64_fill_circle(cx, cy, size / 5, g_shell.colors.panel_bg); /* 中心孔 */
 }
 
-
 /* 文件夹 */
 void hs_icon_folder(int x, int y, int size, uint32_t color)
 {
@@ -2714,7 +2734,6 @@ void hs_icon_file(int x, int y, int size, uint32_t color)
     gfx64_fill_rect(x + size / 3 + size / 6, y + size / 2, size / 6, size / 8, color);
     gfx64_fill_rect(x + size / 3, y + size * 3 / 4, size / 3, size / 8, color);
 }
-
 
 /* 顶部Bar：左侧工作区+右侧状态图标 */
 static void hs_top_bar_render(void)
@@ -3652,37 +3671,6 @@ static int hs_control_center_handle_click(int x, int y)
 /* 右键菜单渲染 */
 static int g_menu_file_mode = 0;   /* V0.13.39: 1=文件管理器右键菜单 */
 
-static void hs_context_menu_render(void)
-{
-    const char *f_items[] = {"Open", "Delete", "New Folder", "Rename", "Refresh", "Up Dir", "---", "Close Menu"};
-    const char *items[] = {"New Window", "Change Theme", "Settings", "About", "---", "Lock Screen", "Desktop Color"};
-    const char **items_p = g_menu_file_mode ? f_items : items;
-    int item_count = g_menu_file_mode ? 8 : 7;
-    int menu_w = 180;
-    int item_h = 32;
-    int menu_h = item_count * item_h + 8;
-
-    int mx = g_context_menu_x;
-    /* P0: 弹出滑入 — 起点低于目标位置 12px, ease-out 后归位 */
-    int my = g_context_menu_y + (int)(12 * (100 - hs_ease_out_cubic(g_menu_t)) / 100);
-    if (mx + menu_w > g_shell.screen_width) mx = g_shell.screen_width - menu_w;
-    if (my + menu_h > g_shell.screen_height) my = g_shell.screen_height - menu_h;
-
-    gfx64_fill_rounded_rect(mx, my, menu_w, menu_h, 10, g_shell.colors.window_bg);
-    gfx64_draw_rounded_rect(mx, my, menu_w, menu_h, 10, g_shell.colors.border);
-
-    void *fb = gfx64_get_framebuffer();
-    for (int i = 0; i < item_count; i++) {
-        int iy = my + 4 + i * item_h;
-        if (items_p[i][0] == '-' && items_p[i][1] == '-') {
-            gfx64_fill_rect(mx + 12, iy + item_h / 2, menu_w - 24, 1, g_shell.colors.border);
-        } else {
-            font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                               mx + 16, iy + 8, items_p[i], g_shell.colors.window_fg, 14);
-        }
-    }
-}
-
 /* ============================================================================
  * V0.55.0: 桌面配色面板 — 图形化更换桌面背景色, 并持久化到 config.hsqml
  * 此前背景色只能靠改代码/手改配置文件, 这里点选预设色块即时生效并写回配置
@@ -3697,7 +3685,6 @@ static void hs_color_panel_geometry(int *px, int *py)
     if (*px < 0) *px = 0;
     if (*py < 0) *py = 0;
 }
-
 
 static void hs_color_panel_render(void)
 {
@@ -3754,55 +3741,6 @@ static int hs_color_panel_handle_click(int x, int y)
     return 1;
 }
 
-static void hs_context_menu_handle_click(int x, int y)
-{
-    const char *f_items[] = {"Open", "Delete", "New Folder", "Rename", "Refresh", "Up Dir", "---", "Close Menu"};
-    const char *items[] = {"New Window", "Change Theme", "Settings", "About", "---", "Lock Screen", "Desktop Color"};
-    const char **items_p = g_menu_file_mode ? f_items : items;
-    int item_count = g_menu_file_mode ? 8 : 7;
-    int menu_w = 180;
-    int item_h = 32;
-    int menu_h = item_count * item_h + 8;
-
-    int mx = g_context_menu_x;
-    int my = g_context_menu_y;
-    if (mx + menu_w > g_shell.screen_width) mx = g_shell.screen_width - menu_w;
-    if (my + menu_h > g_shell.screen_height) my = g_shell.screen_height - menu_h;
-
-    if (x < mx || x > mx + menu_w || y < my || y > my + menu_h) {
-        g_context_menu_visible = 0;
-        return;
-    }
-
-    int idx = (y - my - 4) / item_h;
-    if (idx >= 0 && idx < item_count && items_p[idx][0] != '-') {
-        if (g_menu_file_mode) {
-            extern void hs_files_do_action(int action);
-            if (idx == 0) hs_files_do_action(0);        /* Open */
-            else if (idx == 1) hs_files_do_action(1);   /* Delete */
-            else if (idx == 2) hs_files_do_action(4);   /* New Folder */
-            else if (idx == 3) hs_files_do_action(5);   /* Rename */
-            else if (idx == 4) hs_files_do_action(2);   /* Refresh */
-            else if (idx == 5) hs_files_do_action(3);   /* Up Dir */
-            g_menu_file_mode = 0;
-            g_context_menu_visible = 0;
-            return;
-        }
-        switch (idx) {
-            case 1:
-                if (g_shell.theme == HS_THEME_LIGHT) g_shell.theme = HS_THEME_DARK;
-                else g_shell.theme = HS_THEME_LIGHT;
-                hs_theme_init(&g_shell.colors, g_shell.theme);
-                break;
-            case 2: g_pending_app = HS_APP_SETTINGS; break;
-            case 3: g_pending_app = HS_APP_ABOUT; break;
-            case 5: g_locked = 1; break;
-            case 6: g_color_panel_visible = 1; g_color_t = 0; g_color_target = 100; break;   /* V0.55.0: 桌面配色面板 */
-        }
-        g_context_menu_visible = 0;
-    }
-}
-
 /* Hepu Desktop鼠标点击处理（由desktop64主循环调用） */
 void hpdesk_handle_click(int x, int y)
 {
@@ -3814,11 +3752,41 @@ void hpdesk_handle_click(int x, int y)
         if (hs_oobe_active()) { hs_oobe_handle_click(x, y); return; }
     }
 
+    /* 右键菜单开着: 无论点哪儿都先归菜单, 点空白则关闭 */
+    if (g_ctx.open) {
+        int idx = hs_ctx_hit_item(x, y);
+        int owner = g_ctx.owner, cid = (idx >= 0) ? g_ctx.id[idx] : -1;
+        hs_ctx_close();
+        if (idx >= 0 && owner == 0) {
+            if (cid == HS_CTX_D_REFRESH) hpdesk_mark_dirty();
+            else if (cid == HS_CTX_D_FILES) g_pending_app = HS_APP_FILES;
+            else if (cid == HS_CTX_D_SETTING) g_pending_app = HS_APP_SETTINGS;
+            else if (cid == HS_CTX_D_TASK) g_pending_app = HS_APP_TASK;
+        } else if (idx >= 0 && owner == 1) {
+            extern void hs_files_menu_action(int id);
+            hs_files_menu_action(cid);
+        } else if (idx >= 0 && owner == 2) {
+            /* 通用窗口菜单: 0=Close */
+            if (cid == 0) {
+                for (int zi = g_wm.z_count - 1; zi >= 0; zi--) {
+                    int wid = g_wm.z_order[zi];
+                    if (wid < 0 || wid >= g_wm.window_count) continue;
+                    hs_window_t *w2 = &g_wm.windows[wid];
+                    if (!w2->visible || w2->type != HS_WINDOW_FLOATING) continue;
+                    if (x < w2->x || x > w2->x + w2->width || y < w2->y || y > w2->y + w2->height) continue;
+                    hs_window_hide(w2);
+                    break;
+                }
+            }
+        }
+        return;
+    }
+
     /* V0.55.0: 桌面配色面板优先接管点击 */
     if (hs_color_panel_handle_click(x, y)) return;
 
     /* 控制中心绘制在窗口之上，优先接管该区域点击 */
-    if (!g_locked && g_shell.panel_registry[HS_PANEL_CONTROL_CENTER].enabled && !g_context_menu_visible) {
+    if (!g_locked && g_shell.panel_registry[HS_PANEL_CONTROL_CENTER].enabled && 1) {
         if (hs_control_center_handle_click(x, y)) return;
     }
 
@@ -3897,12 +3865,6 @@ void hpdesk_handle_click(int x, int y)
                 return;
             }
         }
-        return;
-    }
-
-    /* 如果右键菜单可见，优先处理菜单点击 */
-    if (g_context_menu_visible) {
-        hs_context_menu_handle_click(x, y);
         return;
     }
 
@@ -4199,23 +4161,6 @@ void hpdesk_handle_click(int x, int y)
     }
 
 }
-/* Hepu Desktop右键点击处理（显示上下文菜单） */
-void hpdesk_handle_right_click(int x, int y)
-{
-    hpdesk_mark_dirty();   /* P0: 交互发生, 内容需重绘 */
-    /* V0.55 P3-GUI: 首启向导期间不弹桌面右键菜单 */
-    {
-        extern int hs_oobe_active(void);
-        if (hs_oobe_active()) return;
-    }
-    extern int hs_files_hit(int x, int y);
-    g_context_menu_x = x;
-    g_context_menu_y = y;
-    g_menu_file_mode = hs_files_hit(x, y) ? 1 : 0;
-    g_context_menu_visible = 1;
-    g_menu_t = 0; g_menu_target = 100;   /* P0: 菜单滑入 */
-}
-
 /* 底部Dock栏 */
 static void hs_dock_render(void)
 {
@@ -4470,6 +4415,150 @@ static void hs_png_selfcheck(void)
                img.rgba[0], img.rgba[1], img.rgba[2], img.rgba[3]);
 }
 
+/* ============================================================================
+ * 右键上下文菜单(V0.57.1)
+ *
+ * 此前 right 位从 usb/xhci/ps2 三路都读出来了, 但没有任何消费者 —— 全系统零右键。
+ * 这里落一个通用小浮层: 调用方给标签与 id, 菜单负责定位(贴边翻转)、渲染、
+ * 命中与关闭, 点击派发回各自的 owner。
+ * ========================================================================== */
+static int hs_ctx_item_h(void) { return hs_sy(24); }
+
+void hs_ctx_close(void)
+{
+    if (!g_ctx.open) return;
+    g_ctx.open = 0;
+    g_content_dirty = 1;
+}
+
+void hs_ctx_open(int x, int y, const char *const *labels, const int *ids, int n, int owner)
+{
+    if (n <= 0) return;
+    if (n > HS_CTX_MAX) n = HS_CTX_MAX;
+    int maxlen = 0;
+    for (int i = 0; i < n; i++) {
+        /* hpdesk.c 里没有 hs_strcpyn(它是 hs_apps.c 的 static), 就地按长度拷贝 */
+        int k = 0;
+        while (labels[i][k] && k < 27) { g_ctx.label[i][k] = labels[i][k]; k++; }
+        g_ctx.label[i][k] = 0;
+        g_ctx.id[i] = ids[i];
+        int l = (int)strlen(labels[i]);
+        if (l > maxlen) maxlen = l;
+    }
+    g_ctx.count = n;
+    g_ctx.owner = owner;
+    g_ctx.w = maxlen * hs_s(7) + hs_s(26);
+    g_ctx.h = n * hs_ctx_item_h() + hs_sy(8);
+    /* 贴边翻转: 右/下空间不足时向左/向上展开, 保证整块菜单在屏内 */
+    int sw = g_shell.screen_width, shh = g_shell.screen_height;
+    g_ctx.x = x;
+    g_ctx.y = y;
+    if (g_ctx.x + g_ctx.w > sw - hs_s(4)) g_ctx.x = x - g_ctx.w;
+    if (g_ctx.y + g_ctx.h > shh - hs_s(4)) g_ctx.y = y - g_ctx.h;
+    if (g_ctx.x < hs_s(4)) g_ctx.x = hs_s(4);
+    if (g_ctx.y < hs_s(4)) g_ctx.y = hs_s(4);
+    g_ctx.open = 1;
+    g_content_dirty = 1;
+    vga_printf("[CTX] open n=%d at %d,%d w=%d h=%d owner=%d\n", n, g_ctx.x, g_ctx.y, g_ctx.w, g_ctx.h, owner);
+}
+
+int hs_ctx_is_open(void) { return g_ctx.open; }
+
+/* 返回菜单项下标, -1 = 没点在菜单上 */
+static int hs_ctx_hit_item(int x, int y)
+{
+    if (!g_ctx.open) return -1;
+    if (x < g_ctx.x || x > g_ctx.x + g_ctx.w) return -1;
+    if (y < g_ctx.y || y > g_ctx.y + g_ctx.h) return -1;
+    int rel = y - g_ctx.y - hs_sy(4);
+    if (rel < 0) return -1;
+    int idx = rel / hs_ctx_item_h();
+    if (idx < 0 || idx >= g_ctx.count) return -1;
+    return idx;
+}
+
+static void hs_ctx_menu_render(void)
+{
+    if (!g_ctx.open) return;
+    void *fb = gfx64_get_framebuffer();
+    int W = g_shell.screen_width, H = g_shell.screen_height;
+    int ih = hs_ctx_item_h();
+    int mx = g_shell.mouse_x, my = g_shell.mouse_y;
+    /* 两层暗边做投影(自研管线无模糊, 用叠加半透明矩形近似) */
+    gfx64_fill_rounded_rect(g_ctx.x + hs_s(4), g_ctx.y + hs_sy(6), g_ctx.w, g_ctx.h, hs_s(8), 0x40000000);
+    gfx64_fill_rounded_rect(g_ctx.x, g_ctx.y, g_ctx.w, g_ctx.h, hs_s(8), g_shell.colors.panel_bg);
+    gfx64_draw_rounded_rect(g_ctx.x, g_ctx.y, g_ctx.w, g_ctx.h, hs_s(8), 0x44FFFFFF);
+    for (int i = 0; i < g_ctx.count; i++) {
+        int iy = g_ctx.y + hs_sy(4) + i * ih;
+        int hov = (mx > g_ctx.x && mx < g_ctx.x + g_ctx.w && my >= iy && my < iy + ih);
+        if (hov)
+            gfx64_fill_rounded_rect(g_ctx.x + hs_s(4), iy, g_ctx.w - hs_s(8), ih, hs_s(4),
+                                    g_shell.colors.accent);
+        font64_draw_string(fb, W, H, g_ctx.x + hs_s(12), iy + hs_sy(5), g_ctx.label[i],
+                           hov ? 0xFFFFFF : g_shell.colors.window_fg, hs_s(12));
+    }
+}
+
+void hpdesk_right_click(int x, int y)
+{
+    vga_printf("[RCLICK] %d,%d open=%d\n", x, y, g_ctx.open);
+    g_content_dirty = 1;
+    if (g_ctx.open) { hs_ctx_close(); return; }
+
+    /* Files 窗口: 文件操作菜单(内容随选中/剪贴板状态变化, 由 Files 自己构建) */
+    {
+        extern int hs_files_hit(int x, int y);
+        extern int hs_files_open_ctx(int x, int y);
+        if (hs_files_hit(x, y) && hs_files_open_ctx(x, y)) return;
+    }
+    /* 其它窗口标题栏: 给一个最小窗口菜单(关闭) */
+    for (int zi = g_wm.z_count - 1; zi >= 0; zi--) {
+        int id = g_wm.z_order[zi];
+        if (id < 0 || id >= g_wm.window_count) continue;
+        hs_window_t *w = &g_wm.windows[id];
+        if (!w->visible || w->type != HS_WINDOW_FLOATING) continue;
+        if (x < w->x || x > w->x + w->width || y < w->y || y > w->y + w->height) continue;
+        static const char *labs[2] = {"Close window", "Cancel"};
+        static const int ids[2] = {0, 1};
+        hs_ctx_open(x, y, labs, ids, 2, 2);   /* owner 2 = 通用窗口 */
+        return;
+    }
+    /* 桌面 */
+    {
+        static const char *labs[4] = {"Refresh desktop", "Open Files",
+                                      "Display settings", "Task manager"};
+        static const int ids[4] = {HS_CTX_D_REFRESH, HS_CTX_D_FILES,
+                                   HS_CTX_D_SETTING, HS_CTX_D_TASK};
+        hs_ctx_open(x, y, labs, ids, 4, 0);
+    }
+}
+
+static int hs_cursor_kind_at(int x, int y)
+{
+    if (g_dragging) return CUR_MOVE;
+    if (g_ctx.open && hs_ctx_hit_item(x, y) >= 0) return CUR_LINK;
+    {
+        extern int hs_oobe_active(void);
+        if (hs_oobe_active()) return CUR_LINK;
+    }
+    {
+        extern int hs_files_cursor_kind(int x, int y);
+        int k = hs_files_cursor_kind(x, y);
+        if (k >= 0) return k;
+    }
+    /* 其余窗口: 标题栏箭头, 窗口内容手型 —— 内容区里基本都是可点控件 */
+    for (int zi = g_wm.z_count - 1; zi >= 0; zi--) {
+        int id = g_wm.z_order[zi];
+        if (id < 0 || id >= g_wm.window_count) continue;
+        hs_window_t *w = &g_wm.windows[id];
+        if (!w->visible || w->type != HS_WINDOW_FLOATING) continue;
+        if (x < w->x || x > w->x + w->width || y < w->y || y > w->y + w->height) continue;
+        if (y <= w->y + hs_sy(26)) return CUR_ARROW;
+        return CUR_LINK;
+    }
+    return CUR_ARROW;
+}
+
 static void hs_cursor_init_once(void)
 {
     static int inited = 0;
@@ -4479,9 +4568,14 @@ static void hs_cursor_init_once(void)
      * 加载失败必须留痕 —— 旧实现静默回退内置位图, 看起来就像"光标包没生效"。 */
     int want = cursor64_pick_size(g_shell.screen_width, g_shell.screen_height);
     want = want * (g_ui_scale_pct > 0 ? g_ui_scale_pct : 100) / 100;
-    int rc = cursor64_load_file("/usr/share/cursors/default.xcur", want);
-    vga_printf("[CURSOR] load rc=%d want=%d ready=%d nominal=%d hot=(%d,%d)\n",
-               rc, want, cursor64_ready(), cursor64_nominal(),
+    extern int cursor64_load_kind(int kind, const char *path, int want);
+    int rc  = cursor64_load_kind(CUR_ARROW, "/usr/share/cursors/default.xcur", want);
+    int rc1 = cursor64_load_kind(CUR_LINK,  "/usr/share/cursors/link.xcur",    want);
+    int rc2 = cursor64_load_kind(CUR_TEXT,  "/usr/share/cursors/text.xcur",    want);
+    int rc3 = cursor64_load_kind(CUR_MOVE,  "/usr/share/cursors/move.xcur",    want);
+
+    vga_printf("[CURSOR] load arrow=%d link=%d text=%d move=%d want=%d ready=%d nominal=%d hot=(%d,%d)\n",
+               rc, rc1, rc2, rc3, want, cursor64_ready(), cursor64_nominal(),
                cursor64_hotspot_x(), cursor64_hotspot_y());
 }
 
@@ -4504,6 +4598,11 @@ static void hs_present_with_cursor(int mx, int my)
     gfx64_present();
     gfx64_set_target_front();
     hs_cursor_init_once();
+    hs_ctx_menu_render();     /* 菜单与光标同为前台叠加层 */
+    {
+        extern void cursor64_set_kind(int kind);
+        cursor64_set_kind(hs_cursor_kind_at(mx, my));
+    }
     cursor64_draw(mx, my);
 }
 
@@ -4608,7 +4707,6 @@ void hpdesk_render(void)
         hs_wallpaper_sample_theme();
     }
 
-
     /* 通过面板注册表渲染所有启用的面板 */
     hs_panel_render_all();
 
@@ -4664,11 +4762,6 @@ void hpdesk_render(void)
             }
         }
     }    hs_launcher_render();
-
-    /* 右键菜单（最顶层） */
-    if (g_context_menu_visible) {
-        hs_context_menu_render();
-    }
 
     /* V0.55.0: 桌面配色面板 */
     hs_color_panel_render();
@@ -4972,7 +5065,6 @@ int hpdesk_init(int width, int height)
     itoa_hs(height, buf);
     vga_puts(buf);
     vga_puts(")\n");
-
 
     return 0;
 }

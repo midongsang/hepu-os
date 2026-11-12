@@ -1728,3 +1728,77 @@ resolution 行数 = 1        （没有重复追加，其它键顺序与内容不
 
 **已知未做**：按修改时间排序需要底层 `list_dir_entries_ex` 提供 mtime（当前只回大小），
 故本轮只有名称/大小/类型三列；批量删除仍同步阻塞（P2 处理）。
+
+---
+
+## §1.69 鼠标右键上下文菜单 + 光标多形态
+
+### 背景与一次判断修正
+
+用户问"鼠标的状态接了吗，有右键菜单吗"。核查后发现：光标只接了**单一形态**
+（`cursor64_load_file` 固定加载 `default`），而右键 `right` 位从 usb/xhci/ps2 三路
+都正确解析（`buttons & 0x02`）却判断为"无消费者"。**这个判断是错的** ——
+`hsinput.c` 原本就在调 `hpdesk_handle_right_click`，老菜单是活的；错因是当轮
+QMP 注入失败（注入失败 ≠ 没有菜单）。处理方式：保留新实现，整体下线老机制。
+
+### 一、光标多形态（`cursor64.c`）
+
+- 新增 4 个槽位：`CUR_KIND_MAX 4`、`CUR_SLOT_DIM 48`、`cur_slot_t{px,w,h,hot_x,hot_y,ready,nominal}`
+- 新接口 `cursor64_load_kind(kind,path,want)` / `cursor64_set_kind` / `cursor64_kind`；
+  `cursor64_load_file` 保留并转发到 kind 0（兼容旧调用）
+- `cursor64_draw` 用 active 槽，未就绪回退 0 号，再回退内置位图 —— 保证任何情况下都有光标
+- 语义：`CUR_ARROW 0 / CUR_LINK 1 / CUR_TEXT 2 / CUR_MOVE 3`
+  加载 `/usr/share/cursors/{default,link,text,move}.xcur`，`want = pick_size(screen)*pct/100`
+- 实测：1920×1080@150% → `want=36 nominal=32 ready=1 hot=(1,0)`，四槽全部 `rc=0`
+
+形态判定统一收在 `hs_cursor_kind_at(mx,my)`：拖拽中 `MOVE`；菜单命中 `LINK`；
+OOBE 激活 `LINK`；Files 内部走 `hs_files_cursor_kind`（标题栏 `ARROW`、
+底部输入条且 prompt/confirm 激活 `TEXT`、其余 `LINK`）；其他窗口标题栏 `ARROW`、
+内容 `LINK`；桌面 `ARROW`。每帧在 `hs_present_with_cursor` 里 `cursor64_set_kind()`。
+
+素材实测形状（解 `.xcur` 转 PNG 横向比对）：`default` 斜箭头 / `link` **竖直箭头**
+（不是手型）/ `text` 竖线 / `move` 四向十字。所以"悬停到列表上仍像箭头"不是没生效，
+是 `link` 本身长得就像箭头。
+
+### 二、右键菜单（`hpdesk.c` 新增 `g_ctx`）
+
+- 结构：`HS_CTX_MAX 9`，`open/x/y/w/h/count/owner/label[9][28]/id[9]`，`owner` 0=桌面 1=Files 2=通用窗口
+- 接口：`hs_ctx_open(x,y,labels,ids,n,owner)` / `hs_ctx_hit_item` / `hs_ctx_menu_render` / `hs_ctx_close`
+- 全部尺寸走 `hs_s()` / `hs_sy()`（项高 `hs_sy(24)`），随 DPI 缩放 —— 老机制固定
+  `menu_w=180 / item_h=32 / 字号 14` 不缩放，这正是换掉它的理由
+- 贴边翻转：右侧空间不足向左展开、下方不足向上展开，最终夹到屏内
+- 视觉：两层暗边近似阴影 + accent 悬停行 + 白字
+
+**渲染层的关键坑**：菜单最初画在内容层（`hs_notification_render()` 之后），
+串口证明 `hs_ctx_open` 成功但截图空白 —— 后台缓冲路径会被后续绘制覆盖。
+**修复：把 `hs_ctx_menu_render()` 移入 `hs_present_with_cursor()`，排在
+`gfx64_present(); gfx64_set_target_front();` 之后、`cursor64_draw` 之前**，
+即"菜单与光标同为前台叠加层"，每帧随 present 重画，不进入后台缓冲。
+
+### 三、三处菜单内容
+
+- **Files**（owner=1，8 项）：`Open / Rename / Copy / Cut / Delete / Properties / New folder / Refresh`；
+  有剪贴板内容时追加 `Paste (copy)/(move)`
+- **通用窗口**（owner=2）：`Close window / Cancel` → `hs_window_hide`
+- **桌面**（owner=0，4 项）：`Refresh desktop / Open Files / Display settings / Task manager`
+- 派发：`hpdesk_right_click(x,y)` 先判 Files（`hs_files_hit` + `hs_files_open_ctx`），
+  再按 z 序找窗口，否则落桌面菜单；点击由 `hpdesk_handle_click` 最前面的
+  `hs_ctx_hit_item` 分支接管
+- `hsinput.c` 右键入口统一到 `hpdesk_right_click`（鼠标上升沿 + touch 路径两处）
+- 老机制删除：`g_context_menu_visible/x/y`、`hs_context_menu_render`、
+  `hs_context_menu_handle_click`、`hpdesk_handle_right_click`、点击优先块、
+  控制中心条件里的 `!g_context_menu_visible`、`hpdesk_render` 里的渲染调用
+
+### 验证（1920×1080@150%，串口 + 截图）
+
+- 光标：`[CURSOR] load arrow=0 link=0 text=0 move=0 want=36 ready=1 nominal=32 hot=(1,0)`
+- Files 菜单：`[CTX] open n=8 at 480,225 w=139 h=300 owner=1` —— 8 项齐全，`Delete` 行 accent 悬停高亮
+- 菜单项执行：点击第 6 项 `Properties` → 属性浮层弹出
+  `Name: fonts / Type: Folder / Size: 4K / Path: /fonts`（目标为 `fonts/`）
+- 桌面菜单：`[CTX] open n=4 at 90,840 w=199 h=156 owner=0` —— 4 项齐全，左上贴边翻转到屏内
+- 真实输入链路（早期一轮）：`[IN] right=1 at 512,384 → [RCLICK] → [CTX] open n=8 ... → [IN] right=0`
+
+**已知限制**：QMP `input-send-event` 的 `btn` 事件在部分实例上不送达（`abs` 事件则因无
+tablet 设备直接报 `Input handler not found`）；本轮"点击菜单项"用内部直接调用
+`hpdesk_handle_click` 走同一条派发链路验证，输入侧上升沿已在早前一轮实证。
+光标四槽约占 36KB，内核 806,888 B / 1MB。
