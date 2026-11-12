@@ -678,6 +678,17 @@ static char f_status[64] = "";
 /* 过滤 / 视图 / 菜单 / 查看器 */
 static char f_quick[FS_QUICK_MAX][FS_PATH_MAX];
 static int  f_quick_n = 0;
+/* 递归搜索: 结果是"相对当前目录的路径", 拼上 f_path 就是完整路径,
+ * 所以打开/删除/重命名沿用同一套 f_join(f_path, f_items[i]), 不用另开分支 */
+#define FS_DEEP_MAX  128
+#define FS_DEEP_DIRS 64
+static int      f_deep_mode = 0;
+static char     f_deep_base[FS_PATH_MAX];   /* 结果基准目录: 换了目录旧结果作废 */
+static int      f_deep_n = 0;
+static char     f_deep_rel[FS_DEEP_MAX][FS_PATH_MAX];
+static uint8_t  f_deep_type[FS_DEEP_MAX];
+static uint32_t f_deep_size[FS_DEEP_MAX];
+
 static char f_filter[32] = "";
 static int f_filter_len = 0;
 static int f_matched[FS_MAX_ITEMS];   /* 过滤/排序后的显示索引 */
@@ -827,6 +838,7 @@ static int f_match_entry(const char *name, int type)
 }
 
 static void f_refresh(void);
+static void f_deep_fill(void);
 
 static int f_visible_rows(void)
 {
@@ -907,6 +919,8 @@ static void f_clear_filter(void)
 {
     f_filter_len = 0;
     f_filter[0] = 0;
+    f_deep_mode = 0;
+    f_deep_n = 0;
 }
 
 static void f_go_up(void)
@@ -945,8 +959,16 @@ static void f_prompt_start(int mode, const char *initial)
 static void f_refresh(void)
 {
     for (int i = 0; i < FS_MAX_ITEMS; i++) f_mark[i] = 0;
-    f_count = ext2_64_list_dir_entries_ex(f_path, f_items, f_types, f_sizes, FS_MAX_ITEMS);
-    if (f_count < 0) f_count = 0;
+    if (f_deep_mode && strcmp(f_deep_base, f_path) != 0) {
+        f_deep_mode = 0;   /* 路径变了(树点击等入口未必清过滤), 旧结果不能再用 */
+        f_deep_n = 0;
+    }
+    if (f_deep_mode) {
+        f_deep_fill();          /* 递归结果已经筛过, 直接铺进 f_items */
+    } else {
+        f_count = ext2_64_list_dir_entries_ex(f_path, f_items, f_types, f_sizes, FS_MAX_ITEMS);
+        if (f_count < 0) f_count = 0;
+    }
 
     /* 过滤 */
     f_match_count = 0;
@@ -1342,10 +1364,10 @@ int hs_files_drag_end(int x, int y)
 static void f_tab_label(int i, char *out, int cap)
 {
     const char *p = f_tab_path[i];
-    if (!p[0] || (p[0] == '/' && p[1] == 0)) { hs_strcpyn(out, "Root", cap); return; }
+    if (!p[0] || (p[0] == '/' && p[1] == 0)) { hs_strcpyn(out, "/", cap); return; }
     const char *last = p;
     for (const char *q = p; *q; q++) if (*q == '/') last = q + 1;
-    hs_strcpyn(out, last[0] ? last : "Root", cap);
+    hs_strcpyn(out, last[0] ? last : "/", cap);
 }
 
 static void f_tab_store(void)
@@ -1523,11 +1545,16 @@ static void f_tree_collapse(int i)
 
 static void f_tree_init(void)
 {
+    /* 根不单独占一行: 路径栏/快捷条已经表达了"/", 树根再占一行只是重复,
+     * 还把可视行数吃掉一行。直接把 / 的子目录铺成第一层 */
     f_tree_n = 0; f_tree_sel = -1;
-    hs_strcpyn(f_tree_path[0], "/", FS_PATH_MAX);
-    f_tree_depth[0] = 0; f_tree_exp[0] = 0;
-    f_tree_n = 1;
-    f_tree_expand(0);
+    int n = ext2_64_list_dir_entries_ex("/", f_tnm, f_ttp, f_tsz, FS_TREE_CHILD);
+    for (int k = 0; k < n; k++) {
+        if (!f_ttp[k]) continue;
+        char sub[FS_PATH_MAX];
+        if (f_join(sub, FS_PATH_MAX, "/", f_tnm[k]) != 0) continue;
+        f_tree_insert(f_tree_n, sub, 0);
+    }
 }
 
 /* 目录内容变过(新建/删除/移动完成)后重新对一遍已展开节点的子目录,
@@ -1548,29 +1575,41 @@ static void f_tree_sync(void)
 }
 
 /* 把树展开到 f_path: 从根逐级往下找"是 f_path 前缀"的子节点 */
+/* 节点路径是不是 f_path 的"按分量前缀"(完全相等也算) */
+static int f_tree_is_prefix(const char *node)
+{
+    int l = hs_strlen(node), fl = hs_strlen(f_path);
+    if (fl < l || strncmp(f_path, node, l) != 0) return 0;
+    return (fl == l || f_path[l] == '/');
+}
+
 static void f_tree_reveal(void)
 {
+    f_tree_sel = -1;
     if (f_tree_n <= 0) return;
-    int idx = 0;
-    f_tree_sel = 0;
+    /* 先在第一层里找 f_path 的那一支 */
+    int idx = -1;
+    for (int i = 0; i < f_tree_n; i++) {
+        if (f_tree_depth[i] != 0) continue;
+        if (f_tree_is_prefix(f_tree_path[i])) {
+            idx = i;
+            if (hs_strlen(f_tree_path[i]) == hs_strlen(f_path)) { f_tree_sel = i; return; }
+            break;
+        }
+    }
+    if (idx < 0) return;   /* 当前就在根上: 树不高亮, 路径栏已经写着 / */
+    f_tree_sel = idx;
     for (int guard = 0; guard < 24; guard++) {
-        if (strcmp(f_tree_path[idx], f_path) == 0) { f_tree_sel = idx; return; }
         if (!f_tree_exp[idx]) f_tree_expand(idx);
-        int d = f_tree_depth[idx] + 1;
-        int found = -1;
+        int d = f_tree_depth[idx] + 1, found = -1;
         for (int k = idx + 1; k < f_tree_n && f_tree_depth[k] >= d; k++) {
             if (f_tree_depth[k] != d) continue;
-            int l = hs_strlen(f_tree_path[k]);
-            int fl = hs_strlen(f_path);
-            /* 节点路径必须是 f_path 的"按分量前缀": 完全相等也算命中。
-             * 原来要求 fl > l, 于是 /usr 匹配不上 /usr 节点, /usr/share 也
-             * 走不到 share —— 高亮会停在上一层, 看起来就是"树没跟到位置" */
-            if (fl >= l && strncmp(f_path, f_tree_path[k], l) == 0 &&
-                (fl == l || f_path[l] == '/')) { found = k; break; }
+            if (f_tree_is_prefix(f_tree_path[k])) { found = k; break; }
         }
         if (found < 0) return;
         idx = found;
         f_tree_sel = idx;
+        if (hs_strlen(f_tree_path[idx]) >= hs_strlen(f_path)) return;
     }
 }
 
@@ -1691,13 +1730,70 @@ static void f_quick_toggle_here(void)
     hs_strcpyn(f_status2, "Pinned to shortcuts", FS_PROMPT_MAX);
 }
 
-/* 搜索框内容实时同步到过滤串: 边打边筛, 不用等回车 */
+/* 去掉 f_path 前缀, 得到用于显示的相对路径 */
+static void f_relpath(char *out, int cap, const char *base, const char *full)
+{
+    int bl = hs_strlen(base);
+    const char *p = full;
+    if (bl > 0 && strncmp(full, base, bl) == 0) {
+        p = full + bl;
+        if (*p == '/') p++;
+    }
+    hs_strcpyn(out, p, cap);
+}
+
+/* 从当前目录往下逐层扫(队列而不是递归: 递归会重入 f_tnm 缓冲) */
+static void f_deep_run(void)
+{
+    static char q[FS_DEEP_DIRS][FS_PATH_MAX];
+    int qh = 0, qt = 0;
+    f_deep_n = 0;
+    f_deep_mode = 0;
+    if (f_filter_len == 0) return;
+    f_deep_mode = 1;
+    hs_strcpyn(f_deep_base, f_path, FS_PATH_MAX);
+    if (qt < FS_DEEP_DIRS) hs_strcpyn(q[qt++], f_path, FS_PATH_MAX);
+    while (qh < qt && f_deep_n < FS_DEEP_MAX) {
+        char dir[FS_PATH_MAX];
+        hs_strcpyn(dir, q[qh++], FS_PATH_MAX);
+        int n = ext2_64_list_dir_entries_ex(dir, f_tnm, f_ttp, f_tsz, FS_TREE_CHILD);
+        if (n <= 0) continue;
+        for (int k = 0; k < n && f_deep_n < FS_DEEP_MAX; k++) {
+            char full[FS_PATH_MAX], rel[FS_PATH_MAX];
+            if (f_join(full, FS_PATH_MAX, dir, f_tnm[k]) != 0) continue;
+            f_relpath(rel, FS_PATH_MAX, f_path, full);
+            /* 目录本身既能被搜到, 也要继续往下走 */
+            if (f_ttp[k]) {
+                if (qt < FS_DEEP_DIRS) hs_strcpyn(q[qt++], full, FS_PATH_MAX);
+            }
+            if (!f_match_entry(rel, f_ttp[k])) continue;
+            hs_strcpyn(f_deep_rel[f_deep_n], rel, FS_PATH_MAX);
+            f_deep_type[f_deep_n] = f_ttp[k];
+            f_deep_size[f_deep_n] = f_tsz[k];
+            f_deep_n++;
+        }
+    }
+}
+
+static void f_deep_fill(void)
+{
+    f_count = 0;
+    for (int i = 0; i < f_deep_n && f_count < FS_MAX_ITEMS; i++) {
+        hs_strcpyn(f_items[f_count], f_deep_rel[i], 255);
+        f_types[f_count] = f_deep_type[i];
+        f_sizes[f_count] = f_deep_size[i];
+        f_count++;
+    }
+}
+
+/* 搜索框内容实时同步到过滤串: 边打边筛(含子目录), 不用等回车 */
 static void f_search_apply(void)
 {
     hs_strcpyn(f_filter, f_prompt_buf, 32);
     f_filter_len = hs_strlen(f_filter);
     f_sel = 0;
     f_scroll = 0;
+    f_deep_run();
     f_refresh();
 }
 
@@ -2057,6 +2153,13 @@ static void f_render(hs_window_t *w)
         int cxcur = ix + FS(7) * (f_prompt_len > maxn ? maxn : f_prompt_len);
         if (cxcur > cx + cw - FS(10)) cxcur = cx + cw - FS(10);
         gfx64_fill_rect(cxcur, by + FS(4), FS(2), FS(13), g_shell.colors.accent);
+        /* 操作提示放在输入框同行右侧, 不占状态栏第二行(常驻长句最显乱) */
+        if (f_prompt == FS_PROMPT_SEARCH) {
+            const char *hint = "Enter=keep  Tab=clear";
+            int hw = FS(6) * hs_strlen(hint);
+            font64_draw_string(fb, W, H, cx + cw - hw - FS(8), by + FS(4), (char *)hint,
+                               g_shell.colors.text_secondary, FS(9));
+        }
     }
 
     /* 状态栏 (两行) */
@@ -2704,7 +2807,7 @@ void hs_files_click(int x, int y)
         int sx = bx - sw - FS(6);
         if (x >= sx && x <= sx + sw && y >= cy0 && y <= cy0 + 20) {
             f_prompt_start(FS_PROMPT_SEARCH, f_filter);
-            hs_strcpyn(f_status2, "Type to filter, Enter to keep, Tab to clear", FS_PROMPT_MAX);
+            hs_strcpyn(f_status2, "", 1);
             return;
         }
         if (x >= bx && x <= bx + tw && y >= cy0 && y <= cy0 + 20) {
@@ -3967,6 +4070,7 @@ void hs_apps_handle_wheel(int delta)
         if (t_scroll > 0) t_scroll--;
     }
 }
+
 
 
 
