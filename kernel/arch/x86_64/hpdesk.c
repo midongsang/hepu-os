@@ -2926,8 +2926,8 @@ static void hs_sidebar_render(void)
         /* 色板里的 accent 是 6 位色(alpha 字节 0), 而 vg 填充走 alpha 混合:
          * alpha=0 被当作全透明, 选中块整块不落像素 —— 文字却按"亮底"选了深色,
          * 结果 150% 下整个 tab 像消失。这里统一补不透明位。 */
-        gfx64_fill_rounded_rect(tx, tab_y, tab_w - hs_sx(4), hs_sy(28), hs_s(8),
-                                bg | 0xFF000000u);
+        /* 圆角填充在 vg 贝塞尔细分里被截断(见 docs), 选中态先用直角块保证可见 */
+        gfx64_fill_rect(tx, tab_y, tab_w - hs_sx(4), hs_sy(28), bg | 0xFF000000u);
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            tx + (tab_w - hs_sx(4) - hs_sx(32)) / 2, tab_y + hs_sy(7),
                            tabs[i], fg, hs_s(14));
