@@ -647,6 +647,11 @@ static void t_handle_key(int key)
 #define FS_PROMPT_RENAME 2
 #define FS_PROMPT_GOTO   3
 #define FS_PROMPT_MKFILE 4
+#define FS_PROMPT_SEARCH 5
+
+/* 用户自定义快捷目录: 钉在路径栏下面的那排胶囊, 持久化到 /hs-quick.txt */
+#define FS_QUICK_MAX 6
+#define FS_QUICK_CFG "/hs-quick.txt"
 
 #define FS_CLIP_MAX 8
 #define FS_COPY_BUF (128 * 1024)
@@ -671,6 +676,8 @@ static int f_sel = 0;
 static int f_scroll = 0;
 static char f_status[64] = "";
 /* 过滤 / 视图 / 菜单 / 查看器 */
+static char f_quick[FS_QUICK_MAX][FS_PATH_MAX];
+static int  f_quick_n = 0;
 static char f_filter[32] = "";
 static int f_filter_len = 0;
 static int f_matched[FS_MAX_ITEMS];   /* 过滤/排序后的显示索引 */
@@ -1554,8 +1561,12 @@ static void f_tree_reveal(void)
         for (int k = idx + 1; k < f_tree_n && f_tree_depth[k] >= d; k++) {
             if (f_tree_depth[k] != d) continue;
             int l = hs_strlen(f_tree_path[k]);
-            if (hs_strlen(f_path) > l && strncmp(f_path, f_tree_path[k], l) == 0 &&
-                f_path[l] == '/') { found = k; break; }
+            int fl = hs_strlen(f_path);
+            /* 节点路径必须是 f_path 的"按分量前缀": 完全相等也算命中。
+             * 原来要求 fl > l, 于是 /usr 匹配不上 /usr 节点, /usr/share 也
+             * 走不到 share —— 高亮会停在上一层, 看起来就是"树没跟到位置" */
+            if (fl >= l && strncmp(f_path, f_tree_path[k], l) == 0 &&
+                (fl == l || f_path[l] == '/')) { found = k; break; }
         }
         if (found < 0) return;
         idx = found;
@@ -1604,6 +1615,92 @@ int hs_files_tree_click(int x, int y)
     return 1;
 }
 
+static void f_quick_label(int i, char *out, int cap)
+{
+    const char *p = f_quick[i];
+    if (!p[0] || (p[0] == '/' && p[1] == 0)) { hs_strcpyn(out, "/", cap); return; }
+    const char *last = p;
+    for (const char *q = p; *q; q++) if (*q == '/') last = q + 1;
+    hs_strcpyn(out, last[0] ? last : "/", cap);
+}
+
+static void f_quick_defaults(void)
+{
+    static const char *d[4] = {"/", "/usr", "/fonts", "/usr/share"};
+    f_quick_n = 0;
+    for (int i = 0; i < 4; i++) hs_strcpyn(f_quick[f_quick_n++], d[i], FS_PATH_MAX);
+}
+
+static void f_quick_save(void)
+{
+    extern int ext2_64_write_file(const char *path, const uint8_t *data, uint32_t size);
+    static char out[FS_QUICK_MAX * FS_PATH_MAX];
+    int n = 0;
+    for (int i = 0; i < f_quick_n && n < (int)sizeof out - FS_PATH_MAX; i++) {
+        int l = hs_strlen(f_quick[i]);
+        for (int k = 0; k < l; k++) out[n++] = f_quick[i][k];
+        out[n++] = '\n';
+    }
+    ext2_64_write_file(FS_QUICK_CFG, (const uint8_t *)out, (uint32_t)n);
+}
+
+static void f_quick_load(void)
+{
+    extern int ext2_64_read_file(const char *path, uint8_t *buf, uint32_t max);
+    static uint8_t buf[FS_QUICK_MAX * FS_PATH_MAX + 256];
+    int n = ext2_64_read_file(FS_QUICK_CFG, buf, (uint32_t)(sizeof buf - 1));
+    if (n <= 0) { f_quick_defaults(); return; }
+    buf[n] = 0;
+    f_quick_n = 0;
+    int i = 0;
+    while (i < n && f_quick_n < FS_QUICK_MAX) {
+        while (i < n && (buf[i] == '\n' || buf[i] == '\r' || buf[i] == ' ')) i++;
+        int st = i;
+        while (i < n && buf[i] != '\n' && buf[i] != '\r') i++;
+        int len = i - st;
+        if (len < 1 || len >= FS_PATH_MAX) continue;
+        if (buf[st] != '/') continue;
+        int k;
+        for (k = 0; k < len; k++) f_quick[f_quick_n][k] = (char)buf[st + k];
+        f_quick[f_quick_n][k] = 0;
+        f_quick_n++;
+    }
+    if (f_quick_n == 0) f_quick_defaults();
+}
+
+/* 把当前目录钉上; 已经在里面就把这一项取消 —— 一个按钮既是加也是删 */
+static void f_quick_toggle_here(void)
+{
+    for (int i = 0; i < f_quick_n; i++) {
+        if (strcmp(f_quick[i], f_path) == 0) {
+            for (int k = i; k + 1 < f_quick_n; k++)
+                hs_strcpyn(f_quick[k], f_quick[k + 1], FS_PATH_MAX);
+            f_quick_n--;
+            f_quick_save();
+            hs_strcpyn(f_status2, "Unpinned from shortcuts", FS_PROMPT_MAX);
+            return;
+        }
+    }
+    if (f_quick_n >= FS_QUICK_MAX) {
+        for (int k = 0; k + 1 < FS_QUICK_MAX; k++)
+            hs_strcpyn(f_quick[k], f_quick[k + 1], FS_PATH_MAX);
+        f_quick_n = FS_QUICK_MAX - 1;
+    }
+    hs_strcpyn(f_quick[f_quick_n++], f_path, FS_PATH_MAX);
+    f_quick_save();
+    hs_strcpyn(f_status2, "Pinned to shortcuts", FS_PROMPT_MAX);
+}
+
+/* 搜索框内容实时同步到过滤串: 边打边筛, 不用等回车 */
+static void f_search_apply(void)
+{
+    hs_strcpyn(f_filter, f_prompt_buf, 32);
+    f_filter_len = hs_strlen(f_filter);
+    f_sel = 0;
+    f_scroll = 0;
+    f_refresh();
+}
+
 static void f_render(hs_window_t *w)
 {
     /* FS P2: 有分片任务在跑就推进一步, 并保持 dirty 让下一帧继续 —— 这样
@@ -1635,22 +1732,46 @@ static void f_render(hs_window_t *w)
         if (on_usb) gfx64_fill_rounded_rect(bx, cy, tw, FS(20), FS(4), g_shell.colors.accent);
         font64_draw_string(fb, W, H, bx + FS(4), cy + FS(3), txt,
                            on_usb ? 0xFFFFFF : g_shell.colors.panel_fg, FS(12));
+        /* 搜索入口: 就在 USB 按钮左边 */
+        int sw = FS(7) * 6 + FS(10);
+        int sx = bx - sw - FS(6);
+        if (sx > cx + FS(6)) {
+            /* 用强调色描边: panel_bg 底 + border 线在深色面板上等于看不见 */
+            gfx64_fill_rounded_rect(sx, cy, sw, FS(20), FS(4),
+                                    f_filter_len ? g_shell.colors.accent : g_shell.colors.panel_bg);
+            gfx64_draw_rounded_rect(sx, cy, sw, FS(20), FS(4), g_shell.colors.accent);
+            font64_draw_string(fb, W, H, sx + FS(5), cy + FS(3), "Search",
+                               f_filter_len ? 0xFFFFFF : g_shell.colors.panel_fg, FS(10));
+        }
     }
 
-    /* 位置快捷条: 常用目录一键跳转(路径栏点击仍可手打任意路径) */
+    /* 快捷目录条: 用户自己钉的常用位置; 末尾按钮把当前目录钉上/取消钉 */
     int loc_y = cy + FS(22);
     {
-        static const char *locs[4] = {"/", "/usr", "/fonts", "/usr/share"};
-        static const char *labs[4] = {"Root", "usr", "fonts", "share"};
         int lx = cx + FS(2);
-        for (int i = 0; i < 4; i++) {
-            int on = (strcmp(f_path, locs[i]) == 0);
-            int lw = FS(7) * hs_strlen(labs[i]) + FS(10);
+        for (int i = 0; i < f_quick_n; i++) {
+            char lb[20];
+            f_quick_label(i, lb, sizeof lb);
+            int on = (strcmp(f_path, f_quick[i]) == 0);
+            int lw = FS(7) * hs_strlen(lb) + FS(10);
+            if (lx + lw > cx + cw - FS(26)) break;
             gfx64_fill_rounded_rect(lx, loc_y, lw, FS(16), FS(4),
                                     on ? g_shell.colors.accent : g_shell.colors.panel_bg);
-            font64_draw_string(fb, W, H, lx + FS(5), loc_y + FS(3), labs[i],
+            font64_draw_string(fb, W, H, lx + FS(5), loc_y + FS(3), lb,
                                on ? 0xFFFFFF : g_shell.colors.panel_fg, FS(10));
             lx += lw + FS(4);
+        }
+        int here = 0;
+        for (int i = 0; i < f_quick_n; i++)
+            if (strcmp(f_path, f_quick[i]) == 0) here = 1;
+        if (lx + FS(16) <= cx + cw - FS(4)) {
+            gfx64_fill_rounded_rect(lx, loc_y, FS(16), FS(16), FS(4),
+                                    g_shell.colors.panel_bg);
+            gfx64_draw_rounded_rect(lx, loc_y, FS(16), FS(16), FS(4),
+                                    g_shell.colors.border);
+            font64_draw_string(fb, W, H, lx + FS(5), loc_y + FS(3),
+                               (char *)(here ? "-" : "+"),
+                               g_shell.colors.panel_fg, FS(10));
         }
     }
     /* 左树右列表: 右栏起点/宽度 (树宽 + 分隔线) */
@@ -1922,6 +2043,7 @@ static void f_render(hs_window_t *w)
         if (f_prompt == FS_PROMPT_MKFILE) label = "New file: ";
         else if (f_prompt == FS_PROMPT_RENAME) label = "Rename: ";
         else if (f_prompt == FS_PROMPT_GOTO) label = "Goto path: ";
+        else if (f_prompt == FS_PROMPT_SEARCH) label = "Search: ";
         gfx64_fill_rounded_rect(cx, by, cw, FS(22), FS(4), g_shell.colors.panel_bg);
         gfx64_draw_rounded_rect(cx, by, cw, FS(22), FS(4), g_shell.colors.accent);
         font64_draw_string(fb, W, H, cx + FS(6), by + FS(4), label, g_shell.colors.panel_fg, FS(12));
@@ -2567,14 +2689,24 @@ void hs_files_click(int x, int y)
         extern int storage_hal_get_device(void);
         extern int usb64_mount_usb(void);
         extern int usb64_umount_usb(void);
-        int cx0 = f_win->x + 6, cy0 = f_win->y + 26;
-        int cw0 = f_win->width - 12;
+        /* 几何必须和渲染用同一套 FS 口径: 原来这里是裸像素, 缩放一开
+         * 点击区就和画出来的按钮错位 */
+        int cx0 = f_win->x + FS(6), cy0 = f_win->y + FS(26);
+        int cw0 = f_win->width - FS(12);
         extern int usb64_dev_count(void);
         int has_usb = usb64_dev_count() > 0;
         int on_usb = storage_hal_get_device() == 1;
         const char *txt = has_usb ? (on_usb ? "[USB: mounted]" : "[USB: click to mount]") : "[USB: not detected]";
-        int tw = 12 * (hs_strlen(txt)) + 4;
-        int bx = cx0 + cw0 - tw - 4;
+        int tw = FS(12) * (hs_strlen(txt)) + FS(4);
+        int bx = cx0 + cw0 - tw - FS(4);
+        /* 搜索按钮(USB 左边): 打开搜索输入框, 边打边筛 */
+        int sw = FS(7) * 6 + FS(10);
+        int sx = bx - sw - FS(6);
+        if (x >= sx && x <= sx + sw && y >= cy0 && y <= cy0 + 20) {
+            f_prompt_start(FS_PROMPT_SEARCH, f_filter);
+            hs_strcpyn(f_status2, "Type to filter, Enter to keep, Tab to clear", FS_PROMPT_MAX);
+            return;
+        }
         if (x >= bx && x <= bx + tw && y >= cy0 && y <= cy0 + 20) {
             int rc = on_usb ? usb64_umount_usb() : usb64_mount_usb();
             hs_strcpyn(f_status2, rc == 0 ? (on_usb ? "USB unmounted" : "USB mounted") : "USB op failed", 60);
@@ -2593,25 +2725,33 @@ void hs_files_click(int x, int y)
         }
     }
 
-    /* 位置快捷条: 命中范围与渲染同源 */
+    /* 快捷目录条: 命中范围与渲染同源(含末尾的钉/取消钉按钮) */
     {
-        static const char *locs[4] = {"/", "/usr", "/fonts", "/usr/share"};
-        static const char *labs[4] = {"Root", "usr", "fonts", "share"};
         int cx0 = f_win->x + FS(6);
+        int cw0 = f_win->width - FS(12);
         int cy0 = f_win->y + FS(26) + FS(22);
         int lx = cx0 + FS(2);
         if (y >= cy0 && y <= cy0 + FS(16)) {
-            for (int i = 0; i < 4; i++) {
-                int lw = FS(7) * hs_strlen(labs[i]) + FS(10);
+            for (int i = 0; i < f_quick_n; i++) {
+                char lb[20];
+                f_quick_label(i, lb, sizeof lb);
+                int lw = FS(7) * hs_strlen(lb) + FS(10);
+                if (lx + lw > cx0 + cw0 - FS(26)) break;
                 if (x >= lx && x <= lx + lw) {
-                    hs_strcpyn(f_path, locs[i], FS_PATH_MAX - 1);
+                    hs_strcpyn(f_path, f_quick[i], FS_PATH_MAX - 1);
                     f_scroll = 0; f_sel = 0;
                     f_refresh();
                     return;
                 }
                 lx += lw + FS(4);
             }
-            return;   /* 点在位置条空白处: 吞掉, 避免落进下方列表误选 */
+            if (lx + FS(16) <= cx0 + cw0 - FS(4) &&
+                x >= lx && x <= lx + FS(16)) {
+                f_quick_toggle_here();
+                f_refresh();
+                return;
+            }
+            return;   /* 点在空白处: 吞掉, 避免落进下方列表误选 */
         }
     }
     /* 左栏目录树最先判: 树与"列头"同高起算, 不先拦会被列头排序吃掉 */
@@ -2938,6 +3078,20 @@ static void f_prompt_commit(void)
             hs_strcpyn(f_status2, rc == -2 ? "Rename failed: conflict" : "Rename failed",
                        FS_PROMPT_MAX);
         }
+    } else if (f_prompt == FS_PROMPT_SEARCH) {
+        f_prompt = FS_PROMPT_NONE;
+        f_search_apply();
+        char m[64], t[8];
+        hs_strcpyn(m, "Search: ", 12);
+        if (f_filter_len == 0) hs_strcpyn(m, "Search cleared", 20);
+        else {
+            hs_strcpyn(m + hs_strlen(m), f_filter, 24);
+            strcpy(m + hs_strlen(m), "  ");
+            hs_itoa(f_match_count, t);
+            strcpy(m + hs_strlen(m), t);
+            strcpy(m + hs_strlen(m), " found");
+        }
+        hs_strcpyn(f_status2, m, FS_PROMPT_MAX);
     } else if (f_prompt == FS_PROMPT_GOTO) {
         if (f_prompt_len == 0) {
             f_prompt = FS_PROMPT_NONE;
@@ -3038,6 +3192,7 @@ void hs_files_key(int key)
                 f_prompt_len--;
                 f_prompt_buf[f_prompt_len] = 0;
             }
+            if (f_prompt == FS_PROMPT_SEARCH) f_search_apply();
             return;
         }
         if (key >= 0x20 && key <= 0x7E) {
@@ -3045,6 +3200,7 @@ void hs_files_key(int key)
                 f_prompt_buf[f_prompt_len++] = (char)key;
                 f_prompt_buf[f_prompt_len] = 0;
             }
+            if (f_prompt == FS_PROMPT_SEARCH) f_search_apply();
             return;
         }
         if (key == '\n' || key == '\r' || key == 0x1C) {
@@ -3052,6 +3208,7 @@ void hs_files_key(int key)
             return;
         }
         if (key == '\t') {
+            if (f_prompt == FS_PROMPT_SEARCH) { f_clear_filter(); f_refresh(); }
             f_prompt = FS_PROMPT_NONE;
             hs_strcpyn(f_status2, "Cancelled", FS_PROMPT_MAX);
             return;
@@ -3464,6 +3621,7 @@ hs_window_t *hs_files_create(void)
         f_tab_scroll[0] = 0; f_tab_sel[0] = -1;
         f_tab_view[0] = 0;  f_tab_skey[0] = 0; f_tab_sdesc[0] = 0;
         f_tree_init();
+        f_quick_load();
         f_refresh();
     }
     return f_win;
@@ -3809,6 +3967,7 @@ void hs_apps_handle_wheel(int delta)
         if (t_scroll > 0) t_scroll--;
     }
 }
+
 
 
 
