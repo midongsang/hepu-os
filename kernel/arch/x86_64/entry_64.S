@@ -551,6 +551,60 @@ kernel_stack_bottom:
 kernel_stack_top:
 hepu_kstack_top:
 
+/* ============================================================================
+ * V0.57.3: clone_trampoline_64 —— clone 出的子线程入口
+ *
+ * 语义（对齐 Linux clone 的用户可见行为）：
+ *   - 子线程与父线程共享同一地址空间（CR3 不切，也不复制页表）
+ *   - 子线程从 clone 的返回点继续执行（rip = 父的 syscall 返回地址）
+ *   - 子线程使用调用方传入的 stack（不是父的栈）
+ *   - 子线程寄存器返回值 rax = 0（父线程拿到 tid）
+ *   - CLONE_SETTLS 时把 tls 参数写进 FS_BASE
+ *
+ * 另：把本线程独立的内核栈顶装进 g_syscall_kstack_slot。父线程与子线程
+ * 各自有自己的 syscall 内核栈，否则两个线程同时进内核会把同一块栈写花。
+ * ============================================================================ */
+.global clone_trampoline_64
+clone_trampoline_64:
+    /* 共享父线程页表：CR3 保持父线程的即可，这里再显式写一次以防调度器切过别的进程 */
+    movq g_clone_child_kstack(%rip), %rax
+    testq %rax, %rax
+    jz 1f
+    movq %rax, g_syscall_kstack_slot(%rip)
+1:
+    /* 恢复 callee-saved GPR（跳过 r11/rsp/rip/rax 四个专用槽） */
+    movq  g_clone_child_gprs+0(%rip), %r15
+    movq  g_clone_child_gprs+8(%rip), %r14
+    movq  g_clone_child_gprs+16(%rip), %r13
+    movq  g_clone_child_gprs+24(%rip), %r12
+    movq  g_clone_child_gprs+40(%rip), %r10
+    movq  g_clone_child_gprs+48(%rip), %r9
+    movq  g_clone_child_gprs+56(%rip), %r8
+    movq  g_clone_child_gprs+64(%rip), %rbp
+    movq  g_clone_child_gprs+72(%rip), %rdi
+    movq  g_clone_child_gprs+80(%rip), %rsi
+    movq  g_clone_child_gprs+88(%rip), %rdx
+    movq  g_clone_child_gprs+104(%rip), %rbx
+
+    /* 子线程用户栈（调用方传入的 stack） */
+    movq g_clone_child_rsp(%rip), %rsp
+
+    /* CLONE_SETTLS：写 FS_BASE (MSR 0xC0000100) */
+    movq g_clone_child_tls(%rip), %rdx
+    testq %rdx, %rdx
+    jz 2f
+    movq %rdx, %rax
+    shrq $32, %rdx                /* edx = 高 32 位 */
+    movl %eax, %eax               /* eax = 低 32 位 */
+    movl $0xC0000100, %ecx
+    wrmsr
+2:
+    swapgs
+    movq g_clone_child_rip(%rip), %rcx
+    movq g_clone_child_rflags(%rip), %r11
+    xorq %rax, %rax               /* 子线程 clone 返回 0 */
+    sysretq
+
 /* syscall返回上下文（用于fork完整实现） */
 .global g_syscall_ret_rip
 g_syscall_ret_rip:
@@ -575,6 +629,28 @@ g_fork_child_rsp:
 .global g_fork_child_rflags
 g_fork_child_rflags:
     .quad 0
+
+/* V0.57.3: clone 子线程专用上下文
+ * 与 fork 的区别：clone 共享父线程地址空间，所以没有 child_pml4；
+ * 用户栈由调用方传入（Linux clone 的 stack 参数），子线程 rax=0。 */
+.global g_clone_child_rip
+g_clone_child_rip:
+    .quad 0
+.global g_clone_child_rsp
+g_clone_child_rsp:
+    .quad 0
+.global g_clone_child_rflags
+g_clone_child_rflags:
+    .quad 0
+.global g_clone_child_tls
+g_clone_child_tls:
+    .quad 0
+.global g_clone_child_kstack
+g_clone_child_kstack:
+    .quad 0
+.global g_clone_child_gprs
+g_clone_child_gprs:
+    .skip 15 * 8
 
 /* ============================================================================
  * 中断描述符表（64位）

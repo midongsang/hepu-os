@@ -2625,3 +2625,79 @@ SEC-02、ROADMAP P0-2、OVERVIEW 3.6 的「clone 共享父页表」全部改为
 返回后进程跨到用户栈第二页（`0x6FFFEFE8`）即 `#PF`，现场 `PDe` 物理地址为 0，
 属内核页表侧问题，已登记 `OPEN_BUGS.md` SEC-19。autorun 只保留 hello 与
 sec_test 两个确认干净的程序。
+
+---
+
+## §1.84 clone 真线程：基础设施就位，卡在"用户线程不是调度单元"
+
+### 做了什么
+
+把 `sys_clone` 从空桩推到完整基础设施，四块都落在代码里：
+
+1. **汇编侧**（`entry_64.S`）：新增 `g_clone_child_rip/rsp/rflags/tls/kstack/gprs[15]`
+   六个槽与 `clone_trampoline_64`。子线程进入时先把自己的内核栈装进
+   `g_syscall_kstack_slot`（每线程独立 syscall 栈），再按 fork 同款顺序恢复
+   12 个 callee-saved GPR，`movq g_clone_child_rsp,%rsp` 换到调用方传入的栈，
+   可选 `wrmsr 0xC0000100` 写 FS_BASE，`swapgs` 后 **`xorq %rax,%rax`**（子线程
+   clone 返回 0），`sysretq`。**不切 CR3** —— 与父共享页表。
+2. **内核侧**（`syscall64_full.c`）：`CLONE_*` 常量、`CLONE_VM`/栈窗口守卫、
+   一页 syscall 内核栈分配、15 个 GPR 快照、`process64_create("clone_thr")`、
+   `user_process_clone_track()`、按 flags 用 `copy_to_user` 写 `parent_tid`。
+3. **进程侧**（`user_process.c`）：`g_pt_ref[]` 页表共享引用计数，
+   `release` 里计数 >0 时打印 `[CLONE] aspace kept` 并保留地址空间，不释放。
+4. **用户侧**：`ulib.h` 补 `syscall4`（r10）/ `syscall5`（r10+r8），
+   新增 `user/apps/clone_test.c`（共享标志 + futex 自阻塞 + PASS/FAIL 判据）。
+
+### QEMU 实测：线程建出来了，但跑不起来
+
+```
+[PROC64] Created process: clone_thr (pid=4, prio=2)
+[CLONE] thread registered, pt_ref=0x1
+[CLONE] created thread pid=0x4 (shared pml4, stack=0x6FF80000)
+parent: clone returned tid
+[KSVC] beat alive
+FAIL: child write not visible to parent
+[EXCEPTION] vector=0xE error=0x15 rip=0x0  CR2=0x0  rsp=0x6FFFF008
+[CLONE] aspace kept: live clone threads=0x1
+```
+
+建线程、槽登记、页表记账、父返回 tid 全部正常；**子线程一次都没被调度**，
+父线程忙等 3 亿次后自身 `rip=0 / CR2=0` 崩掉。
+
+### 根因（已定位，不是 clone 自身的问题）
+
+`process64_tick()`（`pit64.c` 的 PIT 中断）只轮转 `process64` 表里的**内核线程**；
+`user_process_switch()` 进去的那条用户执行流**根本不在调度表里**，没有
+rip/rsp/rflags/GPR/fsbase 的保存槽位。`smp.c::smp_timer_tick` 里 AP 调度还被
+`if (cpu_id != bsp_cpu_id && 0)` 硬关掉。后果有两条：
+
+- 用户态父线程不会被打断 → 子线程永远停在 READY，拿不到 CPU；
+- 一旦某次 `context_switch` 把 CPU 抽走，父线程**没有恢复路径**，回来时
+  上下文已经是坏的（`rip=0`）。
+
+fork 能跑通正是因为它绕开了这个缺口：`sys_fork` 快照整份父上下文到
+`g_fork_parent_*`，子进程退出时由 `fork_return_to_parent` **显式**把父恢复回来，
+全程不依赖抢占。
+
+### 因此本轮的决定
+
+`sys_clone` 内部保留完整实现，但由 `g_clone_threads_enabled`（默认 0）拦在
+最前面返回 `HEPU_ENOSYS`，注释里写清为什么。理由：打开它只会让调用方卡死或
+崩，比返回 ENOSYS 更糟。`clone_test.elf` 仍打进 `/bin`（32 个），但**不进 autorun**。
+
+真正打开的前置条件是**让用户线程成为调度单元**：给每条用户执行流一份
+rip/rsp/rflags/GPR/fsbase 上下文，由中断里的调度器轮转并保证恢复。这是一个
+独立里程碑，工作量与风险都远超"补一个 syscall"。
+
+### 验证（QEMU 实机）
+
+```
+[REG] exec /bin/hello.elf
+  Hello World from ELF64 user space!
+[REG] exec /bin/sec_test.elf
+[REG] autorun done
+[NOTIFY] Welcome to Hepu OS: Hepu Desktop loaded
+```
+
+`EXCEPTION=0`、桌面正常（截图 `hepu_clone_verified.png`，14:40）。
+内核 824,136 B。

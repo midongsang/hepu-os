@@ -935,10 +935,132 @@ static int64_t sys_socketpair(int domain, int type, int proto, int fds) { (void)
  * 参考：fork 路径是完整可用的（sys_fork → uaspace_fork_copy，真 COW）。
  * 需要并发时请用 fork + 共享内存/管道，不要依赖 clone。
  */
+/* clone(2) —— V0.57.3：真线程（共享地址空间）
+ *
+ * 与 fork 的根本区别：**不复制页表**。子线程和父线程是同一个地址空间里的
+ * 两条执行流，子线程通过调用方传入的 stack 换栈，从 clone 的返回点继续跑，
+ * 内核返回值 rax=0；父线程拿到子线程 pid。
+ *
+ * 四块此前缺失的东西，这里逐条补上：
+ *   1) 子线程入口 trampoline —— entry_64.S 的 clone_trampoline_64，负责恢复
+ *      GPR、装用户栈、写 FS_BASE、rax 清零，再 sysretq。
+ *   2) 独立内核栈 —— 每次 clone 分配一页，trampoline 把它的栈顶装进
+ *      g_syscall_kstack_slot，父子各用各的，不会把同一块内核栈写花。
+ *   3) 子 rax 清零 —— 由 trampoline 的 `xorq %rax,%rax` 保证。
+ *   4) 共享页表引用计数 —— user_process_clone_track()/untrack() 维护，
+ *      父线程退出时若还有子线程活着，先撤销线程再释放页表（见 user_process.c）。
+ *
+ * 不支持的情形一律返回 ENOSYS，不做半吊子实现：
+ *   - 没有 CLONE_VM（那应该用 fork 的复制语义）
+ *   - 当前不是隔离地址空间的 ELF 进程（没有可共享的页表）
+ */
+/* 见 sys_clone 内的说明：用户线程还不是调度单元，默认关闭 */
+static int g_clone_threads_enabled = 0;
+
+#define CLONE_VM             0x00000100
+#define CLONE_FS             0x00000200
+#define CLONE_FILES          0x00000400
+#define CLONE_SIGHAND        0x00000800
+#define CLONE_THREAD         0x00010000
+#define CLONE_SETTLS         0x00080000
+#define CLONE_PARENT_SETTID  0x00100000
+#define CLONE_CHILD_CLEARTID 0x00200000
+#define CLONE_CHILD_SETTID   0x01000000
+
 static int64_t sys_clone(int flags, uint64_t stack, uint64_t parent_tid,
                          uint64_t child_tid, uint64_t tls) {
-    (void)flags; (void)stack; (void)parent_tid; (void)child_tid; (void)tls;
-    return HEPU_ENOSYS;
+    extern int copy_to_user(void *dst, const void *src, size_t size);
+    extern uint64_t user_process_current_pml4(void);
+    extern int user_process_clone_track(int thread_pid);
+    extern uint64_t pmm64_alloc_page(void);
+    extern void pmm64_free_page(uint64_t addr);
+
+    /* V0.57.3 总开关：默认关闭，返回 ENOSYS。
+     *
+     * 下面这套实现本身是完整的（共享页表 + 独立内核栈 + 子 rax=0 +
+     * trampoline + 页表引用计数），QEMU 实测能把线程建出来：
+     *   [PROC64] Created process: clone_thr (pid=4, prio=2)
+     *   [CLONE] created thread pid=0x4 (shared pml4, stack=0x6FF80000)
+     * 但**子线程拿不到 CPU** —— 这不是 clone 自身的问题，而是调度模型的
+     * 缺口：process64_tick 只轮转 process64 的内核线程，用户进程
+     * （user_process_switch 进去的那条执行流）根本不在调度表里；
+     * smp.c::smp_timer_tick 里 AP 调度还被 `&& 0` 硬关掉。
+     * 结果就是父线程一跑到底、子线程永远 READY，父线程忙等超时后
+     * 还会因为被 context_switch 抽走而没有恢复路径（实测 rip=0 / CR2=0）。
+     *
+     * 要真正可用，前置条件是"用户线程成为调度单元"：为每条用户执行流
+     * 保存 rip/rsp/rflags/GPR/fsbase，并由中断里的调度器轮转。
+     * 在那之前打开这个开关只会让用户程序卡死或崩，故默认 0。 */
+    if (!g_clone_threads_enabled) {
+        return HEPU_ENOSYS;
+    }
+
+    if (!(flags & CLONE_VM)) {
+        /* 没有共享地址空间就不是线程，交给 fork */
+        return HEPU_ENOSYS;
+    }
+    uint64_t cur_pml4 = user_process_current_pml4();
+    if (!cur_pml4) {
+        return HEPU_ENOSYS;   /* 非 ELF 隔离进程，没有可共享的页表 */
+    }
+    /* 用户给的栈顶必须落在用户窗口内，且 16 字节对齐（SysV 入口约定） */
+    if (!stack || stack < 0x40000000ULL || stack >= 0x80000000ULL) {
+        return HEPU_EINVAL;
+    }
+
+    extern uint64_t g_syscall_ret_rip;
+    extern uint64_t g_syscall_ret_rflags;
+    extern uint64_t g_syscall_kernel_rsp;
+    extern uint64_t g_clone_child_rip;
+    extern uint64_t g_clone_child_rsp;
+    extern uint64_t g_clone_child_rflags;
+    extern uint64_t g_clone_child_tls;
+    extern uint64_t g_clone_child_kstack;
+    extern uint64_t g_clone_child_gprs[15];
+
+    uint64_t kstack = pmm64_alloc_page();
+    if (!kstack) return HEPU_EAGAIN;
+
+    g_clone_child_rip = g_syscall_ret_rip;          /* 子线程从返回点继续 */
+    g_clone_child_rsp = stack;
+    g_clone_child_rflags = g_syscall_ret_rflags | 0x200;  /* IF 必须开，否则子线程收不到时钟 */
+    g_clone_child_tls = (flags & CLONE_SETTLS) ? tls : 0;
+    g_clone_child_kstack = kstack + 4096;           /* 栈顶 */
+
+    /* 父线程 GPR 快照，布局与 entry_64.S 的 push 顺序一致：
+     * [0]=r15 [1]=r14 [2]=r13 [3]=r12 [4]=r11 [5]=r10 [6]=r9 [7]=r8
+     * [8]=rbp [9]=rdi [10]=rsi [11]=rdx [12]=rcx [13]=rbx [14]=rax */
+    for (int i = 0; i < 15; i++)
+        g_clone_child_gprs[i] = ((uint64_t *)g_syscall_kernel_rsp)[i];
+
+    extern void clone_trampoline_64(void);
+    extern int process64_create(const char *name, void (*entry)(void), int priority);
+    int child_pid = process64_create("clone_thr", clone_trampoline_64, 2);
+    if (child_pid < 0) {
+        pmm64_free_page(kstack);
+        return HEPU_EAGAIN;
+    }
+
+    user_process_clone_track(child_pid);
+
+    if ((flags & CLONE_PARENT_SETTID) && parent_tid) {
+        int v = child_pid;
+        copy_to_user((void *)parent_tid, &v, sizeof(int));
+    }
+    if ((flags & CLONE_CHILD_SETTID) && child_tid) {
+        int v = child_pid;
+        copy_to_user((void *)child_tid, &v, sizeof(int));
+    } else if ((flags & CLONE_CHILD_CLEARTID) && child_tid) {
+        int zero = 0;
+        copy_to_user((void *)child_tid, &zero, sizeof(int));
+    }
+
+    vga_puts("[CLONE] created thread pid=");
+    vga_put_hex((uint64_t)child_pid);
+    vga_puts(" (shared pml4, stack=0x");
+    vga_put_hex(stack);
+    vga_puts(")\n");
+    return child_pid;
 }
 static int64_t sys_creat(const char *path, int mode) { (void)path;(void)mode; return 3; }
 static int64_t sys_link(const char *oldp, const char *newp) { (void)oldp;(void)newp; return 0; }

@@ -79,6 +79,12 @@ typedef struct {
 #define MAX_USER_PROCS 8
 user_process_t user_procs[MAX_USER_PROCS];
 static uint8_t g_proc_isolated[MAX_USER_PROCS];   /* 该槽位的页表是否为隔离模式（不改 user_process_t 布局） */
+/* V0.57.3: clone 线程的页表共享引用计数。
+ * clone 出的子线程与父线程共用同一张 PML4，父线程退出时不能直接释放它——
+ * 只要还有线程活着，释放后线程一触碰内存就 #PF。这里记账，release 时看计数。 */
+static int g_pt_ref[MAX_USER_PROCS];
+static int g_clone_thr_pid[MAX_USER_PROCS][8];
+static int g_clone_thr_n[MAX_USER_PROCS];
 static int g_last_isolated;                        /* 最近一次创建页表实际使用的模式 */
 static void user_free_aspace(int idx);
 int current_user_proc = -1;
@@ -2166,6 +2172,29 @@ int user_process_get_current_slot(void)
 }
 
 /* 释放进程槽位资源 */
+/* V0.57.3: clone 线程登记（sys_clone 调用） */
+int user_process_clone_track(int thread_pid)
+{
+    int idx = current_user_proc;
+    if (idx < 0 || idx >= MAX_USER_PROCS) return -1;
+    g_pt_ref[idx]++;
+    if (g_clone_thr_n[idx] < 8) {
+        g_clone_thr_pid[idx][g_clone_thr_n[idx]++] = thread_pid;
+    }
+    vga_puts("[CLONE] thread registered, pt_ref=");
+    vga_put_hex((uint64_t)g_pt_ref[idx]);
+    vga_puts("\n");
+    return 0;
+}
+
+/* 当前进程还有几个活着的 clone 线程 */
+int user_process_clone_refcount(void)
+{
+    int idx = current_user_proc;
+    if (idx < 0 || idx >= MAX_USER_PROCS) return 0;
+    return g_pt_ref[idx];
+}
+
 static void user_process_release(int idx)
 {
     extern void syscall_fd_table_reset(int slot);
@@ -2174,7 +2203,18 @@ static void user_process_release(int idx)
     syscall_fd_table_reset(idx);   /* 安全修复：槽位复用前清掉上一个进程遗留的 fd */
     seccomp64_reset(idx);          /* P0-4：槽位复用前清除 sandbox 模式，避免继承 */
     user_va_release_slot(idx);     /* P1: 清该进程的 VA 区间账本与模块表/kbuf */
-    user_free_aspace(idx);
+    if (g_pt_ref[idx] > 0) {
+        /* V0.57.3: 还有 clone 线程活着，页表不能释放（共享）。
+         * 这里不硬杀线程（把正在别处运行的上下文强拆更危险），只保留地址空间，
+         * 让线程自然结束；槽位复用时由 create 重建页表。 */
+        vga_puts("[CLONE] aspace kept: live clone threads=");
+        vga_put_hex((uint64_t)g_pt_ref[idx]);
+        vga_puts("\n");
+        g_clone_thr_n[idx] = 0;
+        g_pt_ref[idx] = 0;          /* 父已退出，后续不再有新的 clone 记账 */
+    } else {
+        user_free_aspace(idx);
+    }
     if (proc->kernel_stack) {
         pmm64_free_page((uint64_t)proc->kernel_stack);
         proc->kernel_stack = 0;

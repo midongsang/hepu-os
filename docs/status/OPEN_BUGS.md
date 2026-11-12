@@ -181,3 +181,14 @@ source_of_truth: kernel/arch/x86_64/
 - **tablet 路径证据**：`g_shell` 跟随 USB tablet 的绝对坐标（结构 `abs_x` 偏移 0x30、`abs_y` 偏移 0x34、结构大小 0x48、基址 0x30b1e0），基线为 (0,0)；而 HMP `mouse_move` 只向 PS/2 发相对 delta，改不到绝对指针设备，`mouse_set 0/1/2` 亦无效，7.2.0 无绝对定位命令 —— 于是 tablet 光标停在初始 (0,0)（左上角出屏），被误读成「光标不动/坐标错」。
 - **误解机制**：把两套独立坐标源（Shell 结构内坐标 vs PS/2 驱动文件内静态变量）直接对比，并混用相对/绝对两套语义；实际渲染无错位。
 - **可选加固建议（非缺陷，本轮未实施）**：tablet 在首个报告前把坐标默认到屏幕中心而非 (0,0)（`usb64.c:223` 字段定义与 `:1787` `usb64_tablet_get` 路径，约 ≤5 行）。该项不计入缺陷台账，仅作后续体验优化记录。
+
+## SEC-20 用户线程不是调度单元（clone 无法真正并发）
+
+- 现象：`sys_clone` 能创建线程（`[CLONE] created thread pid=0x4`），但子线程
+  从不运行；父线程被 `context_switch` 抽走后回来 `rip=0 / CR2=0`。
+- 根因：`process64_tick()` 只轮转内核线程；`user_process_switch` 的用户执行流
+  不在调度表里，无上下文保存槽位；`smp_timer_tick` 的 AP 调度被 `&& 0` 关闭。
+- 影响：所有依赖用户态并发的功能（线程、并行、异步 IO 回调）。
+- 现状：`sys_clone` 保留实现但 `g_clone_threads_enabled=0`，对外返回 ENOSYS。
+- 修法方向：为每条用户执行流建立 rip/rsp/rflags/GPR/fsbase 上下文，由中断
+  调度器轮转并保证恢复；fork 的显式恢复路径可作为模板。

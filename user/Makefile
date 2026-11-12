@@ -32,7 +32,8 @@ SRCS := hello.c shell.c forktest.c
 # 目标
 TARGETS := $(BUILD_DIR)/hello.elf $(BUILD_DIR)/shell.elf $(BUILD_DIR)/forktest.elf \
            $(BUILD_DIR)/sec_test.elf $(BUILD_DIR)/comptest.elf \
-           $(BUILD_DIR)/ps.elf
+           $(BUILD_DIR)/ps.elf \
+           $(BUILD_DIR)/clone_test.elf
 
 # 全量构建目标：原生用户程序 + Linux 兼容层 PIE 测试程序 + 历史测试程序（SEC-12）
 # 注意：真正的 all 目标在**文件末尾**定义 —— GNU Make 在**读取规则时**就展开
@@ -118,6 +119,12 @@ $(BUILD_DIR)/ps.o: $(USER_DIR)apps/ps.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/ps.elf: $(BUILD_DIR)/ps.o $(LDSCRIPT)
+	$(LD) $(LDFLAGS) -T $(LDSCRIPT) -o $@ $<
+
+$(BUILD_DIR)/clone_test.o: $(USER_DIR)apps/clone_test.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/clone_test.elf: $(BUILD_DIR)/clone_test.o $(LDSCRIPT)
 	$(LD) $(LDFLAGS) -T $(LDSCRIPT) -o $@ $<
 	@echo "Built user ELF: $@"
 	@ls -lh $@

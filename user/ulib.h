@@ -54,6 +54,30 @@ static inline uint64_t syscall3(uint64_t nr, uint64_t arg1, uint64_t arg2, uint6
     return ret;
 }
 
+/* V0.57.3: 第 4/5 参数走 r10/r8（Linux x86_64 约定），clone 需要 5 个参数 */
+static inline uint64_t syscall4(uint64_t nr, uint64_t arg1, uint64_t arg2,
+                                uint64_t arg3, uint64_t arg4)
+{
+    register uint64_t ret asm("rax");
+    register uint64_t r10 asm("r10") = arg4;
+    asm volatile("syscall" : "=a"(ret)
+                 : "a"(nr), "D"(arg1), "S"(arg2), "d"(arg3), "r"(r10)
+                 : "rcx", "r11", "memory");
+    return ret;
+}
+
+static inline uint64_t syscall5(uint64_t nr, uint64_t arg1, uint64_t arg2,
+                                uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+    register uint64_t ret asm("rax");
+    register uint64_t r10 asm("r10") = arg4;
+    register uint64_t r8  asm("r8")  = arg5;
+    asm volatile("syscall" : "=a"(ret)
+                 : "a"(nr), "D"(arg1), "S"(arg2), "d"(arg3), "r"(r10), "r"(r8)
+                 : "rcx", "r11", "memory");
+    return ret;
+}
+
 /* 系统调用函数 */
 static inline int write(int fd, const void *buf, size_t count)
 {
