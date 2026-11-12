@@ -247,6 +247,14 @@ static int g_content_dirty;   /* 定义在文件后部, 此处前向声明供设
 static int g_settings_page = 0;  /* 0=Appearance, 1=Panels, 2=System, 3=About, 4=Display */
 /* Display 页缩放按钮的渲染位置: 命中测试直接复用, 不另算一套坐标 */
 static int g_disp_scale_btn_x = 0, g_disp_scale_btn_y = 0;
+/* 分辨率档位(点选后写 ESP 的 HEPBOOT.CFG, 重启生效) */
+static int g_disp_res_btn_x = 0, g_disp_res_btn_y = 0;
+static const int g_disp_res_w[4] = {1024, 1280, 1920, 2048};
+static const int g_disp_res_h[4] = {768, 720, 1080, 1536};
+static char g_disp_msg[48];
+#define HS_DISP_RES_W 132
+#define HS_DISP_RES_GAPX 140
+#define HS_DISP_RES_GAPY 32
 static const int g_disp_scale_pcts[4] = {100, 125, 150, 200};
 #define HS_DISP_BTN_W 64
 #define HS_DISP_BTN_GAP 72
@@ -551,6 +559,69 @@ void hs_display_save(void)
     int rc = ext2_64_write_file(HS_DISPLAY_CFG, (const uint8_t *)buf, (uint32_t)p);
     vga_printf("[DISPLAY] save %s rc=%d\n", HS_DISPLAY_CFG, rc);
     (void)rc;
+}
+
+/* 把 resolution=WxH 写进 ESP 上的 HEPBOOT.CFG。
+ * 分辨率由引导阶段 SetMode 决定(内核已 ExitBootServices, 运行时改不了),
+ * 所以这里的语义是"写配置 + 提示重启", 而不是立即切换。
+ * 逐行改写而不是整文件覆盖: 原文件里的 timeout/default/kernel_arch/cmdline
+ * 必须原样保留, 否则会把引导配置清掉。 */
+void hs_display_set_resolution(int ww, int hh)
+{
+    extern int hs_fat32_read(const char *name83, uint8_t *out, uint32_t max);
+    extern int hs_fat32_write(const char *name83, const uint8_t *data, uint32_t len);
+    uint8_t in[256], out[256];
+    char tail[16];
+    const char *key = "resolution=";
+    int n, i = 0, p = 0, found = 0;
+
+    n = hs_fat32_read("HEPBOOT CFG", in, sizeof(in) - 8);
+    if (n < 0) n = 0;
+
+    while (i < n && p < 200) {
+        int ls = i, le, m, is_res = 1, t = 0;
+        while (i < n && in[i] != '\n') i++;
+        le = i;
+        if (i < n) i++;                       /* 吃掉换行 */
+        if (le - ls >= 11) {
+            for (m = 0; key[m]; m++)
+                if (in[ls + m] != (uint8_t)key[m]) { is_res = 0; break; }
+        } else {
+            is_res = 0;
+        }
+        if (is_res) {
+            /* 命中 resolution 行: 整行换成新的 */
+            for (m = 0; key[m]; m++) out[p++] = (uint8_t)key[m];
+            itoa_hs(ww, tail);
+            for (t = 0; tail[t]; t++) out[p++] = (uint8_t)tail[t];
+            out[p++] = 'x';
+            itoa_hs(hh, tail);
+            for (t = 0; tail[t]; t++) out[p++] = (uint8_t)tail[t];
+            out[p++] = '\n';
+            found = 1;
+        } else {
+            for (m = ls; m < le && p < 200; m++) out[p++] = in[m];
+            if (i <= n && p < 200) out[p++] = '\n';
+        }
+    }
+    if (!found) {
+        int m, t;
+        for (m = 0; key[m]; m++) out[p++] = (uint8_t)key[m];
+        itoa_hs(ww, tail); for (t = 0; tail[t]; t++) out[p++] = (uint8_t)tail[t];
+        out[p++] = 'x';
+        itoa_hs(hh, tail); for (t = 0; tail[t]; t++) out[p++] = (uint8_t)tail[t];
+        out[p++] = '\n';
+    }
+    /* 去掉可能的尾部空行 */
+    while (p > 0 && out[p - 1] == '\n' && p > 1 && out[p - 2] == '\n') p--;
+
+    if (hs_fat32_write("HEPBOOT CFG", out, (uint32_t)p) == 0) {
+        strcpy(g_disp_msg, "Saved. Reboot to apply.");
+        vga_printf("[DISPLAY] resolution -> %dx%d written to HEPBOOT.CFG\n", ww, hh);
+    } else {
+        strcpy(g_disp_msg, "Write failed (ESP not writable)");
+        vga_printf("[DISPLAY] resolution write failed\n");
+    }
 }
 
 /* 返回 1 = 配置文件里有用户显式选择的 scale; 0 = 没有(应走自动) */
@@ -2110,14 +2181,44 @@ static void hs_settings_window_render(hs_window_t *w)
                                rx, ry, mb, g_shell.colors.panel_fg, SETK(11));
             ry += SETK(18);
         }
+        /* 分辨率档位: 点选后写 ESP 上的 HEPBOOT.CFG, 重启生效。
+         * 内核已 ExitBootServices, 运行时没有 SetMode 能力, 所以这里的交互
+         * 只能是"落配置 + 提示重启", 不做假的立即切换。 */
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           rx, ry, "Change: resolution=WxH in HEPBOOT.CFG",
-                           g_shell.colors.panel_fg, SETK(11));
-        ry += SETK(18);
-        font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           rx, ry, "then reboot (no runtime SetMode)",
+                           rx, ry, "Resolution (reboot to apply)",
                            g_shell.colors.panel_fg, SETK(11));
         ry += SETK(20);
+        g_disp_res_btn_x = rx;
+        g_disp_res_btn_y = ry;
+        for (int ri = 0; ri < 4; ri++) {
+            int col = ri % 2, row = ri / 2;
+            int bx = rx + col * SETK(HS_DISP_RES_GAPX);
+            int by2 = ry + row * SETK(HS_DISP_RES_GAPY);
+            int on = (g_disp_res_w[ri] == g_shell.screen_width &&
+                      g_disp_res_h[ri] == g_shell.screen_height);
+            char rl[16];
+            int q = 0, t4 = 0;
+            char t3[8];
+            gfx64_fill_rounded_rect(bx, by2, SETK(HS_DISP_RES_W), SETK(26), SETK(6),
+                                    on ? g_shell.colors.accent : g_shell.colors.panel_bg);
+            itoa_hs(g_disp_res_w[ri], rl);
+            while (rl[q]) q++;
+            rl[q++] = 'x';
+            itoa_hs(g_disp_res_h[ri], t3);
+            while (t3[t4] && q < 15) rl[q++] = t3[t4++];
+            rl[q] = 0;
+            font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                               bx + SETK(10), by2 + SETK(7), rl,
+                               on ? 0x2B2930 : g_shell.colors.panel_fg, SETK(10));
+        }
+        /* 两行按钮的实际占用: 行距 + 按钮高 + 行间留白 */
+        ry += SETK(HS_DISP_RES_GAPY + 26) + SETK(8);
+        if (g_disp_msg[0]) {
+            font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                               rx, ry, g_disp_msg,
+                               g_shell.colors.text_secondary, SETK(10));
+            ry += SETK(16);
+        }
 
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            rx, ry, g_disp_scale_auto ? "UI Scale: Auto (from resolution)"
@@ -3916,6 +4017,26 @@ void hpdesk_handle_click(int x, int y)
                         }
                     }
                     return;
+                }
+            }
+            /* Display 页: 分辨率档位点击 -> 写 HEPBOOT.CFG(重启生效) */
+            if (g_settings_page == 4 && y >= g_disp_res_btn_y) {
+                int rx_ = x - g_disp_res_btn_x;
+                int ry_ = y - g_disp_res_btn_y;
+                int gw_ = hs_set_k(w, HS_DISP_RES_GAPX);
+                int gv_ = hs_set_k(w, HS_DISP_RES_GAPY);
+                int bw_ = hs_set_k(w, HS_DISP_RES_W);
+                int bh_ = hs_set_k(w, 26);
+                if (rx_ >= 0 && ry_ >= 0 && gw_ > 0 && gv_ > 0) {
+                    int col = rx_ / gw_, row = ry_ / gv_;
+                    if (col < 2 && row < 2 &&
+                        (rx_ % gw_) <= bw_ && (ry_ % gv_) <= bh_) {
+                        int idx = row * 2 + col;
+                        extern void hs_display_set_resolution(int ww, int hh);
+                        hs_display_set_resolution(g_disp_res_w[idx], g_disp_res_h[idx]);
+                        g_content_dirty = 1;
+                        return;
+                    }
                 }
             }
             /* Display 页: 缩放档位点击 -> 立即生效 + 持久化 */

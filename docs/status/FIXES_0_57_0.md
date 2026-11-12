@@ -1529,3 +1529,69 @@ QC 六卡与两滑块圆角全部实心且边缘平滑，没有出现"只剩描�
   不影响点击准确性，但视觉上略有偏差，待后续按 xcur hotspot 校准
 - 真机（物理鼠标）尚未验证；以上均在 QEMU + XHCI 下取证
 - 进程表仍只有 idle，任务管理器的进程列表内容待补
+
+## 1.64 Display 页"点选分辨率"：ESP FAT32 最小读写 + 重启生效
+
+**需求**：Display 页能把分辨率改掉。但内核已过 `ExitBootServices`，运行时没有
+`SetMode` 能力（`hpdesk.c:2082` 注释与页面提示都写着这一点），所以只能把
+`resolution=WxH` 写进 ESP 上的 `/HEPBOOT.CFG`，**重启生效**。
+
+**为什么新建 `hs_fat32.c` 而不是复用**：`ext2_64` 只能写根分区，ESP 是 FAT32，
+`vfat.c` 是空壳。存储层有 `storage_hal_write(lba, count, buf)`，所以写入能力本身是有的，
+缺的只是 FAT32 这一层。
+
+**模块刻意做得窄**（`kernel/arch/x86_64/hs_fat32.c`）：
+
+- 只认 GPT 里的 EFI System Partition（类型 GUID `C12A7328-F81F-11D2-BA4B-00A0C93EC93B`，
+  字节序 `28 73 2A C1 1F F8 D2 11 BA 4B 00 A0 C9 3E C9 3B`），扫前 16 项；
+- BPB 逐项校验（`bs` 512–4096 且为 2 的幂、`spc` 1–128、`rsvd`、`nfats`、`fatsz`、`rootc >= 2`），
+  任一项不合法整体放弃，不做"尽力而为"的写；目前只支持 512B 逻辑扇区；
+- 只遍历根目录 FAT 链（上限 64 簇）找 8.3 短名，跳过 LFN / 已删除 / 卷标；
+- **只在"新内容 ≤ 原簇容量"时覆盖写**，不分配新簇、不改 FAT 链 ——
+  分配簇要动 FSInfo 与备份 FAT，那是能写坏引导盘的路径，宁可返回错误；
+- 写回后**必须更新目录项 off 28 的文件大小**，否则 bootloader 读到旧长度会截断。
+
+**API**：`hs_fat32_read(name83,out,max)` / `hs_fat32_write(name83,data,len)` / `hs_fat32_selftest()`。
+Makefile 第 37 行加入 `hs_fat32.c`（显式源文件列表，非 wildcard）。
+
+**实测（读）**：
+```
+[FAT32] esp=2048 data=6114 root=2 clus=512
+[FAT32] HEPBOOT.CFG(82): # HepuBoot UEFI Configuration v0.57.0|timeout=5|default=0|kernel_arch=64|cmdline=|
+```
+
+**实测（写）**：读 82B → 追加 `resolution=1920x1080` → 写回 103B → 内核读回 103B 一致；
+关机后外部 `mtools` 读回内容一致 → FAT 结构对 bootloader 与第三方工具都成立。
+
+**Display 页 UI**：
+
+- 原来那两行说明文字（"Change: resolution=WxH in HEPBOOT.CFG" / "then reboot"）
+  替换为 **2×2 分辨率按钮组**（`1024x768 / 1280x720 / 1920x1080 / 2048x1536`），
+  按钮宽 `SETK(132)`、横向 gap `SETK(140)`、纵向 gap `SETK(32)`；
+  内容区宽约 290，4 个完整标签一行放不下，所以是 2×2 而不是 1×4。
+- 选中态按**当前实际屏分辨率**匹配（不是按配置里的字符串），所以刚开机就能看到当前档高亮。
+- 点击命中另设 `g_disp_res_btn_x/y`，用 `hs_set_k(w, ...)` 做行/列整除定位，
+  与渲染共用同一组常量 —— 避免"画得大、点得小"。
+- 写入后页面显示 `Saved. Reboot to apply.`，串口打印 `[DISPLAY] resolution -> WxH written`。
+
+**关键实现细节：逐行改写而不是整文件覆盖**
+
+`HEPBOOT.CFG` 里还有 `timeout/default/kernel_arch/cmdline`，整文件覆盖会把引导配置清掉。
+`hs_display_set_resolution()` 逐行扫描：命中 `resolution=` 前缀就**整行替换**，其余行原样拷贝，
+没有该键才在末尾追加。测例（原文件已含 `resolution=1920x1080` 且 `cmdline=` 在其后）：
+
+```
+写入前: # ...v0.57.0 / timeout=5 / default=0 / resolution=1920x1080 / cmdline=
+写入后: # ...v0.57.0 / timeout=5 / default=0 / resolution=2048x1536 / cmdline=
+resolution 行数 = 1        （没有重复追加，其它键顺序与内容不变）
+```
+
+**端到端验证（重启链路）**：把 cfg 改成 `resolution=2048x1536` 后重启，
+串口输出 `[DISPLAY] auto scale=200% (screen 2048x1536)`、
+`[GEOM] pct=200 screen=2048x1536 logical=1024x768`，桌面版式正常 ——
+"点选分辨率 → 重启生效"这条链路是通的，不是只写了文件。
+
+**风险与边界**：这是写引导分区的操作。当前实现只覆盖**已存在**的小文件、
+不扩簇、不改 FAT 链，失败时返回错误码而不重试；`HEPBOOT.CFG` 只有几十字节，
+远小于一个 512B 簇，正常路径不会触发任何簇分配。若将来要写超过一簇的文件，
+必须先补 FSInfo 与备份 FAT 的维护，那应当另开一轮并单独验证。

@@ -34,6 +34,7 @@ C_SOURCES = \
     $(ARCH_DIR)/keyboard64.c \
     $(ARCH_DIR)/rtc64.c \
     $(ARCH_DIR)/ext2_64.c \
+    $(ARCH_DIR)/hs_fat32.c \
     $(ARCH_DIR)/pci64.c \
     $(ARCH_DIR)/rtl8139_64.c \
     $(ARCH_DIR)/e1000_64.c \
