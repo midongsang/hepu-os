@@ -674,6 +674,10 @@ static int f_filter_len = 0;
 static int f_matched[FS_MAX_ITEMS];   /* 过滤/排序后的显示索引 */
 static int f_match_count = 0;
 static int f_view_mode = 0;           /* 0=列表, 1=网格 */
+/* 排序: 0=名称 1=大小 2=类型; desc=1 时反向。目录恒优先(两种方向都保持目录在前) */
+static int f_sort_key = 0;
+static int f_sort_desc = 0;
+static int f_kind(int item);
 /* V0.55.1: 文件菜单状态当前未被使用(统一走桌面菜单), 先标注保留意图 */
 static int f_fs_menu __attribute__((unused)) = 0;   /* 0=桌面菜单, 1=文件菜单 */
 static int f_dclick_tick = 0;         /* 双击检测: 上次点击 tick */
@@ -704,6 +708,7 @@ static char f_old_name[64];
 
 /* 删除确认 */
 static int f_del_confirm = 0;
+static int f_del_multi = 0;          /* >0: 待删项数(多选), 0 则删当前选中项 */
 static char f_del_name[64];
 static char f_del_path[FS_PATH_MAX];
 
@@ -747,7 +752,8 @@ static int f_visible_rows(void)
 {
     int h = f_win ? f_win->height : 360;
     int ch = h - FS(26) - FS(40);          /* 内容区高度 (状态栏 40px 已扣除) */
-    int rows = (ch - FS(52)) / f_row_h();  /* 26px 路径栏 + 26px 底部输入/确认条 */
+    /* 20 路径栏 + 18 位置条 + 16 列头 + 26 底部输入/确认条 + 余量 */
+    int rows = (ch - FS(86)) / f_row_h();
     if (rows < 1) rows = 1;
     if (rows > FS_MAX_VISIBLE) rows = FS_MAX_VISIBLE;
     return rows;
@@ -767,11 +773,19 @@ static int f_name_cmp(const char *a, const char *b)
     return 0;
 }
 
-/* 目录优先，再按名称不区分大小写排序 */
+/* 目录优先，再按当前排序列；同列值相等时退回名称，保证顺序稳定 */
 static int f_cmp_items(int ia, int ib)
 {
+    int r = 0;
     if (f_types[ia] != f_types[ib]) return f_types[ib] - f_types[ia];
-    return f_name_cmp(f_items[ia], f_items[ib]);
+    if (f_sort_key == 1 && f_sizes[ia] != f_sizes[ib])
+        r = (int)f_sizes[ia] - (int)f_sizes[ib];
+    else if (f_sort_key == 2) {
+        int ka = f_kind(ia), kb = f_kind(ib);
+        if (ka != kb) r = ka - kb;
+    }
+    if (r == 0) r = f_name_cmp(f_items[ia], f_items[ib]);
+    return f_sort_desc ? -r : r;
 }
 
 static int f_join(char *out, int cap, const char *dir, const char *name)
@@ -951,13 +965,53 @@ static void f_render(hs_window_t *w)
                            on_usb ? 0xFFFFFF : g_shell.colors.panel_fg, FS(12));
     }
 
+    /* 位置快捷条: 常用目录一键跳转(路径栏点击仍可手打任意路径) */
+    int loc_y = cy + FS(22);
+    {
+        static const char *locs[4] = {"/", "/usr", "/fonts", "/usr/share"};
+        static const char *labs[4] = {"Root", "usr", "fonts", "share"};
+        int lx = cx + FS(2);
+        for (int i = 0; i < 4; i++) {
+            int on = (strcmp(f_path, locs[i]) == 0);
+            int lw = FS(7) * hs_strlen(labs[i]) + FS(10);
+            gfx64_fill_rounded_rect(lx, loc_y, lw, FS(16), FS(4),
+                                    on ? g_shell.colors.accent : g_shell.colors.panel_bg);
+            font64_draw_string(fb, W, H, lx + FS(5), loc_y + FS(3), labs[i],
+                               on ? 0xFFFFFF : g_shell.colors.panel_fg, FS(10));
+            lx += lw + FS(4);
+        }
+    }
+    /* 列表列头: 点击切换排序(名称/大小/类型) */
+    int hdr_y = cy + FS(44);
+    int list_y = hdr_y + FS(16);
+    if (f_view_mode == 0) {
+        uint32_t hc = g_shell.colors.text_secondary;
+        int col_size = cx + cw - FS(86);
+        int col_type = cx + cw - FS(34);
+        font64_draw_string(fb, W, H, cx + FS(22), hdr_y, "Name",
+                           f_sort_key == 0 ? g_shell.colors.accent : hc, FS(10));
+        font64_draw_string(fb, W, H, col_size, hdr_y, "Size",
+                           f_sort_key == 1 ? g_shell.colors.accent : hc, FS(10));
+        font64_draw_string(fb, W, H, col_type, hdr_y, "Type",
+                           f_sort_key == 2 ? g_shell.colors.accent : hc, FS(10));
+        /* 当前排序列下的小横线: 有横线=升序, 粗线=降序不好区分, 用箭头文字代替 */
+        if (f_sort_desc) {
+            const char *arrow = "v";
+            int ax = (f_sort_key == 0) ? cx + FS(22) + FS(34)
+                   : (f_sort_key == 1) ? col_size + FS(32) : col_type + FS(30);
+            font64_draw_string(fb, W, H, ax, hdr_y, (char *)arrow,
+                               g_shell.colors.accent, FS(9));
+        }
+        gfx64_fill_rect(cx, hdr_y + FS(14), cw, 1, g_shell.colors.border);
+    }
+
     /* 网格模式: 大图标 + 名称 */
     if (f_view_mode == 1) {
         int gs = FS(76), cols = cw / gs;
         if (cols < 1) cols = 1;
         int rows = (ch - FS(52)) / (gs + FS(8));
         if (rows < 1) rows = 1;
-        int gy = cy + FS(26);
+        int gy = cy + FS(44);
         for (int r = 0; r < rows; r++) {
             for (int c = 0; c < cols; c++) {
                 int gi = f_scroll + (r * cols + c);
@@ -982,8 +1036,14 @@ static void f_render(hs_window_t *w)
             }
         }
     } else {
-        /* 列表模式 (名称 + 大小) */
-        int list_y = cy + FS(26);
+        /* 空状态: 区分"目录本身是空的"与"被过滤条件筛掉了" —— 两者在旧版都是纯黑一片,
+         * 用户会以为目录没刷新出来。 */
+        if (f_match_count == 0) {
+            const char *msg = f_filter_len ? "No matches for filter" : "This folder is empty";
+            font64_draw_string(fb, W, H, cx + FS(24), list_y + FS(6), (char *)msg,
+                               g_shell.colors.text_secondary, FS(12));
+        }
+        /* 列表模式 (名称 + 大小 + 类型) */
         int visible = f_visible_rows();
         if (visible < 1) visible = 1;
         for (int r = 0; r < visible; r++) {
@@ -1007,16 +1067,24 @@ static void f_render(hs_window_t *w)
             }
             font64_draw_string(fb, W, H, cx + FS(22), iy + FS(2), disp,
                                (li == f_sel) ? 0xFFFFFF : g_shell.colors.window_fg, FS(12));
-            /* 标记指示 */
+            /* 标记指示(多选): 放到行首, 避免与 Size/Type 两列抢位置 */
             if (f_mark[item])
-                font64_draw_string(fb, W, H, cx + cw - FS(68), iy + FS(2), "*",
+                font64_draw_string(fb, W, H, cx + FS(1), iy + FS(2), "*",
                                    (li == f_sel) ? 0xFFFFFF : 0xFFD040, FS(12));
-            /* 右侧大小 / <DIR> */
+            /* Size 列 */
             char szbuf[20];
             if (f_types[item]) strcpy(szbuf, "<DIR>");
             else f_fmt_size(f_sizes[item], szbuf);
-            font64_draw_string(fb, W, H, cx + cw - FS(52), iy + FS(2), szbuf,
+            font64_draw_string(fb, W, H, cx + cw - FS(86), iy + FS(2), szbuf,
                                (li == f_sel) ? 0xFFFFFF : g_shell.colors.text_secondary, FS(12));
+            /* Type 列: 与列头 col_type 对齐 */
+            {
+                static const char *kname[6] = {"DIR", "IMG", "VID", "AUD", "DOC", "FIL"};
+                int k = f_kind(item);
+                if (k < 0 || k > 5) k = 5;
+                font64_draw_string(fb, W, H, cx + cw - FS(34), iy + FS(2), (char *)kname[k],
+                                   (li == f_sel) ? 0xFFFFFF : g_shell.colors.text_secondary, FS(10));
+            }
         }
     }
 
@@ -1053,7 +1121,14 @@ static void f_render(hs_window_t *w)
         gfx64_fill_rounded_rect(cx, by, cw, FS(22), FS(4), 0xC03030);
         char lb[120];
         strcpy(lb, "Delete ");
-        hs_strcpyn(lb + hs_strlen(lb), f_del_name, 20);
+        if (f_del_multi > 0) {
+            char t8[8];
+            hs_itoa(f_del_multi, t8);
+            strcpy(lb + hs_strlen(lb), t8);
+            strcpy(lb + hs_strlen(lb), " marked items");
+        } else {
+            hs_strcpyn(lb + hs_strlen(lb), f_del_name, 20);
+        }
         strcpy(lb + hs_strlen(lb), " ?  Enter=Delete  N=Cancel");
         font64_draw_string(fb, W, H, cx + FS(8), by + FS(4), lb, 0xFFFFFF, FS(12));
     } else if (f_prompt != FS_PROMPT_NONE) {
@@ -1082,6 +1157,10 @@ static void f_render(hs_window_t *w)
     if (f_status2[0])
         font64_draw_string(fb, W, H, cx, cy + ch + FS(16), f_status2,
                            g_shell.colors.accent, FS(12));
+    else
+        font64_draw_string(fb, W, H, cx, cy + ch + FS(16),
+                           "F2 Rename  F3 Props  F5 Refresh  F6 Copy  F8 Cut  F9 Paste",
+                           g_shell.colors.text_secondary, FS(9));
 }
 
 static int f_is_text_file(const char *nm)
@@ -1285,27 +1364,22 @@ static void f_do_paste(void)
         return;
     }
 
-    int ok = 0;
+    int ok = 0, fail = 0;
+    const char *why = 0;
     for (int i = 0; i < f_clip_count; i++) {
         char dst[FS_PATH_MAX];
-        if (f_join(dst, FS_PATH_MAX, f_path, f_clip_names[i]) != 0) break;
+        if (f_join(dst, FS_PATH_MAX, f_path, f_clip_names[i]) != 0) { fail++; why = "path too long"; continue; }
 
         uint32_t sz = 0;
         uint8_t isdir = 0;
-        if (ext2_64_stat(dst, &sz, &isdir) == 0) {
-            hs_strcpyn(f_status2, "Paste failed: target exists", FS_PROMPT_MAX);
-            return;
-        }
-        if (ext2_64_stat(f_clip_paths[i], &sz, &isdir) != 0) {
-            hs_strcpyn(f_status2, "Paste failed: source missing", FS_PROMPT_MAX);
-            return;
-        }
+        if (ext2_64_stat(dst, &sz, &isdir) == 0) { fail++; why = "target exists"; continue; }
+        if (ext2_64_stat(f_clip_paths[i], &sz, &isdir) != 0) { fail++; why = "source missing"; continue; }
 
         int rc = isdir ? f_copy_tree(f_clip_paths[i], dst)
                        : f_copy_file(f_clip_paths[i], dst);
-        if (rc == -2) { hs_strcpyn(f_status2, "Paste failed: file too large", FS_PROMPT_MAX); return; }
-        if (rc == -3) { hs_strcpyn(f_status2, "Paste failed: too many entries", FS_PROMPT_MAX); return; }
-        if (rc != 0) { hs_strcpyn(f_status2, "Paste failed", FS_PROMPT_MAX); return; }
+        if (rc == -2) { fail++; why = "file too large"; continue; }
+        if (rc == -3) { fail++; why = "too many entries"; continue; }
+        if (rc != 0) { fail++; continue; }
 
         if (f_clip_mode == 2) {
             if (isdir) ext2_64_delete_tree(f_clip_paths[i]);
@@ -1314,16 +1388,27 @@ static void f_do_paste(void)
         ok++;
     }
 
-    if (ok == f_clip_count) {
-        char msg[48]; char tmp[8];
-        strcpy(msg, "Pasted ");
+    /* 结果汇报: 成功/失败分别计数, 失败附最后一个原因 (旧版中途 return, 前面已成功的项连计数都没有) */
+    {
+        char msg[96]; char tmp[8];
+        strcpy(msg, f_clip_mode == 2 ? "Moved " : "Copied ");
         hs_itoa(ok, tmp);
         strcpy(msg + hs_strlen(msg), tmp);
-        strcpy(msg + hs_strlen(msg), " item(s)");
+        strcpy(msg + hs_strlen(msg), ok == 1 ? " item" : " items");
+        if (fail > 0) {
+            strcpy(msg + hs_strlen(msg), ", ");
+            hs_itoa(fail, tmp);
+            strcpy(msg + hs_strlen(msg), tmp);
+            strcpy(msg + hs_strlen(msg), " failed");
+            if (why) {
+                strcpy(msg + hs_strlen(msg), " (");
+                hs_strcpyn(msg + hs_strlen(msg), why, 24);
+                strcpy(msg + hs_strlen(msg), ")");
+            }
+        }
         hs_strcpyn(f_status2, msg, FS_PROMPT_MAX);
-        f_clip_count = 0;
-        f_clip_mode = 0;
     }
+    if (fail == 0) { f_clip_count = 0; f_clip_mode = 0; }
     f_refresh();
     f_clear_marks();
 }
@@ -1464,7 +1549,51 @@ void hs_files_click(int x, int y)
         }
     }
 
-    int cy = f_win->y + FS(26) + FS(26);
+    /* 位置快捷条: 命中范围与渲染同源 */
+    {
+        static const char *locs[4] = {"/", "/usr", "/fonts", "/usr/share"};
+        static const char *labs[4] = {"Root", "usr", "fonts", "share"};
+        int cx0 = f_win->x + FS(6);
+        int cy0 = f_win->y + FS(26) + FS(22);
+        int lx = cx0 + FS(2);
+        if (y >= cy0 && y <= cy0 + FS(16)) {
+            for (int i = 0; i < 4; i++) {
+                int lw = FS(7) * hs_strlen(labs[i]) + FS(10);
+                if (x >= lx && x <= lx + lw) {
+                    hs_strcpyn(f_path, locs[i], FS_PATH_MAX - 1);
+                    f_scroll = 0; f_sel = 0;
+                    f_refresh();
+                    return;
+                }
+                lx += lw + FS(4);
+            }
+            return;   /* 点在位置条空白处: 吞掉, 避免落进下方列表误选 */
+        }
+    }
+    /* 列头: 点击切排序(同列再次点击切换升降) */
+    if (f_view_mode == 0) {
+        int cx0 = f_win->x + FS(6);
+        int cw0 = f_win->width - FS(12);
+        int hy = f_win->y + FS(26) + FS(44);
+        if (y >= hy && y <= hy + FS(16)) {
+            int key = -1;
+            if (x >= cx0 + cw0 - FS(34)) key = 2;
+            else if (x >= cx0 + cw0 - FS(86)) key = 1;
+            else if (x >= cx0) key = 0;
+            if (key >= 0) {
+                uint8_t keep[FS_MAX_ITEMS];
+                for (int i = 0; i < FS_MAX_ITEMS; i++) keep[i] = f_mark[i];
+                if (f_sort_key == key) f_sort_desc = !f_sort_desc;
+                else { f_sort_key = key; f_sort_desc = 0; }
+                f_refresh();
+                for (int i = 0; i < FS_MAX_ITEMS; i++) f_mark[i] = keep[i];
+                f_scroll = 0;
+            }
+            return;
+        }
+    }
+
+    int cy = f_win->y + FS(26) + FS(60);
     int rows = f_visible_rows();
     if (f_view_mode == 0) {
         int rel = (y - cy) / f_row_h();
@@ -1489,6 +1618,7 @@ void hs_files_click(int x, int y)
     } else {
         int gs = 76, cols = (f_win->width - 12) / gs;
         if (cols < 1) cols = 1;
+        cy = f_win->y + FS(26) + FS(44);
         int rel = ((x - (f_win->x + 6 + 6)) / gs) + ((y - cy) / (gs + 8)) * cols;
         int gi = f_scroll + rel;
         if (rel >= 0 && gi >= 0 && gi < f_match_count) {
@@ -1519,6 +1649,22 @@ void hs_files_do_action(int action)
     /* 0=Open 1=Delete 2=Refresh 3=Up 4=NewFolder 5=Rename */
     if (action == 0) { f_open_item(f_sel); }
     else if (action == 1) {
+        /* 有标记 → 批量删除全部标记项; 无标记 → 删当前选中项 */
+        int marks = 0;
+        for (int i = 0; i < f_count; i++) if (f_mark[i]) marks++;
+        if (marks > 0) {
+            f_del_multi = marks;
+            f_del_name[0] = 0;
+            f_prompt = FS_PROMPT_NONE;
+            f_del_confirm = 1;
+            char msg[64], tmp[8];
+            strcpy(msg, "Enter to delete ");
+            hs_itoa(marks, tmp);
+            strcpy(msg + hs_strlen(msg), tmp);
+            strcpy(msg + hs_strlen(msg), " marked items");
+            hs_strcpyn(f_status2, msg, FS_PROMPT_MAX);
+            return;
+        }
         if (f_sel >= 0 && f_sel < f_match_count) {
             int item = f_matched[f_sel];
             if (f_join(f_del_path, FS_PATH_MAX, f_path, f_items[item]) != 0) {
@@ -1528,6 +1674,7 @@ void hs_files_do_action(int action)
             hs_strcpyn(f_del_name, f_items[item], 60);
             f_prompt = FS_PROMPT_NONE;
             f_del_confirm = 1;
+            f_del_multi = 0;
             hs_strcpyn(f_status2, "Enter to delete, N to cancel", FS_PROMPT_MAX);
         }
     }
@@ -1721,6 +1868,36 @@ static void f_prompt_commit(void)
 
 static void f_delete_commit(void)
 {
+    if (f_del_multi > 0) {
+        /* 批量删除: 逐项独立成败, 结束后汇报总数, 不再"第一个失败就整体中断" */
+        int ok = 0, fail = 0;
+        for (int i = 0; i < f_count; i++) {
+            if (!f_mark[i]) continue;
+            char full[FS_PATH_MAX];
+            uint32_t sz2 = 0; uint8_t d2 = 0;
+            int r = -1;
+            if (f_join(full, FS_PATH_MAX, f_path, f_items[i]) == 0 &&
+                ext2_64_stat(full, &sz2, &d2) == 0)
+                r = d2 ? ext2_64_delete_tree(full) : ext2_64_delete_file(full);
+            if (r == 0) ok++; else fail++;
+        }
+        f_del_multi = 0;
+        f_del_confirm = 0;
+        char msg[96], tmp[8];
+        strcpy(msg, "Deleted ");
+        hs_itoa(ok, tmp);
+        strcpy(msg + hs_strlen(msg), tmp);
+        strcpy(msg + hs_strlen(msg), ok == 1 ? " item" : " items");
+        if (fail > 0) {
+            strcpy(msg + hs_strlen(msg), ", ");
+            hs_itoa(fail, tmp);
+            strcpy(msg + hs_strlen(msg), tmp);
+            strcpy(msg + hs_strlen(msg), " failed");
+        }
+        hs_strcpyn(f_status2, msg, FS_PROMPT_MAX);
+        f_refresh();
+        return;
+    }
     uint32_t sz = 0;
     uint8_t isdir = 0;
     int rc = -1;

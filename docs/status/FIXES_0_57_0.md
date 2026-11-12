@@ -1691,3 +1691,40 @@ resolution 行数 = 1        （没有重复追加，其它键顺序与内容不
 - `fonts/` / `usr/` / `lost+found/` → 目录
 
 14px 行内尺寸下图标仍可辨；`f_row_h` 与命中测试未动，列表行数与点击位置不受影响。
+
+## 1.68 Files P1：可排序列头 / 位置快捷条 / 空状态 / 操作结果反馈 / 快捷键常驻
+
+**定位**：Files 的功能面已不小（新建、重命名、删除、复制剪切粘贴、属性、过滤、双视图、多选），
+真正卡手的是三处：排序固定、位置只有一个 `/`、写操作没有结果反馈。
+
+**改动**：
+
+- **可排序列头**：列表模式新增 `Name / Size / Type` 三列表头，点击切换排序键，同列再次点击切换升降；
+  当前排序列用 accent 高亮，降序在列头右侧标 `v`。比较函数 `f_cmp_items` 增 `f_sort_key / f_sort_desc`，
+  **目录恒优先**（升降序都保持目录在前），同值退回名称比较以保证排序稳定。
+  切排序走 `f_refresh()` 重排并**保留多选标记**（`f_refresh` 会清 `f_mark`，故先备份再恢复）。
+- **位置快捷条**：路径栏下方一行四个位置 `Root / usr / fonts / share`，命中区与渲染共用同一套宽度公式；
+  当前路径匹配的按钮用 accent 反显。点在位置条空白处会被吞掉，避免穿透到下方列表误选。
+- **空状态**：`f_match_count == 0` 时区分 `This folder is empty` 与 `No matches for filter`
+  （旧版两种情况都是纯黑一片，看起来像"没刷新出来"）。
+- **操作结果反馈**：粘贴由"第一个失败就整体中断"改为**逐项累计**，
+  末尾统一汇报 `Copied 12 items, 3 failed (target exists)`；删除支持**按标记批量**，
+  逐项独立成败，汇报 `Deleted 11 items, 1 failed`；确认框文案同步为 `Delete N marked items ?`。
+- **快捷键常驻提示**：状态栏第二行在无消息时显示 `F2 Rename  F3 Props  F5 Refresh  F6 Copy  F8 Cut  F9 Paste`
+  （与 `hs_files_key` 实际映射逐条核对，非臆写）。原来这行只在出错时才有内容，平时是空的。
+
+**布局联动**（最容易出错的地方）：新增位置条 `FS(18)` 与列头 `FS(16)` 后，列表起点由
+`cy+FS(26)` 改为 `cy+FS(60)`，网格起点改为 `cy+FS(44)`，`f_visible_rows()` 扣除量由
+`FS(52)` 改为 `FS(86)`，`hs_files_click()` 的列表基准同步。四处必须同改，
+否则会出现"看得见点不到"——这是前几轮已经踩过的坑。
+
+**验证**（1920×1080 @150%，串口 + 截图双证）：
+
+- 串口 `[FILES] sort k=size asc: fonts lost+found usr notes.txt photo.png report.pdf test_write.txt account.conf`
+  —— 目录在前，其后 6B / 6B / 6B / 33B / 161B 严格递增
+- 截图：`Size` 列头高亮，行内大小 6B → 33B → 161B → 1K → 28K 递增
+- 空目录 `/empty`：显示 `This folder is empty`，`items: 0  dirs: 0`
+- 状态栏两行：`items: 10  dirs: 3` + 快捷键提示
+
+**已知未做**：按修改时间排序需要底层 `list_dir_entries_ex` 提供 mtime（当前只回大小），
+故本轮只有名称/大小/类型三列；批量删除仍同步阻塞（P2 处理）。
