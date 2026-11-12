@@ -1815,77 +1815,82 @@ void hs_window_render_all(void)
 }
 
 /* 设置窗口渲染回调 */
+/* 设置窗口内容按窗口实际宽度等比缩放(基准 460x430)。
+ * 渲染与命中测试必须共用这一套公式, 否则点击会落空。 */
+static int hs_set_k(hs_window_t *w, int v) { return (v * w->width + 230) / 460; }
+#define SETK(v) hs_set_k(w, (v))
+
 static void hs_settings_window_render(hs_window_t *w)
 {
     void *fb = gfx64_get_framebuffer();
-    int cx = w->x + 16;
-    int cy = w->y + 36;  /* 跳过标题栏 */
+    int cx = w->x + SETK(16);
+    int cy = w->y + SETK(36);  /* 跳过标题栏 */
 
     /* 左侧菜单 */
     const char *menu[] = {"Appearance", "Panels", "System", "About", "Display"};
     for (int i = 0; i < 5; i++) {
         uint32_t bg = (i == g_settings_page) ? g_shell.colors.accent : g_shell.colors.panel_bg;
         uint32_t fg = (i == g_settings_page) ? hs_on_accent() : g_shell.colors.panel_fg;
-        gfx64_fill_rounded_rect(cx, cy + i * 32, 120, 28, 6, bg);
+        gfx64_fill_rounded_rect(cx, cy + i * SETK(32), SETK(120), SETK(28), SETK(6), bg);
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           cx + 10, cy + i * 32 + 7, menu[i], fg, 13);
+                           cx + SETK(10), cy + i * SETK(32) + SETK(7), menu[i], fg, SETK(13));
     }
 
     /* 右侧内容 */
-    int rx = cx + 140;
+    int rx = cx + SETK(140);
     int ry = cy;
 
     if (g_settings_page == 0) {
         /* Appearance */
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           rx, ry, "Appearance", g_shell.colors.panel_fg, 16);
-        ry += 30;
+                           rx, ry, "Appearance", g_shell.colors.panel_fg, SETK(16));
+        ry += SETK(30);
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           rx, ry, "Theme: Light / Dark", g_shell.colors.panel_fg, 12);
-        ry += 24;
+                           rx, ry, "Theme: Light / Dark", g_shell.colors.panel_fg, SETK(12));
+        ry += SETK(24);
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           rx, ry, "Accent Color (click to apply):", g_shell.colors.panel_fg, 12);
-        ry += 22;
+                           rx, ry, "Accent Color (click to apply):", g_shell.colors.panel_fg, SETK(12));
+        ry += SETK(22);
         /* 8 个预设色板圆点，点击即应用 */
         for (int i = 0; i < HS_THEME_PRESET_COUNT; i++) {
-            int sx = rx + i * 28;
+            int sx = rx + i * SETK(28);
             int sy = ry;
-            gfx64_fill_circle(sx + 10, sy + 10, 10, g_theme_presets[i]);
+            gfx64_fill_circle(sx + SETK(10), sy + SETK(10), SETK(10), g_theme_presets[i]);
             /* 当前生效色描边 */
             if (g_theme_presets[i] == g_shell.theme_source) {
-                gfx64_draw_rounded_rect(sx - 2, sy - 2, 24, 24, 12, g_shell.colors.panel_fg);
+                gfx64_draw_rounded_rect(sx - SETK(2), sy - SETK(2), SETK(24), SETK(24), SETK(12), g_shell.colors.panel_fg);
             }
         }
-        ry += 28;
+        ry += SETK(28);
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           rx, ry, "Font: DejaVu Sans", g_shell.colors.panel_fg, 12);
-        ry += 24;
+                           rx, ry, "Font: DejaVu Sans", g_shell.colors.panel_fg, SETK(12));
+        ry += SETK(24);
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           rx, ry, "Clock Size: 40px", g_shell.colors.panel_fg, 12);
-        ry += 24;
+                           rx, ry, "Clock Size: 40px", g_shell.colors.panel_fg, SETK(12));
+        ry += SETK(24);
         /* V0.56: 壁纸切换行 (点击循环 Classic/Dusk/Ocean) */
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           rx, ry, "Wallpaper:", g_shell.colors.panel_fg, 12);
+                           rx, ry, "Wallpaper:", g_shell.colors.panel_fg, SETK(12));
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           rx + 84, ry, g_wallpaper_names[g_wallpaper_style],
-                           g_shell.colors.accent, 12);
+                           rx + SETK(84), ry, g_wallpaper_names[g_wallpaper_style],
+                           g_shell.colors.accent, SETK(12));
         /* V0.55.0: 桌面背景色 3x3 色板 (点击应用并写回 config.hsqml) */
-        ry += 24;
+        ry += SETK(24);
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           rx, ry, "Desktop:", g_shell.colors.panel_fg, 12);
+                           rx, ry, "Desktop:", g_shell.colors.panel_fg, SETK(12));
         for (int i = 0; i < 9; i++) {
-            int bx = rx + 76 + (i % 3) * 22;
-            int by = ry - 4 + (i / 3) * 22;
-            gfx64_fill_rect(bx, by, 16, 16, g_color_presets[i]);
+            int bx = rx + SETK(76) + (i % 3) * SETK(22);
+            int by = ry - SETK(4) + (i / 3) * SETK(22);
+            gfx64_fill_rect(bx, by, SETK(16), SETK(16), g_color_presets[i]);
             uint32_t bc = (g_shell.colors.bg == g_color_presets[i])
                         ? g_shell.colors.panel_fg : g_shell.colors.border;
-            gfx64_draw_rounded_rect(bx, by, 16, 16, 3, bc);
+            gfx64_draw_rounded_rect(bx, by, SETK(16), SETK(16), SETK(3), bc);
         }
     } else if (g_settings_page == 1) {
         /* Panels */
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           rx, ry, "Panels", g_shell.colors.panel_fg, 16);
-        ry += 30;
+                           rx, ry, "Panels", g_shell.colors.panel_fg, SETK(16));
+        ry += SETK(30);
         const char *panels[] = {"Top Bar", "Dynamic Island", "Dock", "Clock",
                                 "Weather", "Sidebar", "Control Center"};
         for (int i = 0; i < 7; i++) {
@@ -1893,16 +1898,16 @@ static void hs_settings_window_render(hs_window_t *w)
                 (const char*[]){"top_bar","dynamic_island","dock","desktop_clock",
                                 "weather","sidebar","control_center"}[i]);
             font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                               rx, ry + i * 22, enabled ? "[x] " : "[ ] ",
-                               enabled ? g_shell.colors.accent : g_shell.colors.panel_fg, 12);
+                               rx, ry + i * SETK(22), enabled ? "[x] " : "[ ] ",
+                               enabled ? g_shell.colors.accent : g_shell.colors.panel_fg, SETK(12));
             font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                               rx + 30, ry + i * 22, panels[i], g_shell.colors.panel_fg, 12);
+                               rx + SETK(30), ry + i * SETK(22), panels[i], g_shell.colors.panel_fg, SETK(12));
         }
     } else if (g_settings_page == 2) {
         /* System */
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           rx, ry, "System Information", g_shell.colors.panel_fg, 16);
-        ry += 30;
+                           rx, ry, "System Information", g_shell.colors.panel_fg, SETK(16));
+        ry += SETK(30);
         const char *labels[] = {"OS:", "Kernel:", "CPU:", "Memory:", "Graphics:", "Filesystem:"};
         /* V0.56.1: "4 cores" / "2GB" 原是写死文案, 与实际机器无关。
          * 改为读 SMP CPU 数与 PMM 物理内存总量。 */
@@ -1925,29 +1930,29 @@ static void hs_settings_window_render(hs_window_t *w)
                                 "VBE 1024x768", "ext2"};
         for (int i = 0; i < 6; i++) {
             font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                               rx, ry + i * 24, labels[i], g_shell.colors.panel_fg, 12);
+                               rx, ry + i * SETK(24), labels[i], g_shell.colors.panel_fg, SETK(12));
             font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                               rx + 80, ry + i * 24, values[i], g_shell.colors.accent, 12);
+                               rx + SETK(80), ry + i * SETK(24), values[i], g_shell.colors.accent, SETK(12));
         }
         /* V0.13.39: 语言切换 + 驱动管理入口 */
-        ry += 6 * 24 + 10;
-        gfx64_fill_rect(rx, ry, w->width - 180, 1, g_shell.colors.border);
-        ry += 8;
+        ry += SETK(6) * SETK(24) + SETK(10);
+        gfx64_fill_rect(rx, ry, w->width - SETK(180), 1, g_shell.colors.border);
+        ry += SETK(8);
         extern int l10n64_get_lang(void);
         extern int drv_get_count(void);
         char lb[64];
         strcpy(lb, "Language: ");
         strcpy(lb + strlen(lb), l10n64_get_lang() ? "English  [switch]" : "中文  [切换]");
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           rx, ry, lb, g_shell.colors.panel_fg, 12);
-        ry += 24;
+                           rx, ry, lb, g_shell.colors.panel_fg, SETK(12));
+        ry += SETK(24);
         char db[64];
         strcpy(db, "Drivers: ");
         hs_itoa(drv_get_count(), db + strlen(db));
         strcpy(db + strlen(db), "  [Refresh]");
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           rx, ry, db, g_shell.colors.panel_fg, 12);
-        ry += 24;
+                           rx, ry, db, g_shell.colors.panel_fg, SETK(12));
+        ry += SETK(24);
         /* V0.13.39: 通知位置行 */
         extern int hs_notification_get_pos(void);
         char npb[64];
@@ -1959,11 +1964,11 @@ static void hs_settings_window_render(hs_window_t *w)
             strcpy(npb + strlen(npb), "  [Click to switch]");
         }
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           rx, ry, npb, g_shell.colors.panel_fg, 12);
-        ry += 24;
+                           rx, ry, npb, g_shell.colors.panel_fg, SETK(12));
+        ry += SETK(24);
         /* V0.13.39: 存储管理区 */
-        gfx64_fill_rect(rx, ry, w->width - 180, 1, g_shell.colors.border);
-        ry += 8;
+        gfx64_fill_rect(rx, ry, w->width - SETK(180), 1, g_shell.colors.border);
+        ry += SETK(8);
         extern int storage_hal_get_device(void);
         extern int usb64_dev_count(void);
         extern int usb64_mount_usb(void);
@@ -1975,16 +1980,16 @@ static void hs_settings_window_render(hs_window_t *w)
         strcpy(sb + strlen(sb), usb64_dev_count() > 0 ? "USB online" : "No USB");
         strcpy(sb + strlen(sb), "]");
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           rx, ry, sb, g_shell.colors.panel_fg, 12);
-        ry += 24;
+                           rx, ry, sb, g_shell.colors.panel_fg, SETK(12));
+        ry += SETK(24);
         char sb2[80];
         strcpy(sb2, storage_hal_get_device() ? "Mounted on USB ext2  [Unmount]" : "System disk ext2  [Mount USB]");
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           rx, ry, sb2, g_shell.colors.accent, 12);
+                           rx, ry, sb2, g_shell.colors.accent, SETK(12));
         g_settings_storage_ry = ry;
-        ry += 24;
-        gfx64_fill_rect(rx, ry, w->width - 180, 1, g_shell.colors.border);
-        ry += 8;
+        ry += SETK(24);
+        gfx64_fill_rect(rx, ry, w->width - SETK(180), 1, g_shell.colors.border);
+        ry += SETK(8);
         /* V0.13.39: 注册表/文件关联管理 */
         extern int reg64_count(void);
         extern int file_assoc_count(void);
@@ -1993,22 +1998,22 @@ static void hs_settings_window_render(hs_window_t *w)
         hs_itoa(reg64_count(), rb + strlen(rb));
         strcpy(rb + strlen(rb), "  [View]");
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           rx, ry, rb, g_shell.colors.panel_fg, 12);
+                           rx, ry, rb, g_shell.colors.panel_fg, SETK(12));
         g_settings_reg_ry = ry;
-        ry += 24;
+        ry += SETK(24);
         char ab[80];
         strcpy(ab, "Associations: ");
         hs_itoa(file_assoc_count(), ab + strlen(ab));
         strcpy(ab + strlen(ab), "  [View]");
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           rx, ry, ab, g_shell.colors.panel_fg, 12);
+                           rx, ry, ab, g_shell.colors.panel_fg, SETK(12));
         g_settings_assoc_ry = ry;
     } else if (g_settings_page == 4) {
         /* Display */
         char b1[16], b2[16];
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           rx, ry, "Display", g_shell.colors.panel_fg, 16);
-        ry += 30;
+                           rx, ry, "Display", g_shell.colors.panel_fg, SETK(16));
+        ry += SETK(30);
         itoa_hs(g_shell.screen_width, b1);
         itoa_hs(g_shell.screen_height, b2);
         char res[64];
@@ -2020,8 +2025,8 @@ static void hs_settings_window_render(hs_window_t *w)
         k = 0; while (b2[k]) { res[p++] = b2[k++]; }
         res[p] = 0;
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           rx, ry, res, g_shell.colors.panel_fg, 12);
-        ry += 22;
+                           rx, ry, res, g_shell.colors.panel_fg, SETK(12));
+        ry += SETK(22);
         /* 引导器枚举到的模式表(0x6100: count + N*(w,h)), 只读展示。
          * 分辨率由引导阶段 SetMode 决定(内核已过 ExitBootServices, 运行时切不了)。 */
         {
@@ -2034,7 +2039,7 @@ static void hs_settings_window_render(hs_window_t *w)
             const char *pre2 = "Available: ";
             while (pre2[q]) { mb[q] = pre2[q]; q++; }
             for (uint32_t mi = 0; mi < cnt && shown < 3 && q < 100; mi++) {
-                uint32_t mw = ml[1 + mi * 2], mh = ml[2 + mi * 2];
+                uint32_t mw = ml[1 + mi * SETK(2)], mh = ml[2 + mi * SETK(2)];
                 if (mw < 100 || mw > 6000 || mh < 100 || mh > 6000) continue;
                 char t1[8], t2[8];
                 itoa_hs((int)mw, t1); itoa_hs((int)mh, t2);
@@ -2051,63 +2056,65 @@ static void hs_settings_window_render(hs_window_t *w)
             }
             mb[q] = 0;
             font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                               rx, ry, mb, g_shell.colors.panel_fg, 11);
-            ry += 18;
+                               rx, ry, mb, g_shell.colors.panel_fg, SETK(11));
+            ry += SETK(18);
         }
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            rx, ry, "Change: resolution=WxH in HEPBOOT.CFG",
-                           g_shell.colors.panel_fg, 11);
-        ry += 18;
+                           g_shell.colors.panel_fg, SETK(11));
+        ry += SETK(18);
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            rx, ry, "then reboot (no runtime SetMode)",
-                           g_shell.colors.panel_fg, 11);
-        ry += 20;
+                           g_shell.colors.panel_fg, SETK(11));
+        ry += SETK(20);
 
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            rx, ry, g_disp_scale_auto ? "UI Scale: Auto (from resolution)"
                                                      : "UI Scale: Manual (click to change)",
-                           g_shell.colors.panel_fg, 12);
-        ry += 24;
+                           g_shell.colors.panel_fg, SETK(12));
+        ry += SETK(24);
         g_disp_scale_btn_x = rx;
         g_disp_scale_btn_y = ry;
         for (int i = 0; i < 4; i++) {
-            int bx = rx + i * HS_DISP_BTN_GAP;
+            int bx = rx + i * SETK(HS_DISP_BTN_GAP);
             int on = (g_disp_scale_pcts[i] == g_ui_scale_pct);
-            gfx64_fill_rounded_rect(bx, ry, HS_DISP_BTN_W, 28, 6,
+            gfx64_fill_rounded_rect(bx, ry, SETK(HS_DISP_BTN_W), SETK(28), SETK(6),
                                     on ? g_shell.colors.accent : g_shell.colors.panel_bg);
             char lab[16];
             itoa_hs(g_disp_scale_pcts[i], lab);
             int q = 0; while (lab[q]) q++;
             lab[q] = '%'; lab[q + 1] = 0;
             font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                               bx + 14, ry + 6, lab,
-                               on ? hs_on_accent() : g_shell.colors.panel_fg, 12);
+                               bx + SETK(14), ry + SETK(6), lab,
+                               on ? hs_on_accent() : g_shell.colors.panel_fg, SETK(12));
         }
-        ry += 44;
+        ry += SETK(44);
 
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           rx, ry, "Refresh rate: firmware-controlled", g_shell.colors.panel_fg, 11);
-        ry += 20;
+                           rx, ry, "Refresh rate: firmware-controlled", g_shell.colors.panel_fg, SETK(11));
+        ry += SETK(20);
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           rx, ry, "(no EDID/CRTC driver yet)", g_shell.colors.panel_fg, 11);
+                           rx, ry, "(no EDID/CRTC driver yet)", g_shell.colors.panel_fg, SETK(11));
     } else {
         /* About */
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           rx, ry, "About Hepu OS", g_shell.colors.panel_fg, 16);
-        ry += 30;
+                           rx, ry, "About Hepu OS", g_shell.colors.panel_fg, SETK(16));
+        ry += SETK(30);
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           rx, ry, "A self-developed 64-bit OS", g_shell.colors.panel_fg, 12);
-        ry += 24;
+                           rx, ry, "A self-developed 64-bit OS", g_shell.colors.panel_fg, SETK(12));
+        ry += SETK(24);
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           rx, ry, "Inspired by Quickshell", g_shell.colors.panel_fg, 12);
-        ry += 24;
+                           rx, ry, "Inspired by Quickshell", g_shell.colors.panel_fg, SETK(12));
+        ry += SETK(24);
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           rx, ry, "Hepu Desktop Environment", g_shell.colors.panel_fg, 12);
-        ry += 24;
+                           rx, ry, "Hepu Desktop Environment", g_shell.colors.panel_fg, SETK(12));
+        ry += SETK(24);
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           rx, ry, "(c) 2026 Hepu OS Project", g_shell.colors.accent, 12);
+                           rx, ry, "(c) 2026 Hepu OS Project", g_shell.colors.accent, SETK(12));
     }
 }
+#undef SETK
+
 
 /* ============================================================================
  * 工作区
@@ -3741,17 +3748,18 @@ void hpdesk_handle_click(int x, int y)
         }
         /* 设置窗口左侧菜单点击 */
         if (w == top_win && w->render == hs_settings_window_render && w->visible) {
-            int menu_x = w->x + 16;
-            int menu_y = w->y + 36;
-            if (x >= menu_x && x <= menu_x + 120 && y >= menu_y) {
-                int item = (y - menu_y) / 32;
+            int menu_x = w->x + hs_set_k(w, 16);
+            int menu_y = w->y + hs_set_k(w, 36);
+            if (x >= menu_x && x <= menu_x + hs_set_k(w, 120) && y >= menu_y) {
+                int item = (y - menu_y) / hs_set_k(w, 32);
                 if (item >= 0 && item < 5) {
                     g_settings_page = item;
                     /* V0.13.39: System tab 内可点击操作 (语言切换 / 驱动刷新) */
                     if (item == 2 && g_settings_page == 2) {
-                        int lang_y = w->y + 36 + 6 * 24 + 18;
-                        int drv_y = lang_y + 24;
-                        if (y >= lang_y && y <= lang_y + 20) {
+                        int lang_y = w->y + hs_set_k(w, 36) + 6 * hs_set_k(w, 24) +
+                                     hs_set_k(w, 18);
+                        int drv_y = lang_y + hs_set_k(w, 24);
+                        if (y >= lang_y && y <= lang_y + hs_set_k(w, 20)) {
                             extern int l10n64_get_lang(void);
                             extern int l10n64_set_lang(int lang);
                             extern int reg64_set(const char *k, const char *v);
@@ -3763,7 +3771,7 @@ void hpdesk_handle_click(int x, int y)
                             vga_puts("[SETTINGS] language switched\n");
                             return;
                         }
-                        if (y >= drv_y && y <= drv_y + 20) {
+                        if (y >= drv_y && y <= drv_y + hs_set_k(w, 20)) {
                             extern int drv_mgr_update(void);
                             vga_puts("[SETTINGS] refresh driver repo...\n");
                             int dn = drv_mgr_update();
@@ -3779,8 +3787,8 @@ void hpdesk_handle_click(int x, int y)
                             return;
                         }
                         {
-                            int npy = drv_y + 24;
-                            if (y >= npy && y <= npy + 20) {
+                            int npy = drv_y + hs_set_k(w, 24);
+                            if (y >= npy && y <= npy + hs_set_k(w, 20)) {
                                 extern void hs_notification_set_pos(int pos);
                                 extern int hs_notification_get_pos(void);
                                 int np = (hs_notification_get_pos() + 1) & 3;
@@ -3792,7 +3800,7 @@ void hpdesk_handle_click(int x, int y)
                         /* V0.13.39: 存储管理行点击 (挂载/卸载U盘) */
                         {
                             int sry = g_settings_storage_ry;
-                            if (sry && y >= sry && y <= sry + 20) {
+                            if (sry && y >= sry && y <= sry + hs_set_k(w, 20)) {
                                 extern int storage_hal_get_device(void);
                                 extern int usb64_mount_usb(void);
                                 extern int usb64_umount_usb(void);
@@ -3805,7 +3813,7 @@ void hpdesk_handle_click(int x, int y)
                         /* V0.13.39: 注册表/文件关联查看 */
                         {
                             int rry = g_settings_reg_ry;
-                            if (rry && y >= rry && y <= rry + 20) {
+                            if (rry && y >= rry && y <= rry + hs_set_k(w, 20)) {
                                 extern int reg64_count(void);
                                 extern const char *reg64_key_at(int i);
                                 extern const char *reg64_value_at(int i);
@@ -3845,8 +3853,8 @@ void hpdesk_handle_click(int x, int y)
             if (g_settings_page == 4) {
                 if (y >= g_disp_scale_btn_y && y <= g_disp_scale_btn_y + 28) {
                     int bi = (x - g_disp_scale_btn_x);
-                    if (bi >= 0 && bi < 4 * HS_DISP_BTN_GAP) {
-                        int idx = bi / HS_DISP_BTN_GAP;
+                    if (bi >= 0 && bi < 4 * hs_set_k(w, HS_DISP_BTN_GAP)) {
+                        int idx = bi / hs_set_k(w, HS_DISP_BTN_GAP);
                         if (idx >= 0 && idx < 4) {
                             g_ui_scale_pct = g_disp_scale_pcts[idx];
                             g_disp_scale_auto = 0;   /* 手动选择后不再自动跟随 */
@@ -4802,7 +4810,7 @@ void hs_tray_init(void)
     /* 创建设置浮动窗口 */
     hs_window_manager_init();
     hs_window_t *settings_win = hs_window_create(HS_WINDOW_FLOATING, "Settings",
-                                                  -1, -1, 460, 430);
+                                                  -1, -1, hs_sx(460), hs_sy(430));
     if (settings_win) {
         settings_win->render = hs_settings_window_render;
     }
@@ -5945,7 +5953,7 @@ void hpdesk_handle_pending_app(void)
     }
     if (app == HS_APP_SETTINGS) {
         hs_window_t *w = hs_window_create(HS_WINDOW_FLOATING, title,
-                                          -1, -1, 460, 300);
+                                          -1, -1, hs_sx(460), hs_sy(300));
         if (w) w->render = hs_settings_window_render;
         return;
     }
