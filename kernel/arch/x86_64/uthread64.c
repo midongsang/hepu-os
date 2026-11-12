@@ -37,6 +37,12 @@ static int g_ut_cur = -1;
 void uthread_note_exit_redirect(int from_tid, int to_tid);
 static int g_next_tid = 1000;
 
+/* V0.58.2: 用户线程轮转时间片状态（按 owner 记账, 见 uthread_timer_tick） */
+static int g_ut_slice = 0;
+static unsigned long g_ut_n2_ticks = 0;
+static unsigned long g_ut_switches = 0;
+static int g_ut_slice_owner = -1;
+
 /* V0.58.1: 给任务管理器看的线程统计（只读快照，不参与调度决策） */
 static int g_ut_total_created = 0;   /* 累计 clone 出的线程数 */
 static int g_ut_last_parent_tid = 0; /* 最近一次 clone 的创建者 tid */
@@ -132,6 +138,11 @@ int uthread_create(int owner, uint64_t rip, uint64_t rsp, uint64_t fsbase)
             g_ut_last_parent_tid = (g_ut_cur >= 0 && g_ut[g_ut_cur].used)
                                  ? g_ut[g_ut_cur].tid : 0;
             g_ut_last_child_tid = g_ut[i].tid;
+            /* V0.58.2: 新线程创建后把时间片置为"到点", 下一次时钟 tick 必定
+             * 切到它 —— 否则要等满 10 个 tick(10ms), 而父线程可能在这之前
+             * 就跑完计数进入等待, 子线程整轮轮不到（即 child never ran）。 */
+            g_ut_slice_owner = owner;      /* V0.58.2 fix: 否则 tick 会把它重置为 0 */
+            g_ut_slice = 10;
             vga_puts("[UTHREAD] created tid=");
             vga_put_hex((uint64_t)g_ut[i].tid);
             vga_puts(" owner=");
@@ -183,6 +194,10 @@ int g_thr_redirect_flag = 0;
 
 int uthread_exit_current(void)
 {
+    vga_puts("[UT] exit ticks2="); vga_put_hex(g_ut_n2_ticks);
+    vga_puts(" switches="); vga_put_hex(g_ut_switches);
+    vga_puts("\n");
+
     if (g_ut_cur < 0 || !g_ut[g_ut_cur].used) return 0;
 
     int cur = g_ut_cur;
@@ -256,17 +271,21 @@ void uthread_timer_tick(uint64_t *f)
         idx[n++] = i;
     }
 
+    if (n >= 2) g_ut_n2_ticks++;
     if (n < 2) return;                  /* 单线程：行为完全不变 */
 
     /* 时间片：每 10 个 tick（约 10ms）才真正切一次。
      * PIT 是 1000Hz，若每个 tick 都切，线程只能前进几条指令，
-     * 实测表现为 rip 永远停在同一处。 */
-    { static int slice = 0;
-      if (++slice < 10) return;
-      slice = 0; }
+     * 实测表现为 rip 永远停在同一处。
+     * V0.58.2: 计数从函数内 static 提升到文件级, 并记住它属于哪个 owner ——
+     * 原实现跨进程共享同一个计数, 进程切换后切点不可控。 */
+    if (g_ut_slice_owner != owner) { g_ut_slice_owner = owner; g_ut_slice = 0; }
+    if (++g_ut_slice < 10) return;
+    g_ut_slice = 0;
 
     int next_i = idx[(pos + 1) % n];
     g_ut_cur = next_i;
+    g_ut_switches++;
     ut_restore(&g_ut[next_i], f);
 }
 

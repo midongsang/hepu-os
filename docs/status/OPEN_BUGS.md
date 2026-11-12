@@ -233,19 +233,23 @@ source_of_truth: kernel/arch/x86_64/
 - 修法方向：crt0 改成 64 位入口（`call main` + `mov $5,%eax; syscall`），
   需要全量回归所有用户程序，属独立改动。
 
-## SEC-23 clone 测试的偶发 `child never ran`（时序竞态，非崩溃）
+## SEC-23 clone 测试偶发 `child never ran` —— 已修复（V0.58.2）
 
-- 现象：`clone_test` 偶发打印 `FAIL: child never ran`，此时串口既无
-  `[UTHREAD] created` 之后的 `thread exit`，也无 `EXCEPTION`/`#PF`。
-- 频率：同一镜像连续启动 6 次，实测出现 1~2 次；`EXCEPTION=0`，系统与桌面
-  均正常，只是子线程没在父线程的等待窗口内被切上来。
-- 判定依据：失败时 `PASS=0 FAIL=1 EXCEPTION=0 THREXIT=0`；
-  对照实验（临时移除任务管理器统计代码）基线 3 次全 PASS，样本量小，
-  无法确认与统计代码的因果关系，暂按既有竞态处理。
-- 已做的缓解：`clone_test` 在忙等循环后追加 `sleep(10ms) × 40` 兜底，
-  让出 CPU 给调度器（原实现父线程一直占着 CPU，子线程能否上电全看中断时机）。
-  缓解后失败率下降但未归零。
-- 未解决的部分：`uthread_timer_tick()` 的时间片是每 10 个 tick（约 10ms）
-  才真正切换一次，若父线程在切换发生前就跑完计数并进入等待尾部，
-  子线程可能整轮都轮不到。下一步方向：把时间片改成按 `slice` 归属线程
-  （当前 `static slice` 跨 owner 共享），或在 `clone` 返回后主动让出一次。
+**根因**：`uthread_create()` 为了让子线程"下一次 tick 必定被切到"，把时间片计数
+直接顶到阈值（`g_ut_slice = 10`），但没有同时记录这个计数属于哪个 owner。
+`uthread_timer_tick()` 开头的 `if (g_ut_slice_owner != owner) { g_ut_slice = 0; }`
+会把它当场复位成 0，于是"立即切换"的意图被悄悄取消，退化成要等满 10 个 tick。
+父线程在这 10ms 内跑完计数进入等待，子线程就整轮轮不到 —— 表现为
+`FAIL: child never ran`，且 `EXCEPTION=0`、`[CLONE] aspace kept: live clone threads=0x1`
+（线程创建成功了，但一直没被调度）。
+
+**修法**：create 时把 `g_ut_slice_owner` 一并写成当前 owner，让"顶满时间片"真正生效。
+保留 `[UT] exit ticks2=<n> switches=<m>` 退出取证日志：前者是同 owner 存在多线程时
+的 tick 次数，后者是实际切换次数，二者都为 0 才说明调度没跑起来。
+
+**验证**：修复前同一镜像 6 次启动出现 2 次失败；修复后连续 20 次启动 **20/20 PASS**，
+每次 `switches` 稳定在 0x21~0x25（33~37 次切换），子线程确实被反复调度过。
+
+**残留风险**：`sys_sleep` 期间父线程处于内核态，用户态 tick 不触发，所以
+"sleep 兜底"并不能帮子线程获得 CPU；若将来需要休眠期轮转，必须让 sleep 走
+阻塞/唤醒式调度，属独立改造。

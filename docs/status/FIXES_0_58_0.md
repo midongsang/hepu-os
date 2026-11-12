@@ -324,3 +324,20 @@ PASS: child ran in shared address space, both counters advanced
 **已知限制**：`clone_test` 在 autorun 里同步执行完就退出，任务管理器被打开时
 线程表通常已空（只剩累计数与授受关系）—— 要看"运行中"的线程需要让演示进程
 常驻，这需要异步 exec（当前内核只支持同步 `user_process_exec`），未在本版实施。
+
+## §1.90 修复 clone 线程偶发不被调度（SEC-23）
+
+**现象**：`clone_test` 偶发 `FAIL: child never ran`，但 `EXCEPTION=0`，
+且 `[CLONE] aspace kept: live clone threads=0x1` —— 线程建好了，就是没跑。
+
+**根因**：`uthread_create` 把 `g_ut_slice` 顶到阈值想"下一次 tick 立刻切"，
+却没同步 `g_ut_slice_owner`；tick 里 owner 不匹配就把计数复位为 0，
+意图失效，退化成等满 10 个 tick，父线程早已进入等待。
+
+**修法**：create 时一并写 `g_ut_slice_owner = owner`（一行），
+并新增 `g_ut_n2_ticks` / `g_ut_switches` 两个只读计数，在 `uthread_exit_current`
+退出时打印 `[UT] exit ticks2=.. switches=..`，用于事后确认调度是否真的发生。
+
+**验证**：修复前 6 次启动 2 次失败；修复后连续 20 次启动 20/20 PASS，
+`switches` 稳定 33~37 次。内核 828,360 B。
+
