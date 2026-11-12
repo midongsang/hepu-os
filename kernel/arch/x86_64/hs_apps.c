@@ -1676,9 +1676,12 @@ static void f_render(hs_window_t *w)
             uint32_t fc = (r == f_tree_sel) ? 0x211F26 : g_shell.colors.panel_fg;
             /* 折叠态用 '>' 展开态用 'v', 和列头排序箭头同一套字符做法 */
             const char *ar = f_tree_exp[r] ? "v" : ">";
-            font64_draw_string(fb, W, H, tx + FS(2), iy + 1, (char *)ar,
+            /* 箭头必须跟着缩进一起右移, 否则子项的箭头会孤零零留在最左边,
+             * 和名字隔开二三十像素, 层级完全看不出来 */
+            int rind = f_tree_depth[r] * FS(9);
+            font64_draw_string(fb, W, H, tx + FS(2) + rind, iy + 1, (char *)ar,
                                (r == f_tree_sel) ? 0x211F26 : g_shell.colors.text_secondary, FS(9));
-            font64_draw_string(fb, W, H, tx + FS(9) + f_tree_depth[r] * FS(9), iy + 1,
+            font64_draw_string(fb, W, H, tx + FS(14) + rind, iy + 1,
                                lb, fc, FS(9));
         }
     }
@@ -3801,6 +3804,7 @@ void hs_apps_handle_wheel(int delta)
         if (t_scroll > 0) t_scroll--;
     }
 }
+
 
 
 
