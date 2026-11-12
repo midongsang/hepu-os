@@ -6,6 +6,7 @@
 
 #include "hpdesk.h"
 #include "png64.h"
+#include "jpeg64.h"
 #include "hs_apps.h"
 #include "hsservices.h"
 #include "hsinput.h"   /* KEY_EXT_* 扩展键统一码 */
@@ -970,6 +971,173 @@ static int f_kind(int item)
     return 5;
 }
 
+
+/* ===================== 网格视图缩略图 =====================
+ * 一屏网格可能有十来张图, 逐帧解码会把渲染线程拖住, 所以:
+ *   1) 解码一次 → 立刻缩成 56x40 存进缓存槽, 原始大图 free 掉;
+ *   2) 每帧最多补一张, 首次进入目录时缩略图"逐格冒出来"而不是整体卡一下;
+ *   3) 槽满就按 round-robin 覆盖(屏幕上同时可见的图远比槽多)。
+ * 文件大小上限 128KB, 超过不解码直接回退图标 —— 解码 2MB 级 JPEG 的峰值内存
+ * (宽*高*4) 在 1GB 机器上不划算, 也不符合"缩略图"这个用途。 */
+#define F_THUMB_MAX  16
+#define F_THUMB_W    56
+#define F_THUMB_H    40
+#define F_THUMB_SRC_MAX (512 * 1024)
+
+typedef struct {
+    char path[FS_PATH_MAX];
+    int  used;
+    uint8_t pix[F_THUMB_W * F_THUMB_H * 4];
+} f_thumb_t;
+
+static f_thumb_t f_thumbs[F_THUMB_MAX];
+static int f_thumb_rr = 0;
+static uint8_t f_thumb_src[F_THUMB_SRC_MAX];
+
+
+
+/* 是否为可出缩略图的图片(png/jpg) */
+static int f_thumb_ext_ok(const char *name)
+{
+    int n = hs_strlen(name);
+    for (int i = n - 1; i >= 0 && n - i <= 5; i--) {
+        if (name[i] == '.') {
+            const char *e = name + i;
+            if (strcmp(e, ".png") == 0) return 1;
+            if (strcmp(e, ".jpg") == 0) return 2;
+            if (strcmp(e, ".jpeg") == 0) return 2;
+            return 0;
+        }
+    }
+    return 0;
+}
+
+static int f_thumb_find(const char *path)
+{
+    for (int i = 0; i < F_THUMB_MAX; i++)
+        if (f_thumbs[i].used && strcmp(f_thumbs[i].path, path) == 0) return i;
+    return -1;
+}
+
+/* 把任意尺寸 RGBA 最近邻缩进槽里(等比, 居中留边) */
+static void f_thumb_downscale(f_thumb_t *t, const uint8_t *src, int sw, int sh)
+{
+    int tw = F_THUMB_W, th = F_THUMB_H;
+    int scale_w, scale_h;
+    /* 等比缩放: 以"更受限"的那一边为准, 另一边按比例算 —— 两个轴都必须落在格子内,
+     * 否则写 pix 会越界(首版把两个轴都初始化成原尺寸, 只改其中一个 → #PF) */
+    if (sw * th > sh * tw) { scale_w = tw; scale_h = sh * tw / sw; }   /* 宽受限 */
+    else                   { scale_h = th; scale_w = sw * th / sh; }   /* 高受限 */
+    if (scale_w > tw) scale_w = tw;
+    if (scale_h > th) scale_h = th;
+    if (scale_w < 1) scale_w = 1;
+    if (scale_h < 1) scale_h = 1;
+    int offx = (tw - scale_w) / 2, offy = (th - scale_h) / 2;
+
+    /* 底板: 深色, 让透明图和浅色图都有边界感 */
+    for (int i = 0; i < tw * th; i++) {
+        t->pix[i * 4 + 0] = 0x1c; t->pix[i * 4 + 1] = 0x1b;
+        t->pix[i * 4 + 2] = 0x1f; t->pix[i * 4 + 3] = 0xFF;
+    }
+    for (int y = 0; y < scale_h; y++) {
+        int sy = y * sh / scale_h;
+        for (int x = 0; x < scale_w; x++) {
+            int sx = x * sw / scale_w;
+            const uint8_t *s = src + ((size_t)sy * sw + sx) * 4;
+            uint8_t *d = t->pix + (((size_t)(y + offy)) * tw + (x + offx)) * 4;
+            uint8_t a = s[3];
+            if (a == 0xFF) { d[0] = s[0]; d[1] = s[1]; d[2] = s[2]; d[3] = 0xFF; }
+            else if (a == 0) { /* 保持底板 */ }
+            else {   /* 简易混合到底板上 */
+                d[0] = (uint8_t)((s[0] * a + 0x1c * (255 - a)) / 255);
+                d[1] = (uint8_t)((s[1] * a + 0x1b * (255 - a)) / 255);
+                d[2] = (uint8_t)((s[2] * a + 0x1f * (255 - a)) / 255);
+                d[3] = 0xFF;
+            }
+        }
+    }
+}
+
+/* 读文件头判断真实格式(不少素材是 "xxx.png" 其实是 JPEG), 并读出宽高:
+ * 宽高用来挡掉超大图 —— 解码峰值是 w*h*4, 2048x2048 就是 16MB,
+ * 对缩略图这种用途不值当。 */
+static uint32_t f_be32(const uint8_t *p) { return ((uint32_t)p[0]<<24)|((uint32_t)p[1]<<16)|((uint32_t)p[2]<<8)|p[3]; }
+static uint16_t f_be16(const uint8_t *p) { return (uint16_t)(((uint16_t)p[0]<<8)|p[1]); }
+
+#define F_THUMB_MAX_SIDE 1400
+
+/* 返回 1=png 2=jpeg, 0=不认识; w/h 输出原始尺寸 */
+static int f_img_sniff(const uint8_t *b, int n, int *w, int *h)
+{
+    *w = 0; *h = 0;
+    if (n >= 24 && b[0] == 0x89 && b[1] == 'P' && b[2] == 'N' && b[3] == 'G') {
+        *w = (int)f_be32(b + 16); *h = (int)f_be32(b + 20);
+        return 1;
+    }
+    if (n >= 4 && b[0] == 0xFF && b[1] == 0xD8) {
+        int i = 2;
+        while (i + 9 < n) {
+            if (b[i] != 0xFF) { i++; continue; }
+            uint8_t m = b[i + 1];
+            if (m == 0xC0 || m == 0xC1 || m == 0xC2) {   /* SOF0/1/2 */
+                *h = (int)f_be16(b + i + 5);
+                *w = (int)f_be16(b + i + 7);
+                return 2;
+            }
+            if (m == 0x01 || m == 0xD8 || (m >= 0xD0 && m <= 0xD7)) { i += 2; continue; }
+            int len = (int)f_be16(b + i + 2);
+            if (len <= 0) break;
+            i += 2 + len;
+        }
+        return 2;   /* 是 JPEG 但没读到 SOF, 后面解码会报错 */
+    }
+    return 0;
+}
+
+/* 为某个完整路径生成缩略图, 返回槽号, 失败 -1 */
+static int f_thumb_make(const char *path, const char *name)
+{
+    (void)name;
+    uint32_t sz = 0;
+    if (ext2_64_stat(path, &sz, 0) != 0) return -1;
+    if (sz == 0 || sz > F_THUMB_SRC_MAX) return -1;
+
+    int n = ext2_64_read_file(path, f_thumb_src, F_THUMB_SRC_MAX);
+    if (n <= 8) return -1;
+
+    int iw = 0, ih = 0;
+    int kind = f_img_sniff(f_thumb_src, n, &iw, &ih);
+    if (kind == 0) return -1;
+    if (iw <= 0 || ih <= 0) return -1;
+    if (iw > F_THUMB_MAX_SIDE || ih > F_THUMB_MAX_SIDE) return -1;
+
+    const uint8_t *src = 0; int sw = 0, sh = 0;
+    png64_image_t pimg; pimg.width = 0; pimg.height = 0; pimg.rgba = 0;
+    jpeg64_image_t jimg; jimg.width = 0; jimg.height = 0; jimg.rgba = 0;
+    if (kind == 1) {
+        if (png64_decode(f_thumb_src, n, &pimg) != 0 || !pimg.rgba) return -1;
+        src = pimg.rgba; sw = (int)pimg.width; sh = (int)pimg.height;
+    } else {
+        if (jpeg64_decode(f_thumb_src, n, &jimg) != 0 || !jimg.rgba) return -1;
+        src = jimg.rgba; sw = (int)jimg.width; sh = (int)jimg.height;
+    }
+    if (!src || sw <= 0 || sh <= 0) {
+        if (pimg.rgba) png64_free(&pimg);
+        if (jimg.rgba) jpeg64_free(&jimg);
+        return -1;
+    }
+
+    int slot = f_thumb_find(path);
+    if (slot < 0) { slot = f_thumb_rr; f_thumb_rr = (f_thumb_rr + 1) % F_THUMB_MAX; }
+    hs_strcpyn(f_thumbs[slot].path, path, FS_PATH_MAX);
+    f_thumb_downscale(&f_thumbs[slot], src, sw, sh);
+    f_thumbs[slot].used = 1;
+
+    if (pimg.rgba) png64_free(&pimg);
+    if (jimg.rgba) jpeg64_free(&jimg);
+    return slot;
+}
+
 static void f_render(hs_window_t *w)
 {
     /* FS P2: 有分片任务在跑就推进一步, 并保持 dirty 让下一帧继续 —— 这样
@@ -1050,6 +1218,7 @@ static void f_render(hs_window_t *w)
         int rows = (ch - FS(52)) / (gs + FS(8));
         if (rows < 1) rows = 1;
         int gy = cy + FS(44);
+        int thumb_budget = 1;   /* 每帧最多补一张, 避免一次把渲染线程拖住 */
         for (int r = 0; r < rows; r++) {
             for (int c = 0; c < cols; c++) {
                 int gi = f_scroll + (r * cols + c);
@@ -1061,15 +1230,45 @@ static void f_render(hs_window_t *w)
                     gfx64_fill_rounded_rect(ix - FS(4), iy2 - FS(4), gs, gs, FS(8), g_shell.colors.accent);
                 extern void hs_file_type_icon(int x, int y, int size, uint32_t color, int kind);
                 uint32_t ic = (gi == f_sel) ? 0xFFFFFF : g_shell.colors.accent;
-                hs_file_type_icon(ix, iy2, FS(30), ic, f_kind(item));
+                /* 图片文件优先用缩略图; 未缓存的格子先画图标, 本帧预算内补一张 */
+                int thumb = -1;
+                if (f_kind(item) == 1) {
+                    char fp[FS_PATH_MAX];
+                    if (f_join(fp, FS_PATH_MAX, f_path, f_items[item]) == 0) {
+                        thumb = f_thumb_find(fp);
+                        if (thumb < 0 && thumb_budget > 0) {
+                            thumb_budget--;
+                            thumb = f_thumb_make(fp, f_items[item]);
+                        }
+                    }
+                }
+                if (thumb >= 0) {
+                    gfx64_blit_rgba(ix - FS(5), iy2 - FS(6), FS(56), FS(40),
+                                    f_thumbs[thumb].pix, F_THUMB_W, F_THUMB_H);
+                    /* 四边描边: 浅色/透明图直接压在深色底上会看不出边界 */
+                    gfx64_fill_rect(ix - FS(5), iy2 - FS(6), FS(56), 1, g_shell.colors.border);
+                    gfx64_fill_rect(ix - FS(5), iy2 - FS(6) + FS(40) - 1, FS(56), 1, g_shell.colors.border);
+                    gfx64_fill_rect(ix - FS(5), iy2 - FS(6), 1, FS(40), g_shell.colors.border);
+                    gfx64_fill_rect(ix - FS(5) + FS(56) - 1, iy2 - FS(6), 1, FS(40), g_shell.colors.border);
+                }
+                else
+                    hs_file_type_icon(ix, iy2, FS(30), ic, f_kind(item));
                 if (f_mark[item])
                     gfx64_fill_rounded_rect(ix - FS(2), iy2 - FS(2), FS(12), FS(12), FS(3), 0xFFD040);
                 char gd[32];
-                /* 单元格宽 76px: 长文件名缩小字号, 避免与相邻图标名称重叠 */
+                /* 单元格宽 76px: 长文件名缩小字号; 仍放不下就截断并以 ".." 收尾
+                 * (旧版硬砍到 12 字符, "wallpaper.png" 会显示成 "wallpaper.pn") */
                 int nlen = hs_strlen(f_items[item]);
-                int nsz = (nlen > 12) ? 10 : 12;
-                hs_strcpyn(gd, f_items[item], nsz == 10 ? 12 : 14);
-                font64_draw_string(fb, W, H, ix - FS(2), iy2 + FS(34), gd,
+                int nsz = (nlen > 10) ? 10 : 12;
+                int cap = (nsz == 10) ? 14 : 16;
+                if (nlen >= cap) {
+                    hs_strcpyn(gd, f_items[item], cap);
+                    int l = hs_strlen(gd);
+                    if (l >= 3) { gd[l - 1] = '.'; gd[l - 2] = '.'; }
+                } else {
+                    hs_strcpyn(gd, f_items[item], cap + 1);
+                }
+                font64_draw_string(fb, W, H, ix - FS(2), iy2 + FS(38), gd,
                                    (gi == f_sel) ? 0xFFFFFF : g_shell.colors.window_fg, nsz);
             }
         }
@@ -3039,4 +3238,5 @@ void hs_apps_handle_wheel(int delta)
         if (t_scroll > 0) t_scroll--;
     }
 }
+
 
