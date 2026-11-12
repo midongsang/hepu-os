@@ -857,6 +857,41 @@ Settings 窗口保持 460×430 基准尺寸（内部坐标同基准，内容不�
 **验证**：启动日志 `[DISPLAY] auto scale=150% (screen 2048x1536)`，桌面与手工设 150% 表现一致：
 侧栏完整、Quick Controls 六卡两滑块、天气卡、dock、顶栏图标均正常。
 
+
+### 1.41 P3 第一步：分辨率可由配置决定（含引导器评分溢出的真 bug）
+
+**目标**：Display 页的分辨率从"只读展示"变成可配置、重启生效。
+
+**能力现状核对**：
+- 引导器 `hepboot_uefi.c` 已有 `QueryMode` 枚举、EDID 读刷新率、`SetMode` 切换 —— 通路齐全。
+- 内核 `ExitBootServices` 之后没有 Boot Services，**运行时无法 SetMode**，所以分辨率只能由引导阶段决定。
+- 内核 `kernel/fs/vfat.c` 是空壳（`vfat_mount` 只填了一段假引导扇区，不读盘不写文件），
+  所以内核目前**无法**写 ESP 去改 `HEPBOOT.CFG` —— 这是"Display 页直接点选切换"的最后一道门槛。
+
+**实现**：
+1. 引导器支持 `HEPBOOT.CFG` 新增键 `resolution=WxH`，解析后对完全匹配的模式给 50,000,000 分。
+2. 引导器把枚举到的模式表导出到内存槽 `0x6100`：`count(4) + N*8 字节 (w,h)`，上限 16 项。
+3. 内核 Display 页读取该槽，显示 `Available: 1024x768, 640x480, ...` 与
+   `Change: resolution=WxH in HEPBOOT.CFG / then reboot (no runtime SetMode)`。
+
+**顺带发现的真 bug：引导器评分 UINT32 溢出**
+`score` 原为 `UINT32`，而"限制最大分辨率"给 `w>2560 || h>1440` 扣 2,000,000 分。
+2048×1536 的其它加分合计约 133 万，减去 200 万后为负，在 `UINT32` 下**回绕成约 42 亿**，
+反而稳坐第一 —— 也就是说任何高度 >1440 的模式都会赢，`resolution=WxH` 的加分也被它压过。
+
+修法：`score` 与 `best_score` 改为 `INT64`，初始 `best_score = -999999999`。
+
+**验证**：
+- `resolution=1024x768` → 日志 `[CFG] resolution=0x400x0x300`，
+  `[GFX64] Mode set: 0x400x0x300 pitch=0x1000`，界面按 1024×768 完整重排，自动缩放降为 100%。
+- 无配置项（默认）→ 修复溢出后正确选中 **1920×1080**（此前一直是 2048×1536），
+  日志 `[DISPLAY] auto scale=150% (screen 1920x1080)`，桌面各面板排布协调。
+
+**行为变化（需知悉）**：默认分辨率从 2048×1536 变为 1920×1080（这正是修复溢出后的正确结果）。
+若想回到 2048×1536，在 `HEPBOOT.CFG` 写 `resolution=2048x1536` 即可。
+
+**尚未打通**：Display 页直接点选分辨率（需要内核具备 FAT32 写 ESP 的能力，`vfat.c` 目前是空壳）。
+
 ---
 
 ## 四、回归基线

@@ -2010,9 +2010,46 @@ static void hs_settings_window_render(hs_window_t *w)
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            rx, ry, res, g_shell.colors.panel_fg, 12);
         ry += 22;
+        /* 引导器枚举到的模式表(0x6100: count + N*(w,h)), 只读展示。
+         * 分辨率由引导阶段 SetMode 决定(内核已过 ExitBootServices, 运行时切不了)。 */
+        {
+            volatile uint32_t *ml = (volatile uint32_t *)0x6100;
+            uint32_t cnt = ml[0];
+            if (cnt > 16) cnt = 0;
+            int shown = 0;
+            char mb[128];
+            int q = 0;
+            const char *pre2 = "Available: ";
+            while (pre2[q]) { mb[q] = pre2[q]; q++; }
+            for (uint32_t mi = 0; mi < cnt && shown < 3 && q < 100; mi++) {
+                uint32_t mw = ml[1 + mi * 2], mh = ml[2 + mi * 2];
+                if (mw < 100 || mw > 6000 || mh < 100 || mh > 6000) continue;
+                char t1[8], t2[8];
+                itoa_hs((int)mw, t1); itoa_hs((int)mh, t2);
+                int k1 = 0;
+                while (t1[k1] && q < 110) mb[q++] = t1[k1++];
+                mb[q++] = 'x';
+                k1 = 0;
+                while (t2[k1] && q < 110) mb[q++] = t2[k1++];
+                if (shown < 2 && mi + 1 < cnt) { mb[q++] = ','; mb[q++] = ' '; }
+                shown++;
+            }
+            if (cnt > 3) {
+                mb[q++] = '.'; mb[q++] = '.'; mb[q++] = '.';
+            }
+            mb[q] = 0;
+            font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                               rx, ry, mb, g_shell.colors.panel_fg, 11);
+            ry += 18;
+        }
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           rx, ry, "Set by firmware at boot", g_shell.colors.panel_fg, 11);
-        ry += 26;
+                           rx, ry, "Change: resolution=WxH in HEPBOOT.CFG",
+                           g_shell.colors.panel_fg, 11);
+        ry += 18;
+        font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                           rx, ry, "then reboot (no runtime SetMode)",
+                           g_shell.colors.panel_fg, 11);
+        ry += 20;
 
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            rx, ry, g_disp_scale_auto ? "UI Scale: Auto (from resolution)"

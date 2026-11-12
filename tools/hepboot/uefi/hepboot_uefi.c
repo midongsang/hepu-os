@@ -163,8 +163,9 @@ typedef struct {
     int has_config;
     UINT32 expected_crc;  /* V6.71: 期望的内核CRC32，0表示跳过校验 */
     int kernel_arch;      /* V0.10.6: 0=32位, 1=64位 */
+    int res_w, res_h;     /* V0.57.x: HEPBOOT.CFG 的 resolution=WxH, 0=自动挑最佳 */
 } hepboot_config_t;
-static hepboot_config_t g_config = {3, 0, "", 0, 0, 0};
+static hepboot_config_t g_config = {3, 0, "", 0, 0, 0, 0, 0};
 
 /* 外部汇编函数: x64→32位切换并跳转内核 */
 extern void jump_to_kernel_32(UINT64 kernel_entry, UINT64 stack_ptr, UINT64 low_mem_addr, UINT64 mb_info);
@@ -309,6 +310,11 @@ static multiboot_info_t *build_multiboot_info(EFI_MEMORY_DESCRIPTOR *map, UINTN 
 }
 
 /* 初始化GOP高分辨率图形模式 (V6.96 智能分辨率+刷新率选择) */
+/* 枚举到的模式表, ExitBootServices 后写到 0x6100 供内核 Display 页展示 */
+static UINT32 g_mode_w[16];
+static UINT32 g_mode_h[16];
+static UINT32 g_mode_n = 0;
+
 static int init_gop(void)
 {
     EFI_GRAPHICS_OUTPUT_PROTOCOL *gop = NULL;
@@ -351,7 +357,10 @@ static int init_gop(void)
 
     /* 枚举所有模式，智能选择最佳模式 */
     UINTN best_mode = gop->Mode->Mode;
-    UINT32 best_score = 0;
+    /* V0.57.x: 原为 UINT32。2048x1536 这类 h>1440 的模式会被扣 2000000 分,
+     * 总分变负后在 UINT32 下回绕成约 42 亿, 反而稳坐第一 —— 高分辨率屏上
+     * "最佳模式"一直是错的, resolution=WxH 也无法覆盖。改为有符号累加。 */
+    INT64 best_score = -999999999;
     UINT32 best_w = 0, best_h = 0, best_bpp = 0;
     UINT32 mode_count = 0;
 
@@ -378,7 +387,7 @@ static int init_gop(void)
             }
 
             /* 智能评分系统 (V6.96) */
-            UINT32 score = 0;
+            INT64 score = 0;
 
             /* 1. 标准分辨率优先级 (兼顾清晰度和UI可用性) */
             if (w == 1920 && h == 1080)  score += 10000000;  /* FHD - 最佳平衡 */
@@ -410,6 +419,20 @@ static int init_gop(void)
 
             /* 6. 当前模式轻微加分 (避免不必要的模式切换) */
             if (i == gop->Mode->Mode) score += 10000;
+
+            /* 7. HEPBOOT.CFG 的 resolution=WxH 明确指定时, 该模式压过一切评分 */
+            if (g_config.res_w > 0 && g_config.res_h > 0 &&
+                w == (UINT32)g_config.res_w && h == (UINT32)g_config.res_h) {
+                score += 50000000;
+            }
+
+            if (g_mode_n < 16) {
+                int dup = 0;
+                for (UINT32 q = 0; q < g_mode_n; q++) {
+                    if (g_mode_w[q] == w && g_mode_h[q] == h) { dup = 1; break; }
+                }
+                if (!dup) { g_mode_w[g_mode_n] = w; g_mode_h[g_mode_n] = h; g_mode_n++; }
+            }
 
             if (score > best_score) {
                 best_score = score;
@@ -667,6 +690,26 @@ static void parse_config(char *buf, UINTN size)
                         val++;
                     }
                     g_config.expected_crc = crc;
+                } else if (my_strcmp(key, "resolution") == 0) {
+                    /* resolution=WxH: 明确指定引导时要切到的分辨率。
+                     * 内核已过 ExitBootServices, 运行时无法 SetMode, 所以分辨率
+                     * 只能在这里(引导阶段)定; Display 页读到的是引导器最终选择。 */
+                    int rw = 0, rh = 0;
+                    while (val < line_end && *val >= '0' && *val <= '9') {
+                        rw = rw * 10 + (*val - '0'); val++;
+                    }
+                    if (val < line_end && (*val == 'x' || *val == 'X')) val++;
+                    while (val < line_end && *val >= '0' && *val <= '9') {
+                        rh = rh * 10 + (*val - '0'); val++;
+                    }
+                    if (rw > 0 && rh > 0) {
+                        g_config.res_w = rw; g_config.res_h = rh;
+                        print_str(L"    [CFG] resolution=");
+                        print_hex(rw); print_str(L"x"); print_hex(rh);
+                        print_str(L"\r\n");
+                    } else {
+                        print_str(L"    [CFG] resolution parse failed\r\n");
+                    }
                 } else if (my_strcmp(key, "kernel_arch") == 0) {
                     /* V0.10.6: 内核架构 0=32位, 1=64位 */
                     if (my_strcmp(val, "64") == 0 || my_strcmp(val, "x86_64") == 0) {
@@ -1473,6 +1516,13 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
             v[2] = (UINT16)(g_gop_info.pixels_per_scanline * (g_gop_info.bpp / 8));
             *(volatile UINT8 *)(0x6000 + 6) = (UINT8)g_gop_info.bpp;
             *(volatile UINT32 *)(0x6000 + 8) = (UINT32)(g_gop_info.framebuffer_base & 0xFFFFFFFF);
+            /* 0x6100: 枚举模式表 count(4) + count*8 字节 (w,h), 上限 16 项,
+             * 供内核 Display 页列出"引导器支持哪些分辨率"。 */
+            *(volatile UINT32 *)0x6100 = g_mode_n;
+            for (UINT32 mi = 0; mi < g_mode_n && mi < 16; mi++) {
+                *(volatile UINT32 *)(0x6104 + mi * 8) = g_mode_w[mi];
+                *(volatile UINT32 *)(0x6108 + mi * 8) = g_mode_h[mi];
+            }
             /* 帧缓冲物理地址可能 >4GB (大显存独显/核显), 高32位写 0x600c */
             *(volatile UINT32 *)(0x6000 + 12) = (UINT32)(g_gop_info.framebuffer_base >> 32);
             debug_puts("FB info -> 0x6000: ");
