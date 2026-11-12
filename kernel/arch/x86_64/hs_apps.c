@@ -41,6 +41,7 @@ extern int ext2_64_create_file(const char *path);
 extern int ext2_64_stat(const char *path, uint32_t *size, uint8_t *isdir);
 extern int ext2_64_delete_file(const char *path);
 extern int ext2_64_delete_tree(const char *path);
+extern int ext2_64_delete_dir(const char *path);
 extern int ext2_64_mkdir(const char *path);
 extern int ext2_64_rename(const char *oldp, const char *newp);
 
@@ -701,12 +702,18 @@ static struct {
     int top_i, top_n;
     int topdir_n;
     char tdsrc[FS_CLIP_MAX][FS_PATH_MAX];   /* 顶层目录源(移动时整树删除) */
+    /* 删除任务: 先遍历删文件, 记下沿途目录, 最后逆序删空目录 */
+    int phase;                              /* 0=遍历 1=回收目录 */
+    int ddn;
+    char ddel[48][FS_PATH_MAX];
     char ts[FS_CLIP_MAX][FS_PATH_MAX];
     char td[FS_CLIP_MAX][FS_PATH_MAX];
     char tn[FS_CLIP_MAX][64];
     char cur_name[64];
 } f_job;
 static void f_job_step(void);
+static void f_job_step_delete(void);
+static void f_job_start_delete(const char *const *paths, const char *const *names, int n);
 static void f_job_cancel(void);
 static int f_job_cancel_hit(int x, int y);
 
@@ -1187,7 +1194,7 @@ static void f_render(hs_window_t *w)
                        g_shell.colors.text_secondary, FS(10));
     if (f_job.active) {
         char msg[80], tmp[8];
-        strcpy(msg, f_job.kind == 2 ? "Moving " : "Copying ");
+        strcpy(msg, f_job.kind == 3 ? "Deleting " : (f_job.kind == 2 ? "Moving " : "Copying "));
         hs_itoa(f_job.ok, tmp);
         strcpy(msg + hs_strlen(msg), tmp);
         strcpy(msg + hs_strlen(msg), " items  ");
@@ -1445,6 +1452,7 @@ static int f_job_push_dir(const char *s, const char *d)
 static void f_job_step(void)
 {
     if (!f_job.active) return;
+    if (f_job.kind == 3) { f_job_step_delete(); return; }
     for (int k = 0; k < F_JOB_PER_FRAME && f_job.active; k++) {
         /* 1) 顶层文件 */
         if (f_job.top_i < f_job.top_n) {
@@ -1499,6 +1507,102 @@ static void f_job_step(void)
         }
         if (f_job.cur_i >= f_job.cur_n) { f_job.qh++; f_job.cur_n = 0; }
     }
+}
+
+
+/* 删除分片: 一份任务要处理"多个顶层项, 其中若干是目录树"两件事, 所以分两阶段
+ *   phase 0: 逐个顶层项; 目录入遍历队列, 边遍历边删文件, 顺手把每个目录记进 ddel
+ *   phase 1: 队列空了, 从 ddel 末尾往前 delete_dir (子目录先于父目录)
+ * 每个文件/目录只占一帧, 大目录树删除也有进度、可取消 */
+static void f_job_step_delete(void)
+{
+    for (int k = 0; k < F_JOB_PER_FRAME && f_job.active; k++) {
+        if (f_job.phase == 0) {
+            /* ① 顶层文件 / 目录 */
+            if (f_job.top_i < f_job.top_n) {
+                int i = f_job.top_i++;
+                hs_strcpyn(f_job.cur_name, f_job.tn[i], 64);
+                uint32_t sz = 0; uint8_t isdir = 0;
+                if (ext2_64_stat(f_job.ts[i], &sz, &isdir) != 0) {
+                    f_job.fail++; hs_strcpyn(f_job.why, "not found", 24);
+                } else if (isdir) {
+                    if (f_job_push_dir(f_job.ts[i], f_job.ts[i]) != 0) {
+                        f_job.fail++; hs_strcpyn(f_job.why, "too many dirs", 24);
+                    }
+                } else {
+                    int rc = ext2_64_delete_file(f_job.ts[i]);
+                    if (rc == 0) f_job.ok++; else { f_job.fail++; hs_strcpyn(f_job.why, "delete failed", 24); }
+                }
+                f_job.done++;
+                continue;
+            }
+            /* ② 从遍历队列取目录展开 */
+            if (f_job.cur_n == 0) {
+                if (f_job.qh >= f_job.qt) { f_job.phase = 1; continue; }
+                int n = ext2_64_list_dir_entries_ex(f_job.qs[f_job.qh], f_job.names,
+                                                    f_job.types, f_job.sizes, FS_COPY_ENTRIES);
+                if (n < 0 || n >= FS_COPY_ENTRIES) {
+                    f_job.fail++;
+                    hs_strcpyn(f_job.why, n < 0 ? "list failed" : "dir > 64 entries", 24);
+                    f_job.qh++; f_job.cur_n = 0;
+                    continue;
+                }
+                if (n == 0) {
+                    if (f_job.ddn < 48) hs_strcpyn(f_job.ddel[f_job.ddn++], f_job.qs[f_job.qh], FS_PATH_MAX);
+                    f_job.qh++; f_job.cur_n = 0;
+                    continue;
+                }
+                f_job.cur_n = n; f_job.cur_i = 0;
+                continue;
+            }
+            int i = f_job.cur_i++;
+            {
+                char sp[FS_PATH_MAX];
+                hs_strcpyn(f_job.cur_name, f_job.names[i], 64);
+                if (f_join(sp, FS_PATH_MAX, f_job.qs[f_job.qh], f_job.names[i]) != 0) {
+                    f_job.fail++; hs_strcpyn(f_job.why, "path too long", 24);
+                } else if (f_job.types[i]) {
+                    if (f_job_push_dir(sp, sp) != 0) { f_job.fail++; hs_strcpyn(f_job.why, "too many dirs", 24); }
+                } else {
+                    int rc = ext2_64_delete_file(sp);
+                    if (rc == 0) f_job.ok++; else { f_job.fail++; hs_strcpyn(f_job.why, "delete failed", 24); }
+                }
+                f_job.done++;
+            }
+            if (f_job.cur_i >= f_job.cur_n) {
+                if (f_job.ddn < 48) hs_strcpyn(f_job.ddel[f_job.ddn++], f_job.qs[f_job.qh], FS_PATH_MAX);
+                f_job.qh++; f_job.cur_n = 0;
+            }
+            continue;
+        }
+        /* ③ 回收: 逆序删目录 */
+        if (f_job.ddn <= 0) { f_job_finish(); return; }
+        f_job.ddn--;
+        hs_strcpyn(f_job.cur_name, f_job.ddel[f_job.ddn], 64);
+        {
+            int rc = ext2_64_delete_dir(f_job.ddel[f_job.ddn]);
+            if (rc == 0) f_job.ok++; else { f_job.fail++; hs_strcpyn(f_job.why, "rmdir failed", 24); }
+        }
+    }
+}
+
+/* 启动删除任务 */
+static void f_job_start_delete(const char *const *paths, const char *const *names, int n)
+{
+    f_job.active = 0; f_job.kind = 3;
+    f_job.ok = 0; f_job.fail = 0; f_job.done = 0; f_job.why[0] = 0;
+    f_job.qh = 0; f_job.qt = 0; f_job.cur_n = 0; f_job.cur_i = 0;
+    f_job.top_i = 0; f_job.top_n = 0; f_job.topdir_n = 0; f_job.cur_name[0] = 0;
+    f_job.phase = 0; f_job.ddn = 0;
+    for (int i = 0; i < n && i < FS_CLIP_MAX; i++) {
+        hs_strcpyn(f_job.ts[i], paths[i], FS_PATH_MAX);
+        hs_strcpyn(f_job.tn[i], names[i], 64);
+        f_job.td[i][0] = 0;
+    }
+    f_job.top_n = (n < FS_CLIP_MAX) ? n : FS_CLIP_MAX;
+    if (f_job.top_n == 0) { f_job_report(); return; }
+    f_job.active = 1;
+    hs_strcpyn(f_status2, "Deleting...", FS_PROMPT_MAX);
 }
 
 /* 启动: 剪贴板里逐个预检, 目录 mkdir 后入队, 文件进顶层表 */
@@ -1560,7 +1664,7 @@ static void f_job_cancel(void)
 static void f_job_report(void)
 {
     char msg[96]; char tmp[8];
-    strcpy(msg, f_job.kind == 2 ? "Moved " : "Copied ");
+    strcpy(msg, f_job.kind == 3 ? "Deleted " : (f_job.kind == 2 ? "Moved " : "Copied "));
     hs_itoa(f_job.ok, tmp); strcpy(msg + hs_strlen(msg), tmp);
     strcpy(msg + hs_strlen(msg), f_job.ok == 1 ? " item" : " items");
     if (f_job.fail > 0) {
@@ -1575,7 +1679,7 @@ static void f_job_report(void)
         }
     }
     hs_strcpyn(f_status2, msg, FS_PROMPT_MAX);
-    if (f_job.fail == 0) { f_clip_count = 0; f_clip_mode = 0; }
+    if (f_job.fail == 0 && f_job.kind != 3) { f_clip_count = 0; f_clip_mode = 0; }
     f_refresh();
 }
 
@@ -2121,53 +2225,32 @@ static void f_prompt_commit(void)
 
 static void f_delete_commit(void)
 {
+    /* 批量与单项统一走分片删除任务: 大目录树不再同步阻塞, 有进度也能取消 */
+    static char pbuf[FS_CLIP_MAX][FS_PATH_MAX];
+    static char nbuf[FS_CLIP_MAX][64];
+    static const char *pl[FS_CLIP_MAX];
+    static const char *nl[FS_CLIP_MAX];
+    int n = 0;
+
     if (f_del_multi > 0) {
-        /* 批量删除: 逐项独立成败, 结束后汇报总数, 不再"第一个失败就整体中断" */
-        int ok = 0, fail = 0;
-        for (int i = 0; i < f_count; i++) {
+        for (int i = 0; i < f_count && n < FS_CLIP_MAX; i++) {
             if (!f_mark[i]) continue;
-            char full[FS_PATH_MAX];
-            uint32_t sz2 = 0; uint8_t d2 = 0;
-            int r = -1;
-            if (f_join(full, FS_PATH_MAX, f_path, f_items[i]) == 0 &&
-                ext2_64_stat(full, &sz2, &d2) == 0)
-                r = d2 ? ext2_64_delete_tree(full) : ext2_64_delete_file(full);
-            if (r == 0) ok++; else fail++;
+            if (f_join(pbuf[n], FS_PATH_MAX, f_path, f_items[i]) != 0) continue;
+            hs_strcpyn(nbuf[n], f_items[i], 64);
+            pl[n] = pbuf[n]; nl[n] = nbuf[n];
+            n++;
         }
-        f_del_multi = 0;
-        f_del_confirm = 0;
-        char msg[96], tmp[8];
-        strcpy(msg, "Deleted ");
-        hs_itoa(ok, tmp);
-        strcpy(msg + hs_strlen(msg), tmp);
-        strcpy(msg + hs_strlen(msg), ok == 1 ? " item" : " items");
-        if (fail > 0) {
-            strcpy(msg + hs_strlen(msg), ", ");
-            hs_itoa(fail, tmp);
-            strcpy(msg + hs_strlen(msg), tmp);
-            strcpy(msg + hs_strlen(msg), " failed");
-        }
-        hs_strcpyn(f_status2, msg, FS_PROMPT_MAX);
-        f_refresh();
-        return;
-    }
-    uint32_t sz = 0;
-    uint8_t isdir = 0;
-    int rc = -1;
-    if (ext2_64_stat(f_del_path, &sz, &isdir) == 0) {
-        rc = isdir ? ext2_64_delete_tree(f_del_path) : ext2_64_delete_file(f_del_path);
-    }
-    f_del_confirm = 0;
-    if (rc == 0) {
-        char msg[96];
-        strcpy(msg, "Deleted ");
-        hs_strcpyn(msg + hs_strlen(msg), f_del_name, 40);
-        hs_strcpyn(f_status2, msg, FS_PROMPT_MAX);
     } else {
-        hs_strcpyn(f_status2, rc == -2 ? "Delete failed: too deep" : "Delete failed",
-                   FS_PROMPT_MAX);
+        if (f_join(pbuf[0], FS_PATH_MAX, f_path, f_del_name) != 0) return;
+        hs_strcpyn(nbuf[0], f_del_name, 64);
+        pl[0] = pbuf[0]; nl[0] = nbuf[0];
+        n = 1;
     }
-    f_refresh();
+
+    f_del_multi = 0;
+    f_del_confirm = 0;
+    if (f_job.active) { hs_strcpyn(f_status2, "Busy: a file job is running", FS_PROMPT_MAX); return; }
+    f_job_start_delete(pl, nl, n);
 }
 
 void hs_files_key(int key)
@@ -2956,3 +3039,4 @@ void hs_apps_handle_wheel(int delta)
         if (t_scroll > 0) t_scroll--;
     }
 }
+

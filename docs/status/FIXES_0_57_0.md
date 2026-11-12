@@ -1907,3 +1907,83 @@ tablet 设备直接报 `Input handler not found`）；本轮"点击菜单项"用
 `link.xcur`（那支竖直箭头），`assets/cursors/hand.xcur` 已删除，镜像恢复为 17 个光标素材。
 理由也站得住 —— 与其余素材同一套视觉，不自创风格。生成手型的脚本思路保留在本节，
 若以后拿到正版 hand 素材，只需把文件放进 `assets/cursors/` 并改一行 `CUR_LINK` 路径。
+
+## 1.72 Files 删除分片化（P3 收尾 P2 的最后一个同步点）
+
+### 问题
+
+P2 把拷贝/移动改成了分片任务，但删除仍走 `f_delete_commit` 里的同步路径：
+批量删除逐个 `ext2_64_delete_tree`（内部递归 BFS，同步跑完），单项同样。
+删一个几十文件的目录，界面同样会整段假死，且没有任何进度与取消入口 ——
+P2 建立的 `f_job` 状态机在删除这条路线上是断的。
+
+底层没有独立的 `rmdir` 公开接口，但 `ext2_64_delete_dir` 存在（`delete_tree`
+内部就是调它），因此分片删除可行，不必引入线程。
+
+### 实现：一个任务两阶段
+
+`f_job.kind = 3` 复用了 P2 的 `f_job` 骨架（`f_job_step` 开头分派到
+`f_job_step_delete`），新增 `phase / ddn / ddel[48][FS_PATH_MAX]`：
+
+- **phase 0（遍历）**：先逐个顶层项 —— 文件直接 `delete_file`；目录 push 进 BFS
+  队列。然后边 list 边处理：文件立即删，子目录入队；一个目录的条目全部处理完，
+  把该目录记进 `ddel`（含空目录直接记）。
+- **phase 1（回收）**：队列空了，从 `ddel` 末尾往前 `delete_dir`。
+  因为记录顺序就是 BFS 处理完成顺序（父先于子），逆序必然是子先于父，天然满足
+  "目录非空不能删"的约束。
+
+`f_delete_commit` 整体重写：批量标记项与单项统一收集成路径/名字数组，交给
+`f_job_start_delete`，不再在 UI 线程里同步跑树。任务进行中的删除请求报
+`Busy: a file job is running`。文案：进度 `Deleting N items <文件名>`，
+完成 `Deleted N items`，取消 `Cancelled after N items`（复用 P2 的取消热区与
+Esc 0x01）。删除任务不清空剪贴板（`kind != 3` 条件）。
+
+### 踩到的一处真 bug：目录被记了两次
+
+首版在 push 子目录时就记 `ddel`，条目处理完又记一次 → 同一个目录出现两遍，
+逆序删时第二次报 `rmdir failed`。实测 `ok=44 fail=5`，5 正好是 5 个子目录的
+重复删除。改为"只在目录处理完成时记一次"，重测 `ok=44 fail=0`。
+
+### 验证
+
+自建测试树：`/big2` = 8 个顶层文件 + `sub1..sub5` 各 6 文件（共 38 文件 6 目录），
+debugfs 灌进根分区。启动序列里同步跑自检（跑完即删，未入库）：
+
+```
+[DELTEST] begin: /big2 (38 files + 6 dirs)
+[DELTEST] done=8  ok=7  fail=0 phase=0 cur=f07.txt
+[DELTEST] done=16 ok=10 fail=0 phase=0 cur=s1_2.txt
+[DELTEST] done=24 ok=18 fail=0 phase=0 cur=s2_4.txt
+[DELTEST] done=32 ok=26 fail=0 phase=0 cur=s3_6.txt
+[DELTEST] done=40 ok=34 fail=0 phase=0 cur=s5_2.txt
+[DELTEST] FINAL ok=44 fail=0 why= guard=58 active=0
+```
+
+`ok=44` = 38 文件 + 6 目录，全部命中；`guard=58` 说明每步一单位、无死循环。
+随后把镜像根分区抽出用 debugfs 复核：`/big2` 已不存在
+（`File not found by ext2_lookup`），同级 `fonts/ usr/ wallpaper.png account.conf
+test_write.txt` 等全部完好，未误删。
+
+干净版回归：桌面、Settings、Quick Controls 正常，光标四形态加载 `link=0`，
+内核 809,896 B。
+
+### 验证过程的一个方法论教训
+
+三次把自检钩子挂错地方，值得记下来：
+
+1. 挂在 `hs_present_with_cursor()` —— 它只在 `g_content_dirty || animating` 时才被调，
+   静置桌面下永不执行；
+2. 挂在 `hpdesk_run()` —— 这个函数没有任何调用者（旧接口残留），是死代码；
+3. 挂在 `hpdesk_render()` 内部 —— 更隐蔽：tick 里 `hpdesk_mark_dirty()` 标脏后，
+   渲染清脏，而 tick 只在渲染里跑 → 自举死锁，全局只进了一次。
+
+真正的主循环是 `desktop64.c` 里那个 `while(1)`（16ms 节拍渲染）。但即使挂对了，
+该实例的主循环还会卡在天气 HTTP 拉取上（`[HTTP64] Connection timeout` 之后不再出帧），
+所以最终改成**在启动序列里同步跑完自检**，完全不依赖 UI 帧 —— 结论最干净。
+
+### 已知限制
+
+- `ddel` 容量 48 个目录，超出的子目录计入 fail(`too many dirs`)，不静默跳过；
+- 目录列举仍受 `ext2_64_list_dir_entries_ex` 单次 64 项上限，超限目录报
+  `dir > 64 entries` 并跳过该目录（与 P2 同一根因，要真支持得给 ext2 加带偏移的列举接口）；
+- 任务推进仍挂在 `f_render` 里，窗口最小化时暂停（与 P2 相同）。
