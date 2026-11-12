@@ -3157,10 +3157,12 @@ static void cc_geometry(int *cx, int *cy, int *cw, int *ch)
         int sb_cap = g_shell.screen_width * 2 / 5;
         if (sb_cap > 0 && sb_w > sb_cap) sb_w = sb_cap;
         int min_cx = sb_x + sb_w + hs_sx(24);
-        int cx_try = g_shell.screen_width - w - hs_sx(24);
+        /* 右缘与顶栏同一 margin(hs_sx(10)), 否则 QC 会浮在页面中间、和右上状态栏
+         * 差出 20 多逻辑像素, 看起来像两套布局(实测 150%: QC 右缘 1853 / 顶栏 1892)。 */
+        int cx_try = g_shell.screen_width - w - hs_sx(10);
         if (cx_try < min_cx) {
             cx_try = min_cx;
-            w = g_shell.screen_width - cx_try - hs_sx(24);
+            w = g_shell.screen_width - cx_try - hs_sx(10);
             if (w < hs_sx(200)) w = hs_sx(200);
         }
         *cx = cx_try;
@@ -4903,13 +4905,15 @@ void hs_notification_render(void)
         int top_bottom = hs_sy(g_shell.ui.bar_height) + hs_sy(8);
         int right_side = (g_notif_pos == 0 || g_notif_pos == 2);
         if (g_notif_pos == 0) {      /* 右上: 向下堆叠 */
-            x = g_shell.screen_width - w - 8;
+            /* 与顶栏/QC 同一 margin, 否则卡身冲出屏幕右缘(150% 下 06:2x 被裁) */
+            x = g_shell.screen_width - w - hs_sx(10);
             y = top_bottom + popup_count * (h + gap);
         } else if (g_notif_pos == 1) { /* 左上 */
             x = 8;
             y = top_bottom + popup_count * (h + gap);
         } else if (g_notif_pos == 2) { /* 右下: 向上堆叠 */
-            x = g_shell.screen_width - w - 8;
+            /* 与顶栏/QC 同一 margin, 否则卡身冲出屏幕右缘(150% 下 06:2x 被裁) */
+            x = g_shell.screen_width - w - hs_sx(10);
             y = g_shell.screen_height - 40 - (popup_count + 1) * (h + gap);
         } else {                       /* 左下 */
             x = 8;
