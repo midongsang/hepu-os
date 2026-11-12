@@ -686,6 +686,13 @@ void process64_tick(void)
         curr->time_slice = curr->default_slice;
         scheduler_ticks++;
         need_resched = 1;
+        /* V0.57.4: 用户态中断里绝对不能切内核上下文。
+         * 这条 tick 是在用户态被打断时进来的，当前 CPU 栈上正躺着用户中断帧；
+         * context_switch 会把栈换掉，IRQ 返回时就从别人的栈上弹寄存器，
+         * 表现就是 rip/rax 变成垃圾（实测 rip=0、子线程 rax!=0）。
+         * 用户线程由 uthread64.c 的轮转负责，这里直接让路。 */
+        extern int g_user_in_user_mode;
+        if (g_user_in_user_mode) return;
         /* 直接调用调度器（当前只有内核线程，上下文切换安全） */
         if (ready_queue_count[PRIORITY_NORMAL] > 0 ||
             ready_queue_count[PRIORITY_LOW] > 0 ||

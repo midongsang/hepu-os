@@ -615,6 +615,8 @@ int user_process_create_elf(const char *name, void *code_data, uint64_t code_siz
     proc->rip = entry_vaddr;  /* 用户空间入口点 */
     proc->rsp = USER_INIT_RSP;
     proc->rflags = 0x202;  /* IF=1 */
+    /* V0.57.4: 登记主线程，让用户态时钟中断有切换单元 */
+    { extern int uthread_bind_main(int, int); uthread_bind_main(idx, proc->pid); }
 
     /* 创建带代码段的用户页表 */
     proc->page_table = create_user_page_table_with_code(code_data, code_size, code_vaddr, raw_elf);
@@ -2203,6 +2205,7 @@ static void user_process_release(int idx)
     syscall_fd_table_reset(idx);   /* 安全修复：槽位复用前清掉上一个进程遗留的 fd */
     seccomp64_reset(idx);          /* P0-4：槽位复用前清除 sandbox 模式，避免继承 */
     user_va_release_slot(idx);     /* P1: 清该进程的 VA 区间账本与模块表/kbuf */
+    { extern void uthread_clear_owner(int); uthread_clear_owner(idx); }
     if (g_pt_ref[idx] > 0) {
         /* V0.57.3: 还有 clone 线程活着，页表不能释放（共享）。
          * 这里不硬杀线程（把正在别处运行的上下文强拆更危险），只保留地址空间，
@@ -2522,6 +2525,12 @@ int user_process_timeout_triggered(void)
         return 1;
     }
     return 0;
+}
+
+/* V0.57.4: 当前用户进程槽位（线程调度器需要按 owner 轮转） */
+int user_process_current_slot(void)
+{
+    return current_user_proc;
 }
 
 /* 当前用户进程PID */

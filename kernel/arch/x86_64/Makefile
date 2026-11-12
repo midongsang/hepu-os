@@ -66,6 +66,7 @@ C_SOURCES = \
     $(ARCH_DIR)/shell64.c \
     $(ARCH_DIR)/desktop64.c \
     $(ARCH_DIR)/user_process.c \
+    $(ARCH_DIR)/uthread64.c \
     $(ARCH_DIR)/user_aspace64.c \
     $(ARCH_DIR)/user_lib.c \
     $(ARCH_DIR)/user_app_test.c \

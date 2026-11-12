@@ -2701,3 +2701,63 @@ rip/rsp/rflags/GPR/fsbase 上下文，由中断里的调度器轮转并保证恢
 
 `EXCEPTION=0`、桌面正常（截图 `hepu_clone_verified.png`，14:40）。
 内核 824,136 B。
+
+---
+
+## §1.85 用户线程调度单元（uthread64）：切换成立，子线程未推进
+
+§1.84 定位到 clone 的卡点是"用户执行流不在调度表里"。本轮按这个结论补调度单元。
+
+### 已实现
+
+1. **新模块 `kernel/arch/x86_64/uthread64.c`**（`Makefile` 已接入）
+   `uthread_t` 保存每条用户执行流的完整现场（`raw[15]` 对应中断帧
+   `r15..rax`，加 `rip/rflags/rsp/fsbase`）。API：
+   `uthread_bind_main` / `uthread_create` / `uthread_timer_tick` /
+   `uthread_clear_owner`。
+2. **接入真实的 tick 路径**：PIT 走的是 **IRQ0（vector 32）**，不是
+   APIC 定时器的 0x40。第一版接在 0x40，实测从未触发；改到
+   `lib64.c` 的 `irq == 0` 分支后立刻生效。
+3. **`ut_restore` 显式写 `IA32_FS_BASE`**：iret/sysret 不恢复它。
+4. **时间片 10 tick**（约 10ms），避免每 1ms 切一次把线程推进度压到零。
+5. **`process64_tick` 在用户态直接让路**：原来它在用户态 tick 里也会
+   `process64_schedule()`，`context_switch` 会把栈换掉，IRQ 返回时
+   从别人的栈弹寄存器 —— 实测表现为 `rip=0`、rax 变垃圾。
+6. `user_process_create_elf` 登记主线程；`user_process_release` 清理该
+   owner 的所有线程。单线程进程 `n<2` 直接 return，行为与之前完全一致。
+
+### QEMU 实测（`/tmp/ser_clone*.log`）
+
+```
+[UTHREAD] created tid=0x3E8 owner=0x0
+[UT] next rax=0x0 rip=0x40000024 rsp=0x6FF80000 cur_rax=0x400000AA
+[UTSAVE] thread=0x1 rip=0x40000024 rax=0x0 rsp=0x6FF80000   (连续 3 次)
+parent: clone returned tid
+FAIL: child never ran
+```
+
+- ✅ 线程注册、帧注入都对：注入的 `rax=0`、`rip=0x40000024`（clone 返回点）、
+  `rsp=0x6FF80000`（调用方给的独立栈）与设计完全一致。
+- ✅ `g_ut_cur` 在 0/1 之间交替，说明轮转逻辑在跑。
+- ❌ 子线程现场连续三次**数值分毫未变**（`rip` 仍停在返回点，`rax` 仍为 0），
+  即 iret 没有让它推进哪怕一条指令。
+
+### 结论与现状
+
+开关 `g_clone_threads_enabled` 仍为 **0**（`sys_clone` 对外 ENOSYS），
+`clone_test.elf` 仍在 `/bin`（32 个）但不进 autorun。理由：调度器已能切换，
+但被切过去的线程不推进，打开只会让调用方卡死。
+
+下一轮要查的点：IRQ 返回路径对帧的使用（`IRQ_ENTRY` 的 pop 顺序 vs
+`stack_frame` 索引是否在恢复段被其它 handler 二次改写），以及 syscall 帧与
+IRQ 帧布局差异是否让"从 syscall 返回点启动的线程"落在错误的地方。
+
+### 验证（QEMU 实机）
+
+```
+[REG] autorun done
+[NOTIFY] Welcome to Hepu OS: Hepu Desktop loaded
+```
+
+`EXCEPTION=0`、`WATCHDOG=0`、桌面正常（截图 `hepu_uthread_verified.png`）。
+内核 825,160 B。

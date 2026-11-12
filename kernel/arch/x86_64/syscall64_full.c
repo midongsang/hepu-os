@@ -972,95 +972,54 @@ static int64_t sys_clone(int flags, uint64_t stack, uint64_t parent_tid,
     extern int copy_to_user(void *dst, const void *src, size_t size);
     extern uint64_t user_process_current_pml4(void);
     extern int user_process_clone_track(int thread_pid);
-    extern uint64_t pmm64_alloc_page(void);
-    extern void pmm64_free_page(uint64_t addr);
-
-    /* V0.57.3 总开关：默认关闭，返回 ENOSYS。
-     *
-     * 下面这套实现本身是完整的（共享页表 + 独立内核栈 + 子 rax=0 +
-     * trampoline + 页表引用计数），QEMU 实测能把线程建出来：
-     *   [PROC64] Created process: clone_thr (pid=4, prio=2)
-     *   [CLONE] created thread pid=0x4 (shared pml4, stack=0x6FF80000)
-     * 但**子线程拿不到 CPU** —— 这不是 clone 自身的问题，而是调度模型的
-     * 缺口：process64_tick 只轮转 process64 的内核线程，用户进程
-     * （user_process_switch 进去的那条执行流）根本不在调度表里；
-     * smp.c::smp_timer_tick 里 AP 调度还被 `&& 0` 硬关掉。
-     * 结果就是父线程一跑到底、子线程永远 READY，父线程忙等超时后
-     * 还会因为被 context_switch 抽走而没有恢复路径（实测 rip=0 / CR2=0）。
-     *
-     * 要真正可用，前置条件是"用户线程成为调度单元"：为每条用户执行流
-     * 保存 rip/rsp/rflags/GPR/fsbase，并由中断里的调度器轮转。
-     * 在那之前打开这个开关只会让用户程序卡死或崩，故默认 0。 */
-    if (!g_clone_threads_enabled) {
-        return HEPU_ENOSYS;
-    }
-
-    if (!(flags & CLONE_VM)) {
-        /* 没有共享地址空间就不是线程，交给 fork */
-        return HEPU_ENOSYS;
-    }
-    uint64_t cur_pml4 = user_process_current_pml4();
-    if (!cur_pml4) {
-        return HEPU_ENOSYS;   /* 非 ELF 隔离进程，没有可共享的页表 */
-    }
-    /* 用户给的栈顶必须落在用户窗口内，且 16 字节对齐（SysV 入口约定） */
-    if (!stack || stack < 0x40000000ULL || stack >= 0x80000000ULL) {
-        return HEPU_EINVAL;
-    }
-
+    extern int user_process_current_slot(void);
+    extern uint64_t user_process_get_fsbase(void);
+    extern int uthread_create(int owner, uint64_t rip, uint64_t rsp, uint64_t fsbase);
     extern uint64_t g_syscall_ret_rip;
-    extern uint64_t g_syscall_ret_rflags;
-    extern uint64_t g_syscall_kernel_rsp;
-    extern uint64_t g_clone_child_rip;
-    extern uint64_t g_clone_child_rsp;
-    extern uint64_t g_clone_child_rflags;
-    extern uint64_t g_clone_child_tls;
-    extern uint64_t g_clone_child_kstack;
-    extern uint64_t g_clone_child_gprs[15];
 
-    uint64_t kstack = pmm64_alloc_page();
-    if (!kstack) return HEPU_EAGAIN;
+    /* V0.57.4: 真线程。
+     *
+     * V0.57.3 的失败教训（见 §1.84）：线程建得出来，但退出 syscall 后
+     * 没有任何调度单元会去运行它，父线程被 context_switch 抽走还回不来。
+     * V0.57.4 补上了用户线程调度单元（uthread64.c），所以这里不再创建
+     * process64 内核线程，也不再靠 clone_trampoline 手工 sysret ——
+     * 只要登记一条用户执行流，剩下的交给用户态时钟中断的轮转。
+     */
+    if (!g_clone_threads_enabled) return HEPU_ENOSYS;
+    if (!(flags & CLONE_VM)) return HEPU_ENOSYS;      /* 不共享地址空间不是线程 */
+    if (!user_process_current_pml4()) return HEPU_ENOSYS;
+    if (!stack || stack < 0x40000000ULL || stack >= 0x80000000ULL) return HEPU_EINVAL;
 
-    g_clone_child_rip = g_syscall_ret_rip;          /* 子线程从返回点继续 */
-    g_clone_child_rsp = stack;
-    g_clone_child_rflags = g_syscall_ret_rflags | 0x200;  /* IF 必须开，否则子线程收不到时钟 */
-    g_clone_child_tls = (flags & CLONE_SETTLS) ? tls : 0;
-    g_clone_child_kstack = kstack + 4096;           /* 栈顶 */
+    int slot = user_process_current_slot();
+    if (slot < 0) return HEPU_ENOSYS;
 
-    /* 父线程 GPR 快照，布局与 entry_64.S 的 push 顺序一致：
-     * [0]=r15 [1]=r14 [2]=r13 [3]=r12 [4]=r11 [5]=r10 [6]=r9 [7]=r8
-     * [8]=rbp [9]=rdi [10]=rsi [11]=rdx [12]=rcx [13]=rbx [14]=rax */
-    for (int i = 0; i < 15; i++)
-        g_clone_child_gprs[i] = ((uint64_t *)g_syscall_kernel_rsp)[i];
+    /* 子线程从 clone 的返回点继续，rax=0 由 uthread_create 保证 */
+    uint64_t tls_base = (flags & CLONE_SETTLS) ? tls : user_process_get_fsbase();
+    int tid = uthread_create(slot, g_syscall_ret_rip, stack, tls_base);
+    if (tid < 0) return HEPU_EAGAIN;
 
-    extern void clone_trampoline_64(void);
-    extern int process64_create(const char *name, void (*entry)(void), int priority);
-    int child_pid = process64_create("clone_thr", clone_trampoline_64, 2);
-    if (child_pid < 0) {
-        pmm64_free_page(kstack);
-        return HEPU_EAGAIN;
-    }
-
-    user_process_clone_track(child_pid);
+    user_process_clone_track(tid);   /* 共享页表记账 */
 
     if ((flags & CLONE_PARENT_SETTID) && parent_tid) {
-        int v = child_pid;
+        int v = tid;
         copy_to_user((void *)parent_tid, &v, sizeof(int));
     }
     if ((flags & CLONE_CHILD_SETTID) && child_tid) {
-        int v = child_pid;
+        int v = tid;
         copy_to_user((void *)child_tid, &v, sizeof(int));
     } else if ((flags & CLONE_CHILD_CLEARTID) && child_tid) {
         int zero = 0;
         copy_to_user((void *)child_tid, &zero, sizeof(int));
     }
 
-    vga_puts("[CLONE] created thread pid=");
-    vga_put_hex((uint64_t)child_pid);
-    vga_puts(" (shared pml4, stack=0x");
+    vga_puts("[CLONE] thread tid=");
+    vga_put_hex((uint64_t)tid);
+    vga_puts(" (shared pml4, entry=0x");
+    vga_put_hex(g_syscall_ret_rip);
+    vga_puts(", stack=0x");
     vga_put_hex(stack);
     vga_puts(")\n");
-    return child_pid;
+    return tid;
 }
 static int64_t sys_creat(const char *path, int mode) { (void)path;(void)mode; return 3; }
 static int64_t sys_link(const char *oldp, const char *newp) { (void)oldp;(void)newp; return 0; }

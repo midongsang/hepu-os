@@ -389,6 +389,17 @@ static void irq_handler_64_body(uint64_t *stack_frame)
         if (irq_handlers[irq]) {
             irq_handlers[irq]();
         }
+        /* V0.57.4: 用户线程轮转。
+         * PIT 走的是 IRQ0（vector 32），不是 APIC 定时器的 0x40 —— 用户态
+         * 时钟实际落在这里，线程切换必须接在这一条路径上。 */
+        if (irq == 0 && (stack_frame[20] & 3) == 3) {
+            extern void uthread_timer_tick(uint64_t *frame);
+            extern int user_process_kill_pending(void);
+            extern int user_process_timeout_triggered(void);
+            if (!user_process_kill_pending() && !user_process_timeout_triggered()) {
+                uthread_timer_tick(stack_frame);
+            }
+        }
         /* V0.13.46: 键盘IRQ直通检查 Ctrl+Alt+K（未响应进程强制结束，不依赖GUI主循环） */
         if (irq == 1) {
             extern int keyboard64_force_kill_triggered(void);
@@ -434,6 +445,15 @@ static void irq_handler_64_body(uint64_t *stack_frame)
                 stack_frame[20] = 0x08;      /* 内核代码段 */
                 stack_frame[22] = cur_rsp;   /* 当前中断处理栈 */
                 stack_frame[23] = 0x10;      /* 内核数据段 */
+            }
+        }
+        /* V0.57.4: 用户线程轮转（只在 CPL=3 且同 owner 有 >=2 线程时生效） */
+        extern void uthread_timer_tick(uint64_t *frame);
+        if ((stack_frame[20] & 3) == 3) {
+            extern int user_process_kill_pending(void);
+            extern int user_process_timeout_triggered(void);
+            if (!user_process_kill_pending() && !user_process_timeout_triggered()) {
+                uthread_timer_tick(stack_frame);
             }
         }
         extern void apic64_timer_eoi(void);

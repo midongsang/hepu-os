@@ -190,5 +190,8 @@ source_of_truth: kernel/arch/x86_64/
   不在调度表里，无上下文保存槽位；`smp_timer_tick` 的 AP 调度被 `&& 0` 关闭。
 - 影响：所有依赖用户态并发的功能（线程、并行、异步 IO 回调）。
 - 现状：`sys_clone` 保留实现但 `g_clone_threads_enabled=0`，对外返回 ENOSYS。
+- V0.57.4 进展：用户线程调度单元（`uthread64.c`）已把"线程不在调度表"补上，
+  切换逻辑成立（`g_ut_cur` 交替、帧注入 `rax/rip/rsp` 均正确），但子线程被切到后
+  现场不推进，下一轮继续定位中断返回路径。
 - 修法方向：为每条用户执行流建立 rip/rsp/rflags/GPR/fsbase 上下文，由中断
   调度器轮转并保证恢复；fork 的显式恢复路径可作为模板。
