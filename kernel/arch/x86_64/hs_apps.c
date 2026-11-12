@@ -894,6 +894,33 @@ static void f_refresh(void)
     hs_strcpyn(f_status, buf, 63);
 }
 
+
+/* 文件类型判定: 0=目录 1=图片 2=视频 3=音频 4=文档 5=其它。
+ * 旧实现只有 media/doc 两类, 且按"末 4 字符"取扩展名 —— 对 .c/.h/.md 这种 2~3 字符
+ * 扩展名会把文件名尾巴一起比, 永远不命中。这里统一按"最后一个点"定位。 */
+static int f_kind(int item)
+{
+    const char *nm;
+    int len, dot = -1, i;
+    if (f_types[item]) return 0;
+    nm = f_items[item];
+    len = hs_strlen(nm);
+    for (i = len - 1; i >= 0 && i >= len - 6; i--)
+        if (nm[i] == '.') { dot = i; break; }
+    if (dot < 0) return 5;
+    nm += dot;
+    if (strcmp(nm, ".png") == 0 || strcmp(nm, ".jpg") == 0 ||
+        strcmp(nm, ".bmp") == 0 || strcmp(nm, ".gif") == 0) return 1;
+    if (strcmp(nm, ".mp4") == 0 || strcmp(nm, ".mov") == 0 ||
+        strcmp(nm, ".mkv") == 0) return 2;
+    if (strcmp(nm, ".mp3") == 0 || strcmp(nm, ".wav") == 0 ||
+        strcmp(nm, ".flac") == 0) return 3;
+    if (strcmp(nm, ".txt") == 0 || strcmp(nm, ".md") == 0 ||
+        strcmp(nm, ".doc") == 0 || strcmp(nm, ".pdf") == 0 ||
+        strcmp(nm, ".c") == 0   || strcmp(nm, ".h") == 0) return 4;
+    return 5;
+}
+
 static void f_render(hs_window_t *w)
 {
     void *fb = gfx64_get_framebuffer();
@@ -940,29 +967,9 @@ static void f_render(hs_window_t *w)
                 int iy2 = gy + r * (gs + FS(8));
                 if (gi == f_sel)
                     gfx64_fill_rounded_rect(ix - FS(4), iy2 - FS(4), gs, gs, FS(8), g_shell.colors.accent);
-                extern void hs_icon_folder(int x, int y, int size, uint32_t color);
-                extern void hs_icon_doc(int x, int y, int size, uint32_t color);
-                extern void hs_icon_media(int x, int y, int size, uint32_t color);
-                extern void hs_icon_file(int x, int y, int size, uint32_t color);
+                extern void hs_file_type_icon(int x, int y, int size, uint32_t color, int kind);
                 uint32_t ic = (gi == f_sel) ? 0xFFFFFF : g_shell.colors.accent;
-                if (f_types[item]) hs_icon_folder(ix, iy2, FS(30), ic);
-                else {
-                    int len = hs_strlen(f_items[item]);
-                    const char *nm = f_items[item];
-                    int is_media = 0, is_doc = 0;
-                    if (len >= 4) {
-                        const char *ext = nm + len - 4;
-                        if (strcmp(ext, ".mp3") == 0 || strcmp(ext, ".mp4") == 0 ||
-                            strcmp(ext, ".png") == 0 || strcmp(ext, ".jpg") == 0 ||
-                            strcmp(ext, ".wav") == 0) is_media = 1;
-                        if (strcmp(ext, ".txt") == 0 || strcmp(ext, ".md") == 0 ||
-                            strcmp(ext, ".c") == 0 || strcmp(ext, ".h") == 0 ||
-                            strcmp(ext, ".doc") == 0) is_doc = 1;
-                    }
-                    if (is_media) hs_icon_media(ix, iy2, FS(30), ic);
-                    else if (is_doc) hs_icon_doc(ix, iy2, FS(30), ic);
-                    else hs_icon_file(ix, iy2, FS(30), ic);
-                }
+                hs_file_type_icon(ix, iy2, FS(30), ic, f_kind(item));
                 if (f_mark[item])
                     gfx64_fill_rounded_rect(ix - FS(2), iy2 - FS(2), FS(12), FS(12), FS(3), 0xFFD040);
                 char gd[32];
@@ -994,30 +1001,9 @@ static void f_render(hs_window_t *w)
             }
             /* 文件类型矢量图标(目录/文档/媒体/未知) */
             {
-                extern void hs_icon_folder(int x, int y, int size, uint32_t color);
-                extern void hs_icon_doc(int x, int y, int size, uint32_t color);
-                extern void hs_icon_media(int x, int y, int size, uint32_t color);
-                extern void hs_icon_file(int x, int y, int size, uint32_t color);
+                extern void hs_file_type_icon(int x, int y, int size, uint32_t color, int kind);
                 uint32_t ic = (li == f_sel) ? 0xFFFFFF : g_shell.colors.accent;
-                if (f_types[item]) {
-                    hs_icon_folder(cx + FS(3), iy + 1, FS(14), ic);
-                } else {
-                    int len = hs_strlen(f_items[item]);
-                    const char *nm = f_items[item];
-                    int is_media = 0, is_doc = 0;
-                    if (len >= 4) {
-                        const char *ext = nm + len - 4;
-                        if (strcmp(ext, ".mp3") == 0 || strcmp(ext, ".mp4") == 0 ||
-                            strcmp(ext, ".png") == 0 || strcmp(ext, ".jpg") == 0 ||
-                            strcmp(ext, ".wav") == 0) is_media = 1;
-                        if (strcmp(ext, ".txt") == 0 || strcmp(ext, ".md") == 0 ||
-                            strcmp(ext, ".c") == 0 || strcmp(ext, ".h") == 0 ||
-                            strcmp(ext, ".doc") == 0) is_doc = 1;
-                    }
-                    if (is_media) hs_icon_media(cx + FS(3), iy + 1, FS(14), ic);
-                    else if (is_doc) hs_icon_doc(cx + FS(3), iy + 1, FS(14), ic);
-                    else hs_icon_file(cx + FS(3), iy + 1, FS(14), ic);
-                }
+                hs_file_type_icon(cx + FS(3), iy + 1, FS(14), ic, f_kind(item));
             }
             font64_draw_string(fb, W, H, cx + FS(22), iy + FS(2), disp,
                                (li == f_sel) ? 0xFFFFFF : g_shell.colors.window_fg, FS(12));

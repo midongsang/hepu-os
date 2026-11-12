@@ -2564,6 +2564,23 @@ static void hs_icon_bmp(int x, int y, int size, uint32_t color, const uint32_t *
     }
 }
 
+/* Files 类型图标: 单色线性套的统一入口。
+ * kind: 0=目录 1=图片 2=视频 3=音频 4=文档 5=其它(未知)。
+ * 目录/音频/未知没有语义完全对应的线性图标, 回落到原有矢量描边 —— 宁可少一种细分,
+ * 也不拿"造型像但语义不对"的图标硬配(比如用齿轮代表可执行文件)。
+ * 图片/视频/文档用第二批线性位图(hs_ico_photo / hs_ico_video / hs_ico_doc_list)。 */
+void hs_file_type_icon(int x, int y, int size, uint32_t color, int kind)
+{
+    switch (kind) {
+    case 1: hs_icon_bmp(x, y, size, color, hs_ico_photo);    return;
+    case 2: hs_icon_bmp(x, y, size, color, hs_ico_video);    return;
+    case 4: hs_icon_bmp(x, y, size, color, hs_ico_doc_list); return;
+    case 0: hs_icon_folder(x, y, size, color); return;
+    case 3: hs_icon_media(x, y, size, color);  return;
+    default: hs_icon_file(x, y, size, color);  return;
+    }
+}
+
 static void hs_icon_settings(int x, int y, int size, uint32_t color)
 {
     int cx = x + size / 2, cy = y + size / 2;

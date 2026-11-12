@@ -1664,3 +1664,30 @@ resolution 行数 = 1        （没有重复追加，其它键顺序与内容不
 备用素材（chat/star/qr/camera/keyboard/card 等），不是"导入失败"。
 实际已接入的：顶栏 5 个（64×64 套）、Apps 网格 12 个（其中 home_v2/doc_list/grid_all/sliders
 来自第二批）、通知卡图标、Files 类型图标（仍为矢量 `hs_icon_folder/doc/media/file`）。
+
+## 1.67 Files 文件类型图标接入线性套（4 类 → 6 类）
+
+**现状**：Files 只有 4 种图标（目录 / 文档 / 媒体 / 未知），都是矢量描边；
+且类型判定按"末 4 字符"取扩展名 —— 对 `.c` / `.h` / `.md` 这类 2~3 字符扩展名
+会把文件名尾巴一起比，**永远不命中**，所以源码文件一直显示成"未知"。
+
+**改动**：
+
+- 新增 `hs_file_type_icon(x,y,size,color,kind)`（`hpdesk.c`）作为单色图标统一入口：
+  `1=图片 → hs_ico_photo`、`2=视频 → hs_ico_video`、`4=文档 → hs_ico_doc_list`（均为第二批线性位图）；
+  `0=目录` / `3=音频` / `5=其它` 回落到原有矢量 `hs_icon_folder / hs_icon_media / hs_icon_file`。
+- 新增 `f_kind(item)`（`hs_apps.c`）：按**最后一个点**定位扩展名，6 类判定；
+  grid 与 list 两个视图共用，不再各写一套。
+- 刻意**不做**的映射：不用 `gear` 代表可执行文件、不用 `card` 代表压缩包 ——
+  造型像但语义不对，比"少一类"更容易误导。
+
+**验证**（1920×1080 @150%，根目录含临时构造的 png/mp4/pdf/txt/mp3/conf/bin）：
+
+- `shot.png` / `wallpaper.png` → 图片图标（山与日）
+- `clip.mp4` → 视频图标
+- `manual.pdf` / `readme.txt` → 文档图标
+- `song.mp3` → 音频（矢量媒体）
+- `account.conf` / `plain.bin` → 通用文件
+- `fonts/` / `usr/` / `lost+found/` → 目录
+
+14px 行内尺寸下图标仍可辨；`f_row_h` 与命中测试未动，列表行数与点击位置不受影响。
