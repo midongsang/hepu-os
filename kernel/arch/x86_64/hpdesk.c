@@ -2574,6 +2574,16 @@ static void hs_desktop_clock_render(void)
     int clock_x = hs_sx(g_shell.ui.clock_x);
     int clock_y = hs_sy(g_shell.ui.clock_y);
 
+    /* 时钟区域不得撞进天气卡: clock_x 是 1024 基准逻辑值, 200% 下放大成 1520,
+     * 而天气卡左缘在 1488 —— 两者重叠, 日期文本被卡片盖住只露出尾巴 "…ay"。
+     * 这里把时钟整体钳在"天气卡左缘减去时钟区域宽"以内。 */
+    {
+        int wx = g_shell.screen_width - hs_sx(g_shell.ui.weather_margin_right);
+        int max_x = wx - hs_sx(380);
+        if (clock_x > max_x) clock_x = max_x;
+        if (clock_x < hs_sx(20)) clock_x = hs_sx(20);
+    }
+
     uint8_t h = rtc64_get_hours();
     uint8_t m = rtc64_get_minutes();
     static char time[16];
@@ -2584,9 +2594,20 @@ static void hs_desktop_clock_render(void)
                        clock_x, clock_y, time, g_shell.colors.accent, hs_s(g_shell.ui.clock_font_size));
 
     static const char date[] = "October 15, Thursday";
-    font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                       clock_x + hs_sx(10), clock_y + hs_sy(85), (char*)date,
-                       g_shell.colors.panel_fg, hs_s(g_shell.ui.date_font_size));
+    /* 日期不得越过天气卡左缘: 200% 下 20 字符按 date_font_size 直接画会溢出卡片,
+     * 截图表现为卡片右侧外面露出半截 "...ay"。按可用宽反推字号上限。 */
+    {
+        int date_x = clock_x + hs_sx(10);
+        int avail = clock_x + hs_sx(350) - date_x;
+        int len = 0; while (date[len]) len++;
+        int ds = hs_s(g_shell.ui.date_font_size);
+        int need = (int)(len * 0.55f * ds);
+        if (avail > 0 && need > avail) ds = (int)(avail / (len * 0.55f));
+        if (ds < hs_s(10)) ds = hs_s(10);
+        font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                           date_x, clock_y + hs_sy(85), (char*)date,
+                           g_shell.colors.panel_fg, ds);
+    }
 }
 
 /* 天气小部件 */
@@ -4144,6 +4165,29 @@ void hpdesk_render(void)
 {
     /* V0.13.11: 双缓冲原子帧 — 全部绘制到后台缓冲, 帧末一次性提交(消除撕裂/半帧) */
     g_frame_no++;
+
+    /* 几何探针: 只打印第一帧。布局问题一直靠看截图估算, 而截图与配置值经常对不上,
+     * 这里把每个面板的真实几何 + 当前缩放吐到串口, 后续改造全部以这些数字为准。 */
+    if (g_frame_no == 1) {
+        int lw = 1024 * 100 / (g_ui_scale_pct > 0 ? g_ui_scale_pct : 100);
+        int lh = 768 * 100 / (g_ui_scale_pct > 0 ? g_ui_scale_pct : 100);
+        int sxs = hs_sx(g_shell.ui.sidebar_x), sys_ = hs_sy(g_shell.ui.sidebar_y);
+        int sws = hs_sx(g_shell.ui.sidebar_width), shs = hs_sy(g_shell.ui.sidebar_height);
+        int ccx = 0, ccy = 0, ccw = 0, cch = 0;
+        cc_geometry(&ccx, &ccy, &ccw, &cch);
+        vga_printf("[GEOM] pct=%d screen=%dx%d logical=%dx%d | sidebar x=%d y=%d w=%d h=%d | "
+                   "cc x=%d y=%d w=%d h=%d | gap_x=%d\n",
+                   g_ui_scale_pct, g_shell.screen_width, g_shell.screen_height, lw, lh,
+                   sxs, sys_, sws, shs, ccx, ccy, ccw, cch, ccx - (sxs + sws));
+        {
+            int cap_w = g_shell.screen_width * 2 / 5;
+            int cap_h = g_shell.screen_height - sys_ - hs_sy(16);
+            vga_printf("[GEOM] sidebar clamped: w=%d h=%d right=%d bottom=%d (caps %d/%d)\n",
+                       sws > cap_w ? cap_w : sws, shs > cap_h ? cap_h : shs,
+                       sxs + (sws > cap_w ? cap_w : sws), sys_ + (shs > cap_h ? cap_h : shs),
+                       cap_w, cap_h);
+        }
+    }
     /* P0 演示: 启动第 30 帧起展开灵动岛, 第 120 帧收回 (展示 ease-out 缓动) */
     if (g_welcome_frame >= 0) {
         g_welcome_frame++;
