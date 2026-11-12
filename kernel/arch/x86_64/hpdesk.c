@@ -4570,10 +4570,9 @@ static void hs_cursor_init_once(void)
     want = want * (g_ui_scale_pct > 0 ? g_ui_scale_pct : 100) / 100;
     extern int cursor64_load_kind(int kind, const char *path, int want);
     int rc  = cursor64_load_kind(CUR_ARROW, "/usr/share/cursors/default.xcur", want);
-    /* 手型优先: 素材包的 link 是一支竖直箭头(不是手型), 语义上"可点击"不够直观,
-     * 故自备 hand.xcur 作为 CUR_LINK; 缺失时回退包内 link */
-    int rc1 = cursor64_load_kind(CUR_LINK,  "/usr/share/cursors/hand.xcur",    want);
-    if (rc1 != 0) rc1 = cursor64_load_kind(CUR_LINK, "/usr/share/cursors/link.xcur", want);
+    /* 悬停形态沿用素材包自带的 link(一支竖直箭头) —— 自备的 hand.xcur 试过,
+     * 按用户意见回退, 保持与其余 17 个素材同一套视觉 */
+    int rc1 = cursor64_load_kind(CUR_LINK,  "/usr/share/cursors/link.xcur",    want);
     int rc2 = cursor64_load_kind(CUR_TEXT,  "/usr/share/cursors/text.xcur",    want);
     int rc3 = cursor64_load_kind(CUR_MOVE,  "/usr/share/cursors/move.xcur",    want);
 
