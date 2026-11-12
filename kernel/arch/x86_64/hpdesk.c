@@ -1376,6 +1376,32 @@ hs_window_t *hs_window_create(hs_window_type_t type, const char *title,
     }
     win->title[i] = 0;
 
+    /* 窗口几何统一入口(单点钳制 + 可观测)。
+     * 各 app 传的是物理像素基准值(520x420 等), 内容渲染也按同一基准画,
+     * 所以这里不再二次缩放 —— 只做钳制, 并打印实际尺寸, 避免再出现
+     * "窗口尺寸改了但内容不缩放, 看起来像没画满"那类问题。
+     * 要真正按 DPI 放大窗口, 必须连同该窗口的内容渲染一起改(见 Settings 的做法)。 */
+    {
+        int max_w = g_shell.screen_width - hs_sx(40);
+        int max_h = g_shell.screen_height - hs_sy(80);
+        if (max_w > 0 && w > max_w) w = max_w;
+        if (max_h > 0 && h > max_h) h = max_h;
+        if (w < hs_sx(200)) w = hs_sx(200);
+        if (h < hs_sy(120)) h = hs_sy(120);
+    }
+    {
+        char nb[16];
+        vga_puts("[WM] create ");
+        vga_puts(title ? title : "?");
+        vga_puts(" ");
+        hs_itoa(w, nb);
+        vga_puts(nb);
+        vga_puts("x");
+        hs_itoa(h, nb);
+        vga_puts(nb);
+        vga_puts("\n");
+    }
+
     /* V0.13.13: 自动级联定位(传 -1 时) */
     hs_window_auto_pos(&x, &y, w, h);
     win->x = x;
@@ -4304,8 +4330,12 @@ void hpdesk_render(void)
     /* 几何探针: 只打印第一帧。布局问题一直靠看截图估算, 而截图与配置值经常对不上,
      * 这里把每个面板的真实几何 + 当前缩放吐到串口, 后续改造全部以这些数字为准。 */
     if (g_frame_no == 1) {
-        int lw = 1024 * 100 / (g_ui_scale_pct > 0 ? g_ui_scale_pct : 100);
-        int lh = 768 * 100 / (g_ui_scale_pct > 0 ? g_ui_scale_pct : 100);
+        /* 真实逻辑画布 = 物理尺寸 ÷ 缩放因子(Windows DIP 语义)。
+         * 旧实现按 "1024*100/pct" 算, 把 1024 基准当成物理宽, 打印出来是 819x614,
+         * 而 1920x1080@125% 的实际逻辑画布是 1536x864 —— 这个误导曾导致
+         * "逻辑宽装不下双栏"的错误结论(见 §1.51)。 */
+        int lw = g_shell.screen_width * 100 / (g_ui_scale_pct > 0 ? g_ui_scale_pct : 100);
+        int lh = g_shell.screen_height * 100 / (g_ui_scale_pct > 0 ? g_ui_scale_pct : 100);
         int sxs = hs_sx(g_shell.ui.sidebar_x), sys_ = hs_sy(g_shell.ui.sidebar_y);
         int sws = hs_sx(g_shell.ui.sidebar_width), shs = hs_sy(g_shell.ui.sidebar_height);
         int ccx = 0, ccy = 0, ccw = 0, cch = 0;

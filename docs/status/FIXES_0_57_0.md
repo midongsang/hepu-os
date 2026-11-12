@@ -1217,6 +1217,43 @@ static uint32_t hs_dim(uint32_t c, int k);   /* 颜色按比例压暗, 保留 k%
 **验证**（1920×1080 @125%）：QC 右下出现明显暗边，与天气卡/壁纸分层清楚，
 被压住的组件自然退到后面。
 
+### 1.54 窗口几何统一入口 + 修正 [GEOM] logical 误导性打印
+
+**一、hs_window_create 成为窗口几何的唯一入口**
+
+14 个创建点（Settings 2 处、hs_apps.c 6 处、hs_systools64.c 3 处、其余在 hpdesk.c）
+原本各传各的裸像素。现在统一在 create 里：
+
+```c
+int max_w = screen_width  - hs_sx(40);
+int max_h = screen_height - hs_sy(80);
+if (max_w > 0 && w > max_w) w = max_w;
+if (max_h > 0 && h > max_h) h = max_h;
+if (w < hs_sx(200)) w = hs_sx(200);
+if (h < hs_sy(120)) h = hs_sy(120);
+/* 并打印 [WM] create <title> WxH */
+```
+
+**为什么不在这里顺手 w = hs_sx(w)**：各 app 的内容渲染仍是按基准像素画的
+（Terminal/Files/Task Manager/Editor/Image/Viewer/Device Manager/Disk Manager/Log Viewer
+都还没接缩放）。只放大窗口不放大内容，会重现 §1.5 那次的"窗口变大、内容只占左上角、
+大片留白"。Settings 之所以能放大，是因为它的**内容渲染和命中测试一起改了**（§1.52）。
+
+所以本轮只做三件事：单点钳制、单点可观测、语义写进注释。
+
+**二、[GEOM] 的 logical 一直是错的**
+
+```c
+/* 旧 */ int lw = 1024 * 100 / pct;   /* 1920x1080@125% 打印 819x614 */
+/* 新 */ int lw = screen_width  * 100 / pct;   /* 1536x864 */
+```
+
+1024 是设计基准，不是物理宽。这个打印正是 §1.43/§1.51 两次错误结论的数字来源，
+一直没被纠正，现在顺手修掉。
+
+**验证**：`[WM] create Settings 575x537`、
+`[GEOM] pct=125 screen=1920x1080 logical=1536x864`，桌面无残留空框。
+
 ## 四、回归基线
 
 - 全量干净重建：**0 error / 90 warning**（`-Wunused-parameter` 基线不变；接入 Lua 后仍保持）
