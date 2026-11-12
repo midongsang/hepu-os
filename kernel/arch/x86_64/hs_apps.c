@@ -687,6 +687,14 @@ static int f_fs_menu __attribute__((unused)) = 0;   /* 0=桌面菜单, 1=文件�
 static int f_dclick_tick = 0;         /* 双击检测: 上次点击 tick */
 static char f_status2[FS_PROMPT_MAX + 1] = "";
 
+/* P3: 多标签 —— 每个标签记住自己的目录与视图状态, 切换时互相还原。
+ * 标签栏画在标题栏里(不占内容区高度), 免得动已经耦合紧密的列表几何。 */
+#define FS_TAB_MAX 4
+static char f_tab_path[FS_TAB_MAX][FS_PATH_MAX];
+static int  f_tab_scroll[FS_TAB_MAX], f_tab_sel[FS_TAB_MAX];
+static int  f_tab_view[FS_TAB_MAX], f_tab_skey[FS_TAB_MAX], f_tab_sdesc[FS_TAB_MAX];
+static int  f_tab_count, f_tab_cur;
+
 /* P3: 拖拽移动状态 —— 按住列表/网格某一项, 拖到目录项上松手 = 移进去。
  *   0=空闲 1=按住但未越过阈值 2=拖拽中(只有此时才画拖影、才改光标形态) */
 static int f_drag_state;
@@ -1273,6 +1281,127 @@ int hs_files_drag_end(int x, int y)
     return 1;
 }
 
+
+/* ---- 多标签 ---- */
+static void f_tab_label(int i, char *out, int cap)
+{
+    const char *p = f_tab_path[i];
+    if (!p[0] || (p[0] == '/' && p[1] == 0)) { hs_strcpyn(out, "Root", cap); return; }
+    const char *last = p;
+    for (const char *q = p; *q; q++) if (*q == '/') last = q + 1;
+    hs_strcpyn(out, last[0] ? last : "Root", cap);
+}
+
+static void f_tab_store(void)
+{
+    if (f_tab_cur < 0 || f_tab_cur >= f_tab_count) return;
+    hs_strcpyn(f_tab_path[f_tab_cur], f_path, FS_PATH_MAX);
+    f_tab_scroll[f_tab_cur] = f_scroll;
+    f_tab_sel[f_tab_cur]    = f_sel;
+    f_tab_view[f_tab_cur]   = f_view_mode;
+    f_tab_skey[f_tab_cur]   = f_sort_key;
+    f_tab_sdesc[f_tab_cur]  = f_sort_desc;
+}
+
+static void f_tab_restore(void)
+{
+    hs_strcpyn(f_path, f_tab_path[f_tab_cur], FS_PATH_MAX);
+    f_view_mode = f_tab_view[f_tab_cur];
+    f_sort_key  = f_tab_skey[f_tab_cur];
+    f_sort_desc = f_tab_sdesc[f_tab_cur];
+    f_refresh();
+    /* refresh 之后条目数可能变了, 把游标钳回有效范围 */
+    if (f_sel >= f_count) f_sel = -1;
+    int maxs = f_match_count - f_visible_rows();
+    if (maxs < 0) maxs = 0;
+    f_scroll = f_tab_scroll[f_tab_cur];
+    if (f_scroll > maxs) f_scroll = maxs;
+    if (f_scroll < 0) f_scroll = 0;
+    hpdesk_mark_dirty();
+}
+
+static void f_tab_switch(int i)
+{
+    if (i < 0 || i >= f_tab_count || i == f_tab_cur) return;
+    f_tab_store();
+    f_tab_cur = i;
+    f_tab_restore();
+}
+
+static void f_tab_new(void)
+{
+    f_tab_store();
+    if (f_tab_count >= FS_TAB_MAX) {
+        hs_strcpyn(f_status2, "Max 4 tabs", FS_PROMPT_MAX);
+        return;
+    }
+    int i = f_tab_count++;
+    hs_strcpyn(f_tab_path[i], "/", FS_PATH_MAX);
+    f_tab_scroll[i] = 0; f_tab_sel[i] = -1;
+    f_tab_view[i] = f_view_mode;
+    f_tab_skey[i] = f_sort_key; f_tab_sdesc[i] = f_sort_desc;
+    f_tab_cur = i;
+    f_tab_restore();
+}
+
+static void f_tab_close(void)
+{
+    if (f_tab_count <= 1) { hs_strcpyn(f_status2, "Last tab", FS_PROMPT_MAX); return; }
+    for (int k = f_tab_cur; k + 1 < f_tab_count; k++) {
+        hs_strcpyn(f_tab_path[k], f_tab_path[k + 1], FS_PATH_MAX);
+        f_tab_scroll[k] = f_tab_scroll[k + 1];
+        f_tab_sel[k]    = f_tab_sel[k + 1];
+        f_tab_view[k]   = f_tab_view[k + 1];
+        f_tab_skey[k]   = f_tab_skey[k + 1];
+        f_tab_sdesc[k]  = f_tab_sdesc[k + 1];
+    }
+    f_tab_count--;
+    if (f_tab_cur >= f_tab_count) f_tab_cur = f_tab_count - 1;
+    f_tab_restore();
+}
+
+/* 标签栏几何: 标题栏内, 从 "Files" 字样右侧起, 与绘制共用同一公式 */
+static int f_tab_x0(void) { return f_win->x + FS(56); }
+static int f_tab_xmax(void) { return f_win->x + f_win->width - FS(80); }
+static int f_tab_top(void) { return f_win->y + FS(6); }
+static int f_tab_w(int i)
+{
+    char lb[20];
+    f_tab_label(i, lb, sizeof lb);
+    return FS(6) * hs_strlen(lb) + FS(14);
+}
+
+/* 标题栏标签点击: 返回 1 = 已消费(单击切换 / 双击关闭 / 点 "+" 新建) */
+int hs_files_tab_click(int x, int y)
+{
+    if (!f_win || !f_win->visible) return 0;
+    if (f_tab_count < 1) return 0;
+    int ty = f_tab_top(), th = FS(14);
+    if (y < ty || y > ty + th) return 0;
+    int tx = f_tab_x0(), xmax = f_tab_xmax();
+    for (int i = 0; i < f_tab_count; i++) {
+        int tw = f_tab_w(i);
+        if (tx + tw > xmax) break;
+        if (x >= tx && x <= tx + tw) {
+            extern uint64_t pit64_get_ms(void);
+            static int lasti = -1;
+            static uint64_t lastms = 0;
+            uint64_t now = pit64_get_ms();
+            if (lasti == i && now - lastms < 400) {
+                lasti = -1;
+                f_tab_close();
+                return 1;
+            }
+            lasti = i; lastms = now;
+            f_tab_switch(i);
+            return 1;
+        }
+        tx += tw + FS(4);
+    }
+    if (tx + FS(14) <= xmax && x >= tx && x <= tx + FS(14)) { f_tab_new(); return 1; }
+    return 0;
+}
+
 static void f_render(hs_window_t *w)
 {
     /* FS P2: 有分片任务在跑就推进一步, 并保持 dirty 让下一帧继续 —— 这样
@@ -1322,6 +1451,31 @@ static void f_render(hs_window_t *w)
             lx += lw + FS(4);
         }
     }
+    /* 多标签栏: 画在标题栏里(坐标在内容区之上, 不影响列表几何) */
+    {
+        int ty = f_tab_top(), th = FS(14);
+        int tx = f_tab_x0(), xmax = f_tab_xmax();
+        for (int i = 0; i < f_tab_count; i++) {
+            char lb[20];
+            f_tab_label(i, lb, sizeof lb);
+            int tw = f_tab_w(i);
+            if (tx + tw > xmax) break;
+            int on = (i == f_tab_cur);
+            gfx64_fill_rounded_rect(tx, ty, tw, th, FS(3),
+                                    on ? g_shell.colors.accent : g_shell.colors.panel_bg);
+            if (!on) gfx64_draw_rounded_rect(tx, ty, tw, th, FS(3), g_shell.colors.border);
+            font64_draw_string(fb, W, H, tx + FS(7), ty + FS(2), lb,
+                               on ? 0x211F26 : g_shell.colors.panel_fg, FS(9));
+            tx += tw + FS(4);
+        }
+        if (tx + FS(14) <= xmax) {
+            gfx64_fill_rounded_rect(tx, ty, FS(14), th, FS(3), g_shell.colors.panel_bg);
+            gfx64_draw_rounded_rect(tx, ty, FS(14), th, FS(3), g_shell.colors.border);
+            font64_draw_string(fb, W, H, tx + FS(4), ty + FS(2), "+",
+                               g_shell.colors.accent, FS(10));
+        }
+    }
+
     /* 列表列头: 点击切换排序(名称/大小/类型) */
     int hdr_y = cy + FS(44);
     int list_y = hdr_y + FS(16);
@@ -2610,6 +2764,10 @@ static void f_delete_commit(void)
 
 void hs_files_key(int key)
 {
+    /* 多标签: F1 新建 / F10 关闭 (F2~F9 已各有用途) */
+    if (key == 0x3B) { f_tab_new(); return; }      /* F1 */
+    if (key == 0x44) { f_tab_close(); return; }    /* F10 */
+
     /* 属性浮层: 任意键关闭 */
     if (f_props) { f_props = 0; return; }
 
@@ -3049,6 +3207,12 @@ hs_window_t *hs_files_create(void)
     if (f_win) {
         f_win->render = f_render;
         strcpy(f_path, "/");
+        /* 第一个标签: 标明自己并占住这个位置 */
+        f_tab_count = 1;
+        f_tab_cur = 0;
+        hs_strcpyn(f_tab_path[0], "/", FS_PATH_MAX);
+        f_tab_scroll[0] = 0; f_tab_sel[0] = -1;
+        f_tab_view[0] = 0;  f_tab_skey[0] = 0; f_tab_sdesc[0] = 0;
         f_refresh();
     }
     return f_win;
@@ -3394,5 +3558,6 @@ void hs_apps_handle_wheel(int delta)
         if (t_scroll > 0) t_scroll--;
     }
 }
+
 
 

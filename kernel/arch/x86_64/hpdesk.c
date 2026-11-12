@@ -4326,6 +4326,11 @@ void hpdesk_mouse_down(int x, int y)
         /* 命中区必须与绘制用同一套缩放, 否则放大后按钮画得大、点得小 */
         if (x >= w->x && x <= w->x + w->width &&
             y >= w->y && y <= w->y + hs_sy(24)) {
+            /* Files 多标签: 标签就画在标题栏里, 命中优先于"拖窗口/双击最大化" */
+            if (strcmp(w->title, "Files") == 0) {
+                extern int hs_files_tab_click(int x, int y);
+                if (hs_files_tab_click(x, y)) return;
+            }
             /* V0.13.16: 标题栏三按钮: 最小化/最大化/关闭 (无背景) */
             int bw24 = hs_sx(24);
             int min_x = w->x + w->width - hs_sx(68);
