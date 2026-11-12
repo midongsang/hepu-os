@@ -1319,18 +1319,28 @@ void hs_window_manager_init(void)
 /* V0.13.13: 自动级联定位 — x/y 传 -1 时在右侧区域级联排布, 避开左侧系统面板 */
 static void hs_window_auto_pos(int *x, int *y, int w, int h)
 {
+    /* 窗口几何统一到真实屏尺寸(第 1/4 步: 只动 auto_pos)。
+     * 旧实现硬编码 1024/768: 窗口宽 1270 时 nx = 1024-1270 = -246, 窗口被甩出屏外,
+     * 渲染成一整块压在桌面上的色块。任何 >1024 的屏、任何大体量窗口都会踩这个坑。 */
+    int scr_w = g_shell.screen_width > 0 ? g_shell.screen_width : 1024;
+    int scr_h = g_shell.screen_height > 0 ? g_shell.screen_height : 768;
     if (*x != -1 && *y != -1) {
-        /* 已显式指定坐标: 仅强制不压侧边栏(除非窗口确实超宽) */
-        if (*x < 300 && *x + w <= 1024) *x = 300;
-        if (*y < 40) *y = 40;
+        /* 已显式指定坐标: 只做屏内兜底, 不再套 1024 假设 */
+        if (*x <= 0) *x = 1;
+        if (*x + w > scr_w) *x = scr_w - w;
+        if (*y <= 0) *y = 1;
+        if (*y + h > scr_h) *y = scr_h - h;
         return;
     }
+    /* 默认位置: 居中偏上。左右面板在高缩放下会占掉大部分横向空间, 居中是最不
+     * 偏向任何一边的选择(与面板的重叠面积两侧均摊), 级联时再轻微错开。 */
     int idx = g_wm.cascade_index;
-    int nx = 300 + (idx % 6) * 30;
-    int ny = 100 + (idx % 6) * 26;
-    if (nx + w > 1024) nx = 1024 - w;
-    if (ny + h > 768) ny = 768 - h;
-    if (nx < 300) nx = 300;
+    int nx = (scr_w - w) / 2 + (idx % 6) * hs_sx(24);
+    int ny = scr_h / 6 + (idx % 6) * hs_sy(20);
+    if (nx + w > scr_w) nx = scr_w - w;
+    if (nx < 0) nx = 0;
+    if (ny + h > scr_h) ny = scr_h - h;
+    if (ny < 0) ny = 0;
     *x = nx;
     *y = ny;
     g_wm.cascade_index = (idx + 1) % 6;
