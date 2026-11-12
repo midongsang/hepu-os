@@ -1965,9 +1965,13 @@ static void m_draw_curve(void *fb, int W, int H, int x, int y, int w, int h,
 static void m_render(hs_window_t *w)
 {
     void *fb = gfx64_get_framebuffer();
+    /* 内容按窗口自身尺寸缩放(基准 520x380)。列偏移 c_name/c_cpu/c_mem/c_state
+     * 也走同一个比例, 这样放大后表头与数据行仍然共用一组列位置 —— 比例字体下
+     * 靠空格拼字符串对齐必然随位数漂移, 只有共用列偏移才稳。 */
+#define MC(v) ((v) * w->width / 520)
     int W = g_shell.screen_width, H = g_shell.screen_height;
-    int cx = w->x + 6, cy = w->y + 26;
-    int cw = w->width - 12;
+    int cx = w->x + MC(6), cy = w->y + MC(26);
+    int cw = w->width - MC(12);
 
     m_tick++;
     /* V0.56.2: 标题条已由窗口管理器绘制, 这里不再重复画一遍 "Task Manager" */
@@ -1989,8 +1993,8 @@ static void m_render(hs_window_t *w)
     hs_itoa(pcnt, tmp); strcpy(buf + hs_strlen(buf), tmp);
     strcpy(buf + hs_strlen(buf), "   DRV: ");
     hs_itoa(dcount, tmp); strcpy(buf + hs_strlen(buf), tmp);
-    font64_draw_string(fb, W, H, cx, cy, buf, g_shell.colors.window_fg, 12);
-    cy += 18;
+    font64_draw_string(fb, W, H, cx, cy, buf, g_shell.colors.window_fg, MC(12));
+    cy += MC(18);
 
     /* V0.56.2: 整机占用摘要(用户看这里, 不必读曲线) */
     {
@@ -2011,8 +2015,8 @@ static void m_render(hs_window_t *w)
         hs_itoa((int)(pit64_get_ms() / 1000), tmp);
         strcpy(sbuf + hs_strlen(sbuf), tmp);
         strcpy(sbuf + hs_strlen(sbuf), "s");
-        font64_draw_string(fb, W, H, cx, cy, sbuf, g_shell.colors.accent, 12);
-        cy += 18;
+        font64_draw_string(fb, W, H, cx, cy, sbuf, g_shell.colors.accent, MC(12));
+        cy += MC(18);
     }
 
     /* 实时曲线: CPU + 网络 */
@@ -2023,18 +2027,18 @@ static void m_render(hs_window_t *w)
     m_hist_push(m_rx_hist, (int)(rxr / 1024));   /* KB/s */
     m_hist_push(m_tx_hist, (int)(txr / 1024));
 
-    int gh = 38, gw = cw - 80;
-    m_draw_curve(fb, W, H, cx, cy, gw, gh, m_cpu_hist, 0x52C41A, 100);
-    font64_draw_string(fb, W, H, cx + gw + 6, cy + 6, "CPU%", 0x52C41A, 10);
-    m_draw_curve(fb, W, H, cx, cy + gh + 4, gw, gh, m_rx_hist, 0x4A9EEC, 256);
-    font64_draw_string(fb, W, H, cx + gw + 6, cy + gh + 10, "RX", 0x4A9EEC, 10);
-    m_draw_curve(fb, W, H, cx, cy + 2 * (gh + 4), gw, gh, m_tx_hist, 0xE0A44E, 256);
-    font64_draw_string(fb, W, H, cx + gw + 6, cy + 2 * (gh + 4) + 10, "TX", 0xE0A44E, 10);
-    cy += 3 * gh + 12;
+    int gh = MC(38), gw = cw - MC(80);
+    m_draw_curve(fb, W, H, cx, cy, gw, gh, m_cpu_hist, 0x52C41A, MC(100));
+    font64_draw_string(fb, W, H, cx + gw + MC(6), cy + MC(6), "CPU%", 0x52C41A, MC(10));
+    m_draw_curve(fb, W, H, cx, cy + gh + MC(4), gw, gh, m_rx_hist, 0x4A9EEC, MC(256));
+    font64_draw_string(fb, W, H, cx + gw + MC(6), cy + gh + MC(10), "RX", 0x4A9EEC, MC(10));
+    m_draw_curve(fb, W, H, cx, cy + MC(2) * (gh + MC(4)), gw, gh, m_tx_hist, 0xE0A44E, MC(256));
+    font64_draw_string(fb, W, H, cx + gw + MC(6), cy + MC(2) * (gh + MC(4)) + MC(10), "TX", 0xE0A44E, MC(10));
+    cy += MC(3) * gh + MC(12);
 
     /* 分隔线 */
     gfx64_fill_rect(cx, cy, cw, 1, g_shell.colors.border);
-    cy += 6;
+    cy += MC(6);
 
     /* 表头 (V0.13.46: 加PID与状态列)
      * V0.57.1: 改成分列绘制。旧实现把表头和整行都拼成一个含空格的字符串再一次性画,
@@ -2043,19 +2047,19 @@ static void m_render(hs_window_t *w)
     /* 列距按内容宽度定, 不用百分比: 520 宽的窗口按百分比摊开会让后面两列顶到右边界,
      * 窗口被别的面板遮住时直接看不见。NAME 最长 12 字符(~84px), CPU 最长 "100%"(~28px)。 */
     int c_pid = cx;
-    int c_name = cx + 38;
-    int c_cpu = cx + 150;
-    int c_mem = cx + 202;
-    int c_state = cx + 250;
+    int c_name = cx + MC(38);
+    int c_cpu = cx + MC(150);
+    int c_mem = cx + MC(202);
+    int c_state = cx + MC(250);
     {
         uint32_t hc = g_shell.colors.text_secondary;
-        font64_draw_string(fb, W, H, c_pid, cy, "PID", hc, 10);
-        font64_draw_string(fb, W, H, c_name, cy, "NAME", hc, 10);
-        font64_draw_string(fb, W, H, c_cpu, cy, "CPU", hc, 10);
-        font64_draw_string(fb, W, H, c_mem, cy, "MEM", hc, 10);
-        font64_draw_string(fb, W, H, c_state, cy, "STATE", hc, 10);
+        font64_draw_string(fb, W, H, c_pid, cy, "PID", hc, MC(10));
+        font64_draw_string(fb, W, H, c_name, cy, "NAME", hc, MC(10));
+        font64_draw_string(fb, W, H, c_cpu, cy, "CPU", hc, MC(10));
+        font64_draw_string(fb, W, H, c_mem, cy, "MEM", hc, MC(10));
+        font64_draw_string(fb, W, H, c_state, cy, "STATE", hc, MC(10));
     }
-    cy += 14;
+    cy += MC(14);
 
     /* V0.13.39: 真实用户进程 + 内核进程, CPU 降序 */
     extern int user_process_list(void *list, int max);
@@ -2083,20 +2087,20 @@ static void m_render(hs_window_t *w)
             if (procs[i].pid >= 100 && procs[i].state == 0) col = 0x52C41A;
 
             hs_itoa(procs[i].pid, tmp2);
-            font64_draw_string(fb, W, H, c_pid, cy, tmp2, col, 11);
+            font64_draw_string(fb, W, H, c_pid, cy, tmp2, col, MC(11));
 
             char nmbuf[16];
             int nl = 0;
             while (procs[i].name[nl] && nl < 12) { nmbuf[nl] = procs[i].name[nl]; nl++; }
             nmbuf[nl] = 0;
-            font64_draw_string(fb, W, H, c_name, cy, nmbuf, col, 11);
+            font64_draw_string(fb, W, H, c_name, cy, nmbuf, col, MC(11));
 
             hs_itoa(procs[i].cpu_usage, tmp2);
             strcpy(tmp2 + hs_strlen(tmp2), "%");
-            font64_draw_string(fb, W, H, c_cpu, cy, tmp2, col, 11);
+            font64_draw_string(fb, W, H, c_cpu, cy, tmp2, col, MC(11));
 
             hs_itoa(procs[i].mem_usage, tmp2);
-            font64_draw_string(fb, W, H, c_mem, cy, tmp2, col, 11);
+            font64_draw_string(fb, W, H, c_mem, cy, tmp2, col, MC(11));
 
             /* V0.57.1: 内核线程标 "kthr" 而不是混在 "sys" 里 —— idle/kbeat 这类线程
              * 有的在轮转、有的是登记挂起(见 process64_create_suspended), 统一写 sys 会
@@ -2105,9 +2109,9 @@ static void m_render(hs_window_t *w)
             if (procs[i].pid == 0) st = "sys";
             else if (procs[i].pid >= 100 && procs[i].state == 0) st = "RUN";
             else if (procs[i].pid >= 100) st = "idle";
-            font64_draw_string(fb, W, H, c_state, cy, st, col, 11);
+            font64_draw_string(fb, W, H, c_state, cy, st, col, MC(11));
 
-            cy += 15;
+            cy += MC(15);
         }
     }
 
@@ -2120,13 +2124,13 @@ static void m_render(hs_window_t *w)
         static const char *svc_state[] = {"UNLOAD", "LOADED", "PROBED", "ACTIVE", "SUSP", "ERROR"};
         drv_desc_t *ds[DRV_MAX_COUNT];
         int dn = drv_get_all(ds, DRV_MAX_COUNT);
-        if (dn > 0 && cy + 20 < w->y + w->height - 22) {
-            cy += 4;
+        if (dn > 0 && cy + MC(20) < w->y + w->height - MC(22)) {
+            cy += MC(4);
             gfx64_fill_rect(cx, cy, cw, 1, g_shell.colors.border);
-            cy += 6;
+            cy += MC(6);
             font64_draw_string(fb, W, H, cx, cy, "KERNEL SERVICES (drivers loaded)",
-                               g_shell.colors.text_secondary, 10);
-            cy += 14;
+                               g_shell.colors.text_secondary, MC(10));
+            cy += MC(14);
             for (int i = 0; i < dn && cy < w->y + w->height - 22; i++) {
                 char sline[96];
                 strcpy(sline, ds[i]->name ? ds[i]->name : "?");
@@ -2134,26 +2138,28 @@ static void m_render(hs_window_t *w)
                 int stt = (int)ds[i]->state;
                 strcpy(sline + hs_strlen(sline),
                        (stt >= 0 && stt < 6) ? svc_state[stt] : "?");
-                font64_draw_string(fb, W, H, cx, cy, sline, g_shell.colors.window_fg, 11);
-                cy += 14;
+                font64_draw_string(fb, W, H, cx, cy, sline, g_shell.colors.window_fg, MC(11));
+                cy += MC(14);
             }
         }
     }
 
     /* V0.13.46: 结束进程提示条 (V0.56.2: 固定贴窗口底部, 不再跟随列表溢出) */
-    cy = w->y + w->height - 16;
+    cy = w->y + w->height - MC(16);
     if (m_kill_mode) {
         char kbuf[48];
         strcpy(kbuf, "End PID: ");
         hs_itoa(m_kill_pid, tmp);
         strcpy(kbuf + hs_strlen(kbuf), tmp);
         strcpy(kbuf + hs_strlen(kbuf), " (Enter=end, Esc=cancel)");
-        font64_draw_string(fb, W, H, cx, cy, kbuf, 0xE0A44E, 10);
+        font64_draw_string(fb, W, H, cx, cy, kbuf, 0xE0A44E, MC(10));
     } else {
         font64_draw_string(fb, W, H, cx, cy, "Press K then PID + Enter to end a process",
-                           g_shell.colors.text_secondary, 10);
+                           g_shell.colors.text_secondary, MC(10));
     }
+#undef MC
 }
+
 
 /* ============================================================================
  * 对外接口
@@ -2192,7 +2198,8 @@ hs_window_t *hs_files_create(void)
 hs_window_t *hs_taskmgr_create(void)
 {
     if (m_win && m_win->visible) { m_win->focus = 1; return m_win; }
-    m_win = hs_window_create(HS_WINDOW_FLOATING, "Task Manager", -1, -1, 520, 380);
+    m_win = hs_window_create(HS_WINDOW_FLOATING, "Task Manager", -1, -1,
+                            hs_ui_sx(520), hs_ui_sy(380));
     if (m_win) m_win->render = m_render;
     return m_win;
 }
