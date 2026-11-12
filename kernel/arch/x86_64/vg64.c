@@ -168,14 +168,18 @@ static void vg_tessellate(void)
             pen_x = g_pts[pi]; pen_y = g_pts[pi + 1]; pi += 2;
             break;
         case VG_QUAD:
+            /* 深度 12 时若"平直"判据因 cross² 溢出而恒假, 每段会细分到 4096,
+             * 4 条边共 16k 段远超 VG_MAX_SEG(2048) 而被截断 -> 圆弧只剩一截、
+             * 形状不闭合 -> 整块不落像素(tab 选中态即此症状)。压到 6 层后
+             * 满细分也只有 64 段/曲线, 在 2048 内, 视觉上对 <=40px 圆角足够。 */
             vg_flat_quad(pen_x, pen_y, g_pts[pi], g_pts[pi + 1],
-                         g_pts[pi + 2], g_pts[pi + 3], 12);
+                         g_pts[pi + 2], g_pts[pi + 3], 6);
             pen_x = g_pts[pi + 2]; pen_y = g_pts[pi + 3]; pi += 4;
             break;
         case VG_CUBIC:
             vg_flat_cubic(pen_x, pen_y, g_pts[pi], g_pts[pi + 1],
                           g_pts[pi + 2], g_pts[pi + 3],
-                          g_pts[pi + 4], g_pts[pi + 5], 12);
+                          g_pts[pi + 4], g_pts[pi + 5], 6);
             pen_x = g_pts[pi + 4]; pen_y = g_pts[pi + 5]; pi += 6;
             break;
         case VG_CLOSE:
