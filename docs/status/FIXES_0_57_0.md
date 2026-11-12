@@ -1854,3 +1854,49 @@ tablet 设备直接报 `Input handler not found`）；本轮"点击菜单项"用
 3. 删除仍是同步 `delete_tree`（单文件删除很快，只有超大目录树才卡），留待 P3 统一
 4. 实际吞吐约 1 项/1.5s（QEMU 软件渲染 + ext2 每文件写盘），比同步模式的总耗时更长，
    换来的是全程可交互；真机上应明显更快
+
+---
+
+## §1.71 光标手型语义修正（素材包里没有手型）
+
+### 现象
+
+用户反馈"鼠标怎么回事"。截图放大后确认：光标在文件列表上是一支**竖直向上的大箭头**，
+而不是常见的可点击手型 —— 看起来像光标出了问题。
+
+### 排查：先把素材全部渲染出来看
+
+用 python 解析 `assets/cursors/` 下 17 个 `.xcur`（`Xcur` 头 → TOC → image chunk，
+像素是 little-endian `0xAARRGGBB`），拼成一张总览图逐个比对，结论明确：
+
+- `default` = 斜箭头（桌面正确）
+- `link` = **竖直箭头（带底座）**，不是手型 —— 这就是"鼠标不对劲"的全部原因
+- `text` = 竖线，`move` = 四向十字，其余 crosshair / help / pencil / person / progress /
+  wait / size-* / up-arrow / location / not-allowed / fleur 都不是手型
+
+也就是说链路本身是通的（`[CUR] want=1 active=1` 已实证切换生效），问题在**素材语义**：
+该主题把 `link` 画成了箭头。XMLCursor 惯例里 `link` 通常就是手型，这套素材是例外。
+
+### 修复：自备 hand.xcur
+
+- 用 python 程序生成 48×48 手型：白色填充 + 深蓝（`#0B1B2B`）描边，与包内箭头风格一致；
+  热点 `(13,1)`（食指尖），subtype=48 与包内名义尺寸对齐
+- 产出 `assets/cursors/hand.xcur`（9,280 B），由 `tools/build_uefi_dual.py` 随
+  `assets/cursors/*.xcur` 一起打进镜像 `/usr/share/cursors/`（现在共 18 个）
+- 加载链路改为**手型优先**：`CUR_LINK` 先装 `hand.xcur`，失败回退 `link.xcur`
+
+### 踩坑：改了没生效，先怀疑文件格式
+
+第一版 `hand.xcur` 装进去后 `active=1` 但画面仍是那支箭头 —— 因为 TOC 里 image chunk 的
+`position` 我写成了 `16`（header 大小），实际应为 `16 + 12*ntoc = 28`。解析器读到的
+"image header" 对不上 36 字节魔数，`cursor64_load_blob` 返回非 0，于是**静默回退**到
+`link.xcur`。手写二进制格式时，这类"看起来改成功了其实在走兜底"必须以**画面**为准，
+不能只看返回值。
+
+### 验证（1920×1080@150%）
+
+- 串口 `[CURSOR] load arrow=0 link=0 text=0 move=0 want=36 ready=1 nominal=32 hot=(1,0)`
+  —— `link=0` 表示手型槽加载成功
+- 截图：文件列表悬停处为白填充手型（近景可见四指 + 拇指轮廓）；桌面空白处仍为
+  `default` 斜箭头
+- 干净版回归正常，内核 808,936 B
