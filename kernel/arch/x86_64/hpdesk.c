@@ -495,10 +495,7 @@ int hs_display_auto_scale(void)
 {
     int by = g_shell.screen_height * 100 / 768;
     if (by < 100) by = 100;
-    /* 自动档上限 150%: 实测 2048x1536 下自动算出 200%, 但侧栏内容需要 1120px,
-     * 而屏宽只给到 2/5 = 819px, 进度条/天气卡/Quick Controls 全部冲出屏外。
-     * 150% 是当前布局在 2048x1536 上能完整成立的最大档, 更高请手动选。 */
-    if (by > 150) by = 150;
+    if (by > 200) by = 200;
     int steps[4] = {100, 125, 150, 200};
     int best = steps[0];
     int bd = by - steps[0];
@@ -2835,6 +2832,16 @@ static void hs_sidebar_render(void)
     int sw = hs_sx(g_shell.ui.sidebar_width);
     int sh = hs_sy(g_shell.ui.sidebar_height);
 
+    /* 外框必须落在屏内。注意: 命中测试函数里此前已有一份同样的钳制, 但渲染
+     * 这一份之前漏了 —— 150% 时面板仍是 150+1500=1650 > 1536, 底部被屏裁,
+     * 只是没有滚动条所以看不出来。两处必须用一致的公式。 */
+    {
+        int max_sh = g_shell.screen_height - sy - hs_sy(16);
+        if (max_sh > 0 && sh > max_sh) sh = max_sh;
+        int max_sw = g_shell.screen_width * 2 / 5;
+        if (max_sw > 0 && sw > max_sw) sw = max_sw;
+    }
+
     /* 侧边栏背景（毛玻璃效果） */
     gfx64_fill_rounded_rect(sx, sy, sw, sh, hs_s(g_shell.ui.corner_radius), g_shell.colors.window_bg);
     gfx64_draw_rounded_rect(sx, sy, sw, sh, hs_s(g_shell.ui.corner_radius), g_shell.colors.border);
@@ -2862,6 +2869,14 @@ static void hs_sidebar_render(void)
 
     /* 内容区域 */
     int content_y = tab_y + hs_sy(40);
+
+    /* Info 页三条进度条的几何: 宽度必须按面板可用宽度算。
+     * 旧实现宽度写死 hs_sx(180), 200% 下需要 720px, 而外框被钳到 819px,
+     * 标签列 280 + 百分比列 208 之后已经没有 720 可用 -> 进度条冲出面板。 */
+    int s_bar_x = sx + hs_sx(70);
+    int s_bar_w = sw - hs_sx(70) - hs_sx(20) - hs_sx(52);
+    if (s_bar_w < hs_sx(30)) s_bar_w = hs_sx(30);
+    int s_pct_x = sx + sw - hs_sx(20) - hs_sx(26);
     if (g_sidebar_tab == 0) {
         /* 信息标签：系统状态 (V0.13.39: 真实数据) */
         extern int process64_cpu_usage(void);
@@ -2879,39 +2894,39 @@ static void hs_sidebar_render(void)
         /* CPU */
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            sx + hs_sx(20), content_y, "CPU", g_shell.colors.panel_fg, hs_s(14));
-        gfx64_fill_rounded_rect(sx + hs_sx(70), content_y + hs_sy(2), hs_sx(180), hs_sy(12), hs_s(4), g_shell.colors.border);
-        gfx64_fill_rounded_rect(sx + hs_sx(70), content_y + hs_sy(2), hs_sx(180 * cpu_p / 100), hs_sy(12), hs_s(4), g_shell.colors.accent);
+        gfx64_fill_rounded_rect(s_bar_x, content_y + hs_sy(2), s_bar_w, hs_sy(12), hs_s(4), g_shell.colors.border);
+        gfx64_fill_rounded_rect(s_bar_x, content_y + hs_sy(2), s_bar_w * cpu_p / 100, hs_sy(12), hs_s(4), g_shell.colors.accent);
         {
             char pc[8];
             hs_pct_str(cpu_p, pc);
             font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                               sx + hs_sx(255), content_y, pc, g_shell.colors.panel_fg, hs_s(12));
+                               s_pct_x, content_y, pc, g_shell.colors.panel_fg, hs_s(12));
         }
         content_y += hs_sy(28);
 
         /* Memory */
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            sx + hs_sx(20), content_y, "MEM", g_shell.colors.panel_fg, hs_s(14));
-        gfx64_fill_rounded_rect(sx + hs_sx(70), content_y + hs_sy(2), hs_sx(180), hs_sy(12), hs_s(4), g_shell.colors.border);
-        gfx64_fill_rounded_rect(sx + hs_sx(70), content_y + hs_sy(2), hs_sx(180 * mem_p / 100), hs_sy(12), hs_s(4), g_shell.colors.accent);
+        gfx64_fill_rounded_rect(s_bar_x, content_y + hs_sy(2), s_bar_w, hs_sy(12), hs_s(4), g_shell.colors.border);
+        gfx64_fill_rounded_rect(s_bar_x, content_y + hs_sy(2), s_bar_w * mem_p / 100, hs_sy(12), hs_s(4), g_shell.colors.accent);
         {
             char pc[8];
             hs_pct_str(mem_p, pc);
             font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                               sx + hs_sx(255), content_y, pc, g_shell.colors.panel_fg, hs_s(12));
+                               s_pct_x, content_y, pc, g_shell.colors.panel_fg, hs_s(12));
         }
         content_y += hs_sy(28);
 
         /* Disk */
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            sx + hs_sx(20), content_y, "DSK", g_shell.colors.panel_fg, hs_s(14));
-        gfx64_fill_rounded_rect(sx + hs_sx(70), content_y + hs_sy(2), hs_sx(180), hs_sy(12), hs_s(4), g_shell.colors.border);
-        gfx64_fill_rounded_rect(sx + hs_sx(70), content_y + hs_sy(2), hs_sx(180 * dsk_p / 100), hs_sy(12), hs_s(4), g_shell.colors.accent);
+        gfx64_fill_rounded_rect(s_bar_x, content_y + hs_sy(2), s_bar_w, hs_sy(12), hs_s(4), g_shell.colors.border);
+        gfx64_fill_rounded_rect(s_bar_x, content_y + hs_sy(2), s_bar_w * dsk_p / 100, hs_sy(12), hs_s(4), g_shell.colors.accent);
         {
             char pc[8];
             hs_pct_str(dsk_p, pc);
             font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                               sx + hs_sx(255), content_y, pc, g_shell.colors.panel_fg, hs_s(12));
+                               s_pct_x, content_y, pc, g_shell.colors.panel_fg, hs_s(12));
         }
         content_y += hs_sy(40);
 
