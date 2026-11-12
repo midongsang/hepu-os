@@ -2867,6 +2867,19 @@ static void hs_sidebar_render(void)
         if (max_sw > 0 && sw > max_sw) sw = max_sw;
     }
 
+    /* 渲染侧探针: 第 60 帧打一次(避开首帧 pct 尚未稳定的阶段)。
+     * 首帧 [GEOM] 按配置算出 200% / 侧栏 819x1272 / 底 1472, 但截图里面板底边
+     * 只到 y~1105 —— 说明渲染时的 pct 与该帧不同。这里把渲染函数自己的
+     * pct 与四个边界一起打出来, 三组数字对齐后差异才有解释。 */
+    {
+        static int probed = 0;
+        if (!probed && g_frame_no >= 60) {
+            probed = 1;
+            vga_printf("[GEOM-RENDER] frame=%d pct=%d sidebar sx=%d sy=%d sw=%d sh=%d bottom=%d\n",
+                       g_frame_no, g_ui_scale_pct, sx, sy, sw, sh, sy + sh);
+        }
+    }
+
     /* 侧边栏背景（毛玻璃效果） */
     gfx64_fill_rounded_rect(sx, sy, sw, sh, hs_s(g_shell.ui.corner_radius), g_shell.colors.window_bg);
     gfx64_draw_rounded_rect(sx, sy, sw, sh, hs_s(g_shell.ui.corner_radius), g_shell.colors.border);
