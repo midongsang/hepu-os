@@ -832,6 +832,31 @@ Lua / `klibm64` 是 `-msse2`。`context_switch_64` 原本只保存 rbx/rbp/r12-r
 **P1 结论**：150% 下侧栏、Quick Controls、天气卡、dock、顶栏、灵动岛均可用；
 Settings 窗口保持 460×430 基准尺寸（内部坐标同基准，内容不会错位，只是相对偏小）。
 
+
+### 1.40 缩放默认跟随分辨率自动（含 200% 不可用的实测结论）
+
+**需求**：界面缩放不要写死 100%，默认跟随显示器分辨率自动决定，用户仍可在 Display 页手改。
+
+**实现**：
+- `hs_display_auto_scale()`：以 1024×768 为 100% 基准，按屏高推算 → `by = screen_h * 100 / 768`，
+  再吸附到四档 `{100,125,150,200}`。
+- `hs_display_load()` 改为返回 `1/0`（是否有用户显式选择）。`hpdesk_load_config` 末尾：
+  没有显式配置就走自动，并打印 `[DISPLAY] auto scale=N% (screen WxH)`。
+- `g_disp_scale_auto` 标志：Display 页标题显示 `UI Scale: Auto (from resolution)` 或 `Manual`；
+  用户点任一档位按钮即置为手动，并写入 `/display.conf`。
+- 优先级：`/display.conf` 手选 > 自动 > `config.hsqml` 的 `ui_scale`。
+
+**关键实测：200% 当前布局不成立，自动档上限收到 150%**
+2048×1536 按算法得 `by = 200%`，实测截图：
+- 侧栏内容宽度需求 `280 * 4 = 1120px`，而外框被钳到屏宽 2/5 = `819px` → CPU/MEM/DSK 进度条冲出面板，
+- 天气卡放大到 720×720 溢出右下，Quick Controls 覆盖近半个屏幕，顶栏图标互相压叠。
+
+结论：**150% 是 2048×1536 上当前布局能完整成立的最大档**，因此自动算法上限 clamp 到 150。
+200% 档仍保留在 Display 页（手动可选），但需要面板内部布局支持才会好用。
+
+**验证**：启动日志 `[DISPLAY] auto scale=150% (screen 2048x1536)`，桌面与手工设 150% 表现一致：
+侧栏完整、Quick Controls 六卡两滑块、天气卡、dock、顶栏图标均正常。
+
 ---
 
 ## 四、回归基线

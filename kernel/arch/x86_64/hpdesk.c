@@ -93,6 +93,9 @@ extern uint64_t pit64_get_ticks(void);
  * 把缩放做成显式因子后, 分辨率变了不会再顺带改变"组件相对大小",
  * 用户也能在设置里单独放大界面(字体是矢量光栅化, 放大是重画不是拉伸)。 */
 int g_ui_scale_pct = 100;
+/* 1=缩放跟随分辨率自动(默认), 0=用户在 Display 页手动选过档位 */
+int g_disp_scale_auto = 1;
+int g_disp_scale_auto_pct = 100;
 static int hs_sx(int v) { return (v * g_shell.screen_width * g_ui_scale_pct) / (1024 * 100); }
 static int hs_sy(int v) { return (v * g_shell.screen_height * g_ui_scale_pct) / (768 * 100); }
 static int hs_s(int v)  {
@@ -470,8 +473,15 @@ static int hpdesk_load_config(const char *config)
     }
     vga_printf("[Hepu Desktop] config: %d sections, background=0x%x\n",
                applied, (unsigned)g_shell.colors.bg);
-    /* 显示设置(缩放)在配置解析之后覆盖, 优先级高于 config.hsqml 的 ui_scale */
-    hs_display_load();
+    /* 显示设置(缩放)在配置解析之后覆盖, 优先级高于 config.hsqml 的 ui_scale。
+     * 用户没在 Display 页手选过时, 缩放默认跟随分辨率自动。 */
+    if (hs_display_load() == 0) {
+        int a = hs_display_auto_scale();
+        g_ui_scale_pct = a;
+        g_disp_scale_auto = 1;
+        vga_printf("[DISPLAY] auto scale=%d%% (screen %dx%d)\n",
+                   a, g_shell.screen_width, g_shell.screen_height);
+    }
     return applied > 0 ? 0 : -1;
 }
 
@@ -479,6 +489,29 @@ static void itoa_hs(int value, char *buf);
 
 /* 显示设置持久化: /display.conf (key=value, 与 config.hsqml 分开写, 互不覆盖) */
 #define HS_DISPLAY_CFG "/display.conf"
+/* 自动档位: 以 1024x768 为 100% 基准, 按屏高(纵向像素密度)推算,
+ * 再吸附到 Display 页的四档上。2048x1536 -> 200%。 */
+int hs_display_auto_scale(void)
+{
+    int by = g_shell.screen_height * 100 / 768;
+    if (by < 100) by = 100;
+    /* 自动档上限 150%: 实测 2048x1536 下自动算出 200%, 但侧栏内容需要 1120px,
+     * 而屏宽只给到 2/5 = 819px, 进度条/天气卡/Quick Controls 全部冲出屏外。
+     * 150% 是当前布局在 2048x1536 上能完整成立的最大档, 更高请手动选。 */
+    if (by > 150) by = 150;
+    int steps[4] = {100, 125, 150, 200};
+    int best = steps[0];
+    int bd = by - steps[0];
+    if (bd < 0) bd = -bd;
+    for (int i = 1; i < 4; i++) {
+        int d = by - steps[i];
+        if (d < 0) d = -d;
+        if (d < bd) { bd = d; best = steps[i]; }
+    }
+    g_disp_scale_auto_pct = best;
+    return best;
+}
+
 void hs_display_save(void)
 {
     extern int ext2_64_write_file(const char *path, const uint8_t *data, uint32_t size);
@@ -502,12 +535,13 @@ void hs_display_save(void)
     (void)rc;
 }
 
-void hs_display_load(void)
+/* 返回 1 = 配置文件里有用户显式选择的 scale; 0 = 没有(应走自动) */
+int hs_display_load(void)
 {
     extern int ext2_64_read_file(const char *path, uint8_t *buffer, uint32_t max_size);
     char buf[128];
     int n = ext2_64_read_file(HS_DISPLAY_CFG, (uint8_t *)buf, sizeof(buf) - 1);
-    if (n <= 0) return;
+    if (n <= 0) return 0;
     buf[n] = 0;
     /* 解析 scale=<num> */
     for (int i = 0; buf[i]; i++) {
@@ -515,9 +549,9 @@ void hs_display_load(void)
             buf[i + 3] == 'l' && buf[i + 4] == 'e' && buf[i + 5] == '=') {
             int v = 0, j = i + 6;
             while (buf[j] >= '0' && buf[j] <= '9') { v = v * 10 + (buf[j] - '0'); j++; }
-            if (v >= 100 && v <= 250) g_ui_scale_pct = v;
-            vga_printf("[DISPLAY] loaded scale=%d%%\n", g_ui_scale_pct);
-            return;
+            if (v >= 100 && v <= 250) { g_ui_scale_pct = v; g_disp_scale_auto = 0; }
+            vga_printf("[DISPLAY] loaded scale=%d%% (manual)\n", g_ui_scale_pct);
+            return 1;
         }
     }
 }
@@ -1981,7 +2015,9 @@ static void hs_settings_window_render(hs_window_t *w)
         ry += 26;
 
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           rx, ry, "UI Scale (applies immediately):", g_shell.colors.panel_fg, 12);
+                           rx, ry, g_disp_scale_auto ? "UI Scale: Auto (from resolution)"
+                                                     : "UI Scale: Manual (click to change)",
+                           g_shell.colors.panel_fg, 12);
         ry += 24;
         g_disp_scale_btn_x = rx;
         g_disp_scale_btn_y = ry;
@@ -3611,6 +3647,7 @@ void hpdesk_handle_click(int x, int y)
                         int idx = bi / HS_DISP_BTN_GAP;
                         if (idx >= 0 && idx < 4) {
                             g_ui_scale_pct = g_disp_scale_pcts[idx];
+                            g_disp_scale_auto = 0;   /* 手动选择后不再自动跟随 */
                             g_content_dirty = 1;
                             extern void hs_display_save(void);
                             hs_display_save();
