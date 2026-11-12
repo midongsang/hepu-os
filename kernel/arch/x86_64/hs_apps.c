@@ -650,6 +650,19 @@ static void t_handle_key(int key)
 #define FS_COPY_ENTRIES 64
 
 static hs_window_t *f_win = 0;
+#define FS_BASE_W 460
+
+/* Files 窗口内容按自身尺寸缩放(基准 460x360)。
+ * 窗口被 DPI 放大时内容同比例放大, 基准尺寸下恒等于原值。
+ * 行高也走这里 —— 渲染、f_visible_rows()、命中测试必须共用同一个行高,
+ * 否则会出现"看得见点不到/点错行"。 */
+static int f_sc(int v)
+{
+    int base = f_win ? f_win->width : FS_BASE_W;
+    return v * base / FS_BASE_W;
+}
+#define FS(v) f_sc(v)
+static int f_row_h(void) { return f_sc(FS_ROW_H); }
 static char f_path[FS_PATH_MAX] = "/";
 static char f_items[FS_MAX_ITEMS][256];
 static uint8_t f_types[FS_MAX_ITEMS];
@@ -733,8 +746,8 @@ static void f_refresh(void);
 static int f_visible_rows(void)
 {
     int h = f_win ? f_win->height : 360;
-    int ch = h - 26 - 40;              /* 内容区高度 (状态栏 40px 已扣除) */
-    int rows = (ch - 52) / FS_ROW_H;   /* 26px 路径栏 + 26px 底部输入/确认条 */
+    int ch = h - FS(26) - FS(40);          /* 内容区高度 (状态栏 40px 已扣除) */
+    int rows = (ch - FS(52)) / f_row_h();  /* 26px 路径栏 + 26px 底部输入/确认条 */
     if (rows < 1) rows = 1;
     if (rows > FS_MAX_VISIBLE) rows = FS_MAX_VISIBLE;
     return rows;
@@ -885,16 +898,16 @@ static void f_render(hs_window_t *w)
 {
     void *fb = gfx64_get_framebuffer();
     int W = g_shell.screen_width, H = g_shell.screen_height;
-    int cx = w->x + 6, cy = w->y + 26;
-    int cw = w->width - 12, ch = w->height - 26 - 40;
-    int row_h = FS_ROW_H;
+    int cx = w->x + FS(6), cy = w->y + FS(26);
+    int cw = w->width - FS(12), ch = w->height - FS(26) - FS(40);
+    int row_h = f_row_h();
 
     /* 路径栏 */
-    gfx64_fill_rounded_rect(cx, cy, cw, 20, 4, g_shell.colors.panel_bg);
+    gfx64_fill_rounded_rect(cx, cy, cw, FS(20), FS(4), g_shell.colors.panel_bg);
     {
         char shown[80];
         hs_strcpyn(shown, f_path, 70);
-        font64_draw_string(fb, W, H, cx + 6, cy + 3, shown, g_shell.colors.panel_fg, 12);
+        font64_draw_string(fb, W, H, cx + FS(6), cy + FS(3), shown, g_shell.colors.panel_fg, FS(12));
     }
     /* USB挂载状态按钮(路径栏右侧) */
     {
@@ -904,35 +917,35 @@ static void f_render(hs_window_t *w)
         int has_usb = usb64_dev_count() > 0;
         int on_usb = storage_hal_get_device() == 1;
         const char *txt = has_usb ? (on_usb ? "[USB: mounted]" : "[USB: click to mount]") : "[USB: not detected]";
-        int tw = 12 * (hs_strlen(txt)) + 4;
-        int bx = cx + cw - tw - 4;
-        if (on_usb) gfx64_fill_rounded_rect(bx, cy, tw, 20, 4, g_shell.colors.accent);
-        font64_draw_string(fb, W, H, bx + 4, cy + 3, txt,
-                           on_usb ? 0xFFFFFF : g_shell.colors.panel_fg, 12);
+        int tw = FS(12) * (hs_strlen(txt)) + FS(4);
+        int bx = cx + cw - tw - FS(4);
+        if (on_usb) gfx64_fill_rounded_rect(bx, cy, tw, FS(20), FS(4), g_shell.colors.accent);
+        font64_draw_string(fb, W, H, bx + FS(4), cy + FS(3), txt,
+                           on_usb ? 0xFFFFFF : g_shell.colors.panel_fg, FS(12));
     }
 
     /* 网格模式: 大图标 + 名称 */
     if (f_view_mode == 1) {
-        int gs = 76, cols = cw / gs;
+        int gs = FS(76), cols = cw / gs;
         if (cols < 1) cols = 1;
-        int rows = (ch - 52) / (gs + 8);
+        int rows = (ch - FS(52)) / (gs + FS(8));
         if (rows < 1) rows = 1;
-        int gy = cy + 26;
+        int gy = cy + FS(26);
         for (int r = 0; r < rows; r++) {
             for (int c = 0; c < cols; c++) {
                 int gi = f_scroll + (r * cols + c);
                 if (gi >= f_match_count) break;
                 int item = f_matched[gi];
-                int ix = cx + 6 + c * gs;
-                int iy2 = gy + r * (gs + 8);
+                int ix = cx + FS(6) + c * gs;
+                int iy2 = gy + r * (gs + FS(8));
                 if (gi == f_sel)
-                    gfx64_fill_rounded_rect(ix - 4, iy2 - 4, gs, gs, 8, g_shell.colors.accent);
+                    gfx64_fill_rounded_rect(ix - FS(4), iy2 - FS(4), gs, gs, FS(8), g_shell.colors.accent);
                 extern void hs_icon_folder(int x, int y, int size, uint32_t color);
                 extern void hs_icon_doc(int x, int y, int size, uint32_t color);
                 extern void hs_icon_media(int x, int y, int size, uint32_t color);
                 extern void hs_icon_file(int x, int y, int size, uint32_t color);
                 uint32_t ic = (gi == f_sel) ? 0xFFFFFF : g_shell.colors.accent;
-                if (f_types[item]) hs_icon_folder(ix, iy2, 30, ic);
+                if (f_types[item]) hs_icon_folder(ix, iy2, FS(30), ic);
                 else {
                     int len = hs_strlen(f_items[item]);
                     const char *nm = f_items[item];
@@ -946,24 +959,24 @@ static void f_render(hs_window_t *w)
                             strcmp(ext, ".c") == 0 || strcmp(ext, ".h") == 0 ||
                             strcmp(ext, ".doc") == 0) is_doc = 1;
                     }
-                    if (is_media) hs_icon_media(ix, iy2, 30, ic);
-                    else if (is_doc) hs_icon_doc(ix, iy2, 30, ic);
-                    else hs_icon_file(ix, iy2, 30, ic);
+                    if (is_media) hs_icon_media(ix, iy2, FS(30), ic);
+                    else if (is_doc) hs_icon_doc(ix, iy2, FS(30), ic);
+                    else hs_icon_file(ix, iy2, FS(30), ic);
                 }
                 if (f_mark[item])
-                    gfx64_fill_rounded_rect(ix - 2, iy2 - 2, 12, 12, 3, 0xFFD040);
+                    gfx64_fill_rounded_rect(ix - FS(2), iy2 - FS(2), FS(12), FS(12), FS(3), 0xFFD040);
                 char gd[32];
                 /* 单元格宽 76px: 长文件名缩小字号, 避免与相邻图标名称重叠 */
                 int nlen = hs_strlen(f_items[item]);
                 int nsz = (nlen > 12) ? 10 : 12;
                 hs_strcpyn(gd, f_items[item], nsz == 10 ? 12 : 14);
-                font64_draw_string(fb, W, H, ix - 2, iy2 + 34, gd,
+                font64_draw_string(fb, W, H, ix - FS(2), iy2 + FS(34), gd,
                                    (gi == f_sel) ? 0xFFFFFF : g_shell.colors.window_fg, nsz);
             }
         }
     } else {
         /* 列表模式 (名称 + 大小) */
-        int list_y = cy + 26;
+        int list_y = cy + FS(26);
         int visible = f_visible_rows();
         if (visible < 1) visible = 1;
         for (int r = 0; r < visible; r++) {
@@ -987,7 +1000,7 @@ static void f_render(hs_window_t *w)
                 extern void hs_icon_file(int x, int y, int size, uint32_t color);
                 uint32_t ic = (li == f_sel) ? 0xFFFFFF : g_shell.colors.accent;
                 if (f_types[item]) {
-                    hs_icon_folder(cx + 3, iy + 1, 14, ic);
+                    hs_icon_folder(cx + FS(3), iy + 1, FS(14), ic);
                 } else {
                     int len = hs_strlen(f_items[item]);
                     const char *nm = f_items[item];
@@ -1001,88 +1014,88 @@ static void f_render(hs_window_t *w)
                             strcmp(ext, ".c") == 0 || strcmp(ext, ".h") == 0 ||
                             strcmp(ext, ".doc") == 0) is_doc = 1;
                     }
-                    if (is_media) hs_icon_media(cx + 3, iy + 1, 14, ic);
-                    else if (is_doc) hs_icon_doc(cx + 3, iy + 1, 14, ic);
-                    else hs_icon_file(cx + 3, iy + 1, 14, ic);
+                    if (is_media) hs_icon_media(cx + FS(3), iy + 1, FS(14), ic);
+                    else if (is_doc) hs_icon_doc(cx + FS(3), iy + 1, FS(14), ic);
+                    else hs_icon_file(cx + FS(3), iy + 1, FS(14), ic);
                 }
             }
-            font64_draw_string(fb, W, H, cx + 22, iy + 2, disp,
-                               (li == f_sel) ? 0xFFFFFF : g_shell.colors.window_fg, 12);
+            font64_draw_string(fb, W, H, cx + FS(22), iy + FS(2), disp,
+                               (li == f_sel) ? 0xFFFFFF : g_shell.colors.window_fg, FS(12));
             /* 标记指示 */
             if (f_mark[item])
-                font64_draw_string(fb, W, H, cx + cw - 68, iy + 2, "*",
-                                   (li == f_sel) ? 0xFFFFFF : 0xFFD040, 12);
+                font64_draw_string(fb, W, H, cx + cw - FS(68), iy + FS(2), "*",
+                                   (li == f_sel) ? 0xFFFFFF : 0xFFD040, FS(12));
             /* 右侧大小 / <DIR> */
             char szbuf[20];
             if (f_types[item]) strcpy(szbuf, "<DIR>");
             else f_fmt_size(f_sizes[item], szbuf);
-            font64_draw_string(fb, W, H, cx + cw - 52, iy + 2, szbuf,
-                               (li == f_sel) ? 0xFFFFFF : g_shell.colors.text_secondary, 12);
+            font64_draw_string(fb, W, H, cx + cw - FS(52), iy + FS(2), szbuf,
+                               (li == f_sel) ? 0xFFFFFF : g_shell.colors.text_secondary, FS(12));
         }
     }
 
     /* 属性浮层 */
     if (f_props) {
-        int px = cx + 10, py = cy + 30, pw = cw - 20, ph = 96;
+        int px = cx + FS(10), py = cy + FS(30), pw = cw - FS(20), ph = FS(96);
         char pb[120];
-        gfx64_fill_rounded_rect(px, py, pw, ph, 8, g_shell.colors.panel_bg);
-        gfx64_draw_rounded_rect(px, py, pw, ph, 8, g_shell.colors.accent);
-        font64_draw_string(fb, W, H, px + 10, py + 8, "Properties",
-                           g_shell.colors.accent, 14);
-        font64_draw_string(fb, W, H, px + pw - 108, py + 8,
-                           "any key = close", g_shell.colors.text_secondary, 10);
+        gfx64_fill_rounded_rect(px, py, pw, ph, FS(8), g_shell.colors.panel_bg);
+        gfx64_draw_rounded_rect(px, py, pw, ph, FS(8), g_shell.colors.accent);
+        font64_draw_string(fb, W, H, px + FS(10), py + FS(8), "Properties",
+                           g_shell.colors.accent, FS(14));
+        font64_draw_string(fb, W, H, px + pw - FS(108), py + FS(8),
+                           "any key = close", g_shell.colors.text_secondary, FS(10));
         strcpy(pb, "Name: ");
         hs_strcpyn(pb + hs_strlen(pb), f_props_name, 40);
-        font64_draw_string(fb, W, H, px + 10, py + 30, pb, g_shell.colors.panel_fg, 12);
+        font64_draw_string(fb, W, H, px + FS(10), py + FS(30), pb, g_shell.colors.panel_fg, FS(12));
         strcpy(pb, "Type: ");
         strcpy(pb + hs_strlen(pb), f_props_isdir ? "Folder" : "File");
-        font64_draw_string(fb, W, H, px + 10, py + 46, pb, g_shell.colors.panel_fg, 12);
+        font64_draw_string(fb, W, H, px + FS(10), py + FS(46), pb, g_shell.colors.panel_fg, FS(12));
         strcpy(pb, "Size: ");
         char szb[20];
         f_fmt_size(f_props_size, szb);
         strcpy(pb + hs_strlen(pb), szb);
-        font64_draw_string(fb, W, H, px + 10, py + 62, pb, g_shell.colors.panel_fg, 12);
+        font64_draw_string(fb, W, H, px + FS(10), py + FS(62), pb, g_shell.colors.panel_fg, FS(12));
         strcpy(pb, "Path: ");
         hs_strcpyn(pb + hs_strlen(pb), f_props_path, 45);
-        font64_draw_string(fb, W, H, px + 10, py + 78, pb,
-                           g_shell.colors.text_secondary, 11);
+        font64_draw_string(fb, W, H, px + FS(10), py + FS(78), pb,
+                           g_shell.colors.text_secondary, FS(11));
     }
 
     /* 底部输入框 / 删除确认 (放在状态栏上方, 避免覆盖两行状态文本) */
-    int by = cy + ch - 24;
+    int by = cy + ch - FS(24);
     if (f_del_confirm) {
-        gfx64_fill_rounded_rect(cx, by, cw, 22, 4, 0xC03030);
+        gfx64_fill_rounded_rect(cx, by, cw, FS(22), FS(4), 0xC03030);
         char lb[120];
         strcpy(lb, "Delete ");
         hs_strcpyn(lb + hs_strlen(lb), f_del_name, 20);
         strcpy(lb + hs_strlen(lb), " ?  Enter=Delete  N=Cancel");
-        font64_draw_string(fb, W, H, cx + 8, by + 4, lb, 0xFFFFFF, 12);
+        font64_draw_string(fb, W, H, cx + FS(8), by + FS(4), lb, 0xFFFFFF, FS(12));
     } else if (f_prompt != FS_PROMPT_NONE) {
         const char *label = "New folder: ";
         if (f_prompt == FS_PROMPT_MKFILE) label = "New file: ";
         else if (f_prompt == FS_PROMPT_RENAME) label = "Rename: ";
         else if (f_prompt == FS_PROMPT_GOTO) label = "Goto path: ";
-        gfx64_fill_rounded_rect(cx, by, cw, 22, 4, g_shell.colors.panel_bg);
-        gfx64_draw_rounded_rect(cx, by, cw, 22, 4, g_shell.colors.accent);
-        font64_draw_string(fb, W, H, cx + 6, by + 4, label, g_shell.colors.panel_fg, 12);
-        int ix = cx + 6 + 92;
+        gfx64_fill_rounded_rect(cx, by, cw, FS(22), FS(4), g_shell.colors.panel_bg);
+        gfx64_draw_rounded_rect(cx, by, cw, FS(22), FS(4), g_shell.colors.accent);
+        font64_draw_string(fb, W, H, cx + FS(6), by + FS(4), label, g_shell.colors.panel_fg, FS(12));
+        int ix = cx + FS(6) + FS(92);
         char shown[70];
-        int maxn = (cw - 100) / 7;
+        int maxn = (cw - FS(100)) / FS(7);
         if (maxn < 4) maxn = 4;
         if (f_prompt_len > maxn) hs_strcpyn(shown, f_prompt_buf + (f_prompt_len - maxn), maxn);
         else hs_strcpyn(shown, f_prompt_buf, maxn);
-        font64_draw_string(fb, W, H, ix, by + 4, shown, g_shell.colors.window_fg, 12);
-        int cxcur = ix + 7 * (f_prompt_len > maxn ? maxn : f_prompt_len);
-        if (cxcur > cx + cw - 10) cxcur = cx + cw - 10;
-        gfx64_fill_rect(cxcur, by + 4, 2, 13, g_shell.colors.accent);
+        font64_draw_string(fb, W, H, ix, by + FS(4), shown, g_shell.colors.window_fg, FS(12));
+        int cxcur = ix + FS(7) * (f_prompt_len > maxn ? maxn : f_prompt_len);
+        if (cxcur > cx + cw - FS(10)) cxcur = cx + cw - FS(10);
+        gfx64_fill_rect(cxcur, by + FS(4), FS(2), FS(13), g_shell.colors.accent);
     }
 
     /* 状态栏 (两行) */
-    font64_draw_string(fb, W, H, cx, cy + ch + 4, f_status,
-                       g_shell.colors.text_secondary, 10);
+    font64_draw_string(fb, W, H, cx, cy + ch + FS(4), f_status,
+                       g_shell.colors.text_secondary, FS(10));
     if (f_status2[0])
-        font64_draw_string(fb, W, H, cx, cy + ch + 16, f_status2,
-                           g_shell.colors.accent, 12);
+        font64_draw_string(fb, W, H, cx, cy + ch + FS(16), f_status2,
+                           g_shell.colors.accent, FS(12));
 }
 
 static int f_is_text_file(const char *nm)
@@ -1453,18 +1466,18 @@ void hs_files_click(int x, int y)
     }
     /* 路径栏点击(USB 按钮之外) → 打开“转到路径”输入框 */
     {
-        int cy0 = f_win->y + 26;
-        if (y >= cy0 && y <= cy0 + 20 && x >= f_win->x + 6) {
+        int cy0 = f_win->y + FS(26);
+        if (y >= cy0 && y <= cy0 + FS(20) && x >= f_win->x + FS(6)) {
             f_prompt_start(FS_PROMPT_GOTO, f_path);
             hs_strcpyn(f_status2, "Enter to go, Tab to cancel", FS_PROMPT_MAX);
             return;
         }
     }
 
-    int cy = f_win->y + 26 + 26;
+    int cy = f_win->y + FS(26) + FS(26);
     int rows = f_visible_rows();
     if (f_view_mode == 0) {
-        int rel = (y - cy) / FS_ROW_H;
+        int rel = (y - cy) / f_row_h();
         if (rel >= 0 && rel < rows) {
             int gi = f_scroll + rel;
             if (gi >= 0 && gi < f_match_count) {
@@ -2166,7 +2179,8 @@ hs_window_t *hs_terminal_create(void)
 hs_window_t *hs_files_create(void)
 {
     if (f_win && f_win->visible) { f_win->focus = 1; return f_win; }
-    f_win = hs_window_create(HS_WINDOW_FLOATING, "Files", -1, -1, 460, 360);
+    f_win = hs_window_create(HS_WINDOW_FLOATING, "Files", -1, -1,
+                            hs_ui_sx(460), hs_ui_sy(360));
     if (f_win) {
         f_win->render = f_render;
         strcpy(f_path, "/");
