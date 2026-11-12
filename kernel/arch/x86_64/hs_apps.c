@@ -682,6 +682,9 @@ static int f_fs_menu __attribute__((unused)) = 0;   /* 0=桌面菜单, 1=文件�
 static int f_dclick_tick = 0;         /* 双击检测: 上次点击 tick */
 static char f_status2[FS_PROMPT_MAX + 1] = "";
 static hs_window_t *v_win = 0;
+/* Viewer(460x400) 与 Image(520x420) 共用同一个 render, 基准宽由打开时记录 */
+static int v_base_w = 460;
+#define VC(v) (v * (v_win ? v_win->width : v_base_w) / (v_base_w ? v_base_w : 460))
 static char v_data[8192];
 
 /* V0.55.0 P0: PNG 图片查看 (png64 解码器接入点)
@@ -1157,7 +1160,9 @@ static void f_open_item(int idx)
                 v_is_png = 1;
                 hs_strcpyn(v_name, f_items[item], 60);
                 if (!v_win) {
-                    v_win = hs_window_create(HS_WINDOW_FLOATING, "Image", -1, -1, 520, 420);
+                    v_base_w = 520;
+                v_win = hs_window_create(HS_WINDOW_FLOATING, "Image", -1, -1,
+                                    hs_ui_sx(520), hs_ui_sy(420));
                     if (v_win) v_win->render = hs_viewer_render;
                 }
                 if (v_win) { hs_window_show(v_win); v_win->focus = 1; }
@@ -1169,6 +1174,7 @@ static void f_open_item(int idx)
         }
     }
     v_is_png = 0;
+    v_base_w = 460;
     int n = ext2_64_read_file(full, (uint8_t *)v_data, sizeof(v_data) - 1);
     if (n < 0) {
         hs_strcpyn(f_status2, "Read failed", FS_PROMPT_MAX);
@@ -1180,7 +1186,8 @@ static void f_open_item(int idx)
     v_truncated = (fsz > (uint32_t)n) ? 1 : 0;
     hs_strcpyn(v_name, f_items[item], 60);
     if (!v_win) {
-        v_win = hs_window_create(HS_WINDOW_FLOATING, "Viewer", -1, -1, 460, 400);
+        v_win = hs_window_create(HS_WINDOW_FLOATING, "Viewer", -1, -1,
+                        hs_ui_sx(460), hs_ui_sy(400));
         if (v_win) v_win->render = hs_viewer_render;
     }
     if (v_win) {
@@ -1385,26 +1392,26 @@ void hs_viewer_render(hs_window_t *w)
 {
     void *fb = gfx64_get_framebuffer();
     int W = g_shell.screen_width, H = g_shell.screen_height;
-    int cx = w->x + 6, cy = w->y + 24;
+    int cx = w->x + VC(6), cy = w->y + VC(24);
 
     /* V0.55.0 P0: PNG 位图等比缩放绘制 */
     if (v_is_png && v_png.rgba) {
-        font64_draw_string(fb, W, H, cx, cy, v_name, g_shell.colors.accent, 13);
-        int aw = w->width - 16;
-        int ah = w->height - 52;
+        font64_draw_string(fb, W, H, cx, cy, v_name, g_shell.colors.accent, VC(13));
+        int aw = w->width - VC(16);
+        int ah = w->height - VC(52);
         if (aw < 8 || ah < 8) return;
         int dw = aw, dh = (int)((long)v_png.height * aw / (long)v_png.width);
         if (dh > ah) { dh = ah; dw = (int)((long)v_png.width * ah / (long)v_png.height); }
-        int dx = w->x + 8 + (aw - dw) / 2;
-        int dy = w->y + 44 + (ah - dh) / 2;
+        int dx = w->x + VC(8) + (aw - dw) / 2;
+        int dy = w->y + VC(44) + (ah - dh) / 2;
         gfx64_blit_rgba(dx, dy, dw, dh, v_png.rgba, (int)v_png.width, (int)v_png.height);
         return;
     }
 
-    int cw = w->width - 12;
-    font64_draw_string(fb, W, H, cx, cy, v_name, g_shell.colors.accent, 13);
-    cy += 22;
-    int rows = (w->height - 26 - 28) / 16;
+    int cw = w->width - VC(12);
+    font64_draw_string(fb, W, H, cx, cy, v_name, g_shell.colors.accent, VC(13));
+    cy += VC(22);
+    int rows = (w->height - VC(26) - VC(28)) / VC(16);
     if (rows < 1) rows = 1;
 
     /* 定位到第 v_scroll 行的起始字节 */
@@ -1413,17 +1420,17 @@ void hs_viewer_render(hs_window_t *w)
         while (i < v_len && v_data[i] != '\n') i++;
         if (i < v_len) i++;
     }
-    int maxc = (cw - 8) / 7;
-    if (maxc < 8) maxc = 8;
-    if (maxc > 110) maxc = 110;
+    int maxc = (cw - VC(8)) / VC(7);   /* 7 = 半角字符宽 */
+    if (maxc < 8) maxc = 8;            /* 8 = 字符列下限 */
+    if (maxc > 110) maxc = 110;        /* 110 = 字符列上限(受 lb[128] 容量约束) */
     for (int r = 0; r < rows && i < v_len; r++) {
         char lb[128]; int lc = 0;
         while (i < v_len && v_data[i] != '\n' && lc < maxc)
             lb[lc++] = v_data[i++];
         if (i < v_len && v_data[i] == '\n') i++;
         lb[lc] = 0;
-        font64_draw_string(fb, W, H, cx, cy + r * 16, lb,
-                           g_shell.colors.window_fg, 12);
+        font64_draw_string(fb, W, H, cx, cy + r * VC(16), lb,
+                           g_shell.colors.window_fg, VC(12));
     }
     char st[64];
     strcpy(st, "line ");
@@ -1432,8 +1439,8 @@ void hs_viewer_render(hs_window_t *w)
     strcpy(st + hs_strlen(st), tmp);
     if (v_truncated) strcpy(st + hs_strlen(st), "  (truncated: file too large)");
     else strcpy(st + hs_strlen(st), "  Up/Down/PgUp/PgDn to scroll");
-    font64_draw_string(fb, W, H, cx, w->y + w->height - 18, st,
-                       g_shell.colors.text_secondary, 10);
+    font64_draw_string(fb, W, H, cx, w->y + w->height - VC(18), st,
+                       g_shell.colors.text_secondary, VC(10));
 }
 
 void hs_files_cycle_view(void) { f_view_mode = !f_view_mode; f_scroll = 0; }
@@ -2226,6 +2233,14 @@ static void m_kill_do(void)
 #define ED_GUTTER     42
 
 static hs_window_t *e_win = 0;
+
+/* 编辑器内容按窗口自身尺寸缩放(基准 640x440) */
+static int e_sc(int v)
+{
+    return v * (e_win ? e_win->width : 640) / 640;
+}
+#define EC(v) e_sc(v)
+static int ed_line_h(void) { return e_sc(ED_LINE_H); }
 static char e_buf[ED_CAP + 1];
 static int  e_len = 0;
 static int  e_cur = 0;
@@ -2345,22 +2360,22 @@ static void e_render(hs_window_t *w)
 {
     void *fb = gfx64_get_framebuffer();
     int W = g_shell.screen_width, H = g_shell.screen_height;
-    int cx = w->x + 8;
-    int cy = w->y + 26;
+    int cx = w->x + EC(8);
+    int cy = w->y + EC(26);
     uint32_t accent = g_shell.colors.accent;
     uint32_t fg = g_shell.colors.window_fg;
     uint32_t dim = g_shell.colors.text_secondary;
-    int vis = (w->height - 82) / ED_LINE_H;
+    int vis = (w->height - EC(82)) / ed_line_h();
     if (vis < 1) vis = 1;
 
     /* 标题: 路径 + 修改标记 */
     char title[128];
     hs_strcpyn(title, e_path, 100);
     if (e_modified) hs_strcpyn(title + hs_strlen(title), "  *", 8);
-    font64_draw_string(fb, W, H, cx, cy, title, accent, 13);
-    cy += 18;
-    font64_draw_string(fb, W, H, cx, cy, e_msg, dim, 10);
-    cy += 16;
+    font64_draw_string(fb, W, H, cx, cy, title, accent, EC(13));
+    cy += EC(18);
+    font64_draw_string(fb, W, H, cx, cy, e_msg, dim, EC(10));
+    cy += EC(16);
 
     /* 保持光标行可见 */
     int cline = ed_line_of(e_cur);
@@ -2375,8 +2390,8 @@ static void e_render(hs_window_t *w)
         if (pos < e_len) pos++;
     }
 
-    int maxc = (w->width - ED_GUTTER - 16) / 7;
-    if (maxc < 8) maxc = 8;
+    int maxc = (w->width - EC(ED_GUTTER) - EC(16)) / EC(7);   /* 7 = 半角字符宽 */
+    if (maxc < 8) maxc = 8;                                   /* 8 = 字符列下限 */
 
     int cursor_drawn = 0;
     for (int row = 0; row < vis; row++) {
@@ -2384,7 +2399,7 @@ static void e_render(hs_window_t *w)
         int lend = ed_line_end(pos);
         char num[8];
         hs_itoa(e_scroll + row + 1, num);
-        font64_draw_string(fb, W, H, cx, cy + row * ED_LINE_H, num, dim, 11);
+        font64_draw_string(fb, W, H, cx, cy + row * ed_line_h(), num, dim, EC(11));
 
         char lb[168];
         int lc = 0;
@@ -2392,13 +2407,13 @@ static void e_render(hs_window_t *w)
         while (i < lend && lc < maxc && lc < 167) lb[lc++] = e_buf[i++];
         lb[lc] = 0;
         if (lc > 0)
-            font64_draw_string(fb, W, H, cx + ED_GUTTER, cy + row * ED_LINE_H, lb, fg, 12);
+            font64_draw_string(fb, W, H, cx + EC(ED_GUTTER), cy + row * ed_line_h(), lb, fg, EC(12));
 
         if (!cursor_drawn && e_cur >= lstart && e_cur <= lend) {
             int col = e_cur - lstart;
             if (col > maxc) col = maxc;
-            gfx64_fill_rect(cx + ED_GUTTER + col * 7, cy + row * ED_LINE_H + 2,
-                            2, 13, accent);
+            gfx64_fill_rect(cx + EC(ED_GUTTER) + col * EC(7), cy + row * ed_line_h() + EC(2),
+                            EC(2), EC(13), accent);
             cursor_drawn = 1;
         }
 
@@ -2415,7 +2430,8 @@ hs_window_t *hs_editor_create(void)
         return e_win;
     }
     if (!e_win) {
-        e_win = hs_window_create(HS_WINDOW_FLOATING, "Editor", -1, -1, 640, 440);
+        e_win = hs_window_create(HS_WINDOW_FLOATING, "Editor", -1, -1,
+                            hs_ui_sx(640), hs_ui_sy(440));
         if (e_win) e_win->render = e_render;
     }
     if (e_win) {
@@ -2431,7 +2447,8 @@ hs_window_t *hs_editor_open_file(const char *path)
     if (!path || !path[0]) return 0;
     if (hs_strlen(path) >= (int)sizeof(e_path)) return 0;
     if (!e_win) {
-        e_win = hs_window_create(HS_WINDOW_FLOATING, "Editor", -1, -1, 640, 440);
+        e_win = hs_window_create(HS_WINDOW_FLOATING, "Editor", -1, -1,
+                            hs_ui_sx(640), hs_ui_sy(440));
         if (e_win) e_win->render = e_render;
     }
     if (!e_win) return 0;

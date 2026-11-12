@@ -1388,6 +1388,30 @@ static int st_dev_sc(int v) { return v * (st_dev_win ? st_dev_win->width : 560) 
 `Disk Manager 700x525`、`Log Viewer 775x525`；三个窗口的标签栏、行高、字号、
 磁盘进度条、分区表、日志行距全部同比放大。
 
+### 1.60 Editor / Viewer / Image 接入缩放（共用 render 的基准问题）
+
+Editor：基准 640，`EC(v)` + `ed_line_h()`。行高必须和 `vis` 计算共用：
+`vis = (w->height - EC(82)) / ed_line_h()`。行号槽 `EC(ED_GUTTER)` 与光标块
+`col * EC(7)` 也走同一套，否则光标会跑到文字左边。
+
+**Viewer 与 Image 共用同一个 `hs_viewer_render`，但基准宽不同**（460 / 520）。
+如果只按一个基准写 `v * w->width / 460`，520 宽的 Image 窗口在 100% 缩放下会被
+放大 1.13 倍，破坏"基准尺寸恒等于原值"。解法是打开时记录基准：
+
+```c
+static int v_base_w = 460;
+#define VC(v) (v * (v_win ? v_win->width : v_base_w) / (v_base_w ? v_base_w : 460))
+```
+
+`v_base_w` 在打开 Viewer 前置 460、打开 Image 前置 520。
+
+**本轮的语义误替身**（和前两轮同型）：`maxc` 的 `8`（字符列下限）、`110`（字符列上限，
+受 `lb[128]` 容量约束）、`7`（半角字符宽）。前两个不能缩放，第三个必须缩放。
+
+**验证**：`[WM] create Editor 800x550`，标题/路径/消息/行号槽/光标位置均同比；
+Viewer 与 Image 共用同一套缩放，本轮仅做编译与代码核对，未截图（缺自动打开路径，
+需从 Files 手动点开文件才能触发）。
+
 ## 四、回归基线
 
 - 全量干净重建：**0 error / 90 warning**（`-Wunused-parameter` 基线不变；接入 Lua 后仍保持）
