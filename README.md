@@ -6,28 +6,39 @@
 [![Release](https://github.com/midongsang/hepu-os/actions/workflows/release.yml/badge.svg)](https://github.com/midongsang/hepu-os/actions/workflows/release.yml)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPLv3-blue.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/version-v0.58.0-brightgreen.svg)](#当前版本)
-[![Kernel size](https://img.shields.io/badge/kernel-586KB-blue.svg)](#当前版本)
+[![Kernel size](https://img.shields.io/badge/kernel-807KB-blue.svg)](#当前版本)
 [![glibc 动态链接](https://img.shields.io/badge/glibc-✓-brightgreen.svg)](#核心特性)
 [![ext2](https://img.shields.io/badge/ext2-✓-brightgreen.svg)](#核心特性)
 [![SMP](https://img.shields.io/badge/SMP-4core-green.svg)](#核心特性)
 [![Discussions](https://img.shields.io/badge/Discussions-欢迎交流-blue.svg)](https://github.com/midongsang/hepu-os/discussions)
 
-赫普OS是一款自研64位操作系统，支持SMP多处理器、双内核混合引导、完整图形桌面、ext2文件系统和TCP/IP网络协议栈。
+赫普OS是一款自研64位操作系统，支持SMP多处理器、双内核混合引导、完整图形桌面、ext2文件系统和TCP/IP网络协议栈，
+用户态已具备真正的线程能力（`clone` 共享地址空间 + 独立线程退出）。
 
 ## 当前版本
 
 **0.58.0** — 当前版本（版本号唯一事实源：`docs/status/VERSIONING.md` frontmatter）
 
+本版把 `clone` 从"诚实返回 ENOSYS"做成真线程：用户线程成为独立调度单元（`uthread64`），
+共享父地址空间、独立用户栈、独立内核栈、子线程 `rax=0` 全部实证；并新增线程退出接口
+`SYS_HEPU_THREAD_EXIT`（235），子线程可正常结束而不带走整个进程。
+
+![Hepu OS 桌面（1920×1080）](docs/assets/desktop-0.58.0.png)
+
+*Hepu OS v0.58.0 桌面：System Info、Settings 与 Quick Controls*
+
 ## 核心特性
 
-- **64位长模式内核**：约586KB（599,880字节），-O2优化，98个模块
+- **64位长模式内核**：约807KB（826,824字节），-O2优化，113个源码模块
 - **SMP多处理器**：4核并行，per-CPU调度，负载均衡，IPI核间中断
-- **双内核混合引导**：64位内核（约586KB）+ 32位内核（约3.85MB），启动菜单选择
+- **双内核混合引导**：64位内核（约807KB）+ 32位内核（约3.85MB），启动菜单选择
 - **三重引导支持**：BIOS + UEFI + CD-ROM
-- **图形桌面环境**：1024x768真彩色，9个应用，TrueType字体
+- **图形桌面环境**：1920×1080 真彩色，100/125/150/200% 四档 UI 缩放，TrueType 字体，窗口投影与悬停反馈
 - **ext2文件系统**：完整文件/目录操作（创建/读写/删除）
 - **完整网络协议栈**：ARP/IP/ICMP/UDP/TCP/DHCP/DNS/HTTP
-- **用户态程序支持**：ELF64加载，ulib C库，104个已实现系统调用（详见 `docs/specs/SYSCALL_ABI.md`）
+- **用户态程序支持**：ELF64加载，ulib C库，109 个系统调用表项（号空间 0–235，详见 `docs/specs/SYSCALL_ABI.md`）
+- **clone 真线程**：`CLONE_VM` 共享父地址空间，独立用户栈与独立内核栈，时钟中断轮转，共享内存双向可见
+- **线程退出接口**：`SYS_HEPU_THREAD_EXIT`（235）结束当前线程而不终止整进程，在 syscall 栈上重建目标线程返回帧
 - **glibc 动态链接**：PT_INTERP 引导 glibc 的 `ld-linux-x86-64.so.2`，DT_NEEDED/RELR/TLS 由用户态 ld.so 完成；`gcc -O2` 编译的 Linux PIE 程序可直接 `exec`
 - **统一源码树**：13个共享模块（驱动/文件系统/图形/库/调试/安全）
 - **70个Shell命令**：完整的命令行界面
@@ -38,7 +49,7 @@
 hepu-os/
 ├── kernel/
 │   ├── kernel_main_64.c       # 64位内核主入口
-│   ├── arch/x86_64/           # 64位架构相关（98个模块）
+│   ├── arch/x86_64/           # 64位架构相关（113个源码模块）
 │   │   ├── entry_64.S         # 汇编入口
 │   │   ├── process64_full.c   # 进程管理与调度
 │   │   ├── smp.c              # SMP多处理器
@@ -73,11 +84,16 @@ hepu-os/
 
 ## 快速开始
 
-### 编译64位内核
+### 编译64位内核（主线）
 ```bash
-cd kernel/arch/x86_64
-make
-# 输出: build_x86_64/hepu-kernel64.bin (约531KB)
+make -C kernel/arch/x86_64 -j4
+# 输出: build_x86_64/hepu-kernel64.bin (约807KB)
+```
+
+### 编译用户态程序
+```bash
+make -C user
+# 输出: user/build/*.elf（hello/sec_test/clone_test/ps/shell 等）
 ```
 
 ### 编译32位内核
@@ -86,29 +102,29 @@ make
 # 输出: build_v250/hepu-kernel.bin (4.1MB)
 ```
 
-### 构建BIOS镜像
+### 构建 UEFI 镜像（推荐）
 ```bash
-bash tools/make_single_img64.sh
-# 输出: /tmp/hepu64_single.img (257MB)
+python3 tools/build_uefi_dual.py
+# 输出: /tmp/hepu_uefi_dual.img (256MB, GPT + ESP + ext2 根分区)
+# 依赖: sgdisk / mtools(mcopy) / debugfs —— 缺 sgdisk 会静默产出空 ESP
 ```
 
-### QEMU测试
+### QEMU 测试（UEFI + 双核）
 ```bash
-# 单核测试
-tools/bin/qemu-system-x86_64 -m 128 -bios tools/firmware/bios-256k.bin \
-  -drive format=raw,file=/tmp/hepu64_single.img -vga std
-
-# 4核SMP测试
-tools/bin/qemu-system-x86_64 -m 128 -smp 4 -bios tools/firmware/bios-256k.bin \
-  -drive format=raw,file=/tmp/hepu64_single.img -vga std
+qemu-system-x86_64 \
+  -drive if=pflash,format=raw,readonly=on,file=OVMF_CODE_4M.fd \
+  -drive if=pflash,format=raw,file=OVMF_VARS_4M.fd \
+  -drive format=raw,file=/tmp/hepu_uefi_dual.img \
+  -m 1024 -smp 2 -vga std -serial file:/tmp/hepu_serial.log
 ```
+启动到桌面约 50 秒；串口日志混有二进制输出，`grep` 需带 `-a`。
 
 ### 真机启动
 - 使用Rufus **DD模式**写入.img到U盘
 - 或使用balenaEtcher
 - BIOS设置：Legacy模式，USB第一启动
 
-## 系统调用（104个已实现）
+## 系统调用（109 个表项，号空间 0–235）
 
 系统调用 ABI 由 `tools/gen_syscall_doc.py` 从源码 `kernel/arch/x86_64/syscall64_full.c` 自动生成，完整列表见 [`docs/specs/SYSCALL_ABI.md`](docs/specs/SYSCALL_ABI.md)。
 
@@ -116,18 +132,20 @@ tools/bin/qemu-system-x86_64 -m 128 -smp 4 -bios tools/firmware/bios-256k.bin \
 
 | 调用号 | 名称 | 功能 |
 |--------|------|------|
-| 1 | write | 写入文件/控制台 |
-| 2 | read | 读取文件/键盘 |
-| 3 | open | 打开文件 |
-| 4 | close | 关闭文件 |
-| 6 | exit | 退出进程 |
-| 7 | fork | 创建子进程 |
-| 11 | execve | 执行程序 |
-| 12 | brk | 内存分配 |
-| 33 | mmap | 内存映射 |
-| 39 | getpid | 获取进程ID |
-| 60 | exit | 退出（Linux ABI 兼容） |
-| 79 | getcwd | 当前目录 |
+| 5 | exit | 进程退出 |
+| 7 | getpid | 获取进程 ID |
+| 8 | open | 打开文件 |
+| 9 | read | 读取文件 |
+| 10 | write | 写入文件 |
+| 11 | close | 关闭文件 |
+| 14 | lseek | 文件定位 |
+| 15 | sleep | 睡眠（毫秒） |
+| 40 | clone | 创建线程（共享地址空间） |
+| 41 | waitpid | 等待子进程 |
+| 42 | execve | 执行程序 |
+| 43 | fork | 创建子进程 |
+| 64 | brk | 调整堆顶 |
+| 235 | hepu_thread_exit | 线程退出（不终止整进程） |
 
 > 注：系统同时维护 Linux x86_64 调用号翻译表，可直接运行主机 `gcc -static` 编译的原生 Linux ELF。
 
@@ -154,16 +172,18 @@ Stage2启动菜单：5秒倒计时，默认64位，可选择32位。
 ## 开发状态
 
 ### 已完成
-- ✅ 64位内核基础（98个模块，约531KB）
+- ✅ 64位内核基础（113个源码模块，约807KB）
 - ✅ SMP多处理器（4核，负载均衡，IPI）
 - ✅ 双内核混合引导（64位+32位）
 - ✅ 三重引导（BIOS+UEFI+CD-ROM）
-- ✅ 图形桌面（9个应用，TrueType字体）
+- ✅ 图形桌面（1920×1080，四档 UI 缩放，TrueType 字体）
 - ✅ ext2文件系统（完整操作）
 - ✅ 网络协议栈（TCP/IP+HTTP）
 - ✅ 用户态程序（ELF64+ulib库，Linux静态ELF兼容）
-- ✅ 104个已实现系统调用
+- ✅ 109 个系统调用表项（0–235）
 - ✅ 统一源码树（13个共享模块）
+- ✅ clone 真线程（共享地址空间 + 独立栈 + 时钟轮转）
+- ✅ 线程退出接口 SYS_HEPU_THREAD_EXIT=235
 - ✅ 70个Shell命令
 
 ### 版本历史
