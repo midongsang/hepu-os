@@ -2147,6 +2147,18 @@ static void hs_dynamic_island_render(void)
     int island_y = hs_sy(g_shell.ui.island_y);
 
     {
+        /* 岛必须落在状态栏之下、屏幕之内: 高倍缩放下旧实现 island_y + 展开高度
+         * 会与状态栏胶囊重叠, 时间上半被裁。 */
+        int bar_top = hs_sy(8);
+        int bar_h = hs_sy(g_shell.ui.bar_height);
+        if (island_y < bar_top) island_y = bar_top;
+        int max_h = g_shell.screen_height - island_y - hs_sy(8);
+        if (max_h > 0 && island_h > max_h) island_h = max_h;
+        else if (max_h <= 0) island_h = hs_sy(g_shell.ui.island_height);
+        (void)bar_h;
+    }
+
+    {
         /* P0: 展开/收起尺寸连续插值(缓动), 不再是瞬跳 */
         int e = hs_ease_out_cubic(g_island_t);
         int ww = hs_sx(g_shell.ui.island_width), hh = hs_sy(g_shell.ui.island_height);
@@ -2177,19 +2189,26 @@ static void hs_dynamic_island_render(void)
                            island_x + (island_w - text_w) / 2, island_y + (island_h - font_size) / 2,
                            time, g_shell.colors.panel_fg, font_size);
     } else {
-        /* 展开状态：时间+日期+天气+系统状态 */
-        int cy = island_y + hs_sy(12);
+        /* 展开状态：时间+日期+天气+系统状态
+         * 改为整块在岛内垂直居中: 旧实现固定 +hs_sy(12) 偏移,
+         * 放大后文字块比岛还高, 上半被裁。 */
+        int f_time = hs_s(28), f_date = hs_s(14), f_stat = hs_s(12);
+        int blk = f_time + hs_sy(8) + f_date + hs_sy(8) + f_stat;
+        /* font64_draw_string 的 y 是基线(y+font_size 才是块底), 居中排版必须把
+         * 首行基线放在"块顶 + 字高"处, 否则整块会向上顶出岛外、时间上半被裁。 */
+        int cy = island_y + (island_h - blk) / 2 + f_time;
+        if (cy - f_time < island_y + hs_sy(4)) cy = island_y + hs_sy(4) + f_time;
         /* 时间（大字号） */
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           island_x + hs_sx(20), cy, time, g_shell.colors.panel_fg, hs_s(28));
-        cy += hs_sy(36);
+                           island_x + hs_sx(20), cy, time, g_shell.colors.panel_fg, f_time);
+        cy += f_time + hs_sy(8);
         /* 日期 */
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           island_x + hs_sx(20), cy, "October 15, Thursday", g_shell.colors.text_secondary, hs_s(14));
+                           island_x + hs_sx(20), cy, "October 15, Thursday", g_shell.colors.text_secondary, f_date);
         /* 右侧天气 */
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           island_x + island_w - hs_sx(100), cy, "26C Cloudy", g_shell.colors.text_secondary, hs_s(14));
-        cy += hs_sy(28);
+                           island_x + island_w - hs_sx(100), cy, "26C Cloudy", g_shell.colors.text_secondary, f_date);
+        cy += f_date + hs_sy(8);
         /* 系统状态条 (V0.56.2: 原来是写死的 "CPU 35%  MEM 60%", 与任务管理器/Info 页
          * 的真实数据对不上; 改读同一套统计源, 避免同屏两套数值) */
         {
@@ -2210,7 +2229,7 @@ static void hs_dynamic_island_render(void)
 #undef HS_CAT
             sbuf[l] = 0;
             font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                               island_x + hs_sx(20), cy, sbuf, g_shell.colors.text_secondary, hs_s(12));
+                               island_x + hs_sx(20), cy, sbuf, g_shell.colors.text_secondary, f_stat);
         }
     }
 }
