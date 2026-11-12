@@ -143,10 +143,8 @@ static hs_window_t *st_dev_win;
 
 /* 内容按窗口自身尺寸缩放(基准尺寸下恒等于原值)。行高、字号、列偏移、
  * 标签宽度都走同一套 —— 只放大字号不放大行高会让行距塌在一起。 */
-static int st_dev_sc(int v)
-{
-    return v * (st_dev_win ? st_dev_win->width : ST_BASE_DEV_W) / ST_BASE_DEV_W;
-}
+extern int hs_win_k(hs_window_t *w, int base_w, int v);
+static int st_dev_sc(int v) { return hs_win_k(st_dev_win, ST_BASE_DEV_W, v); }
 #define SD(v) st_dev_sc(v)
 static int st_dev_tab;
 static int st_dev_scroll[3];
@@ -364,10 +362,7 @@ typedef struct {
 extern int partition64_scan(st_partition_t *parts);
 
 static hs_window_t *st_disk_win;
-static int st_disk_sc(int v)
-{
-    return v * (st_disk_win ? st_disk_win->width : ST_BASE_DISK_W) / ST_BASE_DISK_W;
-}
+static int st_disk_sc(int v) { return hs_win_k(st_disk_win, ST_BASE_DISK_W, v); }
 #define SK(v) st_disk_sc(v)
 static int st_disk_btn[3][4];      /* x,y,w,h: Mount / Unmount / fsck */
 static char st_disk_msg[64];
@@ -541,10 +536,7 @@ static void st_disk_render(hs_window_t *w)
 #define ST_LOG_MAX_LINES 256
 
 static hs_window_t *st_log_win;
-static int st_log_sc(int v)
-{
-    return v * (st_log_win ? st_log_win->width : ST_BASE_LOG_W) / ST_BASE_LOG_W;
-}
+static int st_log_sc(int v) { return hs_win_k(st_log_win, ST_BASE_LOG_W, v); }
 #define SL(v) st_log_sc(v)
 static char st_log_text[ST_LOG_TEXT_MAX];
 static int  st_log_offs[ST_LOG_MAX_LINES];

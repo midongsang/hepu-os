@@ -134,6 +134,16 @@ static int hs_ease_out_cubic(int p)
     int m = 100 - p;
     return 100 - (m * m * m) / 10000;
 }
+
+/* 窗口内容缩放的唯一实现。所有 app 的 DS 宏最终都落到这里 ——
+ * 各窗口只声明自己的基准宽, 比例规则只有这一处。
+ * base_w 传 0 或窗口宽度非法时, 退回 base_w 本身(基准尺寸恒等于原值)。 */
+int hs_win_k(hs_window_t *w, int base_w, int v)
+{
+    int bw = (w && w->width > 0) ? w->width : base_w;
+    if (base_w <= 0) return v;
+    return v * bw / base_w;
+}
 /* V0.55.0 P0: 弹出浮层滑入缓动 (0..100, 与灵动岛共用 ease-out cubic) */
 static int g_menu_t = 0, g_menu_target = 0;
 static int g_color_t = 0, g_color_target = 0;
@@ -1746,41 +1756,50 @@ void hs_window_render_all(void)
 
         /* 标题栏（浮动窗口） */
         if (w->type == HS_WINDOW_FLOATING) {
-            gfx64_fill_rect(w->x, w->y, w->width, 24,
+            /* 标题栏高度跟随 DPI: 内容已按窗口尺寸放大, 标题栏若留 24 物理像素,
+             * 125% 下相对就变窄, 标题与按钮会挤到一起。 */
+            int th = hs_sy(24);
+            gfx64_fill_rect(w->x, w->y, w->width, th,
                             g_shell.colors.titlebar_bg);
             /* V0.55: 标题栏前景跟随主题, 深色主题下不再不可见 */
             uint32_t tb_fg = g_shell.colors.window_fg;
-            int by = w->y + 5;
-            int cmin = w->x + w->width - 68;
-            int cmax = w->x + w->width - 44;
-            int cclo = w->x + w->width - 20;
+            int by = w->y + hs_sy(5);
+            int bw24 = hs_sx(24), bh20 = hs_sy(20);
+            int cmin = w->x + w->width - hs_sx(68);
+            int cmax = w->x + w->width - hs_sx(44);
+            int cclo = w->x + w->width - hs_sx(20);
             int mx = g_shell.mouse_x, my = g_shell.mouse_y;
-            int hov_min = (my >= w->y && my < w->y + 24 &&
-                           mx >= cmin && mx < cmin + 24);
-            int hov_max = (my >= w->y && my < w->y + 24 &&
-                           mx >= cmax && mx < cmax + 24);
-            int hov_clo = (my >= w->y && my < w->y + 24 &&
-                           mx >= cclo && mx < cclo + 20);
+            int hov_min = (my >= w->y && my < w->y + th &&
+                           mx >= cmin && mx < cmin + bw24);
+            int hov_max = (my >= w->y && my < w->y + th &&
+                           mx >= cmax && mx < cmax + bw24);
+            int hov_clo = (my >= w->y && my < w->y + th &&
+                           mx >= cclo && mx < cclo + bw24);
             /* 悬停底色(关闭键红色) */
             if (hov_min)
-                gfx64_fill_rounded_rect(cmin, w->y + 2, 24, 20, 4, g_shell.colors.panel_bg);
+                gfx64_fill_rounded_rect(cmin, w->y + hs_sy(2), bw24, bh20, hs_sx(4),
+                                        g_shell.colors.panel_bg);
             if (hov_max)
-                gfx64_fill_rounded_rect(cmax, w->y + 2, 24, 20, 4, g_shell.colors.panel_bg);
+                gfx64_fill_rounded_rect(cmax, w->y + hs_sy(2), bw24, bh20, hs_sx(4),
+                                        g_shell.colors.panel_bg);
             if (hov_clo)
-                gfx64_fill_rounded_rect(cclo, w->y + 2, 20, 20, 4, 0xE5484D);
+                gfx64_fill_rounded_rect(cclo, w->y + hs_sy(2), bw24, bh20, hs_sx(4), 0xE5484D);
             uint32_t btnc = hov_clo ? 0xFFFFFF : tb_fg;
             /* 最小化: 水平粗线 */
-            gfx64_fill_rect(cmin + 6, by + 6, 11, 2, btnc);
+            gfx64_fill_rect(cmin + hs_sx(6), by + hs_sy(6), hs_sx(11), hs_sy(2), btnc);
             /* 最大化: 方框; 已最大化时画双层表示还原 */
-            gfx64_draw_rect(cmax + 6, by + 2, 10, 10, btnc);
+            gfx64_draw_rect(cmax + hs_sx(6), by + hs_sy(2), hs_sx(10), hs_sy(10), btnc);
             if (w->state == HS_WINDOW_STATE_MAXIMIZED) {
-                gfx64_draw_rect(cmax + 8, by + 4, 10, 10, btnc);
-                gfx64_draw_rect(cmax + 10, by + 6, 6, 6, btnc);
+                gfx64_draw_rect(cmax + hs_sx(8), by + hs_sy(4), hs_sx(10), hs_sy(10), btnc);
+                gfx64_draw_rect(cmax + hs_sx(10), by + hs_sy(6), hs_sx(6), hs_sy(6), btnc);
             }
             /* 关闭: ×(硬边对角线, 逐像素) */
-            for (int i = 0; i <= 10; i++) {
-                gfx64_put_pixel(cclo + 4 + i, by + 2 + i, btnc);
-                gfx64_put_pixel(cclo + 14 - i, by + 2 + i, btnc);
+            {
+                int xsz = hs_sx(10);
+                for (int i = 0; i <= xsz; i++) {
+                    gfx64_put_pixel(cclo + hs_sx(4) + i, by + hs_sy(2) + i, btnc);
+                    gfx64_put_pixel(cclo + hs_sx(14) - i, by + hs_sy(2) + i, btnc);
+                }
             }
         }
 
@@ -1797,42 +1816,42 @@ void hs_window_render_all(void)
             /* 浮动窗口标题栏左侧应用图标(单色矢量) */
             if (w->type == HS_WINDOW_FLOATING) {
                 if (strcmp(w->title, "Terminal") == 0)
-                    hs_icon_terminal(w->x + 5, w->y + 4, 16, tc);
+                    hs_icon_terminal(w->x + hs_sx(5), w->y + hs_sy(4), hs_s(16), tc);
                 else if (strcmp(w->title, "Files") == 0)
-                    hs_icon_folder(w->x + 5, w->y + 4, 16, tc);
+                    hs_icon_folder(w->x + hs_sx(5), w->y + hs_sy(4), hs_s(16), tc);
                 else if (strcmp(w->title, "Task Manager") == 0)
-                    hs_icon_task(w->x + 5, w->y + 4, 16, tc);
+                    hs_icon_task(w->x + hs_sx(5), w->y + hs_sy(4), hs_s(16), tc);
                 else if (strcmp(w->title, "Settings") == 0)
-                    hs_icon_settings(w->x + 5, w->y + 4, 16, tc);
+                    hs_icon_settings(w->x + hs_sx(5), w->y + hs_sy(4), hs_s(16), tc);
                 else if (strcmp(w->title, "Device Manager") == 0)
-                    hs_icon_info(w->x + 5, w->y + 4, 16, tc);
+                    hs_icon_info(w->x + hs_sx(5), w->y + hs_sy(4), hs_s(16), tc);
                 else if (strcmp(w->title, "Disk Manager") == 0)
-                    hs_icon_store(w->x + 5, w->y + 4, 16, tc);
+                    hs_icon_store(w->x + hs_sx(5), w->y + hs_sy(4), hs_s(16), tc);
                 else if (strcmp(w->title, "Log Viewer") == 0)
-                    hs_icon_doc(w->x + 5, w->y + 4, 16, tc);
+                    hs_icon_doc(w->x + hs_sx(5), w->y + hs_sy(4), hs_s(16), tc);
                 else if (strcmp(w->title, "Calculator") == 0)
-                    hs_icon_calc(w->x + 5, w->y + 4, 16, tc);
+                    hs_icon_calc(w->x + hs_sx(5), w->y + hs_sy(4), hs_s(16), tc);
                 else if (strcmp(w->title, "Editor") == 0)
-                    hs_icon_editor(w->x + 5, w->y + 4, 16, tc);
+                    hs_icon_editor(w->x + hs_sx(5), w->y + hs_sy(4), hs_s(16), tc);
                 else if (strcmp(w->title, "Browser") == 0)
-                    hs_icon_browser(w->x + 5, w->y + 4, 16, tc);
+                    hs_icon_browser(w->x + hs_sx(5), w->y + hs_sy(4), hs_s(16), tc);
                 else if (strcmp(w->title, "App Store") == 0)
-                    hs_icon_store(w->x + 5, w->y + 4, 16, tc);
+                    hs_icon_store(w->x + hs_sx(5), w->y + hs_sy(4), hs_s(16), tc);
                 else if (strcmp(w->title, "About") == 0)
-                    hs_icon_info(w->x + 5, w->y + 4, 16, tc);
-                tx = w->x + 26;
+                    hs_icon_info(w->x + hs_sx(5), w->y + hs_sy(4), hs_s(16), tc);
+                tx = w->x + hs_sx(26);
             }
             /* 标题过长时截断, 避免压住右侧窗口按钮 */
             char tbuf[40];
-            int maxc = (w->width - 150) / 7;
-            if (maxc < 4) maxc = 4;
+            int maxc = (w->width - hs_sx(150)) / hs_s(7);   /* 7 = 半角字符宽 */
+            if (maxc < 4) maxc = 4;                          /* 4 = 字符列下限 */
             int n = 0;
             while (w->title[n] && n < maxc && n < 39) { tbuf[n] = w->title[n]; n++; }
             if (w->title[n] && n > 1) { tbuf[n - 1] = '.'; tbuf[n] = '.'; n++; }
             tbuf[n] = 0;
             font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                               tx, w->y + 6, tbuf,
-                               tc, 12);
+                               tx, w->y + hs_sy(6), tbuf,
+                               tc, hs_s(12));
         }
 
         /* 自定义渲染回调 */
@@ -1849,7 +1868,7 @@ void hs_window_render_all(void)
 /* 设置窗口渲染回调 */
 /* 设置窗口内容按窗口实际宽度等比缩放(基准 460x430)。
  * 渲染与命中测试必须共用这一套公式, 否则点击会落空。 */
-static int hs_set_k(hs_window_t *w, int v) { return (v * w->width + 230) / 460; }
+static int hs_set_k(hs_window_t *w, int v) { return hs_win_k(w, 460, v); }
 #define SETK(v) hs_set_k(w, (v))
 
 static void hs_settings_window_render(hs_window_t *w)
@@ -4191,21 +4210,23 @@ void hpdesk_mouse_down(int x, int y)
         if (id < 0 || id >= g_wm.window_count) continue;
         hs_window_t *w = &g_wm.windows[id];
         if (!w->visible || w->type != HS_WINDOW_FLOATING) continue;
+        /* 命中区必须与绘制用同一套缩放, 否则放大后按钮画得大、点得小 */
         if (x >= w->x && x <= w->x + w->width &&
-            y >= w->y && y <= w->y + 24) {
+            y >= w->y && y <= w->y + hs_sy(24)) {
             /* V0.13.16: 标题栏三按钮: 最小化/最大化/关闭 (无背景) */
-            int min_x = w->x + w->width - 68;
-            int max_x = w->x + w->width - 44;
-            int close_x = w->x + w->width - 20;
-            if (x >= min_x && x <= min_x + 24) {
+            int bw24 = hs_sx(24);
+            int min_x = w->x + w->width - hs_sx(68);
+            int max_x = w->x + w->width - hs_sx(44);
+            int close_x = w->x + w->width - hs_sx(20);
+            if (x >= min_x && x <= min_x + bw24) {
                 hs_window_minimize(w);
                 return;
             }
-            if (x >= max_x && x <= max_x + 24) {
+            if (x >= max_x && x <= max_x + bw24) {
                 hs_window_toggle_maximize(w);
                 return;
             }
-            if (x >= close_x && x <= close_x + 24) {
+            if (x >= close_x && x <= close_x + bw24) {
                 hs_window_recycle(w->id);
                 return;
             }

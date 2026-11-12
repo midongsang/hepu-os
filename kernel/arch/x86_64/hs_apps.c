@@ -17,6 +17,7 @@ extern void gfx64_fill_rounded_rect(int x, int y, int w, int h, int radius, uint
 /* 桌面缩放入口(见 hpdesk.c), 窗口创建尺寸必须与桌面同一套 DPI 语义 */
 extern int hs_ui_sx(int v);
 extern int hs_ui_sy(int v);
+extern int hs_win_k(hs_window_t *w, int base_w, int v);
 extern void gfx64_draw_rounded_rect(int x, int y, int w, int h, int radius, uint32_t color);
 extern void font64_draw_string(void *fb, int fw, int fh,
                                int x, int y, const char *str,
@@ -425,7 +426,7 @@ static void t_render(hs_window_t *w)
     /* 终端内容按窗口自身尺寸缩放(基准 520x340)。窗口被 DPI 放大时内容跟着放大,
      * 不会出现"窗口变大、内容只占左上角"的留白 —— 这与 Settings 的做法一致,
      * 区别是这里用窗口自身尺寸做比例, 不依赖全局缩放因子, 更耐改。 */
-#define TX(v) ((v) * w->width / 520)
+#define TX(v) hs_win_k(w, 520, v)
 #define TY(v) ((v) * w->height / 340)
     int W = g_shell.screen_width, H = g_shell.screen_height;
     int cx = w->x + TX(6), cy = w->y + TY(26);
@@ -656,11 +657,7 @@ static hs_window_t *f_win = 0;
  * 窗口被 DPI 放大时内容同比例放大, 基准尺寸下恒等于原值。
  * 行高也走这里 —— 渲染、f_visible_rows()、命中测试必须共用同一个行高,
  * 否则会出现"看得见点不到/点错行"。 */
-static int f_sc(int v)
-{
-    int base = f_win ? f_win->width : FS_BASE_W;
-    return v * base / FS_BASE_W;
-}
+static int f_sc(int v) { return hs_win_k(f_win, FS_BASE_W, v); }
 #define FS(v) f_sc(v)
 static int f_row_h(void) { return f_sc(FS_ROW_H); }
 static char f_path[FS_PATH_MAX] = "/";
@@ -1975,7 +1972,7 @@ static void m_render(hs_window_t *w)
     /* 内容按窗口自身尺寸缩放(基准 520x380)。列偏移 c_name/c_cpu/c_mem/c_state
      * 也走同一个比例, 这样放大后表头与数据行仍然共用一组列位置 —— 比例字体下
      * 靠空格拼字符串对齐必然随位数漂移, 只有共用列偏移才稳。 */
-#define MC(v) ((v) * w->width / 520)
+#define MC(v) hs_win_k(w, 520, v)
     int W = g_shell.screen_width, H = g_shell.screen_height;
     int cx = w->x + MC(6), cy = w->y + MC(26);
     int cw = w->width - MC(12);
@@ -2235,10 +2232,7 @@ static void m_kill_do(void)
 static hs_window_t *e_win = 0;
 
 /* 编辑器内容按窗口自身尺寸缩放(基准 640x440) */
-static int e_sc(int v)
-{
-    return v * (e_win ? e_win->width : 640) / 640;
-}
+static int e_sc(int v) { return hs_win_k(e_win, 640, v); }
 #define EC(v) e_sc(v)
 static int ed_line_h(void) { return e_sc(ED_LINE_H); }
 static char e_buf[ED_CAP + 1];
