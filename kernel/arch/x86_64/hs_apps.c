@@ -1662,8 +1662,13 @@ static void f_render(hs_window_t *w)
         int top = f_tree_top(), rh = FS(16);
         int ch = f_win->height - FS(26) - FS(40);
         int rows = f_tree_rows();
-        /* 竖分隔线 */
-        gfx64_fill_rect(tx + tw + FS(3), cy + FS(20), 1, ch - FS(26), g_shell.colors.border);
+        /* 竖分隔线: 只画"树与列表并排"的那一段(从树的第一行开始)。
+         * 原来从 cy+20 起, 会横穿路径栏/面包屑, 把最右边那个胶囊切一刀 */
+        {
+            int sep_h = (cy + ch - FS(6)) - top;
+            if (sep_h > 0)
+                gfx64_fill_rect(tx + tw + FS(3), top, 1, sep_h, g_shell.colors.border);
+        }
         for (int r = 0; r < rows; r++) {
             if (r >= f_tree_n) break;
             int iy = top + r * rh;
@@ -3804,6 +3809,7 @@ void hs_apps_handle_wheel(int delta)
         if (t_scroll > 0) t_scroll--;
     }
 }
+
 
 
 
