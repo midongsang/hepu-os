@@ -14,6 +14,9 @@
 /* 外部图形/系统接口 */
 extern void gfx64_fill_rect(int x, int y, int w, int h, uint32_t color);
 extern void gfx64_fill_rounded_rect(int x, int y, int w, int h, int radius, uint32_t color);
+/* 桌面缩放入口(见 hpdesk.c), 窗口创建尺寸必须与桌面同一套 DPI 语义 */
+extern int hs_ui_sx(int v);
+extern int hs_ui_sy(int v);
 extern void gfx64_draw_rounded_rect(int x, int y, int w, int h, int radius, uint32_t color);
 extern void font64_draw_string(void *fb, int fw, int fh,
                                int x, int y, const char *str,
@@ -419,20 +422,25 @@ static void t_exec(const char *line)
 static void t_render(hs_window_t *w)
 {
     void *fb = gfx64_get_framebuffer();
+    /* 终端内容按窗口自身尺寸缩放(基准 520x340)。窗口被 DPI 放大时内容跟着放大,
+     * 不会出现"窗口变大、内容只占左上角"的留白 —— 这与 Settings 的做法一致,
+     * 区别是这里用窗口自身尺寸做比例, 不依赖全局缩放因子, 更耐改。 */
+#define TX(v) ((v) * w->width / 520)
+#define TY(v) ((v) * w->height / 340)
     int W = g_shell.screen_width, H = g_shell.screen_height;
-    int cx = w->x + 6, cy = w->y + 26;
-    int ch = w->height - 26 - 24;
-    int row_h = 16;
+    int cx = w->x + TX(6), cy = w->y + TY(26);
+    int ch = w->height - TY(26) - TY(24);
+    int row_h = TY(16);
     /* 预留 20px 给底部输入行, 避免最后一行输出与提示行重叠 */
-    int visible = (ch - 20) / row_h;
+    int visible = (ch - TY(20)) / row_h;
     if (visible < 1) visible = 1;
 
     /* V0.13.39: 经典终端配色 — 黑底绿字(固定, 不随主题) */
     uint32_t TERM_BG = 0x000000;
     uint32_t TERM_FG = 0x33FF33;
     uint32_t TERM_HI = 0x66FF66;
-    gfx64_fill_rect(w->x + 3, w->y + 24, w->width - 6, w->height - 28, TERM_BG);
-    gfx64_fill_rect(w->x + 3, w->y + 22 + ch, w->width - 6, 26, 0x0A0F0A);
+    gfx64_fill_rect(w->x + TX(3), w->y + TY(24), w->width - TX(6), w->height - TY(28), TERM_BG);
+    gfx64_fill_rect(w->x + TX(3), w->y + TY(22) + ch, w->width - TX(6), TY(26), 0x0A0F0A);
 
     /* 输出区: 从 t_scroll 偏移显示 */
     int start = t_line_count - visible - t_scroll;
@@ -441,23 +449,25 @@ static void t_render(hs_window_t *w)
         int li = start + r;
         if (li < t_line_count) {
             font64_draw_string(fb, W, H, cx, cy + r * row_h,
-                               t_lines[li], TERM_FG, 12);
+                               t_lines[li], TERM_FG, TY(12));
         }
     }
 
     /* 输入行 */
-    int iy = cy + ch - 20;
+    int iy = cy + ch - TY(20);
     char prompt[72];
     strcpy(prompt, "> ");
     hs_strcpyn(prompt + 2, t_input, TERM_INPUT_MAX);
-    font64_draw_string(fb, W, H, cx, iy, prompt, TERM_HI, 12);
+    font64_draw_string(fb, W, H, cx, iy, prompt, TERM_HI, TY(12));
 
     /* 光标 (闪烁块, 2 帧周期) */
     t_frame++;
     if ((t_frame & 1) == 0) {
-        int tx = cx + (2 + t_in_len) * 6;
-        gfx64_fill_rect(tx, iy + 1, 7, 13, TERM_FG);
+        int tx = cx + (2 + t_in_len) * TX(6);
+        gfx64_fill_rect(tx, iy + TY(1), TX(7), TY(13), TERM_FG);
     }
+#undef TX
+#undef TY
 }
 
 static void t_complete(void)
@@ -2138,7 +2148,8 @@ static void m_render(hs_window_t *w)
 hs_window_t *hs_terminal_create(void)
 {
     if (t_win && t_win->visible) { t_win->focus = 1; return t_win; }
-    t_win = hs_window_create(HS_WINDOW_FLOATING, "Terminal", -1, -1, 520, 340);
+    t_win = hs_window_create(HS_WINDOW_FLOATING, "Terminal", -1, -1,
+                            hs_ui_sx(520), hs_ui_sy(340));
     if (t_win) {
         t_win->render = t_render;
         t_put("Hepu Terminal v0.57.0");

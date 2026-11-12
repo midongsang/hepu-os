@@ -197,6 +197,26 @@ def create_ext2_data(img):
                         '-R', f'write {wp} /wallpaper.png'], capture_output=True)
         print("  写入 /usr/share/wallpapers/wallpaper.png + /wallpaper.png")
 
+    # 光标: hpdesk 读 /usr/share/cursors/default.xcur (cursor64.c 解析 Xcursor)
+    # 旧脚本完全没有打包 assets/cursors, 导致运行时 ext2_64_read_file 失败、
+    # 静默回退到 gfx64 内置位图 —— 表现就是"用户给的鼠标包没加载"。
+    cdir = f"{PROJECT}/assets/cursors"
+    if os.path.isdir(cdir):
+        for d in ('/usr', '/usr/share', '/usr/share/cursors'):
+            subprocess.run(['debugfs', '-w', ext2_tmp, '-R', f'mkdir {d}'],
+                           capture_output=True)
+            subprocess.run(['debugfs', '-w', ext2_tmp, '-R', f'mkdir {d}'],
+                           capture_output=True)
+        ncur = 0
+        for f in sorted(os.listdir(cdir)):
+            if not f.endswith('.xcur'):
+                continue
+            subprocess.run(['debugfs', '-w', ext2_tmp,
+                            '-R', f'write {cdir}/{f} /usr/share/cursors/{f}'],
+                           capture_output=True)
+            ncur += 1
+        print(f"  写入 /usr/share/cursors/*.xcur ({ncur} 个)")
+
     # 将ext2分区写入主镜像
     with open(ext2_tmp, 'rb') as f:
         ext2_data = f.read()

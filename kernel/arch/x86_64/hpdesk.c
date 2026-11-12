@@ -109,6 +109,12 @@ static int hs_s(int v)  {
     return (sx < sy) ? sx : sy;
 }
 
+/* 供其他模块(hs_apps.c / hs_systools64.c)使用的缩放入口。
+ * hs_sx/hs_sy 是 hpdesk.c 内的 static, 跨文件拿不到;
+ * 窗口创建尺寸必须和桌面的缩放语义同源, 否则两套 DPI 会打架。 */
+int hs_ui_sx(int v) { return hs_sx(v); }
+int hs_ui_sy(int v) { return hs_sy(v); }
+
 /* 全局实例 */
 hpdesk_t g_shell;
 
@@ -4240,6 +4246,10 @@ extern void gfx64_set_target_back(void);
 extern void gfx64_present(void);
 extern void cursor64_draw(int x, int y);
 extern int cursor64_load_file(const char *path, int want);
+extern int cursor64_ready(void);
+extern int cursor64_nominal(void);
+extern int cursor64_hotspot_x(void);
+extern int cursor64_hotspot_y(void);
 extern int cursor64_pick_size(int w, int h);
 
 /* ============================================================================
@@ -4296,8 +4306,14 @@ static void hs_cursor_init_once(void)
     static int inited = 0;
     if (inited) return;
     inited = 1;
-    cursor64_load_file("/usr/share/cursors/default.xcur",
-                       cursor64_pick_size(g_shell.screen_width, g_shell.screen_height));
+    /* 指针尺寸跟随 UI 缩放(Windows 语义: 指针是 DIP 尺寸, 高 DPI 下应同步变大)。
+     * 加载失败必须留痕 —— 旧实现静默回退内置位图, 看起来就像"光标包没生效"。 */
+    int want = cursor64_pick_size(g_shell.screen_width, g_shell.screen_height);
+    want = want * (g_ui_scale_pct > 0 ? g_ui_scale_pct : 100) / 100;
+    int rc = cursor64_load_file("/usr/share/cursors/default.xcur", want);
+    vga_printf("[CURSOR] load rc=%d want=%d ready=%d nominal=%d hot=(%d,%d)\n",
+               rc, want, cursor64_ready(), cursor64_nominal(),
+               cursor64_hotspot_x(), cursor64_hotspot_y());
 }
 
 /* 是否有进行中的动画(有则必须持续重绘) */

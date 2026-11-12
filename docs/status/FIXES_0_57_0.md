@@ -1254,6 +1254,58 @@ if (h < hs_sy(120)) h = hs_sy(120);
 **验证**：`[WM] create Settings 575x537`、
 `[GEOM] pct=125 screen=1920x1080 logical=1536x864`，桌面无残留空框。
 
+### 1.55 光标包终于真的加载了（打包缺失 + 静默回退）
+
+**症状**："用户给的鼠标包没加载"，指针一直是最初的内置位图。
+
+**根因**：`cursor64.c` 解析器、`assets/cursors/*.xcur`（17 个，含 24/32/48 三档名义尺寸）
+都早就存在，`hs_cursor_init_once()` 也调 `cursor64_load_file("/usr/share/cursors/default.xcur")`。
+但 **`tools/build_uefi_dual.py` 从未把 `assets/cursors` 写进根分区** —— 目标路径根本不存在，
+`ext2_64_read_file()` 返回负值，`cursor64_load_blob()` 失败，`cursor64_draw()` 的
+`if (!g_ready)` 分支**静默回退内置位图**，全程没有任何日志。
+
+**修法**：
+1. 打包：把 `assets/cursors/*.xcur` 写入 `/usr/share/cursors/`
+2. 留痕：`[CURSOR] load rc=%d want=%d ready=%d nominal=%d hot=(%d,%d)`
+3. 尺寸随 DPI：`want = cursor64_pick_size(...) * pct / 100`，指针是 DIP 尺寸
+
+**验证**：
+```
+[CURSOR] load rc=0 want=30 ready=1 nominal=32 hot=(1,0)
+```
+125% 下 want=30，选中最近的 32 档；截图放大后是标准 Xcursor 白色箭头带深色描边。
+
+### 1.56 Terminal 窗口与内容一起接入缩放
+
+**为什么只做一个 app**：`hs_window_create` 里若统一 `w = hs_sx(w)`，而某 app 的内容仍按
+基准像素画，就会重现"窗口变大、内容只占左上角"的留白（§1.5 那次）。所以必须
+**窗口尺寸和内容渲染同时改**，只能一个一个来。
+
+**做法**：Terminal 内容按**窗口自身尺寸**缩放，不依赖全局缩放因子：
+
+```c
+#define TX(v) ((v) * w->width  / 520)
+#define TY(v) ((v) * w->height / 340)
+```
+
+基准 520×340 时两式恒等于原值，行为向后兼容；窗口被放大时内容同比例放大。
+行高、可见行数、输入行位置、光标块位置全部走这两个宏。
+
+跨文件拿不到 `hs_sx`（它是 hpdesk.c 的 static），所以在 hpdesk.c 暴露：
+
+```c
+int hs_ui_sx(int v) { return hs_sx(v); }
+int hs_ui_sy(int v) { return hs_sy(v); }
+```
+
+窗口创建改为 `hs_ui_sx(520), hs_ui_sy(340)`。
+
+**验证**（1920×1080 @125%）：
+```
+[WM] create Terminal 650x425
+```
+截图：黑底铺满整窗，绿字与字号同步放大，底部输入行贴底，光标块跟在提示符后，无留白。
+
 ## 四、回归基线
 
 - 全量干净重建：**0 error / 90 warning**（`-Wunused-parameter` 基线不变；接入 Lua 后仍保持）
