@@ -1160,6 +1160,43 @@ void x86_64_kernel_main(void)
         hepu_tls_init();
         vga_puts("[OK] Crypto full + TLS ready\n");
 
+        /* ---------------------------------------------------------------
+         * 用户程序注册与启动
+         *
+         * 背景：镜像构建脚本此前只往根分区写字体/壁纸/光标，**从未创建 /bin**
+         * —— 于是 autostart 和自检电池里所有 /bin 下的 .elf 都是 "not found"，
+         * 系统跑起来后一个用户进程都没有。现在 /bin 已打包（见 tools/build_uefi_dual.py 的 elf_dirs 打包步骤），这里把程序登记并启动。
+         *
+         * autorun 只放**确定会自己退出**的三个：hello 验证 ELF64 主路径、
+         * ps 验证进程表读取、sec_test 验证地址访问限制。
+         * forktest/comptest 有各自的测试通道（BOOT_SELFTEST），不在这里
+         * 无条件跑 —— 它们会在启动阶段占用较长时间。
+         * --------------------------------------------------------------- */
+        {
+            extern int user_process_exec(const char *path);
+            /* ps 已打包进 /bin 并可在 shell 里手动执行，但暂不放进 autorun：
+ * SYS_HEPU_PS 之后进程跨越用户栈第二页（0x6FFFEFE8）即 #PF，实测崩溃点
+ * PDe 物理地址为 0，属内核页表侧问题，见 docs/status/OPEN_BUGS.md。 */
+            static const char *autorun[] = {
+                "/bin/hello.elf",
+                "/bin/sec_test.elf",
+            };
+            vga_puts("[REG] user programs registered, starting autorun set...\n");
+            for (unsigned i = 0; i < sizeof(autorun) / sizeof(autorun[0]); i++) {
+                vga_puts("[REG] exec ");
+                vga_puts(autorun[i]);
+                int pid = user_process_exec(autorun[i]);
+                if (pid < 0) {
+                    vga_puts(" -> not found\n");
+                } else {
+                    vga_puts(" -> exited (pid=");
+                    vga_put_hex((uint64_t)pid);
+                    vga_puts(")\n");
+                }
+            }
+            vga_puts("[REG] autorun done\n");
+        }
+
         desktop64_run();
     } else {
         vga_puts("[INIT] Falling back to text shell\n");

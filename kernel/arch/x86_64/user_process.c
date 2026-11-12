@@ -23,7 +23,7 @@
 /* 进程入口初始 RSP。GCC 按普通函数编译 _start, 假设入口 rsp ≡ 8 (mod 16)
  * (调用方 call 已压 8 字节); 真实 Linux ELF 的 crt1 自带 and $-16 重对齐, 不受影响。
  * 若直接给 16 对齐的栈顶, 内联系统调用的 movaps 会因栈未对齐触发 #GP(0xD)。 */
-#define USER_INIT_RSP   (USER_STACK_TOP - 8)
+#define USER_INIT_RSP   (USER_STACK_TOP - 0x1000)   /* V0.57.2: 留一页余量，别贴栈顶 */
 
 #define PAGE_PRESENT  (1 << 0)
 #define PAGE_WRITABLE (1 << 1)

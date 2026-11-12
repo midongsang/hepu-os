@@ -19,7 +19,8 @@ OBJCOPY := objcopy
 
 # 编译选项（用户态ELF64）
 CFLAGS := -m64 -ffreestanding -fcf-protection=none -fno-pic -fno-pie -fno-stack-protector \
-          -fno-builtin -nostdlib -nodefaultlibs -O2 -Wall -Wextra
+          -fno-builtin -nostdlib -nodefaultlibs -O2 -Wall -Wextra \
+          -I$(USER_DIR)../kernel/include
 LDFLAGS := -m elf_x86_64 -nostdlib -static
 
 # 链接脚本（用户态地址空间：0x400000）

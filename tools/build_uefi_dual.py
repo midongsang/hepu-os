@@ -217,6 +217,31 @@ def create_ext2_data(img):
             ncur += 1
         print(f"  写入 /usr/share/cursors/*.xcur ({ncur} 个)")
 
+    # 用户态程序: 内核用绝对路径 /bin/xxx.elf 去 exec，而旧脚本从没打包过 /bin
+    # —— 结果就是 autostart 与自检电池全部 "not found"，系统里一个用户进程都没有。
+    # 这里把三处产物统一扁平化写入 /bin（内核只认 /bin/<name>.elf）。
+    elf_dirs = [
+        f"{PROJECT}/user/build",
+        f"{PROJECT}/user/build/legacy",
+        f"{PROJECT}/user/apps",
+    ]
+    subprocess.run(['debugfs', '-w', ext2_tmp, '-R', 'mkdir /bin'],
+                   capture_output=True)
+    nel = 0
+    for d in elf_dirs:
+        if not os.path.isdir(d):
+            continue
+        for root, _dirs, files in os.walk(d):
+            for f in sorted(files):
+                if not f.endswith('.elf'):
+                    continue
+                dst = f'/bin/{f}'
+                subprocess.run(['debugfs', '-w', ext2_tmp,
+                                '-R', f'write {os.path.join(root, f)} {dst}'],
+                               capture_output=True)
+                nel += 1
+    print(f"  写入 /bin/*.elf ({nel} 个)")
+
     # 将ext2分区写入主镜像
     with open(ext2_tmp, 'rb') as f:
         ext2_data = f.read()

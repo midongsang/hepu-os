@@ -11,18 +11,14 @@
 #include <stddef.h>
 #include <stdarg.h>
 
-/* 系统调用号（与内核syscall64_full.c一致） */
-#define SYS_WRITE   1
-#define SYS_READ    2
-#define SYS_OPEN    3
-#define SYS_CLOSE   4
-#define SYS_EXIT    6
-#define SYS_FORK    7
-#define SYS_EXECVE  11
-#define SYS_BRK     12
-#define SYS_TIME    13
-#define SYS_SLEEP   14
-#define SYS_GETPID  20
+/* 系统调用号：唯一事实源 = kernel/include/syscall.h，用户态禁止再抄一份。
+ *
+ * 旧版在这里硬编码 1=WRITE / 3=OPEN / 6=EXIT / 7=FORK / 20=GETPID，
+ * 与内核真实表（WRITE=10, OPEN=8, EXIT=5, FORK=43, GETPID=7）整体错位
+ * —— 所有 /bin 程序一启动就刷 "Unimplemented syscall: 1"、"exited(pid=0)",
+ * ps.elf 直接 #PF。这就是"程序打包了却跑不起来"的根因。
+ */
+#include "syscall.h"
 
 /* 标准文件描述符 */
 #define STDIN_FILENO  0
@@ -92,7 +88,7 @@ static inline int fork(void)
 
 static inline int waitpid(int pid, int *status, int options)
 {
-    return (int)syscall3(56, (uint64_t)pid, (uint64_t)status, (uint64_t)options);
+    return (int)syscall3(SYS_WAITPID, (uint64_t)pid, (uint64_t)status, (uint64_t)options);
 }
 
 static inline int execve(const char *pathname, char *const argv[], char *const envp[])
@@ -257,7 +253,15 @@ static inline void putchar(char c)
 }
 
 /* 简单的printf（支持%d, %s, %c, %x, %%） */
-static inline void printf(const char *fmt, ...)
+/* V0.57.2: 必须 noinline。
+ *
+ * 原来写 `static inline`，-O2 内联 + constprop 之后 %s 的 va_arg 取值落到
+ * 0x70000000（栈顶之外）→ #PF(rip=printf 内 mov (%rdx),%rsi)。原因：variadic
+ * 函数只有在生成独立栈帧、把寄存器参数 spill 进 register save area 之后，
+ * va_start 才拿得到正确地址；inline 掉就没有这块区域。
+ * ps.elf 一打印就崩、而只用 puts 的 hello.elf 正常，差别就在这里。
+ */
+static __attribute__((noinline, unused)) void printf(const char *fmt, ...)
 {
     va_list ap;
     va_start(ap, fmt);

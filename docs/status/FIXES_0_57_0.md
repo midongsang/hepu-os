@@ -2561,3 +2561,67 @@ USB 按钮的点击热区一直用裸像素（`+6`、`-12`、`12*len+4`），而
 
 SEC-02、ROADMAP P0-2、OVERVIEW 3.6 的「clone 共享父页表」全部改为
 「clone 未实现，返回 ENOSYS」——避免下一轮又照着旧措辞去修一个不存在的行为。
+
+---
+
+## 1.83 真正注册用户程序（/bin 打包 + 号表单一事实源 + 启动 autorun）
+
+### 缺口（源码复核）
+
+1. **镜像 rootfs 里根本没有 `/bin`** —— `create_ext2_data()` 只写 `/fonts`、
+   `/usr/share/wallpapers`、`/usr/share/cursors`、`/wallpaper.png`，
+   `shell64_run` 的 autostart 与 `HEPU_BOOT_SELFTEST` 电池里所有 `/bin/*.elf`
+   全部 "not found"，系统跑起来一个用户进程都没有。
+2. **`user/ulib.h` 是用户态第三份号表**，且整体错位：`SYS_WRITE=1`（真 10）、
+   `SYS_READ=2`（真 9）、`SYS_OPEN=3`（真 8）、`SYS_EXIT=6`（真 5）、
+   `SYS_FORK=7`（真 43）、`SYS_BRK=12`（真 64）、`SYS_SLEEP=14`（真 15）、
+   `SYS_GETPID=20`（真 7），`waitpid` 还硬编码 `syscall3(56,...)`（真 41）。
+   首轮实测 `/bin/hello.elf` 一跑就刷十几条 `Unimplemented syscall: 1` 然后
+   `exited (pid=0x0)`。
+
+### 修法
+
+| 处 | 改动 |
+|---|---|
+| `tools/build_uefi_dual.py` | `create_ext2_data()` 新增 `elf_dirs`：递归 `user/build`、`user/build/legacy`、`user/apps`，扁平化写进 `/bin`，输出 `写入 /bin/*.elf (31 个)`（重名覆盖后实存 20 个） |
+| `user/ulib.h` | 删除自带的硬编码号段，改 `#include "syscall.h"`（与内核**单一事实源**）；`waitpid` 改 `syscall3(SYS_WAITPID,...)` |
+| `user/Makefile` | `CFLAGS` 追加 `-I$(USER_DIR)../kernel/include`（首版误写 `$(ROOT)`，该变量在 Makefile 内未定义） |
+| `kernel/kernel_main_64.c` | `desktop64_run()` 前插入 `[REG]` 块，逐个 `user_process_exec` 并打印 `-> exited (pid=0x..)` / `-> not found` |
+| `user/apps/ps.c` | 硬编码 `syscall2(200,...)` + `syscall 1` 改为 `SYS_HEPU_PS`(227) + ulib |
+
+### 依次暴露并修掉的三个真实内核缺陷
+
+1. **初始 RSP 贴着栈顶**：`hepu_build_initial_stack` 算出的 rsp 距 `0x70000000`
+   只剩 8~32 字节（`USER_INIT_RSP` 更是直接 `TOP-8`）。任何带局部数组的函数
+   （`ps` 的 `e[8]` = 448 B）一建栈帧就越过栈顶 → `#PF(CR2=0x70000000)`，
+   爆栈后还会 `ret` 弹到 0（`rip=0`）。修：`user_stack64.c` 的
+   `rsp = str_base - vec_len - 512`（512 B head-room），
+   `user_process.c` 的 `USER_INIT_RSP` 改 `TOP - 0x1000`。
+2. **进程名没有终止符**：`sys_ps` 逐字节抄 `name[32]`，源结构满 32 字节时
+   无 `\0`，用户态 `strlen` 越过数组读穿。修：`syscall64_full.c` 补
+   `buf[n].name[31] = 0`，`ps.c` 再抄一份到 `nm[33]` 双保险。
+3. **`ulib.h` 的 `printf` 是 `static inline` + varargs**：-O2 下 constprop
+   内联后 `va_start` 拿不到 register save area，`va_arg` 直接取到
+   `0x70000000`（栈顶外）→ `#PF(rip=printf 内 mov (%rdx),%rsi)`。修：
+   改 `static __attribute__((noinline, unused))`。`ps` 另改为零 varargs 的
+   `put_ch`/`put_int`，彻底不依赖。
+
+### 验证（QEMU 实机，1920×1080）
+
+```
+[REG] user programs registered, starting autorun set...
+[REG] exec /bin/hello.elf
+  Hello World from ELF64 user space!
+[REG] exec /bin/sec_test.elf
+[REG] autorun done
+```
+
+`EXCEPTION=0`、`WATCHDOG=0`、`Desktop running=1`，桌面正常（截图
+`hepu_reg_verified.png`，16:25）。内核 824,072 B；`ps.elf` 6,032 B。
+
+### 未闭环（如实记录）
+
+`ps.elf` 已打包进 `/bin`、可手动执行，但**不进 autorun**：`SYS_HEPU_PS`
+返回后进程跨到用户栈第二页（`0x6FFFEFE8`）即 `#PF`，现场 `PDe` 物理地址为 0，
+属内核页表侧问题，已登记 `OPEN_BUGS.md` SEC-19。autorun 只保留 hello 与
+sec_test 两个确认干净的程序。

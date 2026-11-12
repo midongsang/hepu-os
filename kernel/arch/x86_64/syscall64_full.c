@@ -834,6 +834,8 @@ static int64_t sys_ps(struct hep_ps_entry *entries, int max) {
         buf[n].priority = pt[i].priority;
         buf[n].mem_pages = pt[i].runtime;
         for (int j = 0; j < 32; j++) buf[n].name[j] = pt[i].name[j];
+        buf[n].name[31] = 0;   /* V0.57.2: 强制终止符，源码 name 满 32 字节时
+                                * 用户态 strlen 会越过数组读到栈顶之外 → #PF */
         n++;
     }
     copy_to_user(entries, buf, n * sizeof(struct hep_ps_entry));

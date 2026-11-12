@@ -141,7 +141,13 @@ uint64_t hepu_build_initial_stack(const uint64_t *stack_phys, const char *path,
                     + auxv_count * 16;
     vec_len = (vec_len + 15) & ~15ULL;
 
-    uint64_t rsp = str_base - vec_len;
+    /* V0.57.2: 预留 512 字节 head-room。
+     *
+     * 原来 rsp 直接贴着字符串/向量区下面，短程序（如 ps，argv 只有路径一个词）
+     * 算出来 rsp ≈ 0x6FFFFFE0~0x6FFFFFF8，距栈顶只剩 8~32 字节。任何带局部数组
+     * 的函数（ps 的 e[8] = 448 B）再加调用链立刻越过 0x70000000 → #PF(CR2=0x70000000)，
+     * 或爆栈后 ret 弹到 0（rip=0）。给 512 字节余量，普通用户程序就不会一进来就贴顶。 */
+    uint64_t rsp = str_base - vec_len - 512ULL;
     /* V0.33: 进程入口的栈对齐按 SysV x86-64 调用约定给成 RSP ≡ 8 (mod 16)。
      *
      * 依据（实测自 gcc 生成的 _start 反汇编）：
