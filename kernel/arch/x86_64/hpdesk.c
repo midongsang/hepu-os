@@ -2741,7 +2741,10 @@ static void hs_top_bar_render(void)
     icon_x -= hs_sx(6) + icon_size; hs_icon_bmp64(icon_x, icon_y, icon_size, fg, g_shell.colors.panel_bg, hs_ico64_gear64);
     icon_x -= hs_sx(6) + icon_size; hs_icon_bmp64(icon_x, icon_y, icon_size, fg, g_shell.colors.panel_bg, hs_ico64_speaker64);
     icon_x -= hs_sx(6) + icon_size; hs_icon_bmp64(icon_x, icon_y, icon_size, fg, g_shell.colors.panel_bg, hs_ico64_battery64);
-    icon_x -= hs_sx(6) + icon_size; hs_icon_bmp(icon_x, icon_y, icon_size, fg, hs_ico_wifi_std);
+    /* wifi 与旁边四个同源: 都走 64x64 那套(hs_icon_bmp64)。
+     * 旧实现这里单独用 32px 的 hs_ico_wifi_std, 24px 显示时笔画比邻居细一档,
+     * 并排放着像两套图标拼的 —— 与 V0.57.1 修掉的"各自一套手绘矢量"是同一类问题。 */
+    icon_x -= hs_sx(6) + icon_size; hs_icon_bmp64(icon_x, icon_y, icon_size, fg, g_shell.colors.panel_bg, hs_ico64_wifi64);
 }
 
 /* 桌面大时钟 */
