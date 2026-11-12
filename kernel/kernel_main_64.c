@@ -1180,6 +1180,7 @@ void x86_64_kernel_main(void)
             static const char *autorun[] = {
                 "/bin/hello.elf",
                 "/bin/sec_test.elf",
+                "/bin/clone_test.elf",
             };
             vga_puts("[REG] user programs registered, starting autorun set...\n");
             for (unsigned i = 0; i < sizeof(autorun) / sizeof(autorun[0]); i++) {

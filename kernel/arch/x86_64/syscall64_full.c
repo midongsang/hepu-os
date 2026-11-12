@@ -955,7 +955,7 @@ static int64_t sys_socketpair(int domain, int type, int proto, int fds) { (void)
  *   - 当前不是隔离地址空间的 ELF 进程（没有可共享的页表）
  */
 /* 见 sys_clone 内的说明：用户线程还不是调度单元，默认关闭 */
-static int g_clone_threads_enabled = 0;
+static int g_clone_threads_enabled = 1;
 
 #define CLONE_VM             0x00000100
 #define CLONE_FS             0x00000200
@@ -1708,6 +1708,14 @@ uint64_t g_fork_parent_gprs[15];
 /* sys_exit */
 static void sys_exit(int code)
 {
+    /* V0.57.5: 退出前先摘掉本进程的用户线程。
+     * 否则 exit 的处理过程里还会被 tick 切到同进程的其它线程，
+     * 切回来时帧已经不是这条执行流的了 —— 实测表现为退出瞬间 rip=0 的 #PF。 */
+    { extern int user_process_current_slot(void);
+      extern void uthread_clear_owner(int);
+      int sl = user_process_current_slot();
+      if (sl >= 0) uthread_clear_owner(sl); }
+
     vga_puts("\n[SYSCALL64] Process exited with code ");
     print_syscall_number((int64_t)code);
     vga_puts("\n");

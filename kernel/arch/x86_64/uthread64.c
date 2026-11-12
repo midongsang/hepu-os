@@ -28,6 +28,8 @@ typedef struct {
     int state;
     uint64_t raw[15];   /* 帧 0..14：r15..rax，原样保存 */
     uint64_t rip, rflags, rsp, fsbase;
+    uint64_t kstack_top;      /* 本线程的 syscall 内核栈顶（g_syscall_kstack_slot 是全局单值，
+                                 父子共用同一个栈会互相踩，实测表现为随机 #PF） */
 } uthread_t;
 
 static uthread_t g_ut[MAX_UTHREADS];
@@ -37,10 +39,23 @@ static int g_next_tid = 1000;
 extern void vga_puts(const char *s);
 extern void vga_put_hex(uint64_t v);
 extern int user_process_current_slot(void);
+extern uint64_t pmm64_alloc_page(void);
+
+/* 帧布局（entry_64.S IRQ_ENTRY）：ds/es 是在 15 个 GPR 之后压的，
+ * 所以它们在**最低地址**：
+ *   f[0]=es f[1]=ds f[2]=r15 f[3]=r14 f[4]=r13 f[5]=r12 f[6]=r11
+ *   f[7]=r10 f[8]=r9 f[9]=r8 f[10]=rbp f[11]=rdi f[12]=rsi f[13]=rdx
+ *   f[14]=rcx f[15]=rbx f[16]=rax
+ *   f[17]=vector f[18]=error f[19]=rip f[20]=cs f[21]=rflags f[22]=rsp f[23]=ss
+ *
+ * V0.57.5 修正：之前按"f[0]=r15"算，整体差了 2 个槽 —— 写 rax 其实写进了 rbx，
+ * 于是子线程的 rax 一直是父线程的返回值，clone 直接走进父分支（实测 rip 落在
+ * 0x400000bb 的 g_parent_count 循环里）。 */
+#define UT_FRAME_GPR_BASE 2
 
 static void ut_save(uthread_t *t, uint64_t *f)
 {
-    for (int i = 0; i < 15; i++) t->raw[i] = f[i];
+    for (int i = 0; i < 15; i++) t->raw[i] = f[UT_FRAME_GPR_BASE + i];
     t->rip = f[19];
     t->rflags = f[21];
     t->rsp = f[22];
@@ -48,7 +63,11 @@ static void ut_save(uthread_t *t, uint64_t *f)
 
 static void ut_restore(uthread_t *t, uint64_t *f)
 {
-    for (int i = 0; i < 15; i++) f[i] = t->raw[i];
+    for (int i = 0; i < 15; i++) f[UT_FRAME_GPR_BASE + i] = t->raw[i];
+    if (t->kstack_top) {
+        extern uint64_t g_syscall_kstack_slot;
+        g_syscall_kstack_slot = t->kstack_top;
+    }
     f[19] = t->rip;
     f[21] = t->rflags;
     f[22] = t->rsp;
@@ -69,6 +88,8 @@ int uthread_bind_main(int owner, int tid)
             g_ut[i].tid = tid;
             g_ut[i].state = UT_READY;
             g_ut[i].fsbase = 0;
+            { uint64_t kp = pmm64_alloc_page();
+              g_ut[i].kstack_top = kp ? (kp + 4096) : 0; }
             for (int k = 0; k < 15; k++) g_ut[i].raw[k] = 0;
             g_ut[i].rip = 0; g_ut[i].rsp = 0; g_ut[i].rflags = 0;
             g_ut_cur = i;
@@ -88,6 +109,8 @@ int uthread_create(int owner, uint64_t rip, uint64_t rsp, uint64_t fsbase)
             g_ut[i].tid = g_next_tid++;
             g_ut[i].state = UT_READY;
             g_ut[i].fsbase = fsbase;
+            { uint64_t kp = pmm64_alloc_page();
+              g_ut[i].kstack_top = kp ? (kp + 4096) : 0; }
             for (int k = 0; k < 15; k++) g_ut[i].raw[k] = 0;
             g_ut[i].raw[14] = 0;                /* rax = 0：子线程 clone 返回 0 */
             g_ut[i].rip = rip;
@@ -113,7 +136,12 @@ int uthread_current_tid(void)
 void uthread_clear_owner(int owner)
 {
     for (int i = 0; i < MAX_UTHREADS; i++) {
-        if (g_ut[i].used && g_ut[i].owner == owner) g_ut[i].used = 0;
+        if (g_ut[i].used && g_ut[i].owner == owner) {
+            extern void pmm64_free_page(uint64_t addr);
+            if (g_ut[i].kstack_top) pmm64_free_page(g_ut[i].kstack_top - 4096);
+            g_ut[i].kstack_top = 0;
+            g_ut[i].used = 0;
+        }
     }
     if (g_ut_cur >= 0 && !g_ut[g_ut_cur].used) g_ut_cur = -1;
 }

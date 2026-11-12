@@ -2761,3 +2761,61 @@ IRQ 帧布局差异是否让"从 syscall 返回点启动的线程"落在错误�
 
 `EXCEPTION=0`、`WATCHDOG=0`、桌面正常（截图 `hepu_uthread_verified.png`）。
 内核 825,160 B。
+
+---
+
+## §1.86 V0.57.6：clone 真线程跑通 —— IRQ 帧偏移根因与实证
+
+### 现象
+上一轮（§1.85）`uthread` 切换链路已成立：`g_ut_cur` 在 0/1 交替、帧里打印的
+`rax=0 / rip=0x40000024 / rsp=0x6FF80000` 全部"正确"，但子线程现场三次数值分毫未动，
+父始终打印 `FAIL: child never ran`。
+
+### 定位方法（改用 QEMU 自带能力，不引外部依赖）
+1. `-d int -D /tmp/qemu_int.log`（16.5 MB 硬追踪）：用
+   `grep -a 'SP=001b:000000006ff8'` 捞出 **1249 条落在子线程栈上的中断**，
+   全部 `IP=0x400000bb`、`R_EAX` 从 `0x1418` 递增到 `0x97a7`。
+2. `0x400000bb` 正是 `for (i < 200000) g_parent_count++` 的循环计数初始化 ——
+   **子线程在跑，但跑进了父分支**，所以 `g_child_count/g_child_done` 永远是 0。
+3. 哨兵实验：把 `raw[14]` 临时写 `0xDEADBEEF`，运行时寄存器仍不是该值；
+   但读回帧打印 `frame=0x1E3140 f14=0xDEADBEEF f19=0x40000024 f22=0x6FF80000`
+   —— **写帧成功，问题在偏移**。
+4. gdbstub 条件断点 `break *0x400000bb if $rsp == 0x6ff80000` 命中：
+   `SUB rip=0x400000bb rsp=0x6ff80000 rax=0x1 / cr3=0x25dd000 cs=0x23`
+   —— 页表、环级都对，就是 rax 不对。
+
+### 根因
+`entry_64.S` 的 `IRQ_ENTRY` 在压完 15 个 GPR 之后才压 `ds`/`es`，所以这两者在
+**栈的最低地址**。`stack_frame` 指向最低地址，真实布局是：
+
+```
+f[0]=es  f[1]=ds  f[2]=r15 f[3]=r14 ... f[14]=rcx f[15]=rbx f[16]=rax
+f[17]=vector f[18]=error f[19]=rip f[20]=cs f[21]=rflags f[22]=rsp f[23]=ss
+```
+
+而代码按 `f[0]=r15` 计算，**整体差 2 个槽**：写 `f[14]` 实际写的是 `rbx`，
+`rax` 一直保留父线程的返回值 → 子线程 `test %rax,%rax; jne` 直接跳进父分支。
+
+### 修复
+- `uthread64.c` 引入 `UT_FRAME_GPR_BASE 2`，`ut_save`/`ut_restore` 统一按
+  `f[UT_FRAME_GPR_BASE + i]` 存取 15 个 GPR；`f[19]/f[21]/f[22]` 不变（本就正确）。
+- 每个 uthread 分配**独立内核栈**（`kstack_top`），切换时写 `g_syscall_kstack_slot`，
+  避免父子线程共用同一个 syscall 内核栈互相踩。
+- `sys_exit` 开头先 `uthread_clear_owner()`，退出过程不再被 tick 切到同进程其它线程。
+
+### 实证
+`/tmp/ser_fix1.log`、`/tmp/ser_f3_1.log`：
+
+```
+[CLONE] thread registered, pt_ref=0x1
+[CLONE] thread tid=0x3E8 (shared pml4, entry=0x40000024, stack=0x6FF80000)
+parent: clone returned tid
+PASS: child ran in shared address space, both counters advanced
+```
+
+共享地址空间、独立用户栈、子 rax=0、两线程交替推进计数器，四项全部成立。
+
+### 遗留
+- 进程收尾阶段仍有 `vector=0xE error=0x15 rip=0x0` 的 #PF（见 OPEN_BUGS SEC-21），
+  异常被用户态 fault 处理器捕获、进程终止后系统继续，桌面正常加载。
+- 两次运行出现一次 FAIL 的波动，与收尾 #PF 属同一族问题，尚未完全收敛。

@@ -195,3 +195,24 @@ source_of_truth: kernel/arch/x86_64/
   现场不推进，下一轮继续定位中断返回路径。
 - 修法方向：为每条用户执行流建立 rip/rsp/rflags/GPR/fsbase 上下文，由中断
   调度器轮转并保证恢复；fork 的显式恢复路径可作为模板。
+- **V0.57.6 已修复（功能层）**：`uthread64.c` 的 `UT_FRAME_GPR_BASE 2` 修正了
+  IRQ 帧偏移（`IRQ_ENTRY` 把 `ds/es` 压在最顶，rax 在 `f[16]` 而非 `f[14]`，
+  此前写 rax 其实写进了 rbx）。同时给每个线程配独立 syscall 内核栈。
+  实测串口出现 `PASS: child ran in shared address space, both counters advanced`，
+  共享地址空间、独立用户栈、子 rax=0、交替推进计数器四项成立。
+- 剩余：进程收尾阶段的 #PF 未收敛，见 SEC-21；两次运行有一次 FAIL 的波动同源。
+
+## SEC-21 用户线程进程收尾阶段 rip=0 的 #PF
+
+- 现象：clone 测试父线程打印 `PASS` 后，紧接着
+  `[EXCEPTION] vector=0xE error=0x15 rip=0x0 / CR2=0x0`，
+  用户寄存器 `rsp=0x6FFFF008`（正好是 `USER_INIT_RSP + 8`），
+  随后 `[CLONE] aspace kept: live clone threads=0x1`、进程因异常终止。
+- error=0x15 含义：保护违例 + 用户态 + 取指（P=1,W=0,U=1,I/D=1），即从地址 0 取指。
+- 影响：不影响系统整体（异常被用户态 fault 处理器捕获，进程终止后内核继续，
+  桌面正常加载），但会污染测试结论，且导致偶发 FAIL。
+- 已排除：栈太小（256 页）、初始 RSP 贴顶（已留一页 + 512B head-room）、
+  `vmm64_map_page` 分配失败（无 `[VMM64] ERROR`）。
+- 可疑点：`create_user_page_table_ex` 的 256 页循环未检查 `vmm64_map_page` 返回值；
+  syscall 返回路径的 `g_syscall_ret_rip/rflags/ustack` 仍是全局单值。
+- 关联：与 SEC-19（用户栈第二页 #PF / `PDe=0xE3`）高度同型，怀疑同一根因。
