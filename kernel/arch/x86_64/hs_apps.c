@@ -680,10 +680,19 @@ static int f_view_mode = 0;           /* 0=列表, 1=网格 */
 static int f_sort_key = 0;
 static int f_sort_desc = 0;
 static int f_kind(int item);
+static void f_job_report(void);
+static int f_job_push_dir(const char *src, const char *dst);
 /* V0.55.1: 文件菜单状态当前未被使用(统一走桌面菜单), 先标注保留意图 */
 static int f_fs_menu __attribute__((unused)) = 0;   /* 0=桌面菜单, 1=文件菜单 */
 static int f_dclick_tick = 0;         /* 双击检测: 上次点击 tick */
 static char f_status2[FS_PROMPT_MAX + 1] = "";
+
+/* P3: 拖拽移动状态 —— 按住列表/网格某一项, 拖到目录项上松手 = 移进去。
+ *   0=空闲 1=按住但未越过阈值 2=拖拽中(只有此时才画拖影、才改光标形态) */
+static int f_drag_state;
+static int f_drag_item;
+static int f_drag_x0, f_drag_y0, f_drag_x, f_drag_y;
+static int f_drop_item;
 
 /* FS P2: 分片拷贝/移动任务状态 (实现见 f_do_paste 之前; 结构需前置供 f_render 使用) */
 #define F_JOB_Q 24
@@ -1138,6 +1147,132 @@ static int f_thumb_make(const char *path, const char *name)
     return slot;
 }
 
+
+/* 光标命中项(列表/网格共用), 几何与 f_render 严格一致; 未命中返回 -1 */
+static int f_item_at(int x, int y)
+{
+    if (!f_win || !f_win->visible) return -1;
+    int cx = f_win->x + FS(6), cy = f_win->y + FS(26);
+    int cw = f_win->width - FS(12), ch = f_win->height - FS(26) - FS(40);
+    if (x < cx || x > cx + cw) return -1;
+    if (f_view_mode == 0) {
+        int list_y = cy + FS(60);
+        if (y < list_y) return -1;
+        int r = (y - list_y) / f_row_h();
+        if (r < 0 || r >= f_visible_rows()) return -1;
+        int gi = f_scroll + r;
+        if (gi >= f_match_count) return -1;
+        return f_matched[gi];
+    }
+    int gs = FS(76), cols = cw / gs;
+    if (cols < 1) cols = 1;
+    int gy = cy + FS(44);
+    if (y < gy) return -1;
+    int r = (y - gy) / (gs + FS(8));
+    int c = (x - cx - FS(6)) / gs;
+    if (c < 0 || c >= cols) return -1;
+    int gi = f_scroll + r * cols + c;
+    if (gi >= f_match_count) return -1;
+    return f_matched[gi];
+}
+
+/* 直接"移动进指定目录": 复用粘贴的分片任务骨架, 但源不来自剪贴板 */
+static void f_job_start_move_to(const char *src, const char *name, const char *dstdir)
+{
+    f_job.active = 0; f_job.kind = 2;
+    f_job.ok = 0; f_job.fail = 0; f_job.done = 0; f_job.why[0] = 0;
+    f_job.qh = 0; f_job.qt = 0; f_job.cur_n = 0; f_job.cur_i = 0;
+    f_job.top_i = 0; f_job.top_n = 0; f_job.topdir_n = 0; f_job.cur_name[0] = 0;
+
+    char dst[FS_PATH_MAX];
+    if (f_join(dst, FS_PATH_MAX, dstdir, name) != 0) {
+        f_job.fail++; hs_strcpyn(f_job.why, "path too long", 24);
+    } else {
+        uint32_t sz = 0; uint8_t isdir = 0;
+        if (ext2_64_stat(dst, &sz, &isdir) == 0) {
+            f_job.fail++; hs_strcpyn(f_job.why, "target exists", 24);
+        } else if (ext2_64_stat(src, &sz, &isdir) != 0) {
+            f_job.fail++; hs_strcpyn(f_job.why, "source missing", 24);
+        } else if (isdir) {
+            if (ext2_64_mkdir(dst) != 0) { f_job.fail++; hs_strcpyn(f_job.why, "mkdir failed", 24); }
+            else if (f_job_push_dir(src, dst) != 0) { f_job.fail++; hs_strcpyn(f_job.why, "too many dirs", 24); }
+            else {
+                f_job.ok++;
+                if (f_job.topdir_n < FS_CLIP_MAX) {
+                    hs_strcpyn(f_job.tdsrc[f_job.topdir_n], src, FS_PATH_MAX);
+                    f_job.topdir_n++;
+                }
+            }
+        } else {
+            hs_strcpyn(f_job.ts[0], src, FS_PATH_MAX);
+            hs_strcpyn(f_job.td[0], dst, FS_PATH_MAX);
+            hs_strcpyn(f_job.tn[0], name, 64);
+            f_job.top_n = 1;
+        }
+    }
+
+    if (f_job.top_n == 0 && f_job.qt == 0) { f_job_report(); return; }
+    f_job.active = 1;
+    hs_strcpyn(f_status2, "Moving...", FS_PROMPT_MAX);
+}
+
+/* 按下: 只有落在某一项上才接管(返回 1 → 上层别再把这次按下当普通点击) */
+int hs_files_drag_begin(int x, int y)
+{
+    if (!f_win || !f_win->visible) return 0;
+    if (f_job.active) return 0;
+    int it = f_item_at(x, y);
+    if (it < 0) return 0;
+    f_drag_state = 1;
+    f_drag_item = it;
+    f_drop_item = -1;
+    f_drag_x0 = x; f_drag_y0 = y;
+    f_drag_x = x;  f_drag_y = y;
+    return 1;
+}
+
+void hs_files_drag_move(int x, int y)
+{
+    if (f_drag_state == 0) return;
+    f_drag_x = x; f_drag_y = y;
+    if (f_drag_state == 1) {
+        int dx = x - f_drag_x0, dy = y - f_drag_y0;
+        if (dx < 0) dx = -dx;
+        if (dy < 0) dy = -dy;
+        if (dx + dy < FS(8)) return;      /* 抖动不算拖拽 */
+        f_drag_state = 2;
+        hs_strcpyn(f_status2, "Drop on a folder to move", FS_PROMPT_MAX);
+    }
+    int it = f_item_at(x, y);
+    f_drop_item = (it >= 0 && it != f_drag_item && f_kind(it) == 0) ? it : -1;
+    hpdesk_mark_dirty();
+}
+
+/* 松手: 返回 1 表示这次按下-抬起已被拖拽消费, 上层别再当点击 */
+int hs_files_drag_end(int x, int y)
+{
+    (void)x; (void)y;
+    if (f_drag_state == 0) return 0;
+    int was_drag = (f_drag_state == 2);
+    int src = f_drag_item, drop = f_drop_item;
+    f_drag_state = 0; f_drop_item = -1;
+    if (!was_drag) return 0;
+
+    if (drop >= 0 && drop != src) {
+        char dstdir[FS_PATH_MAX], srcp[FS_PATH_MAX];
+        if (f_join(dstdir, FS_PATH_MAX, f_path, f_items[drop]) != 0 ||
+            f_join(srcp, FS_PATH_MAX, f_path, f_items[src]) != 0) {
+            hs_strcpyn(f_status2, "Path too long", FS_PROMPT_MAX);
+        } else {
+            f_job_start_move_to(srcp, f_items[src], dstdir);
+        }
+    } else {
+        hs_strcpyn(f_status2, "Move cancelled", FS_PROMPT_MAX);
+    }
+    f_refresh();
+    return 1;
+}
+
 static void f_render(hs_window_t *w)
 {
     /* FS P2: 有分片任务在跑就推进一步, 并保持 dirty 让下一帧继续 —— 这样
@@ -1228,8 +1363,10 @@ static void f_render(hs_window_t *w)
                 int iy2 = gy + r * (gs + FS(8));
                 if (gi == f_sel)
                     gfx64_fill_rounded_rect(ix - FS(4), iy2 - FS(4), gs, gs, FS(8), g_shell.colors.accent);
+                if (f_drag_state == 2 && item == f_drop_item)
+                    gfx64_draw_rounded_rect(ix - FS(4), iy2 - FS(4), gs, gs, FS(8), 0xFFFFFF);
                 extern void hs_file_type_icon(int x, int y, int size, uint32_t color, int kind);
-                uint32_t ic = (gi == f_sel) ? 0xFFFFFF : g_shell.colors.accent;
+                uint32_t ic = (gi == f_sel) ? 0x211F26 : g_shell.colors.accent;
                 /* 图片文件优先用缩略图; 未缓存的格子先画图标, 本帧预算内补一张 */
                 int thumb = -1;
                 if (f_kind(item) == 1) {
@@ -1290,6 +1427,9 @@ static void f_render(hs_window_t *w)
             int iy = list_y + r * row_h;
             if (li == f_sel)
                 gfx64_fill_rect(cx, iy, cw, row_h, g_shell.colors.accent);
+            /* drop 目标用白色描边: 若目标恰是当前选中项, accent 描边压在同色底上会看不见 */
+            if (f_drag_state == 2 && item == f_drop_item)
+                gfx64_draw_rounded_rect(cx, iy + 1, cw, row_h - 2, FS(3), 0xFFFFFF);
             char disp[70];
             hs_strcpyn(disp, f_items[item], 42);
             if (f_types[item]) {
@@ -1299,7 +1439,8 @@ static void f_render(hs_window_t *w)
             /* 文件类型矢量图标(目录/文档/媒体/未知) */
             {
                 extern void hs_file_type_icon(int x, int y, int size, uint32_t color, int kind);
-                uint32_t ic = (li == f_sel) ? 0xFFFFFF : g_shell.colors.accent;
+                /* 选中行底色是 accent(浅紫), 图标再用白色会糊成实心块 —— 换深色描线 */
+                uint32_t ic = (li == f_sel) ? 0x211F26 : g_shell.colors.accent;
                 hs_file_type_icon(cx + FS(3), iy + 1, FS(14), ic, f_kind(item));
             }
             font64_draw_string(fb, W, H, cx + FS(22), iy + FS(2), disp,
@@ -1350,6 +1491,20 @@ static void f_render(hs_window_t *w)
         hs_strcpyn(pb + hs_strlen(pb), f_props_path, 45);
         font64_draw_string(fb, W, H, px + FS(10), py + FS(78), pb,
                            g_shell.colors.text_secondary, FS(11));
+    }
+
+    /* 拖影: 跟着光标的文件名小牌子 */
+    if (f_drag_state == 2) {
+        char lbl[28];
+        hs_strcpyn(lbl, f_items[f_drag_item], 24);
+        int tw = FS(6) * hs_strlen(lbl) + FS(16);
+        int tx = f_drag_x + FS(10), ty = f_drag_y + FS(8);
+        if (tx + tw > W - FS(4)) tx = W - tw - FS(4);
+        if (ty + FS(18) > H - FS(4)) ty = H - FS(18) - FS(4);
+        gfx64_fill_rounded_rect(tx, ty, tw, FS(18), FS(4), g_shell.colors.panel_bg);
+        gfx64_draw_rounded_rect(tx, ty, tw, FS(18), FS(4), g_shell.colors.accent);
+        font64_draw_string(fb, W, H, tx + FS(6), ty + FS(3), lbl,
+                           g_shell.colors.panel_fg, FS(11));
     }
 
     /* 底部输入框 / 删除确认 (放在状态栏上方, 避免覆盖两行状态文本) */
@@ -2190,6 +2345,7 @@ int hs_files_cursor_kind(int x, int y)
     if (!f_win || !f_win->visible) return -1;
     if (x < f_win->x || x > f_win->x + f_win->width) return -1;
     if (y < f_win->y || y > f_win->y + f_win->height) return -1;
+    if (f_drag_state == 2) return 3;                   /* 拖拽中: 四向移动光标 */
     if (y <= f_win->y + FS(26)) return 0;              /* 标题栏 */
     int cy0 = f_win->y + FS(26);
     int ch = f_win->height - FS(26) - FS(40);

@@ -3742,8 +3742,13 @@ static int hs_color_panel_handle_click(int x, int y)
 }
 
 /* Hepu Desktop鼠标点击处理（由desktop64主循环调用） */
+static int g_files_drag_consumed;   /* Files 拖拽已消费本次按下-抬起 */
+
 void hpdesk_handle_click(int x, int y)
 {
+    /* 拖拽已消费这次按下-抬起: 不能再走点击/双击路径(否则会��接打开源文件) */
+    if (g_files_drag_consumed) { g_files_drag_consumed = 0; return; }
+
     hpdesk_mark_dirty();   /* P0: 交互发生, 内容需重绘 */
     /* V0.55 P3-GUI: 首启向导模态拦截点击 */
     {
@@ -4278,6 +4283,11 @@ void hpdesk_update_mouse(int x, int y)
     g_shell.mouse_y = y;
     /* 窗口拖拽移动 */
     hs_window_drag_move(x, y);
+    /* Files 列表项拖拽(越过阈值才真正进入拖拽态) */
+    {
+        extern void hs_files_drag_move(int x, int y);
+        hs_files_drag_move(x, y);
+    }
 
     /* V0.57.0: 悬停目标变化 → 触发一次重绘 */
     static int last_hover = -2;
@@ -4297,6 +4307,16 @@ void hpdesk_mouse_down(int x, int y)
     {
         extern int hs_oobe_active(void);
         if (hs_oobe_active()) return;
+    }
+    /* Files 列表项拖拽: 必须命中最顶层窗口是 Files, 否则被压住的窗口会"隔空"接管 */
+    {
+        extern hs_window_t *hs_window_at(int x, int y);
+        extern int hs_files_drag_begin(int x, int y);
+        hs_window_t *tw = hs_window_at(x, y);
+        if (tw && tw->title[0] == 'F' && strcmp(tw->title, "Files") == 0) {
+            g_files_drag_consumed = 0;
+            if (hs_files_drag_begin(x, y)) return;
+        }
     }
     for (int zi = g_wm.z_count - 1; zi >= 0; zi--) {
         int id = g_wm.z_order[zi];
@@ -4348,7 +4368,10 @@ void hpdesk_mouse_down(int x, int y)
 void hpdesk_mouse_up(int x, int y)
 {
     hpdesk_mark_dirty();   /* P0: 交互发生, 内容需重绘 */
-    (void)x; (void)y;
+    {
+        extern int hs_files_drag_end(int x, int y);
+        if (hs_files_drag_end(x, y)) g_files_drag_consumed = 1;
+    }
     hs_window_drag_end();
 }
 

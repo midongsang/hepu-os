@@ -2049,3 +2049,72 @@ test_write.txt` 等全部完好，未误删。
 - >512KB 或 >1400px 的图不出缩略图；
 - 缓存按路径命中，同一文件改名后会重新解码一次；
 - 缩略图只在网格视图出现，列表视图仍用 16px 小图标。
+
+## 1.74 Files P3 拖拽移动
+
+### 语义
+
+在列表或网格里按住某一项，拖到一个**目录**上松手 —— 该项（文件或整个目录）
+移进那个目录。悬停时目录行/格子亮白框，光标跟出文件名小牌子，状态栏提示
+`Drop on a folder to move`；松手后走与粘贴同一套分片任务（`kind=2`），
+状态栏 `Moving...` → `Moved 1 item`。
+
+### 接入
+
+三个入口都挂在鼠标主路径上，而不是只在 Files 内部自转：
+
+- `hpdesk_mouse_down`：**先确认该坐标下最顶层窗口就是 Files**，再调
+  `hs_files_drag_begin`。不加这层判断的话，被盖住的 Files 会"隔空"接管
+  上层窗口的按下事件。
+- `hpdesk_update_mouse`：每帧调 `hs_files_drag_move`。位移累计超过 `FS(8)`
+  才从"按住"升级为"拖拽"，避免点击时的轻微抖动变成拖拽。
+- `hpdesk_mouse_up`：调 `hs_files_drag_end`，返回 1 时置
+  `g_files_drag_consumed`；`hpdesk_handle_click` 开头见到该标志直接返回。
+  **否则拖拽松手会紧接着触发一次点击/双击，把源文件当场打开。**
+
+### 几何
+
+命中判定单独抽了 `f_item_at()`，与 `f_render` 用同一套公式（列表 `cy+FS(60)`
++ `f_row_h()`；网格 `cy+FS(44)` + 格宽 `FS(76)`、间距 `FS(8)`）。行号/格子漂了
+就会"看得到那行、拖不进去"。
+
+### 两个坑
+
+**① drop 高亮用了 accent 色**。第一次截图里目标行看不出边框 —— 因为那个目录
+正好是当前选中项，行底色本身就是 accent，accent 描边压在同色底上等于隐形。
+改成白色描边后在任何底色上都能看见。
+
+**② 选中态图标是纯白**。`ic = (sel) ? 0xFFFFFF : accent` 在列表里没问题，
+但网格选中格子是 accent 实心块，白色线性图标压上去糊成一团白。改成选中态用
+`0x211F26`（深色描线），在浅紫底上反而清楚。
+
+### 验证
+
+**功能**（真实事件流，非直接改状态）：启动序列里直调
+`hpdesk_mouse_down` → `hpdesk_update_mouse` → `hpdesk_mouse_up`，串口：
+
+```
+[DRAGTEST] state after down=1 item=a.txt
+[DRAGTEST] dragging=2 src=a.txt drop=sub2
+[DRAGTEST] after up: job_active=1 ok=0 fail=0 why=
+[DRAGTEST] RESULT ok=1 fail=0 status=Moved 1 item guard=2
+```
+
+**视觉**：截图里可见 `a.txt` 拖影小牌子、`sub2/` 行白框、状态栏提示。
+
+**回归**：干净版桌面/Settings/Quick Controls 正常，光标四态 `link=0`，
+内核 814,440 B。
+
+### 又一个操作事故（记录）
+
+清理 TEMP 时用 `s.index(标记)` + 向后找 `\n}\n` 定位删除区间，但标记字符串
+在文件**中部**（拖拽函数之前）也出现了一次，于是删除范围从那里一直延伸到文件
+末尾 —— 中间十几个函数被一起删掉，链接期一片 `undefined reference`。
+教训：TEMP 块的删除必须用**唯一锚点 + 大括号配对**，不能靠"标记到下一个 }"。
+回滚 `git checkout -- hs_apps.c`（该文件上一版已 commit）后重新应用了全部改动。
+
+### 限制
+
+- 只能拖进**当前目录的子目录**；拖到另一个 Files 窗口要等双窗格/多标签；
+- 拖到空白处、拖回自己 = `Move cancelled`；
+- 任务进行中（`f_job.active`）不接管拖拽，与粘贴互斥。
