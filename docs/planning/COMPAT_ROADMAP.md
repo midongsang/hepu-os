@@ -2,7 +2,7 @@
 title: 兼容层落地路线（COMPAT_ROADMAP）
 status: active
 sys_version: 0.57.0
-updated: 2026-11-11
+updated: 2026-11-12
 owner: planning
 source_of_truth: null
 supersedes: null
@@ -37,7 +37,7 @@ supersedes: null
 **预期性能**：慢 20~30%，可接受做原型。
 
 已完成：
-- [x] Linux x86_64 号翻译表（~45 个号）
+- [x] Linux x86_64 号翻译表：`linux_map[350]` 表容量 350，其中**实际有映射的约 45 项**（其余为 0 表示"不翻译"）。号表事实源见 `specs/SYSCALL_ABI.md`
 - [x] ELF 加载 + 6 种重定位（RELMATIVE/64/GLOB_DAT/JUMP_SLOT/PC32/PLT32）
 - [x] PT_DYNAMIC 解析（stripped .so 支持）
 - [x] 跨模块符号查找

@@ -2,7 +2,7 @@
 title: 赫普OS 系统设计（现行）
 status: active
 sys_version: 0.57.0
-updated: 2026-11-11
+updated: 2026-11-12
 source_of_truth: kernel/arch/x86_64/
 iteration_history: ../history/DESIGN_ITERATIONS.md
 ---
@@ -21,6 +21,19 @@ iteration_history: ../history/DESIGN_ITERATIONS.md
 - 兼容层故障（崩溃、越权、异常退出）只影响其自身，不得波及内核或其他进程；
 - 此举保护微内核的**隔离能力与攻击面边界**——外部格式代码天然不可信，
   必须被关在用户态沙盒里，而不是获得内核信任。
+
+> **落地现状（2026-11-12 核对，属已记录的架构债务，不是解释性豁免）**
+>
+> - 当前实现**违反本约束**：`kernel/compat/`（`binfmt_elf.c`、`binfmt_pe.c`、`linux_abi.c`、
+>   `binfmt_macho.c`）与 `syscall64_full.c` 的 `linux_map[350]` **全部编译进内核**
+>   （`kernel/arch/x86_64/Makefile`），兼容逻辑没有独立用户态服务。
+> - 冲突来源是 `PHILOSOPHY.md` 7.2 的措辞（"用户态 / **轻量内核模块**"）在当时给了过渡余地；
+>   **两者冲突时以本条硬约束为准**，7.2 只作为分阶段路线，不作为长期落点。
+> - 债务的化解路径即 `PHILOSOPHY.md` 7.2 的**阶段 2**（用户态 ELF 加载器 + syscall 翻译），
+>   阶段 1（当前）的形态属于过渡态，不得据此扩大内核内兼容代码的授权面（不得在内核里
+>   新增外部格式解析器、不得把 Linux 内部结构体搬进主干）。
+> - 任何"反正已经在核里了，就再加一点兼容逻辑"的改动，视同架构级事故。
+
 
 ### 约束二：统一沙盒（禁止绕过）
 

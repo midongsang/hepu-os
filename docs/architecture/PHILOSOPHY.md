@@ -2,7 +2,7 @@
 title: Hepu OS 核心哲学与原生契约
 status: active
 sys_version: 0.57.0
-updated: 2026-11-11
+updated: 2026-11-12
 owner: architecture
 source_of_truth: null
 supersedes: null
@@ -224,6 +224,11 @@ Linux、BSD、Redox 踩过的坑，都是非常宝贵的：他们证明了哪些
 - 阶段4（远期）：完整内核 Linuxulator，仅当桌面生态刚需时启动
 - Windows 兼容：非常后期，等 Linux 稳定后再启动
 - 接受 5~30% 兼容损耗，不追求零损耗
+
+> **口径补注（2026-11-12）**：本节"用户态 / 轻量内核模块"的措辞曾为过渡期留余地，
+> 与 `DESIGN.md` 约束一（兼容层禁止入内核）冲突。**冲突时以 DESIGN 硬约束为准**：
+> 轻量内核模块**不构成长期合法落点**，只描述阶段 1 的现实形态（当前 `kernel/compat/`
+> 即处于此形态，已登记为架构债务）。阶段 2 完成后，内核内不应再有外部格式解析与 ABI 翻译主体。
 
 ### 7.3 内核预埋路线（优先级）
 - 第1档：syscall 入口兼容分支、errno 统一映射表、vDSO、VFS compat_ctx、env_type 标记

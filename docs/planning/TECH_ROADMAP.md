@@ -2,7 +2,7 @@
 title: TECH_ROADMAP
 status: active
 sys_version: 0.57.0
-updated: 2026-11-01
+updated: 2026-11-12
 owner: planning
 source_of_truth: null
 supersedes: null
@@ -29,7 +29,7 @@ supersedes: null
 ## 当前状态
 
 赫普 OS 已用 C 语言开发了大量内核代码，包括：
-- 微内核（调度、内存管理、IPC）
+- 单体内核（调度、内存管理、驱动框架；IPC 仅命名通道 `hsipc.c`，**无微内核 IPC 主体**）
 - 系统调用接口
 - 文件系统
 - TCP/IP 协议栈

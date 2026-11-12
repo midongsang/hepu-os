@@ -2,7 +2,7 @@
 title: KERNEL
 status: active
 sys_version: 0.57.0
-updated: 2026-11-11
+updated: 2026-11-12
 owner: architecture
 source_of_truth: kernel/arch/x86_64/Makefile
 supersedes: null
@@ -11,6 +11,13 @@ supersedes: null
 # 赫普OS 64位内核架构设计：遵循系统包袱准则
 
 > **核心总原则**：严格划分稳定契约边界，模块之间只依赖契约，不依赖对方内部实现；允许废弃模块，但禁止偷偷在核心路径加临时补丁。
+
+> **现状口径（2026-11-12 核对）**：本文件第七节的"阶段1：契约化（当前）"**尚未完成**——
+> 下表模块清单是**目标契约 + 实际文件落点**的混合记录，`xxx_ops` 目前只有 `storage_ops`
+> 一族被 `storage_hal64.c` 真正统一接入；`cpu_ops` / `irq_ops` / `input_ops` 多为薄封装或直调函数。
+> 另两处与"分层"相关的现状偏差，请先读 `DESIGN.md` 约束一注记与 `planning/MODULARITY.md`：
+> ① 兼容层（`kernel/compat/*`、`linux_map[350]`）**编在内核里**，不是独立上层服务；
+> ② 桌面（`gfx64`→`hepushell`/`hpdesk`→`hs_apps`）也在内核里，ring3 没有窗口/输入契约。
 
 ## 一、64位内核分层架构
 

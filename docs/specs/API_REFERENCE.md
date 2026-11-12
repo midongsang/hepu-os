@@ -2,7 +2,7 @@
 title: API_REFERENCE
 status: active
 sys_version: 0.57.0
-updated: 2026-11-11
+updated: 2026-11-12
 owner: specs
 source_of_truth: null
 supersedes: null
@@ -12,6 +12,14 @@ supersedes: null
 
 
 # 赫普OS API参考文档
+
+> ⚠️ **号表权威性声明（2026-11-12）**：本文的系统调用**编号列已不可作为事实源**。
+> 唯一权威号表是 `docs/specs/SYSCALL_ABI.md`（由 `tools/gen_syscall_doc.py` 从源码生成）。
+> 本文号表抄自 32 位时期的 `kernel/include/syscall.h` 早期快照，与 64 位现役号表存在偏差
+> （例如：本文 `SYS_FSTAT` 与源码 `SYS_FSTAT=25` 一致，但 64 位另有 `SYS_LNX64_*` 扩展号段，
+> 且 `epoll/eventfd2` 为桩）。**写程序请只引用 SYSCALL_ABI.md。**
+> 另注：本文把 `SYS_MALLOC`/`SYS_FREE` 列为"系统调用"，64 位实现中它们只是内核态内存接口，
+> 不对用户态暴露（用户态内存走 `brk`/`mmap`）。
 
 ## 概述
 

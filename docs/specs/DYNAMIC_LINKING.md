@@ -2,7 +2,7 @@
 title: DYNAMIC_LINKING
 status: active
 sys_version: 0.57.0
-updated: 2026-11-11
+updated: 2026-11-12
 owner: specs
 source_of_truth: null
 supersedes: null
@@ -96,6 +96,11 @@ $(LD) -m elf_i386 -dynamic-linker /lib/ld.so -o app.elf app.o -lhepu
 > - PT_INTERP 解释器加载已接入 exec：内核从 ext2 读取 ld.so、按偏置装入库区 `[0x60000000,0x70000000)`、映射进进程并把入口切到解释器，填 AT_BASE/AT_ENTRY/AT_PHDR（`user_process.c:1938-2128`）。
 > - DT_NEEDED 符号查找/重定位/TLS 初始化交由用户态 ld.so 完成；内核遗留 `hepu_dynlink_relocate()`（`user_process.c:1523`，含 DT_NEEDED 遍历 1560-1576 与 JMPREL 重定位）已不再被 exec 调用（`user_process.c:2140-2150`）。
 > - 下文 i386/R_386_* 与 `user/ldso/` 为 32 位历史设计稿，重定位类型与 64 位 R_X86_64_* 不同，保留作设计参考。
+>
+> **验收边界（2026-11-12 补注）**：`ROADMAP` P1-7 的 ✅ 依据是**单个程序** `exec /bin/glibchello.elf` 端到端输出 `Hello, World!`（`tools/gui_test.py --scenario dyn`）。
+> **单程序通过 ≠ 依赖链闭合**——多 `.so` 递归加载、符号版本（`VERNEED`/`VERDEF`）、
+> `dlopen`、初始化和 `TLS` 的模块级初始化、`LD_LIBRARY_PATH`/缓存，这些只有真实多库
+> 程序才会暴露。Qt6/FFmpeg 一类需要数十个 `.so` 的场景仍属未验证区域。
 
 ### 已完成（32 位 ldso 框架，历史）
 - [x] 动态链接器框架（ldso.h/c）

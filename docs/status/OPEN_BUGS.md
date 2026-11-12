@@ -2,7 +2,7 @@
 title: 赫普OS 未关闭问题清单
 status: active
 sys_version: 0.57.0
-updated: 2026-11-11
+updated: 2026-11-12
 owner: status
 source_of_truth: kernel/arch/x86_64/
 ---
@@ -20,8 +20,8 @@ source_of_truth: kernel/arch/x86_64/
 | OPEN-02 | UHCI 写路径时序竞态 | 0.13.42 遗留 | 待解决 |
 | OPEN-03 | ~~QEMU sendkey 不被键盘驱动读取~~ **已关闭（非真 bug，旧测量误解）**。PS/2 与 USB HID 两条键盘链路端到端可用，无需先点击聚焦。四重实测证据（f9db839 内核，PS/2 配置未挂 USB）：① 中断级 `g_kbd_irq_count`（符号地址 0x1f29f4）每次按键 +2（按下/释放各 1 次），键盘环形缓冲 head/tail 同步前移且条目被消费；`sendkey 2` 后计数 11→13、缓冲指针 3→4；② 界面级 `sendkey 2` 使 OOBE 由 1/4 推进到 2/4（截屏像素差 73616 px），账户创建页输入 h/e/p/u，用户名框真实回显 "hepu"；③ USB HID 键盘对照（`-device piix3-usb-uhci -device usb-kbd`）sendkey 改走 USB 队列（此时 PS/2 IRQ1 静默），同样推进向导、回显 hepu、Tab 切换输入框焦点（像素差 3008 px）。**应用层边界（避免再误判）**：OOBE 语言页只绑定数字键 `1`/`2`，Tab/方向键/回车在该页未绑定，属应用设计；旧「按了没反应」源于此，加之此前缺中断级取证，把「界面没变化」误判为「驱动没收到键」 | `g_kbd_irq_count` 中断计数 + 环形缓冲指针；OOBE 页面推进与文本回显；USB HID 对照链路 | 已关闭（非缺陷） |
 | OPEN-04 | 安装器不拷贝系统文件 | install64.c L213-L231 | 待解决 |
-| SEC-01 | ~~用户程序可直接读写内核内存~~ **隔离主路径已修复**：私有 PML4/PDPT 默认开（`Makefile:205` `USER_ISOLATION ?= 1`）、SMEP+SMAP 按 CR4 真实状态门控、brk 分页+NX(W^X)；QEMU 512MB 隔离模式到桌面、sec_test 通过。**边界口径（勿与下文混淆）**：物理内存 >1GB 时内核恒等映射覆盖用户窗口，自动退回旧模式（`user_aspace64.c:76-77`）；fork/clone 的地址空间复制/COW 未闭环，见 SEC-02（部分）。**v0.33.0 补**：用户堆/TLS 预留区搬入用户窗口私有分区（PDPT[1]，原落在内核共享 PDPT[0] 树导致用户态写自己堆 #PF）；大页不可当页表写（新增 vmm64_split_huge_pde）；PMM 显式保留内核栈页（原与用户栈物理重叠） | user_aspace64.c:76-77；user_access64.c/vmm64.c/pmm64.c；Makefile:205；提交 3375fbe | 已关闭（隔离主路径；RAM>1GB 退回旧模式与 fork 复制见 SEC-02） |
-| SEC-02 | 旧模式页表/用户页帧仍不释放（隔离模式已回收）；clone 子线程直接共享父进程页表指针（`syscall64_full.c:931` `child+24 = parent page_table`），未做私有副本也未打 COW 标记。内核已有 COW 缺页处理框架 `vmm64_try_cow`（`vmm64.c:432-457`，PAGE_COW bit9），但 fork/clone 路径尚未接入该框架 | syscall64_full.c:915-953；vmm64.c:426-457；user_process.c user_process_release；user_aspace64.c | 部分（COW 缺页框架已存在；fork/clone 共享页表、未接入 COW） |
+| SEC-01 | ~~用户程序可直接读写内核内存~~ **隔离主路径已修复**：私有 PML4/PDPT 默认开（`Makefile:205` `USER_ISOLATION ?= 1`）、SMEP+SMAP 按 CR4 真实状态门控、brk 分页+NX(W^X)；QEMU 512MB 隔离模式到桌面、sec_test 通过。**边界口径（勿与下文混淆）**：物理内存 >1GB 时内核恒等映射覆盖用户窗口，自动退回旧模式（`user_aspace64.c:76-77`）；fork 的 COW 复制已落地（`uaspace_fork_copy`），clone 仍共享父页表，见 SEC-02（部分）。**v0.33.0 补**：用户堆/TLS 预留区搬入用户窗口私有分区（PDPT[1]，原落在内核共享 PDPT[0] 树导致用户态写自己堆 #PF）；大页不可当页表写（新增 vmm64_split_huge_pde）；PMM 显式保留内核栈页（原与用户栈物理重叠） | user_aspace64.c:76-77；user_access64.c/vmm64.c/pmm64.c；Makefile:205；提交 3375fbe | 已关闭（隔离主路径；RAM>1GB 退回旧模式与 fork 复制见 SEC-02） |
+| SEC-02 | **状态精确化（2026-11-12 源码复核）**：① **fork 已接入 COW** —— `sys_fork`（`syscall64_full.c:1875`）调 `uaspace_fork_copy`（`user_aspace64.c:165`），深拷贝 PML4/PDPT/PD/PT、物理页共享 + `cow_ref` + 清 W 位 + 打 `UA_COW` 标记，缺页走 `vmm64_try_cow`（`vmm64.c:432-457`，PAGE_COW bit9）。旧表述「fork 未接入」不成立。② **clone 未接入 COW** —— `sys_clone`（`syscall64_full.c:917-953`）**不判 flags**，无条件把父进程页表指针复制给子槽（`:931` `child+24 = parent page_table`），既不作私有副本也不打 COW；线程间是直接共享地址空间，写互踩不触发 COW 缺页，且非 `CLONE_VM` 的 clone 也会错误共享地址空间。③ 旧模式（非隔离）下页表/用户页帧仍不释放（隔离模式已回收） | `syscall64_full.c:915-953`、`user_aspace64.c:165`、`vmm64.c:426-457`、`user_process.c user_process_release` | 部分（fork COW 已闭环；**clone 未接入 COW 且不判 flags**，待补） |
 | SEC-03 | fork 父子进程调度。**v0.34.0 已修复**：根因是 schedule() 里 `if (old && old->stack)` 跳过上下文切换，去掉后子进程可调度；子进程exit后通过 fork_return_to_parent 切换到父进程CR3+恢复GPR快照+sysret回父用户态。forktest端到端通过：CHILD输出可见、g_shared隔离正确、PARENT恢复运行、干净exit(0)。 | process64_full.c, syscall64_full.c, entry_64.S | 已关闭 |
 | SEC-04 | 裸盘读写/reboot/mkfs 已加 **PID==0 临时闸**（`sys_disk_read` `syscall64_full.c:2572`、`sys_disk_write:2587`、`sys_reboot:2614`、`sys_mkfs:485`），拒绝所有真实用户进程（PID 恒 ≥100，口径见文末「PID 权限闸口径注记」）；但仍缺 uid/capability 能力模型，`sys_kill` 目前仅限自身。用户态 install64/mbrtool 的 reboot/mkfs/disk 路径属已知不完整遗留（见 OPEN-04） | syscall64_full.c:485,2572,2587,2614；wrap_kill | 待解决（临时闸已加；能力模型未落地） |
 | SEC-05 | 原 `kernel_buf`/`file_buf`/`elf_buffer` 已改为调用期 `kmalloc`（`syscall64_full.c:276`、`:378`、`:1975`，提交 3375fbe）；残留 `sys_readdir` 静态 `names[64][256]`/`types[64]`（`:1606-1607`）仍不可重入；内核栈仅 4KB 的约束仍在 | syscall64_full.c:276,378,1606-1607,1975 | 部分（主路径缓冲已堆分配；readdir 静态表与 4KB 栈约束待后续） |
@@ -63,7 +63,7 @@ source_of_truth: kernel/arch/x86_64/
 | v0.38.0 | install命令（ext2文件复制） | ✅ |
 | v0.38.4 | SEC-18 ext2 目录遍历 guard 上限（`ext2_64.c:332-333`）；偶发挂死根因未复现，条目未全闭环 | 🟡 部分 |
 | v0.39.0 | 页错误处理框架（CR2/PTE转储） | ✅ |
-| v0.40.0 | SEC-02 COW：缺页复制框架 `vmm64_try_cow`（`vmm64.c:432-457`，引用计数+清 W 位+PF 复制页）；fork/clone 路径尚未接入 COW 标记 | 🟡 部分 |
+| v0.40.0 | SEC-02 COW：缺页复制框架 `vmm64_try_cow`（`vmm64.c:432-457`，引用计数+清 W 位+PF 复制页）；后续 `uaspace_fork_copy` 让 **fork** 接入 COW，**clone 仍未接入** | 🟡 部分 |
 | v0.40.2 | signal框架（sigaction存handler） | ✅ |
 | v0.41.0 | 抢占式调度（PIT IRQ0触发schedule） | ✅ |
 | v0.42.0 | 信号投递（用户栈改写 + pending_signals位图） | ✅ |
@@ -86,7 +86,7 @@ source_of_truth: kernel/arch/x86_64/
 
 | 优先级 | 内容 | 状态 |
 |--------|------|------|
-| P0 安全 | SEC-02 COW（部分：缺页框架已有，fork/clone 未接入）/ SEC-04 裸盘（PID==0 临时闸已加，capability 模型待落地）/ SEC-05 动态缓冲（部分：主路径已堆分配，readdir 静态表残留）/ SEC-06 panic栈（部分：SMEP/SMAP 启用与门控已闭环，内核态缺页仍 hlt）/ SEC-07 fd隔离（部分：异常隔离+每进程 fd 表+读写限制已验证；路径长度策略待做）/ SEC-14 撞号（已关闭）/ SEC-18 ext2挂死（部分：遍历 guard 已加，根因未复现） | 🟡 未全部完成（仅 SEC-14 关闭；其余为部分/待解决，详见主表） |
+| P0 安全 | SEC-02 COW（部分：缺页框架已有，fork 已接入，clone 未接入且不判 flags）/ SEC-04 裸盘（PID==0 临时闸已加，capability 模型待落地）/ SEC-05 动态缓冲（部分：主路径已堆分配，readdir 静态表残留）/ SEC-06 panic栈（部分：SMEP/SMAP 启用与门控已闭环，内核态缺页仍 hlt）/ SEC-07 fd隔离（部分：异常隔离+每进程 fd 表+读写限制已验证；路径长度策略待做）/ SEC-14 撞号（已关闭）/ SEC-18 ext2挂死（部分：遍历 guard 已加，根因未复现） | 🟡 未全部完成（仅 SEC-14 关闭；其余为部分/待解决，详见主表） |
 | P1 进程 | fork/waitpid/kill/tgkill/ps/sigaction/抢占调度/信号投递已落地；COW 写时复制见 SEC-02（部分） | 🟡 基本完成（COW 未闭环） |
 | P2 文件 | 基础工具/install/pkg list | ✅ 基本完成 |
 | P3 隔离域 | 优先级调度/nice/domains | ✅ 基本完成 |

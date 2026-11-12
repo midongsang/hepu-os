@@ -2,7 +2,7 @@
 title: GUI
 status: active
 sys_version: 0.57.0
-updated: 2026-11-01
+updated: 2026-11-12
 owner: architecture
 source_of_truth: null
 supersedes: null
@@ -10,7 +10,18 @@ supersedes: null
 
 # 赫普OS 图形化界面（GUI）设计文档 V2.35
 
-> 状态：规划中 · 适用系统版本 0.54.6 · 双模式架构总纲
+> ⚠️ **代际归属（2026-11-12 补注）**：本文描述的是 **32 位遗留树的 GUI 框架**
+> （`theme.c` / `widgets.c` / `mobile.c` / `appreg.c`，V2.35–V2.53 阶段）。该树**不在**
+> `kernel/arch/x86_64/Makefile` 中，因此**不是现役实现**。
+>
+> 现役 64 位桌面请读：[ARCHITECTURE_LAYERS](ARCHITECTURE_LAYERS.md)（gfx64 / hpdesk / hsqml /
+> hs_apps 分层职责）、[DESKTOP_SHELL](DESKTOP_SHELL.md)（桌面外壳落地路径）、
+> `architecture/OVERVIEW.md` 3.5 节。
+>
+> 本文保留的价值：其中"桌面模式 / 手机模式双形态"的产品方向与控件/主题设计经验，
+> 对 64 位桌面的后续规划仍有参考意义；但**任何"按本文找代码"的动作都会落到另一棵树**。
+
+> 状态：历史设计稿 · 原适用系统版本 0.54.6（正文未随之更新） · 双模式架构总纲
 > 项目定位：**手机操作系统**。本文档为 GUI 设计的统一纲领，明确「桌面模式=开发验证平台」「手机模式=产品目标形态」两条腿并行的架构。
 
 ---

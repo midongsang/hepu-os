@@ -2,7 +2,7 @@
 title: OVERVIEW
 status: active
 sys_version: 0.57.0
-updated: 2026-11-11
+updated: 2026-11-12
 owner: architecture
 source_of_truth: kernel/arch/x86_64/Makefile
 supersedes: null
@@ -22,7 +22,7 @@ supersedes: null
 
 | 项目 | 值 |
 |------|-----|
-| 当前版本 | **0.54.6**（`docs/status/VERSIONING.md` frontmatter） |
+| 当前版本 | **0.57.0**（`docs/status/VERSIONING.md` frontmatter；本文正文中"0.54.6"为撰写时的历史基线，规格以 frontmatter 为准） |
 | 内核架构 | x86_64 长模式 |
 | 编译约束 | -m64 -mcmodel=small -mno-red-zone -ffreestanding -fno-pie |
 | 工具链 | gcc / binutils (x86_64 宿主) |
@@ -181,7 +181,7 @@ supersedes: null
 | SMEP（内核不可执行用户页） | ✅ | `irq64_simple.c`（CR4.SMEP） |
 | SMAP（ring0 不可访问用户页） | ✅ | `irq64_simple.c`（CR4.SMAP，copy_*_user 用 STAC/CLAC） |
 | brk 分页 + NX/W^X | ✅ | `vmm64.c`（用户堆带 PT_NX） |
-| fork COW + 独立地址空间 | ✅ | `user_aspace64.c` + `elf64.c`（uaspace_fork_copy） |
+| fork COW + 独立地址空间 | ⚠️ fork 已接入 / clone 未接入 | fork 走 `uaspace_fork_copy`（深拷贝页表 + 共享物理页 + 清 W + `UA_COW` 标记，`user_aspace64.c:165`，由 `sys_fork` 调用 `syscall64_full.c:1875`）；**`sys_clone` 仍无条件共享父页表**（`syscall64_full.c:931` `child+24 = parent page_table`），未判 `CLONE_VM` 也未打 COW 标记 → 线程共享地址空间是"直接共享"，跨线程隔离与缺页路径未闭环（见 `OPEN_BUGS` SEC-02） |
 | 用户程序异常只终止自身 | ✅ | vec40 用户异常 trampoline，不再整机 hlt |
 | 加密原语 | ⚠️ XTEA/XTS 在用，公钥/摘要套件已编入但上层调用有限 | `kernel/crypto/` 共 11 个文件 3552 行全部编入（Makefile:85-95）：XTEA + XTS 页级加密（`crypto.c:33/168`）为在用路径；AES-128/256(-GCM/CBC)、SHA-256/512、HMAC、HKDF、ECDHE、RSA、X.509 代码已编译，主要供 TLS 子模块（`tls_crypto.c:48-55`）与 `auth64.c:71` 使用；RSA/X.509 证书校验暂无独立上层调用方 |
 | Secure Boot 签名验证 | ❌ | 仓库内无对应源码，引导器不传签名校验 |
@@ -357,7 +357,7 @@ bash tools/make_single_img64.sh
 | V0.14~0.18 | 内存隔离阶段 1（私有 PML4 默认开启）+ 阶段 2（fork 深拷贝 / 高半区 / SMEP / SMAP / brk 分页 NX/W^X） |
 | V0.19~0.20 | 安装器闭环 + crypto 入 64 位 + stat/readdir/mmap/munmap/mprotect/chdir/dup/umask/gettimeofday 新 syscall + Linux 翻译表 |
 | V0.33 | PIE/ET_DYN 装载跑通 + Linux syscall 翻译按进程 env_type 判定 + glibc static-PIE 端到端 |
-| **V0.54.6** | **当前版本**（docs/status/VERSIONING.md frontmatter sys_version） |
+| **V0.54.6** | **里程碑：动态链接 P1-7 落地 + 命令规范统一**（该行保留为历史里程碑；当前发布版本以 frontmatter `sys_version` 与 `VERSIONING.md` 为准） |
 
 ---
 
