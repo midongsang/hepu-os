@@ -522,11 +522,18 @@ static void itoa_hs(int value, char *buf);
  * 再吸附到 Display 页的四档上。2048x1536 -> 200%。 */
 int hs_display_auto_scale(void)
 {
-    /* 设计基准 1024x768, 缩放 pct 的语义是"元素放大 pct/100 倍",
-     * 所以逻辑画布 = 屏宽/pct、屏高/pct, 必须 >= 1024x768 才装得下整版。
-     * 只取"装得下"的档位里最大的那个 —— 旧版按最近档吸附,
-     * 1920x1080 会选 150%, 但纵向只允许 140%, 结果 QC 与天气卡必然重叠。 */
-    int by_h = g_shell.screen_height * 100 / 768;
+    /* 设计基准 1024x768(横向) / 720(纵向预算)。
+     * 缩放 pct 的语义是"元素放大 pct/100 倍", 逻辑画布 = 屏宽/pct、屏高/pct,
+     * 必须 >= 基准才装得下整版。
+     *
+     * 纵向基准取 720 而不是 768: 16:9 屏(1920x1080)在 150% 下 logical 是 1280x720,
+     * 用 768 会判"装不下"而退回 125% —— 1080p 上永远拿不到 150% 的字号。
+     * 同一版式在 720 预算下排布, 4:3 屏上反而更宽松:
+     *   1024x768@100%  -> logical 1024x768, 比 720 多 48(留白, 不溢出)
+     *   2048x1536@200% -> logical 1024x768, 同上
+     *   1920x1080@150% -> logical 1280x720, 刚好卡住
+     * 200% 在 1080p 上是 960x540, 改基准也救不回来, 那是物理限制。 */
+    int by_h = g_shell.screen_height * 100 / 720;
     int by_w = g_shell.screen_width * 100 / 1024;
     int lim = (by_h < by_w) ? by_h : by_w;
     if (lim < 100) lim = 100;
@@ -4823,7 +4830,7 @@ int hpdesk_init(int width, int height)
     g_shell.initialized = 0;
     g_shell.screen_width = width;
     g_shell.screen_height = height;
-    /* 自适应缩放因子（基准分辨率1024x768） */
+    /* 自适应缩放因子（横向基准 1024 / 纵向预算 720，与 hs_display_auto_scale 同源） */
     g_shell.scale_x = (float)width / 1024.0f;
     g_shell.scale_y = (float)height / 768.0f;
     g_shell.scale = (g_shell.scale_x < g_shell.scale_y) ? g_shell.scale_x : g_shell.scale_y;
