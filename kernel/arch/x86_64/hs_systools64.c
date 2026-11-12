@@ -112,6 +112,14 @@ static void st_content(hs_window_t *w, int *cx, int *cy, int *cw, int *ch)
     *ch = w->height - 26 - 8;
 }
 
+/* 三个工具窗口的基准尺寸 */
+#define ST_BASE_DEV_W   560
+#define ST_BASE_DEV_H   400
+#define ST_BASE_DISK_W  560
+#define ST_BASE_DISK_H  420
+#define ST_BASE_LOG_W   620
+#define ST_BASE_LOG_H   420
+
 /* ============================================================================
  * 设备管理器
  * ========================================================================== */
@@ -132,6 +140,14 @@ static int st_usb_kbd;
 static int st_usb_mouse;
 
 static hs_window_t *st_dev_win;
+
+/* 内容按窗口自身尺寸缩放(基准尺寸下恒等于原值)。行高、字号、列偏移、
+ * 标签宽度都走同一套 —— 只放大字号不放大行高会让行距塌在一起。 */
+static int st_dev_sc(int v)
+{
+    return v * (st_dev_win ? st_dev_win->width : ST_BASE_DEV_W) / ST_BASE_DEV_W;
+}
+#define SD(v) st_dev_sc(v)
 static int st_dev_tab;
 static int st_dev_scroll[3];
 
@@ -204,7 +220,7 @@ static int st_dev_rows(hs_window_t *w)
 {
     int cx, cy, cw, ch;
     st_content(w, &cx, &cy, &cw, &ch);
-    return (ch - 34 - 24) / 15;
+    return (ch - SD(34) - SD(24)) / SD(15);
 }
 
 static void st_dev_render(hs_window_t *w)
@@ -219,12 +235,12 @@ static void st_dev_render(hs_window_t *w)
 
     /* 标签栏 */
     for (i = 0; i < 3; i++) {
-        int tx = cx + i * 88;
+        int tx = cx + i * SD(88);
         int active = (i == st_dev_tab);
-        gfx64_fill_rounded_rect(tx, cy + 4, 80, 22, 4,
+        gfx64_fill_rounded_rect(tx, cy + SD(4), SD(80), SD(22), SD(4),
                                 active ? g_shell.colors.accent : g_shell.colors.panel_bg);
-        st_text(tx + 24, cy + 8, tabs[i],
-                active ? 0x2B2930 : g_shell.colors.panel_fg, 12);
+        st_text(tx + SD(24), cy + SD(8), tabs[i],
+                active ? 0x2B2930 : g_shell.colors.panel_fg, SD(12));
     }
 
     rows = st_dev_rows(w);
@@ -238,7 +254,7 @@ static void st_dev_render(hs_window_t *w)
         if (st_dev_scroll[0] > maxs) st_dev_scroll[0] = maxs;
         if (st_dev_scroll[0] < 0) st_dev_scroll[0] = 0;
 
-        st_text(cx, cy + 32, "BUS:DEV.FN  VENDOR:DEVICE  CLASS", tc, 11);
+        st_text(cx, cy + SD(32), "BUS:DEV.FN  VENDOR:DEVICE  CLASS", tc, SD(11));
         for (i = 0; i < rows; i++) {
             int idx = st_dev_scroll[0] + i;
             if (idx >= st_pci_n) break;
@@ -258,40 +274,40 @@ static void st_dev_render(hs_window_t *w)
             st_append(line, tmp);
             st_pad(line, 26);
             st_append(line, st_class_name(st_pci[idx].cls));
-            font64_draw_string(fb, W, H, cx, cy + 48 + i * 15, line,
-                               g_shell.colors.window_fg, 11);
+            font64_draw_string(fb, W, H, cx, cy + SD(48) + i * SD(15), line,
+                               g_shell.colors.window_fg, SD(11));
         }
-        st_text(cx, cy + ch - 16, "R=Refresh  Tab=Next tab  Up/Down=Scroll", tc, 10);
+        st_text(cx, cy + ch - SD(16), "R=Refresh  Tab=Next tab  Up/Down=Scroll", tc, SD(10));
     } else if (st_dev_tab == 1) {
         /* USB 子系统 */
-        int y = cy + 40;
+        int y = cy + SD(40);
         line[0] = 0;
         st_append(line, "USB devices detected: ");
         st_itoa(st_usb_n, line + st_len(line));
-        st_text(cx, y, line, g_shell.colors.window_fg, 12); y += 20;
+        st_text(cx, y, line, g_shell.colors.window_fg, SD(12)); y += SD(20);
 
         st_copyn(line, "Mass storage: ", 60);
         st_append(line, st_usb_storage ? "present" : "not present");
-        st_text(cx, y, line, g_shell.colors.window_fg, 12); y += 20;
+        st_text(cx, y, line, g_shell.colors.window_fg, SD(12)); y += SD(20);
 
         st_copyn(line, "Storage backend: ", 60);
         st_append(line, storage_hal_get_device() == 1 ? "USB (mounted)" : "ATA/IDE");
-        st_text(cx, y, line, g_shell.colors.window_fg, 12); y += 20;
+        st_text(cx, y, line, g_shell.colors.window_fg, SD(12)); y += SD(20);
 
         st_copyn(line, "USB keyboard: ", 60);
         st_append(line, st_usb_kbd ? "available" : "not detected");
-        st_text(cx, y, line, g_shell.colors.window_fg, 12); y += 20;
+        st_text(cx, y, line, g_shell.colors.window_fg, SD(12)); y += SD(20);
 
         st_copyn(line, "USB mouse: ", 60);
         st_append(line, st_usb_mouse ? "available" : "not detected");
-        st_text(cx, y, line, g_shell.colors.window_fg, 12); y += 20;
+        st_text(cx, y, line, g_shell.colors.window_fg, SD(12)); y += SD(20);
 
         st_copyn(line, "Mount state: ", 60);
         st_append(line, storage_hal_get_device() == 1 ? "USB active" : "internal disk active");
-        st_text(cx, y, line, g_shell.colors.window_fg, 12); y += 20;
+        st_text(cx, y, line, g_shell.colors.window_fg, SD(12)); y += SD(20);
 
-        st_text(cx, y + 10, "Disk Manager: mount/unmount USB storage", tc, 11);
-        st_text(cx, cy + ch - 16, "R=Refresh  Tab=Next tab", tc, 10);
+        st_text(cx, y + SD(10), "Disk Manager: mount/unmount USB storage", tc, SD(11));
+        st_text(cx, cy + ch - SD(16), "R=Refresh  Tab=Next tab", tc, SD(10));
     } else {
         /* 驱动列表 */
         drv_desc_t *descs[DRV_MAX_COUNT];
@@ -309,7 +325,7 @@ static void st_dev_render(hs_window_t *w)
         st_itoa(n, line + st_len(line));
         st_append(line, "  active: ");
         st_itoa(st_drv_active, line + st_len(line));
-        st_text(cx, cy + 32, line, tc, 11);
+        st_text(cx, cy + SD(32), line, tc, SD(11));
 
         maxs = n - rows;
         if (maxs < 0) maxs = 0;
@@ -326,11 +342,11 @@ static void st_dev_render(hs_window_t *w)
             st_pad(line, 30);
             if (descs[idx]->state >= 0 && descs[idx]->state <= DRV_STATE_ERROR)
                 st_append(line, state_names[descs[idx]->state]);
-            font64_draw_string(fb, W, H, cx, cy + 50 + i * 15, line,
+            font64_draw_string(fb, W, H, cx, cy + SD(50) + i * SD(15), line,
                                descs[idx]->state == DRV_STATE_ACTIVE ?
-                               0x52C41A : g_shell.colors.window_fg, 11);
+                               0x52C41A : g_shell.colors.window_fg, SD(11));
         }
-        st_text(cx, cy + ch - 16, "R=Refresh  Tab=Next tab  Up/Down=Scroll", tc, 10);
+        st_text(cx, cy + ch - SD(16), "R=Refresh  Tab=Next tab  Up/Down=Scroll", tc, SD(10));
     }
 }
 
@@ -348,6 +364,11 @@ typedef struct {
 extern int partition64_scan(st_partition_t *parts);
 
 static hs_window_t *st_disk_win;
+static int st_disk_sc(int v)
+{
+    return v * (st_disk_win ? st_disk_win->width : ST_BASE_DISK_W) / ST_BASE_DISK_W;
+}
+#define SK(v) st_disk_sc(v)
 static int st_disk_btn[3][4];      /* x,y,w,h: Mount / Unmount / fsck */
 static char st_disk_msg[64];
 static st_partition_t st_parts[4];
@@ -385,11 +406,11 @@ static void st_disk_render(hs_window_t *w)
     int have_fs, i2;
 
     st_content(w, &cx, &cy, &cw, &ch);
-    y = cy + 6;
+    y = cy + SK(6);
 
     /* 存储设备总览 */
     storage_hal_get_info(&sectors, &ssize);
-    if (ssize == 0) ssize = 512;
+    if (ssize == 0) ssize = 512;   /* 扇区字节数, 不是像素 */
     if (sectors == 0 && st_part_ok) {
         /* HAL 未提供容量: 用 MBR 分区末端估算磁盘大小 */
         for (i2 = 0; i2 < 4; i2++) {
@@ -403,7 +424,7 @@ static void st_disk_render(hs_window_t *w)
     st_append(line, storage_hal_is_initialized() ? "initialized" : "not initialized");
     st_append(line, "  backend=");
     st_append(line, storage_hal_get_device() == 1 ? "USB" : "ATA");
-    st_text(cx, y, line, g_shell.colors.window_fg, 12); y += 19;
+    st_text(cx, y, line, g_shell.colors.window_fg, SK(12)); y += SK(19);
 
     st_copyn(line, "Disk capacity: ", 64);
     st_uitoa(sectors, tmp);
@@ -415,7 +436,7 @@ static void st_disk_render(hs_window_t *w)
     st_uitoa(((uint64_t)sectors * ssize) >> 20, tmp);
     st_append(line, tmp);
     st_append(line, " MB");
-    st_text(cx, y, line, g_shell.colors.window_fg, 12); y += 19;
+    st_text(cx, y, line, g_shell.colors.window_fg, SK(12)); y += SK(19);
 
     /* ext2 根卷 */
     have_fs = ext2_64_is_mounted();
@@ -431,7 +452,7 @@ static void st_disk_render(hs_window_t *w)
         st_append(line, vol);
         st_append(line, "\"");
     }
-    st_text(cx, y, line, g_shell.colors.window_fg, 12); y += 19;
+    st_text(cx, y, line, g_shell.colors.window_fg, SK(12)); y += SK(19);
 
     if (have_fs) {
         uint64_t tot_mb = (total_b * bsize) >> 20;
@@ -446,25 +467,25 @@ static void st_disk_render(hs_window_t *w)
         st_append(line, " MB (");
         st_itoa(pct, tmp); st_append(line, tmp);
         st_append(line, "%)");
-        st_text(cx, y, line, g_shell.colors.window_fg, 12); y += 19;
+        st_text(cx, y, line, g_shell.colors.window_fg, SK(12)); y += SK(19);
 
         st_copyn(line, "Inodes: total ", 64);
         st_uitoa(tinodes, tmp); st_append(line, tmp);
         st_append(line, "  free "); st_uitoa(finodes, tmp); st_append(line, tmp);
         st_append(line, "  groups "); st_uitoa(groups, tmp); st_append(line, tmp);
-        st_text(cx, y, line, g_shell.colors.text_secondary, 11); y += 19;
+        st_text(cx, y, line, g_shell.colors.text_secondary, SK(11)); y += SK(19);
 
         /* 使用率进度条 */
-        gfx64_fill_rect(cx, y, cw, 8, g_shell.colors.panel_bg);
+        gfx64_fill_rect(cx, y, cw, SK(8), g_shell.colors.panel_bg);
         if (pct > 100) pct = 100;
-        gfx64_fill_rect(cx, y, (cw * pct) / 100, 8, g_shell.colors.accent);
-        y += 16;
+        gfx64_fill_rect(cx, y, (cw * pct) / 100, SK(8), g_shell.colors.accent);
+        y += SK(16);
     } else {
-        y += 19;
+        y += SK(19);
     }
 
     /* MBR 分区表 */
-    st_text(cx, y, "MBR partition table:", g_shell.colors.text_secondary, 11); y += 17;
+    st_text(cx, y, "MBR partition table:", g_shell.colors.text_secondary, SK(11)); y += SK(17);
     if (st_part_ok) {
         int any = 0;
         for (i = 0; i < 4; i++) {
@@ -483,32 +504,32 @@ static void st_disk_render(hs_window_t *w)
             st_append(line, tmp);
             st_append(line, " MB  ext2=");
             st_append(line, st_parts[i].fs_ext2 ? "yes" : "no");
-            st_text(cx, y, line, g_shell.colors.window_fg, 11); y += 16;
+            st_text(cx, y, line, g_shell.colors.window_fg, SK(11)); y += SK(16);
         }
-        if (!any) { st_text(cx, y, "(no partitions)", g_shell.colors.text_secondary, 11); y += 16; }
+        if (!any) { st_text(cx, y, "(no partitions)", g_shell.colors.text_secondary, SK(11)); y += SK(16); }
     } else {
-        st_text(cx, y, "(MBR read failed)", g_shell.colors.text_secondary, 11); y += 16;
+        st_text(cx, y, "(MBR read failed)", g_shell.colors.text_secondary, SK(11)); y += SK(16);
     }
 
     /* 操作按钮 */
     {
-        int by = w->y + w->height - 40;
-        int bw = 120, gap = 8;
+        int by = w->y + w->height - SK(40);
+        int bw = SK(120), gap = SK(8);
         int bx = cx;
-        st_disk_button(bx, by, bw, 26, "Mount USB");
+        st_disk_button(bx, by, bw, SK(26), "Mount USB");
         st_disk_btn[0][0] = bx; st_disk_btn[0][1] = by;
-        st_disk_btn[0][2] = bw; st_disk_btn[0][3] = 26;
+        st_disk_btn[0][2] = bw; st_disk_btn[0][3] = SK(26);
         bx += bw + gap;
-        st_disk_button(bx, by, bw, 26, "Unmount USB");
+        st_disk_button(bx, by, bw, SK(26), "Unmount USB");
         st_disk_btn[1][0] = bx; st_disk_btn[1][1] = by;
-        st_disk_btn[1][2] = bw; st_disk_btn[1][3] = 26;
+        st_disk_btn[1][2] = bw; st_disk_btn[1][3] = SK(26);
         bx += bw + gap;
-        st_disk_button(bx, by, 100, 26, "Run fsck");
+        st_disk_button(bx, by, SK(100), SK(26), "Run fsck");
         st_disk_btn[2][0] = bx; st_disk_btn[2][1] = by;
-        st_disk_btn[2][2] = 100; st_disk_btn[2][3] = 26;
+        st_disk_btn[2][2] = SK(100); st_disk_btn[2][3] = SK(26);
 
-        st_text(cx, by - 20, st_disk_msg, g_shell.colors.text_secondary, 11);
-        st_text(bx + 110, by + 7, "R=Refresh", g_shell.colors.text_secondary, 10);
+        st_text(cx, by - SK(20), st_disk_msg, g_shell.colors.text_secondary, SK(11));
+        st_text(bx + SK(110), by + SK(7), "R=Refresh", g_shell.colors.text_secondary, SK(10));
     }
     (void)fb; (void)W; (void)H;
 }
@@ -520,6 +541,11 @@ static void st_disk_render(hs_window_t *w)
 #define ST_LOG_MAX_LINES 256
 
 static hs_window_t *st_log_win;
+static int st_log_sc(int v)
+{
+    return v * (st_log_win ? st_log_win->width : ST_BASE_LOG_W) / ST_BASE_LOG_W;
+}
+#define SL(v) st_log_sc(v)
 static char st_log_text[ST_LOG_TEXT_MAX];
 static int  st_log_offs[ST_LOG_MAX_LINES];
 static int  st_log_lines;
@@ -542,7 +568,7 @@ static int st_log_rows(hs_window_t *w)
 {
     int cx, cy, cw, ch;
     st_content(w, &cx, &cy, &cw, &ch);
-    return (ch - 30) / 14;
+    return (ch - SL(30)) / SL(14);
 }
 
 static void st_log_render(hs_window_t *w)
@@ -561,7 +587,7 @@ static void st_log_render(hs_window_t *w)
     st_append(line, " lines  ");
     st_uitoa(klog64_used(), line + st_len(line));
     st_append(line, " bytes");
-    st_text(cx, cy + 4, line, g_shell.colors.text_secondary, 11);
+    st_text(cx, cy + SL(4), line, g_shell.colors.text_secondary, SL(11));
 
     if (st_log_scroll > st_log_lines - rows) st_log_scroll = st_log_lines - rows;
     if (st_log_scroll < 0) st_log_scroll = 0;
@@ -572,12 +598,12 @@ static void st_log_render(hs_window_t *w)
         int idx = start + i;
         if (idx < 0 || idx >= st_log_lines) break;
         st_copyn(line, st_log_text + st_log_offs[idx], 82);
-        font64_draw_string(fb, W, H, cx, cy + 24 + i * 14,
-                           line, g_shell.colors.window_fg, 10);
+        font64_draw_string(fb, W, H, cx, cy + SL(24) + i * SL(14),
+                           line, g_shell.colors.window_fg, SL(10));
     }
 
-    st_text(cx, cy + ch - 14, "R=Refresh  C=Clear  Up/Down/PgUp/PgDn=Scroll",
-            g_shell.colors.text_secondary, 10);
+    st_text(cx, cy + ch - SL(14), "R=Refresh  C=Clear  Up/Down/PgUp/PgDn=Scroll",
+            g_shell.colors.text_secondary, SL(10));
     (void)cw;
 }
 
@@ -587,7 +613,8 @@ static void st_log_render(hs_window_t *w)
 hs_window_t *hs_devmgr_create(void)
 {
     if (st_dev_win && st_dev_win->visible) { st_dev_win->focus = 1; return st_dev_win; }
-    st_dev_win = hs_window_create(HS_WINDOW_FLOATING, "Device Manager", -1, -1, 560, 400);
+    st_dev_win = hs_window_create(HS_WINDOW_FLOATING, "Device Manager", -1, -1,
+                            hs_ui_sx(560), hs_ui_sy(400));
     if (st_dev_win) {
         st_dev_win->render = st_dev_render;
         st_dev_tab = 0;
@@ -601,7 +628,8 @@ hs_window_t *hs_devmgr_create(void)
 hs_window_t *hs_diskmgr_create(void)
 {
     if (st_disk_win && st_disk_win->visible) { st_disk_win->focus = 1; return st_disk_win; }
-    st_disk_win = hs_window_create(HS_WINDOW_FLOATING, "Disk Manager", -1, -1, 560, 420);
+    st_disk_win = hs_window_create(HS_WINDOW_FLOATING, "Disk Manager", -1, -1,
+                            hs_ui_sx(560), hs_ui_sy(420));
     if (st_disk_win) {
         st_disk_win->render = st_disk_render;
         st_disk_refresh();
@@ -613,7 +641,8 @@ hs_window_t *hs_diskmgr_create(void)
 hs_window_t *hs_logview_create(void)
 {
     if (st_log_win && st_log_win->visible) { st_log_win->focus = 1; return st_log_win; }
-    st_log_win = hs_window_create(HS_WINDOW_FLOATING, "Log Viewer", -1, -1, 620, 420);
+    st_log_win = hs_window_create(HS_WINDOW_FLOATING, "Log Viewer", -1, -1,
+                            hs_ui_sx(620), hs_ui_sy(420));
     if (st_log_win) {
         st_log_win->render = st_log_render;
         st_log_scroll = 0;
