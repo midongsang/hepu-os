@@ -495,7 +495,11 @@ int hs_display_auto_scale(void)
 {
     int by = g_shell.screen_height * 100 / 768;
     if (by < 100) by = 100;
-    if (by > 200) by = 200;
+    /* 自动档回到 150%: 200% 在 2048x1536 上把逻辑画布压到 512x384,
+     * 而双栏布局需要 280+280+24 = 584 逻辑宽, 结构上装不下 ——
+     * 修完条宽与两栏重叠后, 仍会出现窗口压面板、日期被天气卡压住等版式冲突。
+     * 200% 保留为手动档(试验), 自动不落在这一档。 */
+    if (by > 150) by = 150;
     int steps[4] = {100, 125, 150, 200};
     int best = steps[0];
     int bd = by - steps[0];
@@ -3082,9 +3086,25 @@ static void cc_geometry(int *cx, int *cy, int *cw, int *ch)
     if (max_w > 0 && w > max_w) w = max_w;
     int max_h = g_shell.screen_height * 19 / 20;
     if (max_h > 0 && h > max_h) h = max_h;
+
+    /* 两栏不得重叠: 侧栏被外框钳制(屏宽 2/5)后右缘可能比 QC 的 cx 更靠右,
+     * 200% 时实测侧栏右缘 867 > QC 左缘 832, QC 压进侧栏 35px。 */
+    {
+        int sb_x = hs_sx(g_shell.ui.sidebar_x);
+        int sb_w = hs_sx(g_shell.ui.sidebar_width);
+        int sb_cap = g_shell.screen_width * 2 / 5;
+        if (sb_cap > 0 && sb_w > sb_cap) sb_w = sb_cap;
+        int min_cx = sb_x + sb_w + hs_sx(24);
+        int cx_try = g_shell.screen_width - w - hs_sx(24);
+        if (cx_try < min_cx) {
+            cx_try = min_cx;
+            w = g_shell.screen_width - cx_try - hs_sx(24);
+            if (w < hs_sx(200)) w = hs_sx(200);
+        }
+        *cx = cx_try;
+    }
     *cw = w;
     *ch = h;
-    *cx = g_shell.screen_width - w - hs_sx(24);
     if (*cx < 0) *cx = 0;
     *cy = hs_sy(g_shell.ui.cc_y);
     if (*cy + h > g_shell.screen_height) *cy = g_shell.screen_height - h - hs_sy(8);
