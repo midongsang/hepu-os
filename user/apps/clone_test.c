@@ -29,6 +29,13 @@ int main(void)
         g_child_branch = 1;
         for (int i = 0; i < 200000; i++) g_child_count++;
         g_child_done = 1;
+
+        /* V0.57.8：显式结束这条线程。
+         * 内核会把它摘掉、并把 syscall 返回目标改写成父线程，
+         * 所以 CPU 直接回到父线程，不会留下一个空转的孤儿线程。
+         * 万一此刻没有可切换的兄弟（父还在内核里），
+         * thread_exit 会普通返回，下面这行兜底继续等。 */
+        thread_exit();
         for (;;) { g_child_spin++; }
     }
     if (r < 0) {

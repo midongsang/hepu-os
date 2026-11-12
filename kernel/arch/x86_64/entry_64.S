@@ -137,12 +137,29 @@ syscall_entry_64:
     call syscall_handler_64
     addq $8, %rsp          /* 丢弃 arg6 栈槽，恢复原 rsp */
 
+    /* V0.57.8：线程退出重定向。
+     * wrap_thread_exit 会把当前线程摘掉并把 g_thr_redirect_flag 置 1；
+     * 这里在**本线程的内核栈**上重建目标线程的返回帧，
+     * 于是下面 popq 恢复出来的 rcx/r11/g_syscall_ustack_slot 都是目标线程的，
+     * sysretq 直接落到目标线程，当前线程不再返回。 */
+    cmpq $0, g_thr_redirect_flag(%rip)
+    jne  .Lthr_redirect
+    jmp  .Lthr_no_redirect
+.Lthr_redirect:
+    movq %rsp, %rdi
+    call uthread_apply_redirect
+    movq %rax, 112(%rsp)
+    movq $0, g_thr_redirect_flag(%rip)
+    jmp  .Lthr_redirect_done
+.Lthr_no_redirect:
+
     /* 保存返回值到 rax 栈槽（[rsp+0x70]）。
      * 下面的 process64_deliver_signals 是 C 函数，返回时 rax 会被它的返回值
      * 覆盖 —— 旧代码没有保存，导致所有普通系统调用（getpid/waitpid/...）
      * 返回给用户态的都是 0。 */
     movq %rax, 112(%rsp)
 
+.Lthr_redirect_done:
     /* 信号投递：检查pending_signals，修改返回RIP到handler */
     movq %rsp, %rdi          /* rdi = 内核栈指针 */
     call process64_deliver_signals

@@ -104,6 +104,11 @@ static int copy_user_path(char *dst, size_t dstsz, const char *user_path)
  * 表内 [SYS_HEPU_PS] 之前的 [SYS_MKFS]=wrap_mkfs 被 [SYSCALL_UMASK]=wrap_umask
  * 静默覆盖 —— 即 mkfs 系统调用实际执行的是 umask。改到空闲号 209。 */
 #define SYSCALL_UMASK       209
+/* V0.57.8: 用户态线程退出。这里套一层 SYSCALL_ 别名，是为了让
+ * tools/gen_syscall_doc.py 能把它解析进 docs/specs/SYSCALL_ABI.md
+ * （生成器只认 SYSCALL_xxx 形式；直接写 [SYS_xxx]= 会静默漏登记）。 */
+#define SYSCALL_HEPU_THREAD_EXIT   SYS_HEPU_THREAD_EXIT
+#define SYSCALL_HEPU_PS            SYS_HEPU_PS
 
 /* ---- wait4/creations ---- */
 #define SYSCALL_WAIT4       SYS_WAIT4
@@ -2316,6 +2321,17 @@ static int64_t wrap_exit_group(int64_t a1, int64_t a2, int64_t a3, int64_t a4, i
     sys_exit((int)a1);
     return 0;
 }
+/* V0.57.8: 用户线程退出。
+ * 只是把"当前这条用户执行流"摘掉，然后让 syscall 直接返回到同进程的下一个线程；
+ * 整进程的生命周期不受影响 —— 这正是 clone 子线程目前缺的那一环。 */
+static int64_t wrap_thread_exit(int64_t a1, int64_t a2, int64_t a3, int64_t a4, int64_t a5, int64_t a6) {
+    (void)a1; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+    extern int uthread_exit_current(void);
+    /* 有兄弟线程：已经改写了返回目标，这里的返回值不会被用上；
+     * 没有兄弟：什么都不做，线程继续跑，绝不误杀整进程。 */
+    (void)uthread_exit_current();
+    return 0;
+}
 static int64_t wrap_getpid(int64_t a1, int64_t a2, int64_t a3, int64_t a4, int64_t a5, int64_t a6) {
     (void)a1; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
     return sys_getpid();
@@ -2758,7 +2774,8 @@ static syscall_fn_t syscall_table[SYSCALL_MAX] = {
     [SYSCALL_UMASK]    = wrap_umask,
     [SYSCALL_GETTIMEOFDAY] = wrap_gettimeofday,
     [SYSCALL_WAITPID]  = wrap_waitpid,
-    [SYS_HEPU_PS] = wrap_ps,  /* V0.34.5 → V0.54.6: 统一 syscall 号 */
+    [SYSCALL_HEPU_PS] = wrap_ps,  /* V0.34.5 → V0.54.6: 统一 syscall 号 */
+    [SYSCALL_HEPU_THREAD_EXIT] = wrap_thread_exit,  /* V0.57.8 */
     [SYSCALL_PIPE]     = wrap_pipe,
     [SYSCALL_GETUID]   = wrap_getuid,
     [SYSCALL_GETGID]   = wrap_getgid,

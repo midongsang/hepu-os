@@ -2856,3 +2856,53 @@ clone 测试、hello、sec_test 三个 autorun 程序全部正常退出，桌面
 - 每线程独立 syscall 内核栈：父子不再互踩同一块栈
 - 内核栈不随退出释放：消除 use-after-free
 - 显式 64 位 exit：绕开 crt0 的 int 0x80 返回路径
+
+---
+
+## §1.88 V0.57.8：线程退出接口 —— clone 子线程不再留孤儿
+
+### 缺口
+`clone` 子线程此前只能靠 `for (;;)` 收尾。父线程退出后，这条执行流仍留在
+用户态空转，没有一个"这条线程结束了"的表达方式 —— 既浪费 CPU，也让
+`g_ut` 表里长期挂着一条没有意义的记录。
+
+### 接口
+- 新号：`SYS_HEPU_THREAD_EXIT = 235`，`SYS_MAX` 229 → 236（数组要容纳 235 这个下标）
+- **号位踩坑**：一开始选 209，看起来是 `#define SYS_*` 的空洞，但
+  `syscall64_full.c` 里 `[SYSCALL_UMASK] = wrap_umask` 用的正是 209 ——
+  这是**同一个号空间的另一套前缀**，`grep SYS_` 看不见它。重复下标在 GCC 下
+  只是覆盖不报错，等于静默把 UMASK 顶掉了。教训：选号必须同时查
+  `SYS_xxx` 与 `SYSCALL_xxx` 两套前缀，或直接跑生成器看冲突（ABI 文档开头也写了这一条）。
+- 顺带补齐一个长期缺口：`[SYS_HEPU_PS]`（227）同样因为用了 `SYS_` 前缀，
+  从来没进过 `SYSCALL_ABI.md`；本轮一并改成 `SYSCALL_HEPU_PS` 别名，现已在表内。
+- 用户侧：`ulib.h` 的 `thread_exit()`
+- 语义：结束**当前这条用户线程**，不终止整进程
+
+### 实现要点
+syscall 返回走的是 `sysretq`，RIP/RFLAGS/RSP 分别取自
+`rcx` / `r11` / `g_syscall_ustack_slot`。所以只要在**本线程的内核栈**上
+重建目标线程的整套返回帧，`sysretq` 就会直接落到目标线程：
+
+1. `wrap_thread_exit` → `uthread_exit_current()`：
+   - 找同 owner、`UT_READY` 的兄弟线程；**找不到就什么都不做直接返回**
+     （绝不因一次 `thread_exit` 把整个进程带走）
+   - 找到则把当前线程 `used=0`（`kstack_top` 保留复用）、`g_ut_cur=目标`、
+     置 `g_thr_redirect_flag`
+2. `entry_64.S` 在 `syscall_handler_64` 返回后检查该 flag，
+   调 `uthread_apply_redirect(f)`：
+   - 15 个 GPR 槽整体换成目标的 `raw[]`
+   - **`f[12]=rcx** 换 `t->rip`、**`f[4]=r11`** 换 `t->rflags`
+     （这两个槽在 `sysretq` 语义下不是普通寄存器）
+   - `g_syscall_ustack_slot = t->rsp`、`g_syscall_kstack_slot = t->kstack_top`
+
+注意 syscall 帧与 IRQ 帧布局不同：syscall 帧没有 `ds`/`es` 那两个槽，
+所以 GPR 直接从 `f[0]` 起算，不受 §1.86 的 +2 偏移影响。
+
+### 实证（2 次独立启动，`/tmp/ser_f6_{1,2}.log`）
+```
+[UTHREAD] thread exit tid=0x3E8 -> switch to tid=0x64
+PASS: child ran in shared address space, both counters advanced
+[SYSCALL64] Process exited with code 0
+```
+顺序说明链路是完整的：子线程跑完计数 → 退出并切回父 → 父看到 `g_child_done`
+打 PASS → 正常 `exit(0)`。`PASS=1 FAIL=0 EXCEPTION=0` 连续两次，桌面正常。

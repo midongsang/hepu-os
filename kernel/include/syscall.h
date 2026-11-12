@@ -133,6 +133,7 @@
 #define SYS_NET_STATS       225   /* 网络统计 */
 #define SYS_MKFS            226   /* 文件系统格式化 */
 #define SYS_HEPU_PS         227   /* 进程快照查询 */
+#define SYS_HEPU_THREAD_EXIT 235  /* V0.57.8: 结束当前用户线程（不终止整进程） */
 #define SYS_EXIT_GROUP      228   /* 进程组退出 */
 /* ---- 原有 syscall 保持不变（用 #ifdef 保护，若已定义则跳过） ---- */
 #define SYS_GFX_INIT       200   /* 初始化VGA图形模式 (V4.02: gfxtest支持) */
@@ -156,7 +157,7 @@
 #define SYS_LIST_USERS       219 /* 列出用户 (V8.46) */
 #define SYS_GET_CURRENT_USER 220 /* 获取当前用户 (V8.46) */
 #define SYS_GFX_3D_DEMO      221 /* 3D图形演示 (V0.9.0: P5-5硬件加速) */
-#define SYS_MAX              229
+#define SYS_MAX              236
 #endif
 
 /* 初始化系统调用 */

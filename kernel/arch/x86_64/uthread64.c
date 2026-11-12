@@ -155,6 +155,69 @@ void uthread_clear_owner(int owner)
     if (g_ut_cur >= 0 && !g_ut[g_ut_cur].used) g_ut_cur = -1;
 }
 
+/* ---- V0.57.8：线程退出 ------------------------------------------------
+ * 目标：一条用户线程结束自己时，不终止整进程，而是让 CPU 直接回到同进程的
+ * 下一个就绪线程。
+ *
+ * 实现方式：syscall 返回走的是 sysretq，RIP/RFLAGS/RSP 分别来自
+ * rcx / r11 / g_syscall_ustack_slot。所以只要能在这条 syscall 的内核栈上
+ * 重建目标线程的整套返回帧，sysretq 就会"落到"目标线程且不回到当前线程。
+ * 具体重建在 uthread_apply_redirect() 里做，由 entry_64.S 在 handler
+ * 返回后调用。
+ *
+ * 找不到兄弟线程时返回 0 且不改变任何状态 —— 线程继续跑，
+ * 绝不因为一次 thread_exit 把整个进程带走。 */
+int g_thr_redirect_flag = 0;
+
+int uthread_exit_current(void)
+{
+    if (g_ut_cur < 0 || !g_ut[g_ut_cur].used) return 0;
+
+    int cur = g_ut_cur;
+    int owner = g_ut[cur].owner;
+
+    /* 先看有没有可切换的兄弟；没有就原地不动 */
+    int next = -1;
+    for (int i = 0; i < MAX_UTHREADS; i++) {
+        if (i != cur && g_ut[i].used && g_ut[i].owner == owner &&
+            g_ut[i].state == UT_READY) { next = i; break; }
+    }
+    if (next < 0) return 0;
+
+    g_ut[cur].used = 0;        /* kstack_top 保留，槽位复用 */
+    g_ut_cur = next;
+    g_thr_redirect_flag = 1;
+
+    vga_puts("[UTHREAD] thread exit tid=");
+    vga_put_hex((uint64_t)g_ut[cur].tid);
+    vga_puts(" -> switch to tid=");
+    vga_put_hex((uint64_t)g_ut[next].tid);
+    vga_puts("\n");
+    return 1;
+}
+
+/* 在 syscall 返回帧上重建目标线程上下文。
+ * f 指向 syscall 帧的 r15 槽（与 IRQ 帧不同：syscall 帧没有 ds/es 那两个槽）：
+ *   f[0]=r15 f[1]=r14 f[2]=r13 f[3]=r12 f[4]=r11 f[5]=r10 f[6]=r9 f[7]=r8
+ *   f[8]=rbp f[9]=rdi f[10]=rsi f[11]=rdx f[12]=rcx f[13]=rbx f[14]=rax
+ * 注意：rcx/r11 在 sysretq 语义下分别是 RIP/RFLAGS，必须用 t->rip/t->rflags
+ * 覆盖，不能直接搬 raw[12]/raw[4]（那两个是普通寄存器快照）。 */
+uint64_t uthread_apply_redirect(uint64_t *f)
+{
+    if (g_ut_cur < 0 || !g_ut[g_ut_cur].used) return 0;
+    uthread_t *t = &g_ut[g_ut_cur];
+
+    for (int i = 0; i < 15; i++) f[i] = t->raw[i];
+    f[12] = t->rip;             /* rcx = 目标 RIP */
+    f[4]  = t->rflags;          /* r11 = 目标 RFLAGS */
+
+    extern uint64_t g_syscall_ustack_slot, g_syscall_kstack_slot;
+    g_syscall_ustack_slot = t->rsp;
+    if (t->kstack_top) g_syscall_kstack_slot = t->kstack_top;
+
+    return t->raw[14];          /* 作为返回值写进 rax 槽 */
+}
+
 /* 用户态时钟中断：保存当前线程，轮转同 owner 的下一个 */
 void uthread_timer_tick(uint64_t *f)
 {

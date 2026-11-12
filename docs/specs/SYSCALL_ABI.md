@@ -125,8 +125,10 @@ source_of_truth: kernel/include/syscall.h + kernel/arch/x86_64/syscall64_full.c
 | 224 | REBOOT | wrap_reboot | 原生 SYS_REBOOT | `SYSCALL_REBOOT` |
 | 225 | NET_STATS | wrap_net_stats | 原生 SYS_NET_STATS | `SYSCALL_NET_STATS` |
 | 226 | MKFS | wrap_mkfs | 原生 SYS_MKFS | `SYSCALL_MKFS` |
+| 227 | HEPU_PS | wrap_ps | 原生 SYS_HEPU_PS | `SYSCALL_HEPU_PS` |
+| 235 | HEPU_THREAD_EXIT | wrap_thread_exit | 原生 SYS_HEPU_THREAD_EXIT | `SYSCALL_HEPU_THREAD_EXIT` |
 
-共 106 项已注册。
+共 108 项已注册。
 
 ## 已定义但未注册（未实现/未接线）
 

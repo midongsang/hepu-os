@@ -105,6 +105,14 @@ static inline void exit(int status)
     while (1) { asm volatile("hlt"); }
 }
 
+/* V0.57.8：结束当前用户线程（不是整进程）。
+ * 内核把这条执行流摘掉后直接返回到同进程的下一条就绪线程；
+ * 若没有兄弟线程，调用会普通返回，线程继续跑（不会误杀进程）。 */
+static inline void thread_exit(void)
+{
+    syscall1(SYS_HEPU_THREAD_EXIT, 0);
+}
+
 static inline int fork(void)
 {
     return (int)syscall0(SYS_FORK);
