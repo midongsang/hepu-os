@@ -33,7 +33,7 @@ supersedes: null
 - 解析真实 MADT：存在 Interrupt Source Override，把 **ISA IRQ0(PIT) 覆盖到 GSI 2**
   （IRQ1 键盘无覆盖，仍在 GSI 1）。
 - 根因：`apic64_switch_to_apic_mode` 把 PIT 错误配置在 IOAPIC pin 0，而 PIT 实际
-  经覆盖接在 pin 2，中断永不投递；c51fa4e 的渲染节流又用 `pit64_get_ms()`（冻结值），
+  经覆盖接在 pin 2，中断永不投递；3563c0c 的渲染节流又用 `pit64_get_ms()`（冻结值），
   首帧后 `now-last_render` 恒为 0，永远跳过渲染。
 
 ### 修复（通用，非硬编码）
@@ -47,7 +47,7 @@ supersedes: null
 - QEMU：`pit_ticks` 恢复 1kHz 增长；OOBE 键盘操作后画面实时从 1/4 进入 2/4；
   鼠标坐标随移动正常更新；顶栏时钟走时。
 - 主机测试 6/6 通过（含新增 winslot）。
-- 落地提交：`0b4750f`（窗口槽位泄漏 + 纯 APIC 模式 PIT 中断冻结，两项均已关闭）。
+- 落地提交：`4fbafb5`（窗口槽位泄漏 + 纯 APIC 模式 PIT 中断冻结，两项均已关闭）。
 
 ## 已复核关闭遗留
 

@@ -23,7 +23,7 @@ supersedes: null
 **硬约束执行情况**：版本号保持 **0.54.11 未 bump**；仅本地 commit，**未 push**；
 未在任何输出回显凭据；权限闸本轮一律用 **PID==0 临时闸**，未搭 cred/capability 大体系。
 
-基线：HEAD=`0b4750f`，修复前工作区干净，主机测试 6/6。
+基线：HEAD=`4fbafb5`，修复前工作区干净，主机测试 6/6。
 
 ---
 
@@ -69,7 +69,7 @@ supersedes: null
     `continue` 语义（1235）；每段数据分块 `copy_from_user` 到 512B 栈缓冲再输出，
     总字节封顶 1MB（1238–1259）。
 - **验证**：主机 uaccess 测试通过；QEMU 运行写路径不崩。
-- **回退**：revert 本函数至 `0b4750f` 版本。
+- **回退**：revert 本函数至 `4fbafb5` 版本。
 
 ### SC-02　clone 子线程 TID 裸写 / TLS 裸写
 

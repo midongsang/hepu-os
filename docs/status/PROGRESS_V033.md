@@ -235,5 +235,5 @@ tr -d '\0' < logs/run.log            # 日志含 NUL
 
 1. ~~**SEC-14**：清理撞号历史扩展号~~ **已关闭**（提交 3375fbe，见 OPEN_BUGS SEC-14）。
 2. **ROADMAP P0-2**：把 `syscall64_compat.c` 与 security/kunit/compat/tls 接入 64 位 `kernel/arch/x86_64/Makefile` 的 `C_SOURCES`（注意 VPATH / 重复符号）。
-3. **SEC-11**：构造大文件 / 目录跨块的可复现用例（当前未复现）；`ctx->block_buf` 同址复用已由 R2-7（0ae1ead）改为独立 ind_buf，余留底层失败点待复现。
+3. **SEC-11**：构造大文件 / 目录跨块的可复现用例（当前未复现）；`ctx->block_buf` 同址复用已由 R2-7（ea9cdd8）改为独立 ind_buf，余留底层失败点待复现。
 4. **SEC-02**：把 fork/clone 路径接入已有 COW 框架（`vmm64_try_cow`），当前 clone 仍共享父进程页表指针。

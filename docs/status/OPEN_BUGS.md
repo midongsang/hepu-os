@@ -18,7 +18,7 @@ source_of_truth: kernel/arch/x86_64/
 | BUG-48 | INT13 磁盘重置在关中断下调用 | boot/BOOTLOADER_DEFINITION_PLAN.md, 待 QEMU 验证 | 待验证 |
 | OPEN-01 | QEMU 高 LBA(P2/P3) 写成功读全 0 | VERSIONING.md 0.13.57 已知限制 | 验证中 |
 | OPEN-02 | UHCI 写路径时序竞态 | 0.13.42 遗留 | 待解决 |
-| OPEN-03 | ~~QEMU sendkey 不被键盘驱动读取~~ **已关闭（非真 bug，旧测量误解）**。PS/2 与 USB HID 两条键盘链路端到端可用，无需先点击聚焦。四重实测证据（f9db839 内核，PS/2 配置未挂 USB）：① 中断级 `g_kbd_irq_count`（符号地址 0x1f29f4）每次按键 +2（按下/释放各 1 次），键盘环形缓冲 head/tail 同步前移且条目被消费；`sendkey 2` 后计数 11→13、缓冲指针 3→4；② 界面级 `sendkey 2` 使 OOBE 由 1/4 推进到 2/4（截屏像素差 73616 px），账户创建页输入 h/e/p/u，用户名框真实回显 "hepu"；③ USB HID 键盘对照（`-device piix3-usb-uhci -device usb-kbd`）sendkey 改走 USB 队列（此时 PS/2 IRQ1 静默），同样推进向导、回显 hepu、Tab 切换输入框焦点（像素差 3008 px）。**应用层边界（避免再误判）**：OOBE 语言页只绑定数字键 `1`/`2`，Tab/方向键/回车在该页未绑定，属应用设计；旧「按了没反应」源于此，加之此前缺中断级取证，把「界面没变化」误判为「驱动没收到键」 | `g_kbd_irq_count` 中断计数 + 环形缓冲指针；OOBE 页面推进与文本回显；USB HID 对照链路 | 已关闭（非缺陷） |
+| OPEN-03 | ~~QEMU sendkey 不被键盘驱动读取~~ **已关闭（非真 bug，旧测量误解）**。PS/2 与 USB HID 两条键盘链路端到端可用，无需先点击聚焦。四重实测证据（ef3c7cc 内核，PS/2 配置未挂 USB）：① 中断级 `g_kbd_irq_count`（符号地址 0x1f29f4）每次按键 +2（按下/释放各 1 次），键盘环形缓冲 head/tail 同步前移且条目被消费；`sendkey 2` 后计数 11→13、缓冲指针 3→4；② 界面级 `sendkey 2` 使 OOBE 由 1/4 推进到 2/4（截屏像素差 73616 px），账户创建页输入 h/e/p/u，用户名框真实回显 "hepu"；③ USB HID 键盘对照（`-device piix3-usb-uhci -device usb-kbd`）sendkey 改走 USB 队列（此时 PS/2 IRQ1 静默），同样推进向导、回显 hepu、Tab 切换输入框焦点（像素差 3008 px）。**应用层边界（避免再误判）**：OOBE 语言页只绑定数字键 `1`/`2`，Tab/方向键/回车在该页未绑定，属应用设计；旧「按了没反应」源于此，加之此前缺中断级取证，把「界面没变化」误判为「驱动没收到键」 | `g_kbd_irq_count` 中断计数 + 环形缓冲指针；OOBE 页面推进与文本回显；USB HID 对照链路 | 已关闭（非缺陷） |
 | OPEN-04 | 安装器不拷贝系统文件 | install64.c L213-L231 | 待解决 |
 | SEC-01 | ~~用户程序可直接读写内核内存~~ **隔离主路径已修复**：私有 PML4/PDPT 默认开（`Makefile:205` `USER_ISOLATION ?= 1`）、SMEP+SMAP 按 CR4 真实状态门控、brk 分页+NX(W^X)；QEMU 512MB 隔离模式到桌面、sec_test 通过。**边界口径（勿与下文混淆）**：物理内存 >1GB 时内核恒等映射覆盖用户窗口，自动退回旧模式（`user_aspace64.c:76-77`）；fork 的 COW 复制已落地（`uaspace_fork_copy`），clone 仍共享父页表，见 SEC-02（部分）。**v0.33.0 补**：用户堆/TLS 预留区搬入用户窗口私有分区（PDPT[1]，原落在内核共享 PDPT[0] 树导致用户态写自己堆 #PF）；大页不可当页表写（新增 vmm64_split_huge_pde）；PMM 显式保留内核栈页（原与用户栈物理重叠） | user_aspace64.c:76-77；user_access64.c/vmm64.c/pmm64.c；Makefile:205；提交 3375fbe | 已关闭（隔离主路径；RAM>1GB 退回旧模式与 fork 复制见 SEC-02） |
 | SEC-02 | **状态精确化（2026-11-12 源码复核）**：① **fork 已接入 COW** —— `sys_fork`（`syscall64_full.c:1875`）调 `uaspace_fork_copy`（`user_aspace64.c:165`），深拷贝 PML4/PDPT/PD/PT、物理页共享 + `cow_ref` + 清 W 位 + 打 `UA_COW` 标记，缺页走 `vmm64_try_cow`（`vmm64.c:432-457`，PAGE_COW bit9）。旧表述「fork 未接入」不成立。② **clone 未实现（返回 ENOSYS）** —— 原 `sys_clone` 用错误的结构体偏移（`+8` 写 active 实际落在 rip、`+24` 写页表实际落在 rflags、真正的 `active(+4)`/`page_table(+32)` 从未赋值），导致子槽**永远不会被调度**，clone 只是返回一个 pid 的空实现；一旦把 active 改对，子线程会带脏页表启动。v0.57.1 已改为明确返回 `-38 ENOSYS`，真线程需 trampoline + 独立内核栈 + 子 rax 清零 + 共享页表引用计数（见 `FIXES_0_57_0.md` §1.82）。③ 旧模式（非隔离）下页表/用户页帧仍不释放（隔离模式已回收） | `syscall64_full.c:915-953`、`user_aspace64.c:165`、`vmm64.c:426-457`、`user_process.c user_process_release` | 部分（fork COW 已闭环；**clone 已诚实化为 ENOSYS**，真线程未实现） |
@@ -51,7 +51,7 @@ source_of_truth: kernel/arch/x86_64/
 | — | hepu_elf_vaddr_to_fileoff 无边界检查 | 加 elf_size 参数，phnum/offset/filesz 校验（`elf64.c`） | 已关闭（随 3375fbe 快照入仓） |
 | — | hepu_user_ptr 写用户页未查 NX(W^X) | 新增 `hepu_user_write_ptr`（`user_process.c:431`，GOT 写 `:596`），写用户页走它 | 已关闭（随 3375fbe 快照入仓） |
 | — | syscall64_compat.c 曾是未接入的兼容层 | 已从构建与源码移除（死代码；64 位树内无该文件） | 已关闭（3375fbe） |
-| BLD-15 | 构建/启动脚本硬编码绝对路径。源码核实（HEAD f9db839）仍有 **4** 个脚本未相对定位：`tools/build_hybrid_iso.py:12`、`tools/build_iso.py:10`、`tools/build_uefi_dual.py:15` 写死 `/home/user/Doubao/chats/38448056008342018/...`；`tools/start_qemu.sh:3` 写死 `/home/user/.super_doubao/.../workspace/hepu-os`。旧条目称「v0.33.5 已改 `$(dirname $0)` 相对定位」与源码不符，予以更正 | 待改为 `$(dirname $0)`/脚本自定位 | 待解决（未修复） |
+| BLD-15 | 构建/启动脚本硬编码绝对路径。源码核实（HEAD ef3c7cc）仍有 **4** 个脚本未相对定位：`tools/build_hybrid_iso.py:12`、`tools/build_iso.py:10`、`tools/build_uefi_dual.py:15` 写死 `/home/user/Doubao/chats/38448056008342018/...`；`tools/start_qemu.sh:3` 写死 `/home/user/.super_doubao/.../workspace/hepu-os`。旧条目称「v0.33.5 已改 `$(dirname $0)` 相对定位」与源码不符，予以更正 | 待改为 `$(dirname $0)`/脚本自定位 | 待解决（未修复） |
 
 ## v0.34.0+ 开发记录
 
@@ -97,61 +97,61 @@ source_of_truth: kernel/arch/x86_64/
 
 ## R1–R4 审计修复落地清单（已关闭，含证据与提交）
 
-> 口径：一条「已关闭」同时具备 (a) 源码对应修复代码 file:line、(b) 提交 hash。R1/R2/R3/R4 均在 HEAD `f9db839` 之前合入；64 位树早期修复随初始快照 `3375fbe` 进入本仓，无独立分拆 hash。
+> 口径：一条「已关闭」同时具备 (a) 源码对应修复代码 file:line、(b) 提交 hash。R1/R2/R3/R4 均在 HEAD `ef3c7cc` 之前合入；64 位树早期修复随初始快照 `3375fbe` 进入本仓，无独立分拆 hash。
 
-### R4 · 组合 A 安全止血包（提交 `f9db839`，6 P0 + 12 P1）
+### R4 · 组合 A 安全止血包（提交 `ef3c7cc`，6 P0 + 12 P1）
 
 修复详情与回退方式见 `docs/security/FIX_SECURITY_BUNDLE_A_R4.md`（该文档结论不改写）。
 
 | 编号 | 缺陷 | 证据 file:line | 提交 | 状态 |
 |------|------|---------------|------|------|
-| INT-01 | LAPIC 定时器校准到真实 1kHz（弃用硬编码 ICR=6250，改用 PIT channel-0 1ms tick 测 50ms 窗口；校准期屏蔽 LVT） | `apic64.c:507`（CAL_WINDOW_MS）、`:511`（g_apic_timer_hz）、`:520`（apic64_calibrate_timer）、`:570`（icr=hz/1000） | f9db839 | 已关闭 |
-| SC-01 | writev 任意用户指针/无界长度：iovcnt 上限 1024、总字节封顶 1MB，iov 与数据分批走 copy_from_user | `syscall64_full.c:1210-1213`（常量）、`:1214`（sys_writev） | f9db839 | 已关闭 |
-| SC-02 | clone child_tid 裸写 / TLS 裸写：写前 hepu_is_user_address 校验，child_tid 改 copy_to_user | `syscall64_full.c:915`（sys_clone）、`:938-942`（child_tid）、`:946-950`（tls） | f9db839 | 已关闭 |
-| SC-03 | reboot 无权限闸：入口 PID==0 临时闸 | `syscall64_full.c:2613-2614` | f9db839 | 已关闭（临时闸，见文末 PID 口径注记） |
-| SC-04 | mkfs 仅靠源码内魔数鉴权：魔数之外加 PID==0 临时闸 | `syscall64_full.c:484-485`（闸）、`:486`（魔数保留） | f9db839 | 已关闭（临时闸，见文末 PID 口径注记） |
-| SC-05 | sigaction 把 act 指针当 handler 存储：新增 k_sigaction 按 glibc x86_64 布局 copy_from_user，解析真实 sa_handler | `syscall64_full.c:1347-1377` | f9db839 | 已关闭 |
-| MM-01 | COW 缺页丢失 NX 位：新 PTE 保留 bit63 NX | `pmm64.c:116` | f9db839 | 已关闭 |
-| MM-02 | 用户栈字符串区越界：strbuf[512] 填充前按 strings_len 上限校验 | `user_stack64.c:224`（strbuf）、`:227-230`（上限判断） | f9db839 | 已关闭 |
-| NET-01 | TCP 发送成功判据恒假、序列号不推进：判据改 `sret > 0` | `net64_tcp.c:159` | f9db839 | 已关闭（真机/带网络后端环境待复核，见 R4 文档第五节） |
-| NET-02 | 纯 ACK 静默丢弃：新增 tcp_process_ack helper（RTT 平滑/清未确认/cwnd），data 与纯 ACK 分支均调用 | `net64_tcp.c:275`（helper）、`:370`/`:374`（调用点） | f9db839 | 已关闭（真机流量待复核） |
-| NET-05 | 接收缓冲填满后新数据静默丢弃：取尽复位游标，部分取走则压缩剩余数据到缓冲头 | `net64_tcp.c:241-250` | f9db839 | 已关闭（长连接待复核） |
-| FS-03 | 块设备部分写失败后脏读：raw write 失败先 blk_cache_invalidate 再返回 -1 | `blk_cache64.c:115`（前向声明）、`:127`（失效调用） | f9db839 | 已关闭 |
-| FS-04 | free_inode inode 表块 32 位截断：先 64 位算 itb64、校验后再截断 | `ext2_algo.c:625-626`、`:647-648` | f9db839 | 已关闭 |
-| FS-05 | 写文件末尾偏移 32 位溢出：end_offset 改 64 位计算 | `ext2_64.c:1319`（end_offset64） | f9db839 | 已关闭 |
-| BLD-14 | CSPRNG 熵源 extern 宽度/元素数不匹配：extern 改 uint64_t irq_count[256]，256 项 uint64 累加 | `csprng.c:64-69` | f9db839 | 已关闭 |
-| GFX-01 | Tab 补全候选列表栈溢出：out[80] 改逐字符有界拼接，将满安全截断并强制 NUL | `hs_apps.c:461`（t_complete）、`:495`/`:504`/`:507`（有界写） | f9db839 | 已关闭 |
-| DRV-02 | 内核模块 PLT 静态索引跨模块累计：删 static 改模块级局部 | `kmod64.c:287`（plt_slot_idx 局部） | f9db839 | 已关闭 |
-| WM-02 | 鼠标/平板坐标按硬编码 1024 钳制：改取 gfx64_get_width/height 真实尺寸 | `usb64.c:1357-1362`（scr_w/scr_h/max_x/max_y） | f9db839 | 已关闭 |
+| INT-01 | LAPIC 定时器校准到真实 1kHz（弃用硬编码 ICR=6250，改用 PIT channel-0 1ms tick 测 50ms 窗口；校准期屏蔽 LVT） | `apic64.c:507`（CAL_WINDOW_MS）、`:511`（g_apic_timer_hz）、`:520`（apic64_calibrate_timer）、`:570`（icr=hz/1000） | ef3c7cc | 已关闭 |
+| SC-01 | writev 任意用户指针/无界长度：iovcnt 上限 1024、总字节封顶 1MB，iov 与数据分批走 copy_from_user | `syscall64_full.c:1210-1213`（常量）、`:1214`（sys_writev） | ef3c7cc | 已关闭 |
+| SC-02 | clone child_tid 裸写 / TLS 裸写：写前 hepu_is_user_address 校验，child_tid 改 copy_to_user | `syscall64_full.c:915`（sys_clone）、`:938-942`（child_tid）、`:946-950`（tls） | ef3c7cc | 已关闭 |
+| SC-03 | reboot 无权限闸：入口 PID==0 临时闸 | `syscall64_full.c:2613-2614` | ef3c7cc | 已关闭（临时闸，见文末 PID 口径注记） |
+| SC-04 | mkfs 仅靠源码内魔数鉴权：魔数之外加 PID==0 临时闸 | `syscall64_full.c:484-485`（闸）、`:486`（魔数保留） | ef3c7cc | 已关闭（临时闸，见文末 PID 口径注记） |
+| SC-05 | sigaction 把 act 指针当 handler 存储：新增 k_sigaction 按 glibc x86_64 布局 copy_from_user，解析真实 sa_handler | `syscall64_full.c:1347-1377` | ef3c7cc | 已关闭 |
+| MM-01 | COW 缺页丢失 NX 位：新 PTE 保留 bit63 NX | `pmm64.c:116` | ef3c7cc | 已关闭 |
+| MM-02 | 用户栈字符串区越界：strbuf[512] 填充前按 strings_len 上限校验 | `user_stack64.c:224`（strbuf）、`:227-230`（上限判断） | ef3c7cc | 已关闭 |
+| NET-01 | TCP 发送成功判据恒假、序列号不推进：判据改 `sret > 0` | `net64_tcp.c:159` | ef3c7cc | 已关闭（真机/带网络后端环境待复核，见 R4 文档第五节） |
+| NET-02 | 纯 ACK 静默丢弃：新增 tcp_process_ack helper（RTT 平滑/清未确认/cwnd），data 与纯 ACK 分支均调用 | `net64_tcp.c:275`（helper）、`:370`/`:374`（调用点） | ef3c7cc | 已关闭（真机流量待复核） |
+| NET-05 | 接收缓冲填满后新数据静默丢弃：取尽复位游标，部分取走则压缩剩余数据到缓冲头 | `net64_tcp.c:241-250` | ef3c7cc | 已关闭（长连接待复核） |
+| FS-03 | 块设备部分写失败后脏读：raw write 失败先 blk_cache_invalidate 再返回 -1 | `blk_cache64.c:115`（前向声明）、`:127`（失效调用） | ef3c7cc | 已关闭 |
+| FS-04 | free_inode inode 表块 32 位截断：先 64 位算 itb64、校验后再截断 | `ext2_algo.c:625-626`、`:647-648` | ef3c7cc | 已关闭 |
+| FS-05 | 写文件末尾偏移 32 位溢出：end_offset 改 64 位计算 | `ext2_64.c:1319`（end_offset64） | ef3c7cc | 已关闭 |
+| BLD-14 | CSPRNG 熵源 extern 宽度/元素数不匹配：extern 改 uint64_t irq_count[256]，256 项 uint64 累加 | `csprng.c:64-69` | ef3c7cc | 已关闭 |
+| GFX-01 | Tab 补全候选列表栈溢出：out[80] 改逐字符有界拼接，将满安全截断并强制 NUL | `hs_apps.c:461`（t_complete）、`:495`/`:504`/`:507`（有界写） | ef3c7cc | 已关闭 |
+| DRV-02 | 内核模块 PLT 静态索引跨模块累计：删 static 改模块级局部 | `kmod64.c:287`（plt_slot_idx 局部） | ef3c7cc | 已关闭 |
+| WM-02 | 鼠标/平板坐标按硬编码 1024 钳制：改取 gfx64_get_width/height 真实尺寸 | `usb64.c:1357-1362`（scr_w/scr_h/max_x/max_y） | ef3c7cc | 已关闭 |
 
-### R1 · 首轮内核安全审计修复（提交 `365a3fb`）
+### R1 · 首轮内核安全审计修复（提交 `fec3c87`）
 
 | 编号 | 缺陷 | 证据 | 提交 | 状态 |
 |------|------|------|------|------|
-| R1-1 | auth64 SHA-256 单缓冲强制 len≤55，修复超长密码写穿 msg[128] 栈缓冲 | `auth64.c` | 365a3fb | 已关闭 |
-| R1-2 | net64_ip total_len 自报值钳制到实际帧长，防截断包越界读内核内存 | `net64_ip.c` | 365a3fb | 已关闭 |
-| R1-3 | sys_pipe/wrap_net_stats 直写用户指针改 copy_to_user | `syscall64_full.c` | 365a3fb | 已关闭 |
-| R1-4 | ext2_64(legacy) 目录项遍历校验 offset+8/rec_len 不跨块/rec_len≥actual/GDT 组号<32 | `ext2_64.c` | 365a3fb | 已关闭 |
+| R1-1 | auth64 SHA-256 单缓冲强制 len≤55，修复超长密码写穿 msg[128] 栈缓冲 | `auth64.c` | fec3c87 | 已关闭 |
+| R1-2 | net64_ip total_len 自报值钳制到实际帧长，防截断包越界读内核内存 | `net64_ip.c` | fec3c87 | 已关闭 |
+| R1-3 | sys_pipe/wrap_net_stats 直写用户指针改 copy_to_user | `syscall64_full.c` | fec3c87 | 已关闭 |
+| R1-4 | ext2_64(legacy) 目录项遍历校验 offset+8/rec_len 不跨块/rec_len≥actual/GDT 组号<32 | `ext2_64.c` | fec3c87 | 已关闭 |
 
 ### R2 · 第二轮审计（提交见下；报告 `docs/security/AUDIT_64BIT_R2.md`）
 
 | 编号 | 缺陷 | 证据 | 提交 | 状态 |
 |------|------|------|------|------|
-| R2-1 | DNS 压缩指针无限循环（DoS）：指针须包内且严格前移，跳转计数上限 64 | `net64_dns.c` | 4378ade | 已关闭 |
-| R2-2 | CSPRNG 种子被 reseed 抹成固定值 + getrandom 假随机：删自毁 reseed，getrandom 接 csprng_get_bytes | `csprng.c`、`syscall64_full.c`、`kernel_main_64.c` | ad3a552 | 已关闭 |
-| R2-3 | pmm64 MAX_MEMORY_SIZE 整数溢出：强制 uint64 运算 | `pmm64.c` | 38d67bb | 已关闭 |
-| R2-4 | getdents 直写用户指针：内核栈构造条目后 copy_to_user | `syscall64_full.c` | a692be9 | 已关闭 |
-| R2-5 | DHCP 内联选项遍历缺边界检查 | `net64_dhcp.c` | 1fad35c | 已关闭 |
-| R2-6 | TCP data_offset 缺合法性校验 | `net64_tcp.c` | b91018a | 已关闭 |
-| R2-7 | ext2 间接块与目标数据同址复用（SEC-11 底层）：独立 ind_buf | `ext2_algo.c` | 0ae1ead | 已关闭 |
-| R2-8 | 构建链 MBR 无自动构建：缺失自动构建，失败即中止 | `tools/make_single_img64.sh` | 68beced | 已关闭 |
+| R2-1 | DNS 压缩指针无限循环（DoS）：指针须包内且严格前移，跳转计数上限 64 | `net64_dns.c` | b64a2df | 已关闭 |
+| R2-2 | CSPRNG 种子被 reseed 抹成固定值 + getrandom 假随机：删自毁 reseed，getrandom 接 csprng_get_bytes | `csprng.c`、`syscall64_full.c`、`kernel_main_64.c` | 9ba7098 | 已关闭 |
+| R2-3 | pmm64 MAX_MEMORY_SIZE 整数溢出：强制 uint64 运算 | `pmm64.c` | e16dd10 | 已关闭 |
+| R2-4 | getdents 直写用户指针：内核栈构造条目后 copy_to_user | `syscall64_full.c` | f0ed982 | 已关闭 |
+| R2-5 | DHCP 内联选项遍历缺边界检查 | `net64_dhcp.c` | 9a41ea0 | 已关闭 |
+| R2-6 | TCP data_offset 缺合法性校验 | `net64_tcp.c` | 363c0ba | 已关闭 |
+| R2-7 | ext2 间接块与目标数据同址复用（SEC-11 底层）：独立 ind_buf | `ext2_algo.c` | ea9cdd8 | 已关闭 |
+| R2-8 | 构建链 MBR 无自动构建：缺失自动构建，失败即中止 | `tools/make_single_img64.sh` | 77d57c8 | 已关闭 |
 
-### R3 · 桌面体验与稳定性（提交 `0b4750f`；报告 `docs/security/AUDIT_DESKTOP_STABILITY_R3.md`）
+### R3 · 桌面体验与稳定性（提交 `4fbafb5`；报告 `docs/security/AUDIT_DESKTOP_STABILITY_R3.md`）
 
 | 编号 | 缺陷 | 证据 | 提交 | 状态 |
 |------|------|------|------|------|
-| R3-1 | HepuShell 窗口槽位泄漏：id==-1 空闲槽 + 统一回收 hs_window_recycle | `hepushell.c`；主机测试 `tools/host-tests/winslot_test.c` | 0b4750f | 已关闭 |
-| R3-2 | 纯 APIC 模式 PIT 中断冻结（MADT ISA IRQ0→GSI2 覆盖）：acpi_irq_to_gsi 翻译真实 GSI | `acpi.c`/`acpi.h`、`apic64.c`、`kernel_main_64.c` | 0b4750f | 已关闭 |
+| R3-1 | HepuShell 窗口槽位泄漏：id==-1 空闲槽 + 统一回收 hs_window_recycle | `hepushell.c`；主机测试 `tools/host-tests/winslot_test.c` | 4fbafb5 | 已关闭 |
+| R3-2 | 纯 APIC 模式 PIT 中断冻结（MADT ISA IRQ0→GSI2 覆盖）：acpi_irq_to_gsi 翻译真实 GSI | `acpi.c`/`acpi.h`、`apic64.c`、`kernel_main_64.c` | 4fbafb5 | 已关闭 |
 
 ## PID 权限闸口径注记（避免误判为「闸失效」）
 
@@ -165,7 +165,7 @@ source_of_truth: kernel/arch/x86_64/
 ### OPEN-03 · QEMU sendkey 是否被键盘驱动读取 —— 已关闭（非真 bug，旧测量误解）
 
 - **结论**：sendkey 链路端到端可用，PS/2 与 USB HID 两条键盘路径均被键盘驱动正常接收与消费，无需先点击聚焦。旧问题属测量误解，**无修复动作**。
-- **实测环境**：本轮 f9db839 内核；PS/2 配置（未挂 USB）；USB HID 键盘对照（`-device piix3-usb-uhci -device usb-kbd`）。
+- **实测环境**：本轮 ef3c7cc 内核；PS/2 配置（未挂 USB）；USB HID 键盘对照（`-device piix3-usb-uhci -device usb-kbd`）。
 - **四重证据**：
   1. **中断级**：`g_kbd_irq_count`（符号地址 0x1f29f4）每次按键 +2（按下 + 释放各 1 次）；键盘环形缓冲 head/tail 同步前移且条目被消费。执行 `sendkey 2` 后计数 11→13、缓冲指针 3→4。
   2. **界面级（PS/2）**：`sendkey 2` 使 OOBE 由 1/4 页推进到 2/4 页（截屏像素差异 73616 px）；随后在账户创建页输入 h/e/p/u，用户名输入框真实回显 "hepu"。

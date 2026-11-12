@@ -116,7 +116,7 @@ supersedes: null
 
 **0.58.0 迭代内容（2026-11-13，clone 真线程 + 用户线程调度闭环）**
 
-一、用户线程成为真正的调度单元（`d050de0` → `49435ae`）
+一、用户线程成为真正的调度单元（`d61a4d2` → `586dddd`）
 - 新增 `kernel/arch/x86_64/uthread64.c`：每条用户执行流有独立
   `raw[15]/rip/rflags/rsp/fsbase` 上下文，由时钟中断轮转
 - 关键：用户态时钟实际走 **PIT → IRQ0（vector 32）**，不是 APIC 的 `vector 0x40`；
@@ -124,7 +124,7 @@ supersedes: null
 - `process64_tick()` 在用户态 tick 里不再 `process64_schedule()`（否则
   `context_switch` 换栈，中断返回从别人栈上弹寄存器，表现为 `rip=0`、rax 变垃圾）
 
-二、IRQ 帧偏移根因（`49435ae`）
+二、IRQ 帧偏移根因（`586dddd`）
 - `entry_64.S` 的 `IRQ_ENTRY` 在压完 15 个 GPR **之后**才压 `ds`/`es`，
   两者在栈的最低地址，真实布局 `f[0]=es f[1]=ds f[2]=r15 … f[16]=rax`
 - 此前按 `f[0]=r15` 算，整体差 2 槽：写 rax 其实写进 rbx，子线程拿到的仍是
@@ -133,13 +133,13 @@ supersedes: null
   `IP` 全落在父分支循环头）+ gdbstub 条件断点，未引入任何外部依赖
 - 修复后实测 `PASS: child ran in shared address space, both counters advanced`
 
-三、收尾 #PF 的两个独立根因（`0b585b8`）
+三、收尾 #PF 的两个独立根因（`2d88923`）
 - `uthread_clear_owner` 在 `sys_exit` 路径里释放**当前正在使用**的内核栈页，
   返回路径踩在已回收页上，栈里的 `rcx`（`sysretq` 的 RIP）被写成 0
   → 返回即跳地址 0 取指（`error=0x15 rip=0x0`）。改为槽位复用、不随退出释放
 - `crt0.S` 用 32 位 `int $0x80` 退出，在被 clone 切换过的上下文里返回不可靠
 
-四、线程退出接口（`2226f2e`）
+四、线程退出接口（`61cef79`）
 - `SYS_HEPU_THREAD_EXIT = 235`，`SYS_MAX` 229 → 236；用户侧 `ulib.h thread_exit()`
 - 语义：结束当前用户线程、不终止整进程；在 syscall 内核栈上重建目标线程返回帧，
   `sysretq` 直接落到兄弟线程
@@ -165,21 +165,21 @@ supersedes: null
 
 **0.54.12 迭代内容（2026-11-11，桌面稳定性 + 安全止血 + 文档真值对齐）**
 
-一、桌面与稳定性（`0b4750f`）
+一、桌面与稳定性（`4fbafb5`）
 - HepuShell 窗口槽位泄漏：开窗失败时仍占用槽位，反复开关 32 次后无槽可用、无法再开新窗口；改为识别 `id==-1` 空闲槽并新增 `hs_window_recycle` 回收
 - 纯 APIC 模式 PIT 中断冻结：解析 MADT 中断源覆盖（IRQ0→GSI2），IOAPIC 重定向表改用真实 GSI，新增 `acpi_irq_to_gsi` / `acpi_init_irq_overrides`；桌面画面恢复实时刷新
 
-二、安全与健壮性（`f9db839`，6 P0 + 12 P1）
+二、安全与健壮性（`ef3c7cc`，6 P0 + 12 P1）
 - INT-01 LAPIC 定时器校准：改用 PIT channel-0 软件 tick（1ms/tick、50ms 窗口）门控实测 LAPIC 计数，替换硬编码 ICR=6250（此前实测漂至约 4kHz）；多窗口实测 994.6 / 998.3 / 998.5 / 1014.0 Hz，客户机时间内为 1kHz；并修复"校准函数把周期 LVT 覆盖为一次性模式"的子缺陷（周期 LVT 改为校准返回后写入）
 - 系统调用 P0：`writev` 用户指针与长度边界校验；`clone` 的 `child_tid` 与 `tls` 裸写校验；`reboot`、`mkfs` 增加 PID==0 权限闸；`sigaction` 正确解析 sigaction 结构，修复信号投递
 - 12 项 P1：MM-01/MM-02、NET-01/02/05、FS-03/04/05、BLD-14、GFX-01、DRV-02、WM-02
 - 回归：全量干净重建警告 210→209（唯一消失项为基线 `syscall64_full.c` unused parameter `oldact`）、零新增警告类型；主机测试 6/6；镜像重建成功；QEMU 桌面与输入正常
 
 三、文档与规划
-- `2f78278` 文档真值对齐：修正 14 份架构/规格/规划文档中落后于源码的表述（TLS、CSPRNG、动态链接、RSA、PT_INTERP 等已实现能力不再标"不存在"）；收敛 OPEN_BUGS 台账（R1–R4 关闭项带 commit hash 与 `file:line` 证据）；两项待定现象定论——OPEN-03 sendkey 属应用按键绑定而非驱动缺陷（PS/2 与 USB HID 双链路均端到端可用），R3-CURSOR 属测量误解（相对/绝对指针语义混淆，渲染无二次错位）
-- `0be1334` 新增 `docs/planning/PLAN_SMP_HARDENING_R5.md`：SMP 硬化 25 条、五阶段（仅计划，未实施）
-- `3855fa1` `docs/guides/REAL_HARDWARE_TEST.md` 升级为可执行真机上机 checklist：41 条缺口、7 条硬阻塞（含校准自旋无超时导致真机启动挂死）
-- `53a993e` 新增 `docs/planning/SMP_DECISION_A_VS_B_R5.md`：A 完整硬化 vs B 显式单核声明，推荐先 B 止血、真机闭环后再分阶段做 A
+- `97a5af1` 文档真值对齐：修正 14 份架构/规格/规划文档中落后于源码的表述（TLS、CSPRNG、动态链接、RSA、PT_INTERP 等已实现能力不再标"不存在"）；收敛 OPEN_BUGS 台账（R1–R4 关闭项带 commit hash 与 `file:line` 证据）；两项待定现象定论——OPEN-03 sendkey 属应用按键绑定而非驱动缺陷（PS/2 与 USB HID 双链路均端到端可用），R3-CURSOR 属测量误解（相对/绝对指针语义混淆，渲染无二次错位）
+- `3031a38` 新增 `docs/planning/PLAN_SMP_HARDENING_R5.md`：SMP 硬化 25 条、五阶段（仅计划，未实施）
+- `8e23f50` `docs/guides/REAL_HARDWARE_TEST.md` 升级为可执行真机上机 checklist：41 条缺口、7 条硬阻塞（含校准自旋无超时导致真机启动挂死）
+- `ca2d52c` 新增 `docs/planning/SMP_DECISION_A_VS_B_R5.md`：A 完整硬化 vs B 显式单核声明，推荐先 B 止血、真机闭环后再分阶段做 A
 - 版本同步：本文件 frontmatter、49 份活跃文档 `sys_version`、README 徽章与"当前版本"行统一为 0.54.12；界面版本字符串共修 **14 处**——发布清单内 6 处（`hepushell.c`×2、`hs_apps.c`×2、`notes64.c`、`shell64.c`），另 8 处陈旧串一并收敛（启动横幅 `kernel_main_64.c` 的 `v0.54.6`、`version` 命令 `0.37.2`、uname 行 `0.10.156`、neofetch 三处 `0.10.117`、Settings 的 `System/Version` 值 `0.10.156`、占位文案 `V0.13.10`）
 - 发布验证：真全量干净重建（删除仓库根 `build_x86_64`，126 个目标文件全新编译）警告 **209** 条，与基线一致、零新增；主机测试 **6/6**；镜像 `/tmp/hepu64_single.img`（256 MiB）重建成功；QEMU 实测 System Info、终端标题、`ver`、`version`、Settings 系统页均显示 v0.54.12；二进制 `0.54.11` / `0.54.6` / `0.37.2` / `0.10.117` / `0.10.156` 残留计数均为 0
 
@@ -864,9 +864,9 @@ ext2_disk_uefi.img           # 数据盘（版本无关）
 
 | 已删除 Release | 已删除 tag | 原提交 |
 |---|---|---|
-| v0.54.8 | v0.54.8 | 670a91a |
-| v0.54.9 | v0.54.9 | 34cfc1d |
-| v0.54.10 | v0.54.10 | 0b1af42 |
+| v0.54.8 | v0.54.8 | c56430d |
+| v0.54.9 | v0.54.9 | 1756744 |
+| v0.54.10 | v0.54.10 | 1e5f188 |
 | v0.54.12 | v0.54.12 | 238177e |
 
 - 保留：`historical-milestones-v1`（历史里程碑源码包，超 100MB 仓库限制部分）
