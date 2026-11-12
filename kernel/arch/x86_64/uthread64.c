@@ -88,8 +88,10 @@ int uthread_bind_main(int owner, int tid)
             g_ut[i].tid = tid;
             g_ut[i].state = UT_READY;
             g_ut[i].fsbase = 0;
-            { uint64_t kp = pmm64_alloc_page();
-              g_ut[i].kstack_top = kp ? (kp + 4096) : 0; }
+            if (!g_ut[i].kstack_top) {
+                uint64_t kp = pmm64_alloc_page();
+                g_ut[i].kstack_top = kp ? (kp + 4096) : 0;
+            }
             for (int k = 0; k < 15; k++) g_ut[i].raw[k] = 0;
             g_ut[i].rip = 0; g_ut[i].rsp = 0; g_ut[i].rflags = 0;
             g_ut_cur = i;
@@ -109,8 +111,10 @@ int uthread_create(int owner, uint64_t rip, uint64_t rsp, uint64_t fsbase)
             g_ut[i].tid = g_next_tid++;
             g_ut[i].state = UT_READY;
             g_ut[i].fsbase = fsbase;
-            { uint64_t kp = pmm64_alloc_page();
-              g_ut[i].kstack_top = kp ? (kp + 4096) : 0; }
+            if (!g_ut[i].kstack_top) {
+                uint64_t kp = pmm64_alloc_page();
+                g_ut[i].kstack_top = kp ? (kp + 4096) : 0;
+            }
             for (int k = 0; k < 15; k++) g_ut[i].raw[k] = 0;
             g_ut[i].raw[14] = 0;                /* rax = 0：子线程 clone 返回 0 */
             g_ut[i].rip = rip;
@@ -133,14 +137,19 @@ int uthread_current_tid(void)
     return g_ut[g_ut_cur].tid;
 }
 
+/* 摘掉某个进程的全部用户线程。
+ *
+ * V0.57.6 修复：**不能在这里释放内核栈页**。
+ * sys_exit 会先调本函数，而此刻 CPU 正踩在这条线程的内核栈上；
+ * 把该页还给分配器后，后面的代码（含 syscall 返回路径）就写在已释放的页里，
+ * 栈上的 rcx（sysretq 的 RIP）被踩成 0 —— 实测正是收尾阶段
+ * `vector=0xE error=0x15 rip=0x0` 的来源。
+ * 改为：只清 used、保留 kstack_top，下次 bind/create 复用同一块页。 */
 void uthread_clear_owner(int owner)
 {
     for (int i = 0; i < MAX_UTHREADS; i++) {
         if (g_ut[i].used && g_ut[i].owner == owner) {
-            extern void pmm64_free_page(uint64_t addr);
-            if (g_ut[i].kstack_top) pmm64_free_page(g_ut[i].kstack_top - 4096);
-            g_ut[i].kstack_top = 0;
-            g_ut[i].used = 0;
+            g_ut[i].used = 0;      /* kstack_top 保留，槽位复用时重新初始化 */
         }
     }
     if (g_ut_cur >= 0 && !g_ut[g_ut_cur].used) g_ut_cur = -1;

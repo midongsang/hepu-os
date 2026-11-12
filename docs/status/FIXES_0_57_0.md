@@ -2819,3 +2819,40 @@ PASS: child ran in shared address space, both counters advanced
 - 进程收尾阶段仍有 `vector=0xE error=0x15 rip=0x0` 的 #PF（见 OPEN_BUGS SEC-21），
   异常被用户态 fault 处理器捕获、进程终止后系统继续，桌面正常加载。
 - 两次运行出现一次 FAIL 的波动，与收尾 #PF 属同一族问题，尚未完全收敛。
+
+---
+
+## §1.87 V0.57.7：清掉 clone 收尾 #PF，三次运行全绿
+
+§1.86 拿到 `PASS` 后，同一次运行尾部仍有
+`[EXCEPTION] vector=0xE error=0x15 rip=0x0`（`rsp=0x6FFFF008`），进程被异常终止。
+本轮定位并清掉，两次独立根因：
+
+### 根因一：`uthread_clear_owner` 释放了正在使用的内核栈
+`sys_exit` 开头会调 `uthread_clear_owner()`，而该函数把每条线程的
+`kstack_top - 4096` 还给 `pmm64_free_page`。此刻 CPU **正踩在这块页上**执行
+syscall 返回路径，页被回收复写后，栈上的 `rcx`（`sysretq` 的 RIP）被踩成 0，
+于是返回即跳地址 0 取指 —— 与 `error=0x15`（保护违例/用户态/取指）完全吻合。
+
+修法：`clear_owner` 只清 `used`，**保留 `kstack_top`**，由下次 `bind_main`
+/`uthread_create` 复用同一块页（无释放、无 UAF、也无泄漏）。
+
+### 根因二：crt0 用的是 32 位 `int $0x80` 退出路径
+`user/libhepu/crt0.S` 结尾是 `pushl $0 / call main / movl $eax,%ebx /
+movl $5,%eax / int $0x80`。在被 clone 切换过的上下文里，这条 32 位返回路径
+不可靠，`main` 返回后会在回到用户态的一瞬间落到地址 0。
+
+修法：`clone_test` 结尾改用 ulib 的 `exit(0)`（64 位 `syscall`），不再依赖 crt0。
+crt0 本身是历史包袱，影响所有程序，本轮不动，另行记录。
+
+### 实证（3 次独立启动，`/tmp/ser_f5_{1,2,3}.log`）
+```
+PASS=1  FAIL=0  EXCEPTION=0  "Process exited"=3
+```
+clone 测试、hello、sec_test 三个 autorun 程序全部正常退出，桌面正常加载。
+
+### 稳定性小结
+- 帧偏移（`UT_FRAME_GPR_BASE 2`）：子线程 rax 真正为 0
+- 每线程独立 syscall 内核栈：父子不再互踩同一块栈
+- 内核栈不随退出释放：消除 use-after-free
+- 显式 64 位 exit：绕开 crt0 的 int 0x80 返回路径

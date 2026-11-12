@@ -46,5 +46,11 @@ int main(void)
         puts("PASS: child ran in shared address space, both counters advanced\n");
     else
         puts("FAIL: child never ran\n");
+
+    /* 显式走 64 位 syscall 退出。
+     * crt0 的 _start 结尾用的是 `int $0x80`（32 位约定），在多线程/切换过的
+     * 上下文里返回路径不可靠 —— 实测 clone_test 走它会在返回瞬间跳到地址 0
+     * 取指（#PF error=0x15 rip=0x0）。这里不依赖 crt0。 */
+    exit(0);
     return 0;
 }

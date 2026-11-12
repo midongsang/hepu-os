@@ -216,3 +216,19 @@ source_of_truth: kernel/arch/x86_64/
 - 可疑点：`create_user_page_table_ex` 的 256 页循环未检查 `vmm64_map_page` 返回值；
   syscall 返回路径的 `g_syscall_ret_rip/rflags/ustack` 仍是全局单值。
 - 关联：与 SEC-19（用户栈第二页 #PF / `PDe=0xE3`）高度同型，怀疑同一根因。
+- **V0.57.7 已修复**。两个独立根因：
+  (1) `uthread_clear_owner` 在 `sys_exit` 路径里释放了**当前正在使用**的内核栈页，
+      返回路径把栈上的 rcx（sysretq 的 RIP）踩成 0；
+  (2) crt0 用 32 位 `int $0x80` 退出，在被 clone 切换过的上下文里返回不可靠。
+  修法：内核栈改为槽位复用、不随退出释放；clone_test 改用 64 位 `exit()`。
+  三次独立启动实测 `PASS=1 FAIL=0 EXCEPTION=0`。
+
+## SEC-22 crt0 的 32 位 `int $0x80` 退出路径
+
+- 现象：`user/libhepu/crt0.S` 的 `_start` 结尾用 `pushl/call main/movl/int $0x80`
+  （32 位约定），在被用户线程切换过的上下文里，`main` 返回后会落到地址 0
+  取指（`error=0x15 rip=0x0`）。
+- 影响：所有 `return` 而非显式 `exit()` 的程序都可能命中；单线程程序目前未复现。
+- 现状：`clone_test` 已改为显式 `exit(0)` 规避；crt0 本身未改。
+- 修法方向：crt0 改成 64 位入口（`call main` + `mov $5,%eax; syscall`），
+  需要全量回归所有用户程序，属独立改动。
