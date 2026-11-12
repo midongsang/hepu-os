@@ -99,19 +99,42 @@ static void vg_add_seg(fixed_t x0, fixed_t y0, fixed_t x1, fixed_t y1)
     g_nseg++;
 }
 
+/* 整数平方根(牛顿法)。用于把叉积归一化成真实的 fixed 像素距离:
+ *   h = |cross| / |AB|
+ * cross 是 L^2*F^2, |AB| 是 L*F, 比值正好是 fixed 像素 —— 全程不需要平方,
+ * 也就不会有 cross*cross 把 int64 打爆的问题。 */
+static int64_t vg_isqrt64(int64_t v)
+{
+    int64_t x, y;
+    if (v <= 0) return 0;
+    x = v;
+    y = (x + 1) / 2;
+    while (y < x) { x = y; y = (x + v / x) / 2; }
+    return x;
+}
+
 /* 二次贝塞尔细分: 控制点到弦距离 > 1/4px 则对半递归 */
 static void vg_flat_quad(fixed_t ax, fixed_t ay, fixed_t cx, fixed_t cy,
                          fixed_t bx, fixed_t by, int depth)
 {
     if (depth <= 0) { vg_add_seg(ax, ay, bx, by); return; }
-    /* 控制点到弦的偏离判断 */
+    /* 控制点到弦的真实距离(而非距离平方):
+     *   cross = AB × AC  (L^2*F^2)
+     *   len   = |AB|      (L*F)
+     *   h = |cross| / len (fixed 像素)
+     * 距离 <= 1/4 px 才算平直。
+     *
+     * 旧实现判据是 cross*cross <= len2/16, 量纲不对且 cross^2 在 L^2*F^2 的尺度上
+     * 直接溢出 int64 变负数 —— 判据恒为"不平直", 曲线一路细分到 4096 段被
+     * VG_MAX_SEG 截断, 圆弧只剩顶部十几行, 扫描线奇偶配对失败, 整块不落像素。
+     * 现在用除法把叉积归一化成距离, 只比较一次, 不产生任何平方。 */
     fixed_t dx = bx - ax, dy = by - ay;
-    /* 点到线距离² ≈ (叉积)²/(弦长²); 用阈值 1/4 px² */
     int64_t cross = (int64_t)(cx - ax) * dy - (int64_t)(cy - ay) * dx;
-    int64_t cross2 = cross * cross;
     int64_t len2 = (int64_t)dx * dx + (int64_t)dy * dy;
-    /* 若曲线平直 (cross2 <= len2/16, 即距离<1/4px) 或递归过深 */
-    if (cross2 * 16 <= len2 + FIX1) {
+    int64_t len = vg_isqrt64(len2);
+    if (len <= 0) { vg_add_seg(ax, ay, bx, by); return; }
+    if (cross < 0) cross = -cross;
+    if (cross / len <= FIX1 / 4) {      /* 0.25 px */
         vg_add_seg(ax, ay, bx, by);
         return;
     }
@@ -134,9 +157,16 @@ static void vg_flat_cubic(fixed_t ax, fixed_t ay, fixed_t c1x, fixed_t c1y,
     int64_t c1c = (int64_t)(c1x - ax) * dy - (int64_t)(c1y - ay) * dx;
     int64_t c2c = (int64_t)(c2x - ax) * dy - (int64_t)(c2y - ay) * dx;
     int64_t len2 = (int64_t)dx * dx + (int64_t)dy * dy;
-    if ((c1c * c1c + c2c * c2c) * 64 <= len2 + FIX1) {
-        vg_add_seg(ax, ay, bx, by);
-        return;
+    {
+        /* 同 vg_flat_quad: 用真实距离比较, 不平方(否则 (c1c^2+c2c^2) 溢出) */
+        int64_t len = vg_isqrt64(len2);
+        if (len <= 0) { vg_add_seg(ax, ay, bx, by); return; }
+        if (c1c < 0) c1c = -c1c;
+        if (c2c < 0) c2c = -c2c;
+        if (c1c / len <= FIX1 / 4 && c2c / len <= FIX1 / 4) {
+            vg_add_seg(ax, ay, bx, by);
+            return;
+        }
     }
     /* de Casteljau 中点 */
     fixed_t a1x = fix_avg(ax, c1x),  a1y = fix_avg(ay, c1y);
@@ -168,18 +198,17 @@ static void vg_tessellate(void)
             pen_x = g_pts[pi]; pen_y = g_pts[pi + 1]; pi += 2;
             break;
         case VG_QUAD:
-            /* 深度 12 时若"平直"判据因 cross² 溢出而恒假, 每段会细分到 4096,
-             * 4 条边共 16k 段远超 VG_MAX_SEG(2048) 而被截断 -> 圆弧只剩一截、
-             * 形状不闭合 -> 整块不落像素(tab 选中态即此症状)。压到 6 层后
-             * 满细分也只有 64 段/曲线, 在 2048 内, 视觉上对 <=40px 圆角足够。 */
+            /* 深度 12 曾是必需的上限告警点: 那时判据因 cross² 溢出恒假, 每段都会
+             * 细分到 4096 段被 VG_MAX_SEG 截断。判据已改为真实距离比较(见
+             * vg_flat_quad), 正常圆角只需 2~4 层就收敛, 深度 12 只是安全上限。 */
             vg_flat_quad(pen_x, pen_y, g_pts[pi], g_pts[pi + 1],
-                         g_pts[pi + 2], g_pts[pi + 3], 6);
+                         g_pts[pi + 2], g_pts[pi + 3], 12);
             pen_x = g_pts[pi + 2]; pen_y = g_pts[pi + 3]; pi += 4;
             break;
         case VG_CUBIC:
             vg_flat_cubic(pen_x, pen_y, g_pts[pi], g_pts[pi + 1],
                           g_pts[pi + 2], g_pts[pi + 3],
-                          g_pts[pi + 4], g_pts[pi + 5], 6);
+                          g_pts[pi + 4], g_pts[pi + 5], 12);
             pen_x = g_pts[pi + 4]; pen_y = g_pts[pi + 5]; pi += 6;
             break;
         case VG_CLOSE:
