@@ -7,6 +7,7 @@
  * ========================================================================== */
 
 #include <stdint.h>
+#include "spinlock.h"
 #include <stddef.h>
 #include "../../shared/gfx/gfx_shared.h"
 #include "math64.h"
@@ -14,6 +15,7 @@
 
 /* V0.55.1: 以下两个函数在文件内先被调用、后定义, 在此提前原型以消除隐式声明 */
 void gfx64_blit_background(uint8_t *bg, int x, int y, int w, int h);
+void gfx64_blit_to(uint8_t *dstfb, uint8_t *bg, int x, int y, int w, int h);
 void gfx64_blend_pixel(int x, int y, uint32_t fg, int alpha);
 
 /* 图形模式信息（使用共享gfx_framebuffer_t结构） */
@@ -34,22 +36,35 @@ static int back_buf_alloc_ok = 0;
 static uint8_t *front_buffer = (uint8_t *)0;
 static uint8_t *gfx_target = (uint8_t *)0;   /* 当前渲染目标（默认=帧缓冲） */
 
+/* SB-15: 帧提交锁。
+ * 当前只有 BSP 桌面主循环一个写者，并发窗口尚未打开（AP 只跑 idle）。
+ * 这把锁是为 SB-25「放开 AP 调度」预埋：一旦有第二个绘制者，
+ * gfx_target 的切换与 8MB 帧拷贝必须互斥，否则整帧会落到错误缓冲。
+ * 帧内容绘制（fill_rect / put_string / 面板 render）一律不加锁 ——
+ * 它们写的是后台缓冲，只要目标不被抢走就是独占的。 */
+static spinlock_t g_gfx_lock;
+
 /* 设置渲染目标（用于分层渲染：静态层渲染到背景缓冲） */
 void gfx64_set_target(uint8_t *fb)
 {
+    uint64_t gfx_f = spinlock_lock_irqsave(&g_gfx_lock);
     gfx_target = fb;
+    spinlock_unlock_irqrestore(&g_gfx_lock, gfx_f);
 }
 
 /* 恢复渲染目标为前缓冲 */
 void gfx64_set_target_front(void)
 {
+    uint64_t gfx_f = spinlock_lock_irqsave(&g_gfx_lock);
     gfx_target = front_buffer;
+    spinlock_unlock_irqrestore(&g_gfx_lock, gfx_f);
 }
 
 /* P9: 双缓冲 — 渲染目标切到后台缓冲 (首次调用时分配) */
 extern uint64_t pmm64_alloc_pages(uint64_t n);
 void gfx64_set_target_back(void)
 {
+    uint64_t gfx_f = spinlock_lock_irqsave(&g_gfx_lock);
     if (!back_buffer && !back_buf_alloc_ok) {
         uint64_t phys = pmm64_alloc_pages((GFX_MAX_BUF + 4095) / 4096);
         if (phys) {
@@ -58,32 +73,34 @@ void gfx64_set_target_back(void)
         back_buf_alloc_ok = 1;
     }
     if (back_buffer) gfx_target = back_buffer;
+    spinlock_unlock_irqrestore(&g_gfx_lock, gfx_f);
 }
 
-/* P9: 帧交换 — 将后台完整帧一次性拷贝到前台 (原子帧, 消除撕裂/中途帧) */
+/* P9: 帧交换 — 将后台完整帧一次性拷贝到前台 (原子帧, 消除撕裂/中途帧)
+ * GFX-02: 旧实现靠「临时改全局 gfx_target 再改回来」把目标指向前台，
+ * 那段 8MB 拷贝期间任何别的绘制都会画到前台去（窗口期最长可达数毫秒）。
+ * 这里改成显式传目标：blit 内部函数接受 dst，present 期间全局 gfx_target
+ * 完全不动。 */
 void gfx64_present(void)
 {
     if (!gfx_initialized) return;
     if (!back_buffer) return;
-    /* 强制拷贝到前台: blit 目标取 gfx_target, 必须先临时切到 front */
-    uint8_t *save = gfx_target;
-    gfx_target = front_buffer;
-    gfx64_blit_background(back_buffer, 0, 0, gfx_width, gfx_height);
-    gfx_target = save;
+    uint64_t gfx_f = spinlock_lock_irqsave(&g_gfx_lock);
+    gfx64_blit_to(front_buffer, back_buffer, 0, 0, (int)gfx_width, (int)gfx_height);
+    spinlock_unlock_irqrestore(&g_gfx_lock, gfx_f);
 }
 
 
 /* 复制背景缓冲区域到帧缓冲（整行64位复制，分层渲染用） */
-void gfx64_blit_background(uint8_t *bg, int x, int y, int w, int h)
+void gfx64_blit_to(uint8_t *dstfb, uint8_t *bg, int x, int y, int w, int h)
 {
-    if (!gfx_initialized || !bg) return;
+    if (!gfx_initialized || !bg || !dstfb) return;
     int x0 = x, y0 = y, x1 = x + w, y1 = y + h;
     if (x0 < 0) x0 = 0;
     if (y0 < 0) y0 = 0;
     if ((uint32_t)x1 > gfx_width) x1 = (int)gfx_width;
     if ((uint32_t)y1 > gfx_height) y1 = (int)gfx_height;
     if (x0 >= x1 || y0 >= y1) return;
-    uint8_t *dstfb = gfx_target ? gfx_target : front_buffer;
     if (gfx_bpp == 32) {
         uint64_t *dst = (uint64_t *)dstfb;
         uint64_t *src = (uint64_t *)bg;
@@ -124,6 +141,15 @@ void gfx64_blit_background(uint8_t *bg, int x, int y, int w, int h)
             for (int i = 0; i < n; i++) drow[i] = srow[i];
         }
     }
+}
+
+/* 兼容旧调用点：目标取当前渲染目标 */
+void gfx64_blit_background(uint8_t *bg, int x, int y, int w, int h)
+{
+    uint64_t gfx_f = spinlock_lock_irqsave(&g_gfx_lock);
+    uint8_t *dst = gfx_target ? gfx_target : front_buffer;
+    spinlock_unlock_irqrestore(&g_gfx_lock, gfx_f);
+    gfx64_blit_to(dst, bg, x, y, w, h);
 }
 
 /* 外部函数 */
@@ -242,6 +268,7 @@ const uint8_t font8x16[128][16] = {
 /* 设置图形模式信息（由bootloader或内核调用） */
 void gfx64_set_mode(int width, int height, int pitch, int bpp, uint8_t *fb)
 {
+    uint64_t gfx_f = spinlock_lock_irqsave(&g_gfx_lock);
     gfx_fb_info.width = width;
     gfx_fb_info.height = height;
     gfx_fb_info.pitch = pitch;
@@ -260,6 +287,7 @@ void gfx64_set_mode(int width, int height, int pitch, int bpp, uint8_t *fb)
     vga_puts(" fb=");
     vga_put_hex((uint64_t)fb);
     vga_puts("\n");
+    spinlock_unlock_irqrestore(&g_gfx_lock, gfx_f);
 
     gfx_initialized = 1;
     /* V0.13.60: 图形模式接管后关闭早期文本镜像, 避免覆盖桌面 */
@@ -357,6 +385,10 @@ typedef struct {
 } ttf_cache_entry_t;
 static ttf_cache_entry_t ttf_cache[TTF_CACHE_ITEMS];
 static int ttf_cache_next = 0;
+/* SB-15: 字形缓存锁。两核同时缺同一个字形会各自 find_slot 到同一槽、
+ * 互相覆盖 bitmap，缓存里出现两个字形混在一起的结果。
+ * 只锁槽位查找与填充记账，字形光栅化（慢）留在锁外。 */
+static spinlock_t g_ttf_lock;
 
 
 
@@ -372,19 +404,33 @@ static int ttf_cache_should_lock(uint32_t cp, int size)
 /* V0.13.6: 查找可替换槽 (优先非锁定; 全锁定则沿用旧槽) */
 static int ttf_cache_find_slot(uint32_t cp, int size)
 {
+    uint64_t tf = spinlock_lock_irqsave(&g_ttf_lock);
+    int result = -1;   /* 单出口：所有分支只设结果，锁在末尾统一释放 */
     int victim = -1;
     for (int k = 0; k < TTF_CACHE_ITEMS; k++) {
         int ci = (ttf_cache_next + k) % TTF_CACHE_ITEMS;
-        if (!ttf_cache[ci].valid) { ttf_cache_next = (ci + 1) % TTF_CACHE_ITEMS; return ci; }
+        if (!ttf_cache[ci].valid) {
+            ttf_cache_next = (ci + 1) % TTF_CACHE_ITEMS;
+            result = ci;
+            goto out;
+        }
         if (!ttf_cache[ci].locked && victim < 0) victim = ci;
     }
-    if (victim >= 0) { ttf_cache_next = (victim + 1) % TTF_CACHE_ITEMS; return victim; }
+    if (victim >= 0) {
+        ttf_cache_next = (victim + 1) % TTF_CACHE_ITEMS;
+        result = victim;
+        goto out;
+    }
     /* 全锁定: 逐字搜索同key槽 */
     for (int ci = 0; ci < TTF_CACHE_ITEMS; ci++) {
-        if (ttf_cache[ci].valid && ttf_cache[ci].c == cp && ttf_cache[ci].size == size)
-            return ci;
+        if (ttf_cache[ci].valid && ttf_cache[ci].c == cp && ttf_cache[ci].size == size) {
+            result = ci;
+            break;
+        }
     }
-    return -1;
+out:
+    spinlock_unlock_irqrestore(&g_ttf_lock, tf);
+    return result;
 }
 
 static int gfx64_put_ttf(int x, int y, uint32_t cp, uint32_t color);
@@ -825,6 +871,8 @@ int gfx64_init_from_bootloader(void)
 /* 初始化图形子系统（使用VBE信息） */
 int gfx64_init(void)
 {
+    spinlock_init(&g_gfx_lock);
+    spinlock_init(&g_ttf_lock);
     vga_puts("[GFX64] Initializing graphics subsystem...\n");
 
     /* 默认使用VBE 1024x768x32（由bootloader设置） */

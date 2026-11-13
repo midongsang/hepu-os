@@ -204,10 +204,15 @@ void desktop64_run(void)
         }
 
         /* V0.13.7 P4: Hepu Desktop Dock/启动器图标点击的应用启动请求 */
-        if (g_pending_app != 0) {
-            hpdesk_handle_pending_app();
-            vga_puts("[DESKTOP64] Pending app request handled by Hepu Desktop\n");
-            g_pending_app = 0;
+        /* WM-03: 原子取走并清零。原来是「读 != 0 -> 处理 -> 写 0」三步，
+         * 若在这个窗口里另一线程又写入一个新请求，会被后面的 =0 抹掉
+         * （典型场景: 一个 tick 内连点两个图标，第二个请求凭空消失）。 */
+        {
+            int pend = __atomic_exchange_n(&g_pending_app, 0, __ATOMIC_ACQ_REL);
+            if (pend != 0) {
+                hpdesk_handle_pending_app();
+                vga_puts("[DESKTOP64] Pending app request handled by Hepu Desktop\n");
+            }
         }
 
         /* 让出 CPU 等下一次中断(PIT 1kHz 兜底), 避免忙等 100% 占用。

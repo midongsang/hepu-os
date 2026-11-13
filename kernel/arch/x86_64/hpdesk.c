@@ -5,6 +5,7 @@
  * ========================================================================== */
 
 #include "hpdesk.h"
+#include "spinlock.h"
 #include "hs_icons_data.h"   /* V0.57.0: 系统图标位图集(32x32 1bit) */
 #include "png64.h"
 #include "jpeg64.h"
@@ -1449,6 +1450,16 @@ void hpdesk_toggle_launcher(void)
 /* 全局窗口管理器 */
 static hs_window_manager_t g_wm;
 
+/* SB-16: 窗口管理器锁。
+ * 当前所有窗口操作（创建/置顶/关闭/焦点）都由 BSP 桌面主循环驱动，
+ * 并发窗口尚未打开。这把锁为 SB-25 预埋：窗口槽扫描 + 占位、z_order
+ * 重排必须原子，否则两个绘制者会拿到同一个槽或让 z 序出现重复 id。
+ * 只锁簿记，不锁窗口内容渲染。 */
+static spinlock_t g_wm_lock;
+
+static inline uint64_t wm_lock(void) { return spinlock_lock_irqsave(&g_wm_lock); }
+static inline void wm_unlock(uint64_t f) { spinlock_unlock_irqrestore(&g_wm_lock, f); }
+
 void hs_window_manager_init(void)
 {
     g_wm.window_count = 0;
@@ -1493,7 +1504,7 @@ static void hs_window_auto_pos(int *x, int *y, int w, int h)
 }
 
 /* 创建窗口 */
-hs_window_t *hs_window_create(hs_window_type_t type, const char *title,
+hs_window_t *hs_window_create_inner(hs_window_type_t type, const char *title,
                               int x, int y, int w, int h)
 {
     /* 找空闲槽(id==-1)并统计活跃窗口数；仅当活跃窗口真正占满才失败。
@@ -1579,6 +1590,16 @@ hs_window_t *hs_window_create(hs_window_type_t type, const char *title,
     g_wm.focus_window = win->id;
 
     return win;
+}
+
+/* SB-16 wrapper：槽扫描 + 占位 + z_order 入表在锁内完成 */
+hs_window_t *hs_window_create(hs_window_type_t type, const char *title,
+                              int x, int y, int w, int h)
+{
+    uint64_t wf = wm_lock();
+    hs_window_t *r = hs_window_create_inner(type, title, x, y, w, h);
+    wm_unlock(wf);
+    return r;
 }
 
 /* 统一回收窗口槽位: 标记 id=-1 并从 z_order 紧凑移除。
@@ -1672,7 +1693,7 @@ void hs_window_toggle_maximize(hs_window_t *win)
 }
 
 /* 窗口层级 */
-void hs_window_raise(hs_window_t *win)
+void hs_window_raise_inner(hs_window_t *win)
 {
     if (!win) return;
     /* 从z_order移除并添加到顶部 */
@@ -1686,7 +1707,15 @@ void hs_window_raise(hs_window_t *win)
     g_wm.z_count = new_z;
 }
 
-void hs_window_lower(hs_window_t *win)
+/* SB-16 wrapper：z_order 重排整段持锁（两核同时置顶会产生重复 id） */
+void hs_window_raise(hs_window_t *win)
+{
+    uint64_t wf = wm_lock();
+    hs_window_raise_inner(win);
+    wm_unlock(wf);
+}
+
+void hs_window_lower_inner(hs_window_t *win)
 {
     if (!win) return;
     int new_z = 1;
@@ -1698,6 +1727,14 @@ void hs_window_lower(hs_window_t *win)
     }
     g_wm.z_order[0] = saved;
     g_wm.z_count = new_z;
+}
+
+/* SB-16 wrapper：z_order 重排整段持锁（两核同时置顶会产生重复 id） */
+void hs_window_lower(hs_window_t *win)
+{
+    uint64_t wf = wm_lock();
+    hs_window_lower_inner(win);
+    wm_unlock(wf);
 }
 
 /* 移动/调整大小 */
@@ -5218,6 +5255,7 @@ void hpdesk_handle_key(int key)
 
 int hpdesk_init(int width, int height)
 {
+    spinlock_init(&g_wm_lock);
     g_shell.canary_start = 0xDEADBEEF;
     g_shell.canary_end = 0xCAFEBABE;
     g_shell.initialized = 0;
