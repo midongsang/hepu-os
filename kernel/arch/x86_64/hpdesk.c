@@ -1832,15 +1832,16 @@ static uint32_t hs_mix_color(uint32_t a, uint32_t b, int pct)
  *
  * 内存: (w+2pad) x (h+2pad) 字节 × 2(工作 + 临时), 900x700 的窗口约 1.6MB, 复用不释放。
  */
-#define SH_BLUR_R     12    /* 单遍盒式模糊半径(缩放前); 3 遍 -> std ≈ r*sqrt(3) */
+#define SH_BLUR_R     24    /* 单遍盒式模糊半径(缩放前); 3 遍 -> std ≈ r*sqrt(3) */
 #define SH_PASSES     3
-#define SH_STRENGTH   100   /* mask 255 -> alpha 100 */
+#define SH_STRENGTH   255   /* 3 遍盒式模糊把边缘削到约 1/4, 这里补回来 */
 
 static uint8_t *sh_mask = 0;
 static uint8_t *sh_tmp = 0;
 static uint32_t sh_cap = 0;
 static int sh_mw = 0, sh_mh = 0;
 static int sh_kw = -1, sh_kh = -1;      /* 缓存 key: 窗口宽高 */
+static int sh_kpk = -1;                  /* 缓存 key: 半径/圆角/pad 指纹 */
 
 /* 圆角矩形内点判定(矩形外一律 0) */
 static int sh_in_rounded(long px, long py, long r_x0, long r_y0, long r_x1, long r_y1, long rc)
@@ -1885,7 +1886,7 @@ static void sh_box_v(const uint8_t *src, uint8_t *dst, int w, int h, int r)
 }
 
 /* 生成 mask: 返回 1 成功, 0 表示内存不够(调用方回退到解析式) */
-static int sh_build(int ww, int hh, int pad, int rc)
+static int sh_build(int ww, int hh, int pad, int rc, int r)
 {
     extern void *kmalloc(uint64_t size);
     extern void kfree(void *ptr);
@@ -1908,7 +1909,6 @@ static int sh_build(int ww, int hh, int pad, int rc)
             row[x] = sh_in_rounded(x, y, pad, pad, pad + ww - 1, pad + hh - 1, rc) ? 255 : 0;
         }
     }
-    int r = hs_s(SH_BLUR_R);
     if (r < 1) r = 1;
     for (int pass = 0; pass < SH_PASSES; pass++) {
         sh_box_h(sh_mask, sh_tmp, mw, mh, r);
@@ -1923,7 +1923,8 @@ static void hs_window_shadow_analytic(const hs_window_t *w)
 {
     extern void gfx64_blend_pixel(int x, int y, uint32_t fg, int alpha);
     extern uint32_t math64_isqrt(uint32_t v);
-    extern int gfx_width, gfx_height;
+    extern int gfx64_get_width(void);
+    extern int gfx64_get_height(void);
     int d1 = hs_s(16), a1 = 26;
     int d2 = hs_s(44), a2 = 16;
     int dmax = d2;
@@ -1933,8 +1934,8 @@ static void hs_window_shadow_analytic(const hs_window_t *w)
     int ybeg = y0 - dmax, xbeg = x0 - dmax;
     if (ybeg < 0) ybeg = 0;
     if (xbeg < 0) xbeg = 0;
-    int ylim = (y1 + dmax < gfx_height) ? y1 + dmax : gfx_height - 1;
-    int xlim = (x1 + dmax < gfx_width) ? x1 + dmax : gfx_width - 1;
+    int ylim = (y1 + dmax < gfx64_get_height()) ? y1 + dmax : gfx64_get_height() - 1;
+    int xlim = (x1 + dmax < gfx64_get_width()) ? x1 + dmax : gfx64_get_width() - 1;
     for (int y = ybeg; y <= ylim; y++) {
         for (int x = xbeg; x <= xlim; x++) {
             if (x >= x0 && x <= x1 && y >= y0 && y <= y1) continue;
@@ -1959,14 +1960,15 @@ static inline void sh_blit_slice(const hs_window_t *w, int mx0, int my0,
                                  int pad, int rc)
 {
     extern void gfx64_blend_pixel(int x, int y, uint32_t fg, int alpha);
-    extern int gfx_width, gfx_height;
+    extern int gfx64_get_width(void);
+    extern int gfx64_get_height(void);
     for (int y = yb; y < ye; y++) {
         int sy = my0 + y;
-        if (sy < 0 || sy >= gfx_height) continue;
+        if (sy < 0 || sy >= gfx64_get_height()) continue;
         const uint8_t *row = sh_mask + (long)y * sh_mw;
         for (int x = xb; x < xe; x++) {
             int sx = mx0 + x;
-            if (sx < 0 || sx >= gfx_width) continue;
+            if (sx < 0 || sx >= gfx64_get_width()) continue;
             if (sh_in_rounded(x, y, pad, pad, pad + w->width - 1, pad + w->height - 1, rc)) continue;
             int a = (int)row[x] * SH_STRENGTH / 255;
             if (a >= 3) gfx64_blend_pixel(sx, sy, 0x0A1620, a);
@@ -1978,12 +1980,21 @@ static void hs_window_shadow(const hs_window_t *w)
 {
     if (w->width <= 0 || w->height <= 0) return;
 
+    /* 注意: hs_s() 依赖 g_ui_scale_pct, 而 Settings/任务管理器窗口在 hpdesk_init
+     * 里就建好了, 那时缩放还没从配置读出来 —— 早先版本因此把半径算成 1px, mask 糊
+     * 成一团废图, 又按尺寸命中了缓存, 于是一直是废的。这里做保底, 并把半径/圆角/
+     * pad 一起纳入缓存指纹, 缩放变化后会重建。 */
     int rc = hs_s(g_shell.ui.corner_radius);
-    int pad = hs_s(36) + 6;               /* 3 遍 r 的扩散范围(约 2.5σ)再留余量 */
+    if (rc < 4) rc = 16;
+    int pad = hs_s(3 * SH_BLUR_R) + 6;    /* 模糊支撑 3r, 必须 >= 它, 否则边带会切出硬边 */
+    int r = hs_s(SH_BLUR_R);
+    if (r < 8) r = 24;
     int off = hs_sy(14);
+    if (off < 4) off = 14;
+    int pk = (rc * 4096 + pad) * 4096 + r;
 
-    if (sh_kw != w->width || sh_kh != w->height) {
-        if (!sh_build(w->width, w->height, pad, rc)) {
+    if (sh_kw != w->width || sh_kh != w->height || sh_kpk != pk) {
+        if (!sh_build(w->width, w->height, pad, rc, r)) {
             hs_window_shadow_analytic(w);   /* 内存不够, 退回解析式 */
             return;
         }
@@ -1991,6 +2002,7 @@ static void hs_window_shadow(const hs_window_t *w)
     int mx0 = w->x - pad;
     int my0 = w->y + off - pad;
 
+    sh_kpk = pk;
     /* 只走四条边带, 中间整块跳过 —— 那是窗口自己会盖住的区域, 算它纯属浪费 */
     sh_blit_slice(w, mx0, my0, 0, sh_mw, 0, pad, pad, rc);                  /* 上 */
     sh_blit_slice(w, mx0, my0, 0, sh_mw, sh_mh - pad, sh_mh, pad, rc);      /* 下 */
