@@ -458,3 +458,35 @@ QEMU 用户态网络访问外网 HTTP 常被丢弃，因此天气卡在模拟环
 `thread_exit` 文案已不含 `-> tid 0`，显示为 `thread_exit: tid 1000  (handed off)`。
 内核 829,128 B；2/2 PASS、`EXCEPTION=0`。
 
+### §1.95 syscall 返回状态按线程记账，消除全局单值共享
+
+**问题**。`entry_64.S` 在 syscall 入口把 `syscall` 指令压进 rcx/r11 的返回地址与
+rflags、以及用户栈指针，分别落到三个全局变量：
+
+```asm
+movq %rax, g_syscall_ret_rip      # rcx
+movq %rax, g_syscall_ret_rflags   # r11
+```
+
+`g_syscall_ustack_slot` 同理。单核单线程时这就是"本条 syscall 的私有状态"，
+没有问题。但一条 syscall 执行途中被时钟中断切走、另一条线程再进 syscall 时，
+这三个全局会被覆盖 —— 原线程 `sysretq` 返回时拿到的是**别人**的 RIP / RFLAGS / RSP。
+实测里这类踩踏表现为随机 #PF 或跳进别的线程的代码段。
+
+**修法**。沿用 `kstack_top` 已有的 per-thread 模式（`g_syscall_kstack_slot` 早就
+这么做了）：给 `uthread_t` 加三个字段 `sret_rip / sret_rflags / sustack`，
+
+- `ut_save()`（时钟中断里调用）把当前三个全局值记进线程；
+- `ut_restore()`（切到该线程时）把这组值写回全局；
+- `uthread_create()` 用 clone 的入口点 `rip` 与 `rsp` 初始化。
+
+汇编接口完全不动 —— 入口照样写全局，只是"全局单值"变成了
+"切到哪条线程，就装哪条线程的值"。
+
+**验证**。这属于正确性改造，6 次连续启动 clone_test 全部
+`PASS: child ran in shared address space, both counters advanced`，
+`FAIL=0`、`EXCEPTION=0`，说明新记账没有引入回归。原有并发冲突的复现用例
+（syscall 中途被抢占 + 另一线程重入 syscall）目前还没有构造，
+因此这次是**有依据的防御性修复，不是对某个已复现故障的回归验证**。
+内核 829,192 B；`check_docs` warns=0 errors=0。
+

@@ -30,6 +30,12 @@ typedef struct {
     uint64_t rip, rflags, rsp, fsbase;
     uint64_t kstack_top;      /* 本线程的 syscall 内核栈顶（g_syscall_kstack_slot 是全局单值，
                                  父子共用同一个栈会互相踩，实测表现为随机 #PF） */
+    /* V0.58.3: syscall 入口在 entry_64.S 里把 rcx/r11/用户栈写进三个全局
+     * (g_syscall_ret_rip / g_syscall_ret_rflags / g_syscall_ustack_slot)。
+     * 单核单线程时它们是"本条 syscall 的私有状态", 一旦这条 syscall 执行途中
+     * 被时钟中断切走、另一条线程再进 syscall, 全局就被覆盖, 原线程 sysretq
+     * 拿着别人的 RIP/RFLAGS/RSP 返回。随线程上下文一起记账即可消除共享。 */
+    uint64_t sret_rip, sret_rflags, sustack;
 } uthread_t;
 
 static uthread_t g_ut[MAX_UTHREADS];
@@ -73,6 +79,11 @@ static void ut_save(uthread_t *t, uint64_t *f)
     t->rip = f[19];
     t->rflags = f[21];
     t->rsp = f[22];
+    /* V0.58.3: 连带把这组 syscall 返回状态记进线程, 见结构体注释 */
+    extern uint64_t g_syscall_ret_rip, g_syscall_ret_rflags, g_syscall_ustack_slot;
+    t->sret_rip = g_syscall_ret_rip;
+    t->sret_rflags = g_syscall_ret_rflags;
+    t->sustack = g_syscall_ustack_slot;
 }
 
 static void ut_restore(uthread_t *t, uint64_t *f)
@@ -82,6 +93,11 @@ static void ut_restore(uthread_t *t, uint64_t *f)
         extern uint64_t g_syscall_kstack_slot;
         g_syscall_kstack_slot = t->kstack_top;
     }
+    /* V0.58.3: 恢复该线程自己的 syscall 返回状态 */
+    extern uint64_t g_syscall_ret_rip, g_syscall_ret_rflags, g_syscall_ustack_slot;
+    g_syscall_ret_rip = t->sret_rip;
+    g_syscall_ret_rflags = t->sret_rflags;
+    g_syscall_ustack_slot = t->sustack;
     f[19] = t->rip;
     f[21] = t->rflags;
     f[22] = t->rsp;
@@ -134,6 +150,10 @@ int uthread_create(int owner, uint64_t rip, uint64_t rsp, uint64_t fsbase)
             g_ut[i].rip = rip;
             g_ut[i].rsp = rsp;
             g_ut[i].rflags = 0x202;             /* IF=1，否则收不到时钟 */
+            /* V0.58.3: 子线程的 syscall 返回状态从 clone 的入口点起算 */
+            g_ut[i].sret_rip = rip;
+            g_ut[i].sret_rflags = 0x202;
+            g_ut[i].sustack = rsp;
             g_ut_total_created++;
             g_ut_last_parent_tid = (g_ut_cur >= 0 && g_ut[g_ut_cur].used)
                                  ? g_ut[g_ut_cur].tid : 0;
