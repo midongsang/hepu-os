@@ -35,6 +35,31 @@ static uint64_t g_ap_stack_sentinel_before[MAX_CPUS];
    由 irq64_init() 结束时设置。 */
 volatile int g_apic_idt_ready = 0;
 
+/* ---------------------------------------------------------------------------
+ * SB-21: IPI 消息通道
+ *
+ * 原来 0x50 的处理器只把 per_cpu_timer_ticks 当计数器复用一下，既没有消息
+ * 也没有应答 —— 跨核协同（唤醒/刷 TLB/停核）根本没有通道可用。
+ * 这里补最小的消息协议：每核一个消息槽（类型 + 参数 + pending），
+ * 发送方填槽后发固定投递 IPI，接收方在 0x50 里分发、清 pending 并累加 ack。
+ *
+ * 槽只有一份：正在 pending 时再来新消息一律拒收并把 g_ipi_dropped 加一，
+ * 绝不覆盖 —— 覆盖会让前一条消息的参数落到后一条处理逻辑里，比丢消息更糟。
+ * ------------------------------------------------------------------------- */
+#define IPI_MSG_RESCHEDULE  1
+#define IPI_MSG_TLB_FLUSH   2
+#define IPI_MSG_STOP        3
+
+typedef struct {
+    volatile int      pending;
+    volatile int      type;
+    volatile uint64_t arg;      /* TLB_FLUSH: 目标虚拟地址, 0 = 整表刷新 */
+} ipi_slot_t;
+
+static ipi_slot_t g_ipi_slot[MAX_CPUS];
+static volatile uint64_t g_ipi_ack[MAX_CPUS];      /* 每核已处理的消息总数 */
+static volatile uint64_t g_ipi_dropped;            /* 发送时槽忙被拒的次数 */
+
 /* Per-CPU调度状态 */
 static volatile int per_cpu_current_proc[MAX_CPUS];  /* 每个CPU当前运行的进程索引 */
 static volatile uint64_t per_cpu_timer_ticks[MAX_CPUS];  /* 每个CPU的定时器tick计数 */
@@ -274,16 +299,122 @@ uint64_t smp_get_cpu_ticks(uint32_t cpu_id)
     return per_cpu_timer_ticks[cpu_id];
 }
 
-/* IPI核间中断处理 */
+/* IPI核间中断处理：按消息类型分发，处理完清 pending 并写应答 */
+static inline void sb21_invlpg(uint64_t va)
+{
+    __asm__ volatile("invlpg (%0)" : : "r"(va) : "memory");
+}
+
+static inline void sb21_flush_all_tlb(void)
+{
+    uint64_t cr3;
+    __asm__ volatile("mov %%cr3, %0" : "=r"(cr3));
+    __asm__ volatile("mov %0, %%cr3" : : "r"(cr3) : "memory");
+}
+
 void smp_ipi_handler(void)
 {
     uint32_t cpu_id = apic64_get_id();
-    /* IPI用于唤醒空闲CPU或通知调度 */
-    /* 目前只计数，后续可加入调度唤醒逻辑 */
-    if (cpu_id < MAX_CPUS) {
-        per_cpu_timer_ticks[cpu_id]++;  /* 复用计数 */
+    if (cpu_id >= MAX_CPUS) return;
+
+    /* 伪中断 / 已被处理过的迟到 IPI：什么都不做，也不要累加应答，
+     * 否则汇聚方会多算一次。 */
+    if (!g_ipi_slot[cpu_id].pending) return;
+
+    int type = g_ipi_slot[cpu_id].type;
+    uint64_t arg = g_ipi_slot[cpu_id].arg;
+
+    switch (type) {
+    case IPI_MSG_TLB_FLUSH:
+        if (arg) sb21_invlpg(arg);
+        else     sb21_flush_all_tlb();
+        break;
+    case IPI_MSG_RESCHEDULE:
+        /* AP 调度开关仍关着（smp_timer_tick 里的 && 0），这里只记录；
+         * 开关打开后在此直接进 process64_schedule()。 */
+        break;
+    case IPI_MSG_STOP:
+        /* 先清 pending 再停机，避免汇聚方等一个永远不会到的应答；
+         * 停住的核只能靠 INIT/复位唤醒。 */
+        g_ipi_slot[cpu_id].pending = 0;
+        __sync_fetch_and_add(&g_ipi_ack[cpu_id], 1);
+        __asm__ volatile("sti");
+        while (1) { __asm__ volatile("hlt"); }
+        break;
+    default:
+        break;
     }
+
+    g_ipi_slot[cpu_id].pending = 0;
+    __asm__ volatile("" ::: "memory");
+    __sync_fetch_and_add(&g_ipi_ack[cpu_id], 1);
 }
+
+/* 点对点发送。槽忙则拒收（返回 -1），由调用方决定重试或放弃。 */
+int smp_ipi_send(int target, int type, uint64_t arg)
+{
+    if (target < 0 || target >= MAX_CPUS) return -1;
+    if (target == (int)bsp_cpu_id) return -1;   /* BSP 自己不需要 IPI */
+
+    if (g_ipi_slot[target].pending) {
+        __sync_fetch_and_add(&g_ipi_dropped, 1);
+        return -1;
+    }
+    g_ipi_slot[target].type = type;
+    g_ipi_slot[target].arg = arg;
+    /* 参数先落地，pending 后置：接收方看到 pending 时参数一定已可见 */
+    __asm__ volatile("" ::: "memory");
+    g_ipi_slot[target].pending = 1;
+    __asm__ volatile("mfence" ::: "memory");
+
+    apic64_send_ipi((uint32_t)target, 0x50);
+    return 0;
+}
+
+/* 广播给所有在线 AP（逐核填槽，比 others 简码更可靠：能逐核判槽忙） */
+int smp_ipi_send_others(int type, uint64_t arg)
+{
+    int sent = 0;
+    for (int id = 0; id < MAX_CPUS; id++) {
+        if (id == (int)bsp_cpu_id) continue;
+        if (!cpu_table[id].online) continue;
+        if (smp_ipi_send(id, type, arg) == 0) sent++;
+    }
+    return sent;
+}
+
+/* 取每核 ack 快照 */
+void smp_ipi_snapshot(uint64_t *out)
+{
+    if (!out) return;
+    for (int i = 0; i < MAX_CPUS; i++) out[i] = g_ipi_ack[i];
+}
+
+/* 汇聚：等到全核 ack 总和相对 snapshot 增长 expect 次；超时返回 -1。
+ * 只算总和而不是逐核比对 —— 调用方关心的是「所有目标都回了」，
+ * 某一核回了两条也满足条件。 */
+int smp_ipi_wait_ack(const uint64_t *snapshot, int expect, uint64_t timeout)
+{
+    uint64_t base = 0, now = 0;
+    for (int i = 0; i < MAX_CPUS; i++) base += snapshot[i];
+
+    for (uint64_t t = 0; t < timeout; t++) {
+        now = 0;
+        for (int i = 0; i < MAX_CPUS; i++) now += g_ipi_ack[i];
+        if ((int)(now - base) >= expect) return 0;
+        __asm__ volatile("pause" ::: "memory");
+    }
+    return -1;
+}
+
+/* 读每核应答计数（诊断用） */
+uint64_t smp_ipi_ack_count(int cpu)
+{
+    if (cpu < 0 || cpu >= MAX_CPUS) return 0;
+    return g_ipi_ack[cpu];
+}
+
+uint64_t smp_ipi_dropped_count(void) { return g_ipi_dropped; }
 
 /* SB-20: 供屏障后复核 AP 栈底哨兵（ap_stacks 在启动函数内是 static，
  * 这里用同一份符号做读取入口） */
@@ -516,6 +647,26 @@ int smp_init(void)
     vga_puts("[SMP] Initialization complete, ");
     vga_put_hex(ap_started_count + 1);
     vga_puts(" CPUs online\n");
+
+    /* SB-21 自检：给所有在线 AP 发一次 TLB_FLUSH（整表），汇聚应答。
+     * 这是唯一能在启动期证明「消息能发到、能处理、应答能数回来」的
+     * 端到端证据 —— 否则 IPI 通道坏了也只会在需要 shootdown 时才暴露。 */
+    if (cpu_count > 1) {
+        uint64_t snap[MAX_CPUS];
+        smp_ipi_snapshot(snap);
+        int sent = smp_ipi_send_others(IPI_MSG_TLB_FLUSH, 0);
+        int rc = smp_ipi_wait_ack(snap, sent, 200000000ULL);
+        vga_puts("[SB21] ipi selftest sent=");
+        vga_put_hex(sent);
+        vga_puts(" acked=");
+        vga_put_hex(rc == 0 ? (uint64_t)sent : 0);
+        vga_puts(rc == 0 ? " ok\n" : " TIMEOUT\n");
+        if (smp_ipi_dropped_count()) {
+            vga_puts("[SB21] WARN: ipi dropped=");
+            vga_put_hex(smp_ipi_dropped_count());
+            vga_puts("\n");
+        }
+    }
 
     return 0;
 }

@@ -16,6 +16,12 @@ supersedes: null
 > **2026-11-13 阶段 2 完成**：SB-10（用户进程表）、SB-11（fd 表）、
 > SB-12（TCP）、SB-13（UDP）、SB-14（ext2）五条表锁已落地，均为「表级粗锁 +
 > irqsave / per-CPU 深度计数」，提交 6332e6d、7e0fe09、bd2c010、07bcec9。
+> **SB-21（IPI 闭环）已完成**：0x50 从「空处理器 + 复用 tick 计数」改成真正
+> 的消息通道 —— 每核一个 `{pending,type,arg}` 槽，`RESCHEDULE` / `TLB_FLUSH` /
+> `STOP` 三类分发，处理完清 pending 并累加 per-CPU ack；槽忙时拒收并计入
+> `g_ipi_dropped`（绝不覆盖）。新增 `smp_ipi_snapshot/wait_ack` 汇聚，启动期
+> 自检给所有 AP 发一次整表 TLB_FLUSH 并等应答。2/4/8 核实测 ack 全数返回。
+>
 > **SB-20（AP 启动协议）已完成**：`ap_started_count` 改 `__sync_fetch_and_add`
 > 原子递增（+ 每核到位位图），trampoline 参数按 CR3→RSP→entry 顺序发布并
 > 在发 IPI 前 `mfence`，超时会点名缺失核 APIC ID，AP 栈底加 16KB 越界哨兵
