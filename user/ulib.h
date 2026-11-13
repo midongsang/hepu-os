@@ -138,9 +138,15 @@ static inline uint64_t time(void)
     return syscall0(SYS_TIME);
 }
 
-static inline void sleep(uint64_t seconds)
+static inline void sleep(uint64_t ms)
 {
-    syscall1(SYS_SLEEP, seconds);
+    /* V0.58.2: 在内核 sys_sleep 里等是"内核态 nop 忙等" —— 睡眠期间 CPU
+     * 被独占，而用户线程轮转只在时钟中断且 CPL=3 时触发，于是同进程的
+     * 其它线程整段睡眠期一次都轮不到（实测 clone 的子线程就是这样饿死的）。
+     * 把等待放到用户态：CPU 仍被本线程占着，但时钟中断能正常打断并轮转，
+     * 其它线程照样能跑。参数语义仍是毫秒（SYS_SLEEP 原本就是毫秒）。 */
+    volatile uint64_t n = ms * 100000ULL;
+    while (n > 0) n--;
 }
 
 static inline int getpid(void)
