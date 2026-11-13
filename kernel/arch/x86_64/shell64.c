@@ -145,7 +145,7 @@ static int shell_read_line(char *buf, int max)
                 }
             } else if (c == '\t') { /* Tab 补全 */
                 /* 简单补全：匹配常用命令 */
-                static const char *cmds[] = {"help","hepu","ls","cat","pwd","echo","ps","cd","mkdir","rm","clear","date","uname","reboot","sleep","exec","browser","scrapling","ifconfig","version","meminfo","free","top","mem","dev","sandbox","info",0};
+                static const char *cmds[] = {"help","hepu","ls","cat","pwd","echo","ps","cd","mkdir","rm","clear","date","uname","reboot","sleep","exec","browser","scrapling","ifconfig","version","meminfo","free","top","mem","dev","sandbox","info","dmesg","sync","vmstat","pstree","id","who","w","lsblk","blkid","timedatectl","lscpu","lspci","lsusb","ss","htop",0};
                 char prefix[64]; int plen = 0;
                 int i = pos - 1;
                 while (i >= 0 && buf[i] != ' ') { i--; }
@@ -332,7 +332,7 @@ static void shell_cmd_history(int argc, char **argv) {
 /* V0.20.67: which 命令 */
 static void shell_cmd_which(int argc, char **argv) {
     if (argc < 2) { vga_puts("usage: which <command>\n"); return; }
-    static const char *cmds[] = {"help","hepu","ls","cat","pwd","echo","ps","cd","mkdir","rm","clear","date","uname","reboot","sleep","exec","browser","scrapling","ifconfig","version","meminfo","free","history","which",0};
+    static const char *cmds[] = {"help","hepu","ls","cat","pwd","echo","ps","cd","mkdir","rm","clear","date","uname","reboot","sleep","exec","browser","scrapling","ifconfig","version","meminfo","free","history","which","dmesg","sync","vmstat","pstree","id","who","w","lsblk","blkid","timedatectl","lscpu","lspci","lsusb","ss","htop",0};
     for (int i = 0; cmds[i]; i++) {
         if (strcmp(cmds[i], argv[1]) == 0) {
             vga_puts(argv[1]);
@@ -2272,6 +2272,198 @@ static void shell_cmd_meminfo(int argc, char **argv)
 }
 
 /* pci命令：扫描PCI bus并显示device */
+/* ============================================================================
+ * 系统信息与诊断命令（工具清单「一、二、七」组）
+ * 全部只读现有内核数据源，不新增采集路径。
+ * ========================================================================== */
+
+/* dmesg: 内核日志环形缓冲 */
+static void shell_cmd_dmesg(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    extern uint32_t klog64_snapshot(char *out, uint32_t max);
+    extern uint32_t klog64_used(void);
+    static char kbuf[4096];
+    uint32_t n = klog64_snapshot(kbuf, 4095);
+    if (n > 4095) n = 4095;
+    kbuf[n] = 0;
+    if (n == 0) { vga_puts("dmesg: kernel log is empty\n"); return; }
+    vga_puts(kbuf);
+    vga_puts("\n-- end of kernel log, ");
+    char knum[16]; shell_itoa((int)klog64_used(), knum);
+    vga_puts(knum);
+    vga_puts(" bytes buffered --\n");
+}
+
+/* sync: 把块缓存与 ext2 inode 缓存刷到盘上 */
+static void shell_cmd_sync(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    extern void blk_cache_flush(void);
+    extern void ext2_cache_flush_all(void);
+    blk_cache_flush();
+    ext2_cache_flush_all();
+    vga_puts("sync: block cache + ext2 inode cache flushed\n");
+}
+
+/* vmstat: 进程与内存概览 */
+static void shell_cmd_vmstat(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    extern void pmm64_get_stats(uint64_t *total, uint64_t *used, uint64_t *free);
+    extern int process64_get_count(void);
+    extern int process64_get_running_count(void);
+    uint64_t tot = 0, used = 0, freem = 0;
+    pmm64_get_stats(&tot, &used, &freem);
+    char num[16];
+    vga_puts("procs  running  mem_total  mem_used  mem_free   (MB)\n");
+    shell_itoa(process64_get_count(), num); vga_puts(num); vga_puts("      ");
+    shell_itoa(process64_get_running_count(), num); vga_puts(num); vga_puts("         ");
+    shell_itoa((int)(tot / (1024u * 1024u)), num); vga_puts(num); vga_puts("        ");
+    shell_itoa((int)(used / (1024u * 1024u)), num); vga_puts(num); vga_puts("      ");
+    shell_itoa((int)(freem / (1024u * 1024u)), num); vga_puts(num); vga_puts("\n");
+    vga_puts("note: si/so/io 未统计 —— 本系统无 swap，块设备计数器未接入\n");
+}
+
+/* pstree: 按父子关系打印进程树 */
+static process64_stat_t g_pt_buf[PROCESS64_MAX_SLOTS];
+static int g_pt_n;
+static void pstree_walk(int pid, int depth)
+{
+    for (int i = 0; i < g_pt_n; i++) {
+        if (g_pt_buf[i].pid == pid) continue;
+        if (g_pt_buf[i].parent_pid != pid) continue;
+        for (int d = 0; d < depth; d++) vga_puts("  ");
+        vga_puts(depth ? "`- " : "");
+        vga_puts(g_pt_buf[i].name);
+        vga_puts("(");
+        char num[16]; shell_itoa(g_pt_buf[i].pid, num); vga_puts(num); vga_puts(")\n");
+        if (depth < 8) pstree_walk(g_pt_buf[i].pid, depth + 1);
+    }
+}
+static void shell_cmd_pstree(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    g_pt_n = process64_snapshot(g_pt_buf, PROCESS64_MAX_SLOTS);
+    vga_puts("init(0)\n");
+    pstree_walk(0, 1);
+    vga_puts("-- total ");
+    char num[16]; shell_itoa(g_pt_n, num); vga_puts(num); vga_puts(" processes --\n");
+}
+
+/* id: 当前账号身份（角色 -> uid 映射：developer=0, normal=1000） */
+static void shell_cmd_id(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    extern const char *auth64_current_user(void);
+    extern int auth64_current_role(void);
+    const char *who = auth64_current_user();
+    int role = auth64_current_role();   /* 0=none 1=normal 2=developer */
+    char num[16];
+    if (role <= 0) { vga_puts("id: not logged in\n"); return; }
+    vga_puts("uid=");
+    shell_itoa(role == 2 ? 0 : 1000, num); vga_puts(num);
+    vga_puts("("); vga_puts(who ? who : "?"); vga_puts(")");
+    vga_puts(" gid=");
+    shell_itoa(role == 2 ? 0 : 1000, num); vga_puts(num);
+    vga_puts(" groups=");
+    shell_itoa(role == 2 ? 0 : 1000, num); vga_puts(num);
+    vga_puts(role == 2 ? "(root)" : "(users)");
+    vga_puts("\n");
+}
+
+/* who / w: 会话列表（本系统单会话，tty1） */
+static void shell_cmd_who(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    extern const char *auth64_current_user(void);
+    extern int auth64_current_role(void);
+    extern uint64_t pit64_get_uptime(void);
+    if (auth64_current_role() <= 0) { vga_puts("no session\n"); return; }
+    const char *who = auth64_current_user();
+    vga_puts(who ? who : "?"); vga_puts("   tty1    ");
+    uint64_t sec = pit64_get_uptime() / 1000;
+    char num[16]; shell_itoa((int)(sec / 3600), num); vga_puts(num); vga_puts(":");
+    int mins = (int)((sec / 60) % 60);
+    if (mins < 10) vga_puts("0");
+    shell_itoa(mins, num); vga_puts(num);
+    vga_puts("  (up)\n");
+}
+
+/* lsblk / blkid: MBR 分区表（partition64 只解析 MBR；GPT 盘会回报无签名） */
+typedef struct {
+    int     present;
+    uint8_t type;
+    uint32_t lba_start;
+    uint32_t sectors;
+    int     fs_ext2;
+} sh_part_t;
+
+static void shell_cmd_lsblk(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    extern int partition64_scan(void *parts);
+    sh_part_t p[4];
+    for (int i = 0; i < 4; i++) { p[i].present = 0; p[i].type = 0; p[i].lba_start = 0; p[i].sectors = 0; p[i].fs_ext2 = 0; }
+    int rc = partition64_scan(p);
+    if (rc != 0) {
+        vga_puts("lsblk: partition table scan failed (rc=");
+        char num[16]; shell_itoa(rc, num); vga_puts(num);
+        vga_puts(")\n  -1 = 读盘失败, -2 = 无 MBR 签名（GPT 盘属正常）\n");
+        return;
+    }
+    vga_puts("NAME     START        SECTORS      SIZE(MB)  FS\n");
+    for (int i = 0; i < 4; i++) {
+        if (!p[i].present) continue;
+        vga_puts("hd0p"); char num[16]; shell_itoa(i + 1, num); vga_puts(num);
+        vga_puts("     ");
+        shell_itoa((int)p[i].lba_start, num); vga_puts(num);
+        vga_puts("      ");
+        shell_itoa((int)p[i].sectors, num); vga_puts(num);
+        vga_puts("      ");
+        shell_itoa((int)(p[i].sectors / 2048u), num); vga_puts(num);
+        vga_puts("        ");
+        vga_puts(p[i].fs_ext2 ? "ext2" : "unknown");
+        vga_puts("\n");
+    }
+}
+
+static void shell_cmd_blkid(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    extern int partition64_scan(void *parts);
+    sh_part_t p[4];
+    for (int i = 0; i < 4; i++) { p[i].present = 0; p[i].type = 0; p[i].lba_start = 0; p[i].sectors = 0; p[i].fs_ext2 = 0; }
+    int rc = partition64_scan(p);
+    if (rc != 0) { vga_puts("blkid: no MBR partition table\n  UUID 未接入（本系统不做 UUID 持久化）\n"); return; }
+    for (int i = 0; i < 4; i++) {
+        if (!p[i].present) continue;
+        vga_puts("hd0p"); char num[16]; shell_itoa(i + 1, num); vga_puts(num);
+        vga_puts(": TYPE=\""); vga_puts(p[i].fs_ext2 ? "ext2" : "unknown");
+        vga_puts("\"  PTYPE=0x"); shell_itoa((int)p[i].type, num); vga_puts(num);
+        vga_puts("\n");
+    }
+}
+
+/* timedatectl: 时间与时区状态（当前只有 RTC，无 NTP 客户端） */
+static void shell_cmd_timedatectl(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    extern void rtc64_get_time(int *y, int *mo, int *d, int *h, int *mi, int *s);
+    int y = 0, mo = 0, d = 0, h = 0, mi = 0, se = 0;
+    rtc64_get_time(&y, &mo, &d, &h, &mi, &se);
+    char num[16];
+    vga_puts("      Local time: ");
+    shell_itoa(y, num); vga_puts(num); vga_puts("-");
+    if (mo < 10) vga_puts("0"); shell_itoa(mo, num); vga_puts(num); vga_puts("-");
+    if (d < 10) vga_puts("0"); shell_itoa(d, num); vga_puts(num); vga_puts(" ");
+    if (h < 10) vga_puts("0"); shell_itoa(h, num); vga_puts(num); vga_puts(":");
+    if (mi < 10) vga_puts("0"); shell_itoa(mi, num); vga_puts(num); vga_puts(":");
+    if (se < 10) vga_puts("0"); shell_itoa(se, num); vga_puts(num);
+    vga_puts("\n     Time zone: 由 OOBE 选择（尚未写入全局 tz 变量）\n");
+    vga_puts("  NTP synced: no（未实现 NTP 客户端，时间为 RTC 直读）\n");
+}
+
 static void shell_cmd_pci(int argc, char **argv)
 {
     extern uint32_t pci_config_read32(uint8_t bus, uint8_t dev, uint8_t func, uint8_t offset);
@@ -2992,6 +3184,22 @@ static shell_command_t shell_commands[] = {
     {"uptime", shell_cmd_uptime},
     {"meminfo", shell_cmd_meminfo},
     {"pci", shell_cmd_pci},
+    {"dmesg", shell_cmd_dmesg},
+    {"sync", shell_cmd_sync},
+    {"vmstat", shell_cmd_vmstat},
+    {"pstree", shell_cmd_pstree},
+    {"id", shell_cmd_id},
+    {"who", shell_cmd_who},
+    {"w", shell_cmd_who},
+    {"lsblk", shell_cmd_lsblk},
+    {"blkid", shell_cmd_blkid},
+    {"timedatectl", shell_cmd_timedatectl},
+    /* 常用别名：linux 习惯名 -> 已有实现 */
+    {"lscpu", shell_cmd_cpuinfo},
+    {"lspci", shell_cmd_pci},
+    {"lsusb", shell_cmd_usb},
+    {"ss", shell_cmd_netstat},
+    {"htop", (void*)term64_cmd_top},
     {"cpuinfo", shell_cmd_cpuinfo},
     {"netstat", shell_cmd_netstat},
     {"df", shell_cmd_df},
