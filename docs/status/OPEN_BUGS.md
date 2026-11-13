@@ -223,15 +223,30 @@ source_of_truth: kernel/arch/x86_64/
   修法：内核栈改为槽位复用、不随退出释放；clone_test 改用 64 位 `exit()`。
   三次独立启动实测 `PASS=1 FAIL=0 EXCEPTION=0`。
 
-## SEC-22 crt0 的 32 位 `int $0x80` 退出路径
+## SEC-22 crt0 的 32 位 `int $0x80` 退出路径（已修复，V0.58.3）
 
-- 现象：`user/libhepu/crt0.S` 的 `_start` 结尾用 `pushl/call main/movl/int $0x80`
-  （32 位约定），在被用户线程切换过的上下文里，`main` 返回后会落到地址 0
-  取指（`error=0x15 rip=0x0`）。
-- 影响：所有 `return` 而非显式 `exit()` 的程序都可能命中；单线程程序目前未复现。
-- 现状：`clone_test` 已改为显式 `exit(0)` 规避；crt0 本身未改。
-- 修法方向：crt0 改成 64 位入口（`call main` + `mov $5,%eax; syscall`），
-  需要全量回归所有用户程序，属独立改动。
+- **原记录与实测不符**：原来写的是"`crt0.S` 结尾 `int $0x80`（32 位约定），
+  所有 return 而非 exit() 的程序都可能命中"。核查后发现两件事：
+  1. `user/libhepu/crt0.S` **从未被任何 Makefile 链接** —— 每个程序自己定义
+     `_start`，crt0 是孤儿文件；
+  2. 真正的缺陷在 `ps.c` 与 `clone_test.c`：它们只写了 `main`、没有 `_start`，
+     而 `user.ld` 用的是 `ENTRY(_start)`。找不到该符号时 ld 打印
+     `cannot find entry symbol _start; defaulting to 0000000040000000`，
+     把入口退化成"段起始地址" —— 对 ps 来说那正是辅助函数 `put_int`
+     （`main` 在 0x400000e0），**程序一启动就跑错函数**。
+     `clone_test` 的 `main` 恰好落在 0x400000，所以一直"能跑"，但那只是布局巧合。
+- 修法：`ps.c` / `clone_test.c` 各补一层 `_start { exit(main()); }`；
+  `crt0.S` 一并改成正确的 64 位版本（`call main` + `rdi` 传码 + `syscall`），
+  它虽未被链接，但作为入口模板不该留着 32 位写法。
+- 验证：
+  - 7/7 用户 ELF 的 `e_entry` 与 `_start` 地址逐一对齐，`cannot find entry
+    symbol` 警告消失；
+  - 临时把 `ps.elf` 加进 autorun 实跑：`entry=0x400000E0`，打印
+    `PID PPID STATE PRI PAGES NAME` 与进程行后正常返回，**未出现 #PF**
+    （`kernel_main_64.c` 里"跨用户栈第二页必崩"的注释据此更新）；
+  - 3/3 连续启动 `PASS`、`FAIL=0`、`EXCEPTION=0`、`[REG] autorun done` 均出现。
+- 遗留（另记，不属本项）：ps 的 NAME 列输出乱码，`SYS_HEPU_PS` 返回的
+  `struct hep_ps_entry.name` 内容待查；因此 ps 仍未放进 autorun。
 
 ## SEC-23 clone 测试偶发 `child never ran` —— 已修复（V0.58.2）
 

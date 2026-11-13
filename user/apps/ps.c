@@ -71,3 +71,16 @@ int main(void)
     }
     return 0;
 }
+
+/* 入口点。
+ * user.ld 里写的是 ENTRY(_start)，而本文件只有 main —— 找不到 _start 时
+ * ld 会退化成"段起始地址"作为入口，这里恰好是辅助函数 put_int 的地址
+ * (0x400000)，而 main 在 0x400000e0：程序一启动就跑进 put_int，
+ * 参数寄存器里是内核留下的垃圾，随后 ret 弹出栈上的随机值 ——
+ * 正是收尾阶段 rip 落到 0 附近的那种 #PF 形态之一。
+ * 补一层 _start 把 main 包起来，退出走 ulib.h 的 64 位 syscall。 */
+void _start(void)
+{
+    exit(main());
+}
+

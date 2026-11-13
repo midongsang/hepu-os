@@ -65,3 +65,13 @@ int main(void)
     exit(0);
     return 0;
 }
+
+/* 入口点（与 ps.c 同因）。
+ * 本文件只有 main，user.ld 的 ENTRY(_start) 解析失败后 ld 把入口退化成
+ * 段起始地址。当前 main 恰好落在 0x400000 所以一直"能跑"，但这只是布局
+ * 巧合 —— 任何一次函数重排都会让入口落到别的函数上。补 _start 固定入口。 */
+void _start(void)
+{
+    exit(main());
+}
+

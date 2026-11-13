@@ -1174,9 +1174,10 @@ void x86_64_kernel_main(void)
          * --------------------------------------------------------------- */
         {
             extern int user_process_exec(const char *path);
-            /* ps 已打包进 /bin 并可在 shell 里手动执行，但暂不放进 autorun：
- * SYS_HEPU_PS 之后进程跨越用户栈第二页（0x6FFFEFE8）即 #PF，实测崩溃点
- * PDe 物理地址为 0，属内核页表侧问题，见 docs/status/OPEN_BUGS.md。 */
+            /* V0.58.3: ps 的入口缺陷已修（原来只有 main、_start 未定义，
+             * ld 把入口退化成段首 put_int 的地址）。修正后实测 entry=0x400000E0，
+             * 打印进程表并正常返回，早先记录的 "SYS_HEPU_PS 后跨栈页 #PF" 未再复现。
+             * 仍未放进 autorun：ps 的 NAME 列输出乱码（SYS_HEPU_PS 返回结构待查）。 */
             static const char *autorun[] = {
                 "/bin/hello.elf",
                 "/bin/sec_test.elf",

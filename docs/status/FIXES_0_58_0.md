@@ -490,3 +490,41 @@ movq %rax, g_syscall_ret_rflags   # r11
 因此这次是**有依据的防御性修复，不是对某个已复现故障的回归验证**。
 内核 829,192 B；`check_docs` warns=0 errors=0。
 
+### §1.96 修 ps / clone_test 的 ELF 入口（SEC-22 真实根因）
+
+**纠错**。SEC-22 原先记作"`crt0.S` 的 32 位 `int $0x80` 退出路径"。核查后发现
+`user/libhepu/crt0.S` **没有被任何 Makefile 链接** —— 每个程序都自己定义
+`_start`，crt0 是孤儿文件。真正的缺陷在别处。
+
+**真实根因**。`ps.c` 与 `clone_test.c` 只写了 `main`、没有 `_start`，而
+`user.ld` 用的是 `ENTRY(_start)`。链接器找不到符号时的行为是：
+
+```
+ld: warning: cannot find entry symbol _start; defaulting to 0000000040000000
+```
+
+入口被退化成段起始地址。对 `ps.elf` 来说 `0x400000` 是辅助函数 `put_int`
+（`main` 在 `0x400000e0`）—— 程序一启动就跑进错误函数，参数寄存器里是内核
+留下的垃圾值，`ret` 再弹到栈上的随机地址，正是"收尾阶段 rip 落到 0 附近"
+那类 #PF 的形态之一。`clone_test` 的 `main` 恰好落在 `0x400000` 所以一直
+能跑，但那只是函数布局的巧合，任何一次重排都会翻车。
+
+**修法**。
+- `ps.c` / `clone_test.c` 各补一层 `void _start(void) { exit(main()); }`；
+- `crt0.S` 改成正确的 64 位版本（`andq $-16,%rsp` → `call main` →
+  `movq %rax,%rdi` → `movl $5,%eax` → `syscall`），它虽未被链接，
+  但作为"标准入口模板"不该留着 32 位写法。
+
+**验证**。
+- 7/7 用户 ELF 的 `e_entry` 与 `_start` 地址逐一对齐，`cannot find entry symbol`
+  警告从构建输出消失；
+- 临时把 `ps.elf` 放进 autorun 实跑：`entry=0x00000000400000E0`，
+  打印 `PID PPID STATE PRI PAGES NAME` 与四行进程数据后正常返回，
+  **没有 #PF** —— 原来 `kernel_main_64.c` 里"跨用户栈第二页必崩"的判断
+  据此更新为"未再复现，NAME 列乱码待查"；
+- 3/3 连续启动：`PASS`、`FAIL=0`、`EXCEPTION=0`、`[REG] autorun done` 齐全。
+- 内核 829,192 B；`check_docs` warns=0 errors=0。
+
+**遗留**。ps 的 NAME 列输出乱码，`SYS_HEPU_PS` 返回的 `name[32]` 内容待查，
+因此 ps 仍未放回 autorun。
+
