@@ -3443,7 +3443,10 @@ static int m_kill_pid = 0;
 static int m_tick = 0;
 
 /* V0.13.39: 实时曲线历史 (CPU 模拟 / 网络真实) */
-#define M_HIST 72
+/* V0.59.6: 原来 72 —— 每个采样 2px, 曲线最宽只能画到 144px, 窗口 500 多像素宽的
+ * 图形区永远只有右端一小截有颜色, 用户看到的就是"没有曲线"。按最宽图形区
+ * (520 基准窗口 cw-MC(96)-MC(88) ≈ 316 基准单位 → 缩放后 ~470px) / 2px 取 288。 */
+#define M_HIST 288
 static int m_cpu_hist[M_HIST];
 static int m_rx_hist[M_HIST];
 static int m_mem_hist[M_HIST];   /* V0.59.3: 内存也要有视图 */
@@ -3508,23 +3511,25 @@ static void m_draw_curve(void *fb, int W, int H, int x, int y, int w, int h,
         m_bar_c(x + 2, gy, w - 4, 1,
                         hs_apps_mix(g_shell.colors.panel_bg, g_shell.colors.border, 55));
     }
-    /* V0.56.2: 折线在窗口内容层上看不见, 改为柱状条(gfx64_fill_rect 已验证可用),
-     * 每个采样 2px 宽、3px 步进, 右起最新 */
-    int n = (m_hist_count > w / 3) ? w / 3 : m_hist_count;
+    /* V0.59.6: 原来是"2px 柱 + 3px 步进"的柱状采样, 柱与柱之间有空隙, 值又常年贴底,
+     * 屏幕上就看不成曲线 —— 用户直接问"视图没有曲线吗"。
+     * 改成连续面积图: 2px 步进无缝拼接, 半透明色填满基线到当前值, 顶上再压一条
+     * 1px 亮线当轮廓, 远看就是一条带面积的折线。 */
+    int n = (m_hist_count > (w - 6) / 2) ? (w - 6) / 2 : m_hist_count;
     for (int i = 0; i < n; i++) {
         int v = hist[i];
         if (v > maxv) v = maxv;
         if (v < 0) v = 0;
-        int px = x + w - 4 - i * 3;
-        if (px < x + 2) break;
-        /* V0.57.0: 0 值也留 1px 采样点。
-         * 空闲系统的 CPU 真的是 0%(idle 100%), 原来 bh=0 就什么都不画,
-         * 整块图看着是空的, 用户会以为"图表没接上数据"。留基线表示在采样。 */
         int bh = (v * (h - 4)) / maxv;
-        if (bh < 1) bh = 1;
-        uint32_t c = (v > 0) ? color
-                             : hs_apps_mix(g_shell.colors.panel_bg, color, 40);
-        m_bar_c(px, y + h - 2 - bh, 2, bh, c);
+        if (bh < 2) bh = 2;   /* 0 值也留 2px, 否则整块看着空(见 0.57.0 那次的判断) */
+        int px = x + w - 3 - i * 2;
+        if (px < x + 2) break;
+        uint32_t fill = (v > 0) ? hs_apps_mix(g_shell.colors.panel_bg, color, 45)
+                                : hs_apps_mix(g_shell.colors.panel_bg, color, 22);
+        uint32_t top  = (v > 0) ? color
+                                : hs_apps_mix(g_shell.colors.panel_bg, color, 45);
+        m_bar_c(px, y + h - 2 - bh, 2, bh, fill);
+        m_bar_c(px, y + h - 2 - bh, 2, 1, top);
     }
 }
 
@@ -3680,6 +3685,19 @@ static void m_render(hs_window_t *w)
         int mpu = hs_process_get_mem_usage();
         uint64_t ntx = 0, nrx = 0; uint32_t ntxr = 0, nrxr = 0;
         e1000_get_net_stats(&ntx, &nrx, &ntxr, &nrxr);
+        /* V0.59.6: 首次打开时把整条历史预填成当前值。
+         * 原来 hist 从全 0 开始、只在渲染帧 push, 打开头几秒窗口里只有右端一小截
+         * 有颜色、左边一片空白, 看着像"图没接上数据"。预填后一开窗就是满宽的水平线,
+         * 之后右端逐步被真实采样替换。 */
+        if (m_hist_count == 0) {
+            for (int k = 0; k < M_HIST; k++) {
+                m_cpu_hist[k] = cpu;
+                m_mem_hist[k] = mpu;
+                m_rx_hist[k] = (int)(nrxr / 1024);
+                m_tx_hist[k] = (int)(ntxr / 1024);
+            }
+            m_hist_count = M_HIST;
+        }
         m_hist_push(m_cpu_hist, cpu);
         m_hist_push(m_mem_hist, mpu);
         m_hist_push(m_rx_hist, (int)(nrxr / 1024));
@@ -3693,25 +3711,25 @@ static void m_render(hs_window_t *w)
         m_text_c(fb, W, H, cx, cy, "CPU", g_shell.colors.text_secondary, MC(11));
         hs_itoa(cpu, tmp); strcpy(v, tmp); strcpy(v + hs_strlen(v), "%");
         m_text_c(fb, W, H, cx + MC(46), cy, v, 0x52C41A, MC(11));
-        m_draw_curve(fb, W, H, gx, cy, gw, gh, m_cpu_hist, 0x52C41A, MC(100));
+        m_draw_curve(fb, W, H, gx, cy, gw, gh, m_cpu_hist, 0x52C41A, 100);
         cy += MC(26);
 
         m_text_c(fb, W, H, cx, cy, "MEM", g_shell.colors.text_secondary, MC(11));
         hs_itoa(mpu, tmp); strcpy(v, tmp); strcpy(v + hs_strlen(v), "%");
         m_text_c(fb, W, H, cx + MC(46), cy, v, 0x9C6ADE, MC(11));
-        m_draw_curve(fb, W, H, gx, cy, gw, gh, m_mem_hist, 0x9C6ADE, MC(100));
+        m_draw_curve(fb, W, H, gx, cy, gw, gh, m_mem_hist, 0x9C6ADE, 100);
         cy += MC(26);
 
         m_text_c(fb, W, H, cx, cy, "RX", g_shell.colors.text_secondary, MC(11));
         hs_itoa((int)(nrxr / 1024), tmp); strcpy(v, tmp); strcpy(v + hs_strlen(v), "K");
         m_text_c(fb, W, H, cx + MC(46), cy, v, 0x4A9EEC, MC(11));
-        m_draw_curve(fb, W, H, gx, cy, gw, gh, m_rx_hist, 0x4A9EEC, MC(256));
+        m_draw_curve(fb, W, H, gx, cy, gw, gh, m_rx_hist, 0x4A9EEC, 256);
         cy += MC(26);
 
         m_text_c(fb, W, H, cx, cy, "TX", g_shell.colors.text_secondary, MC(11));
         hs_itoa((int)(ntxr / 1024), tmp); strcpy(v, tmp); strcpy(v + hs_strlen(v), "K");
         m_text_c(fb, W, H, cx + MC(46), cy, v, 0xE0A44E, MC(11));
-        m_draw_curve(fb, W, H, gx, cy, gw, gh, m_tx_hist, 0xE0A44E, MC(256));
+        m_draw_curve(fb, W, H, gx, cy, gw, gh, m_tx_hist, 0xE0A44E, 256);
         cy += MC(20);   /* V0.59.4: 最后一条曲线与 THREADS 之间留开, 否则贴着 */
     }
 
