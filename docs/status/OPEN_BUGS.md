@@ -2,7 +2,7 @@
 title: 赫普OS 未关闭问题清单
 status: active
 sys_version: 0.58.0
-updated: 2026-11-13（SEC-19 闭合、OBS-01→BUG-49 关闭、BUG-13 关闭、OPEN-01 实测关闭）
+updated: 2026-11-13（SEC-19 闭合、OBS-01→BUG-49 关闭、BUG-13 关闭、OPEN-01 实测关闭、SEC-21/SEC-23 复核关闭）
 owner: status
 source_of_truth: kernel/arch/x86_64/
 ---
@@ -237,7 +237,11 @@ source_of_truth: kernel/arch/x86_64/
   共享地址空间、独立用户栈、子 rax=0、交替推进计数器四项成立。
 - 剩余：进程收尾阶段的 #PF 未收敛，见 SEC-21；两次运行有一次 FAIL 的波动同源。
 
-## SEC-21 用户线程进程收尾阶段 rip=0 的 #PF
+## SEC-21 用户线程进程收尾阶段 rip=0 的 #PF（**已关闭，V0.57.7 修复 + v0.59.1 复核**）
+
+> **复核记录（v0.59.1）**：修复早已落地（内核栈槽位复用不随退出释放 + crt0 改用
+> 64 位 `exit()`），本轮连跑 10 次回归 `EXC=0` 一致、`PASS=1` 10/10，未再出现
+> `rip=0x0` 取指 #PF。账簿状态补齐为「已关闭」。
 
 - 现象：clone 测试父线程打印 `PASS` 后，紧接着
   `[EXCEPTION] vector=0xE error=0x15 rip=0x0 / CR2=0x0`，
@@ -285,7 +289,15 @@ source_of_truth: kernel/arch/x86_64/
   `process64_get_ps_fields()` 取值后，实机输出 idle/kbeat/khouse/kstat 四行
   正常（PAGES=4），ps 已正式进 autorun。
 
-## SEC-23 clone 测试偶发 `child never ran` —— 部分修复（V0.58.2），仍有偶发复发（见 OBS-01）
+## SEC-23 clone 测试偶发 `child never ran` —— **已关闭（v0.59.1）**
+
+> **关闭记录（v0.59.1）**：本条有两层原因。第一层（时间片归属没记录，`g_ut_slice`
+> 被 `g_ut_slice_owner` 当场复位）早在 V0.58.2 修好；第二层「约 5% 启动仍失败」
+> 指向中断控制器投递 —— 校准失败的那次启动里 CPL=3 的时钟中断为零 —— 即
+> **OBS-01**，本轮已定位为 **BUG-49**（APIC 校准依赖 PIT 中断投递）并修复。
+> 复核：连跑 10 次回归 `PASS=1` 10/10、`timercal=0` 10/10、`FAIL=0`、
+> `EXC=0`，`[CLONE] aspace kept` 后不再出现异常终止。第二层原因消失，
+> 本条随之关闭。
 
 > **V0.58.4 状态更新**：本条的调度器时间片归因是**真实缺陷，修法有效**，但它不是
 > 唯一原因。之后仍有约 5% 的启动出现同样的 `FAIL: child never ran`，根因指向
