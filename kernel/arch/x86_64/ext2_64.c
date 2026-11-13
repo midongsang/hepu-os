@@ -5,6 +5,7 @@
  * ========================================================================== */
 
 #include <stdint.h>
+#include "spinlock.h"
 #include <stddef.h>
 #include <string.h>
 
@@ -58,6 +59,36 @@ static uint32_t ext2_partition_offset = 0;  /* 分区起始LBA（单镜像模式
 /* 共享算法上下文（统一源码树P0-2） */
 static ext2_context_t ext2_ctx;
 
+/* SB-14: 文件系统表锁。
+ * ext2 只在进程上下文（系统调用）被调用，不会从收包中断重入；但路径里
+ * read_block -> lookup -> read_block 会自嵌套，所以用「per-CPU 深度计数 +
+ * 只最外层 cli/加锁」：内层拿的是同一把锁，解锁只发生在深度归零那一次。
+ * 不用 irqsave 嵌套，是因为 spinlock_unlock_irqrestore() 在内层就会把
+ * 中断提前打开（锁其实还拿着）。 */
+#define FS_LOCK_MAX_CPU 16
+static spinlock_t g_fs_lock;
+static int g_fs_depth[FS_LOCK_MAX_CPU];
+
+static inline uint32_t fs_cpu_id(void)
+{
+    extern uint32_t apic64_get_id(void);
+    uint32_t c = apic64_get_id();
+    return c < FS_LOCK_MAX_CPU ? c : 0;
+}
+static inline uint64_t fs_lock_enter(void)
+{
+    uint32_t c = fs_cpu_id();
+    if (g_fs_depth[c]++ == 0) return spinlock_lock_irqsave(&g_fs_lock);
+    return 0;
+}
+static inline void fs_lock_exit(uint64_t flags)
+{
+    uint32_t c = fs_cpu_id();
+    if (g_fs_depth[c] > 0 && --g_fs_depth[c] == 0)
+        spinlock_unlock_irqrestore(&g_fs_lock, flags);
+}
+
+
 /* ============================================================================
  * V0.13.48: ext2 块缓存（LRU, 64槽）
  * 大文件连续读时块命中缓存，避免每块都走磁盘裸读（P0 存储验收项）
@@ -92,19 +123,23 @@ static void ext2_cache_init(void)
 /* 失效指定块的缓存（写后调用） */
 void ext2_cache_invalidate(uint32_t block)
 {
+    uint64_t fs_f = fs_lock_enter();
     for (int i = 0; i < EXT2_CACHE_SLOTS; i++) {
         if (ext2_cache[i].block == block) {
             ext2_cache[i].block = 0xFFFFFFFF;
         }
     }
+    fs_lock_exit(fs_f);
 }
 
 /* V0.13.51: 清空全部缓存槽（内存压力回收） */
 void ext2_cache_flush_all(void)
 {
+    uint64_t fs_f = fs_lock_enter();
     for (int i = 0; i < EXT2_CACHE_SLOTS; i++) {
         ext2_cache[i].block = 0xFFFFFFFF;
     }
+    fs_lock_exit(fs_f);
 }
 
 /* V0.13.51: 已用缓存槽数（内存压力统计） */
@@ -135,7 +170,7 @@ void ext2_64_set_partition_offset(uint32_t lba)
 }
 
 /* 读取一个块到缓冲区 */
-static int ext2_read_block(uint32_t block, uint8_t *buffer)
+static int ext2_read_block_inner(uint32_t block, uint8_t *buffer)
 {
     uint32_t lba = block * (ext2_block_size / EXT2_SECTOR_SIZE) + ext2_partition_offset;
     uint8_t count = ext2_block_size / EXT2_SECTOR_SIZE;
@@ -177,6 +212,15 @@ static int ext2_read_block(uint32_t block, uint8_t *buffer)
         }
     }
     return ret;
+}
+
+/* SB-14: ext2_read_block 整段持 fs 锁（内层重入由 per-CPU 深度计数吸收） */
+static int ext2_read_block(uint32_t block, uint8_t *buffer)
+{
+    uint64_t fs_f = fs_lock_enter();
+    int r = ext2_read_block_inner(block, buffer);
+    fs_lock_exit(fs_f);
+    return r;
 }
 
 /* 读取inode */
@@ -357,7 +401,7 @@ static int ext2_find_in_dir(ext2_inode_t *dir_inode, const char *name, uint32_t 
 }
 
 /* 按路径查找inode */
-static int ext2_lookup(const char *path, uint32_t *ino)
+static int ext2_lookup_inner(const char *path, uint32_t *ino)
 {
     if (ext2_use_shared_algo) {
         return ext2_algo_lookup(&ext2_ctx, path, ino);
@@ -398,6 +442,15 @@ static int ext2_lookup(const char *path, uint32_t *ino)
 
     *ino = current;
     return 0;
+}
+
+/* SB-14: ext2_lookup 整段持 fs 锁（内层重入由 per-CPU 深度计数吸收） */
+static int ext2_lookup(const char *path, uint32_t *ino)
+{
+    uint64_t fs_f = fs_lock_enter();
+    int r = ext2_lookup_inner(path, ino);
+    fs_lock_exit(fs_f);
+    return r;
 }
 
 /* 初始化ext2文件系统 */
@@ -684,7 +737,7 @@ int ext2_64_get_fs_info_ex(uint64_t *total_blocks, uint64_t *free_blocks,
 /* V0.13.57: 多实例挂载接口 */
 const char *ext2_64_resolve_path(const char *path);
 
-int ext2_64_read_file(const char *path, uint8_t *buffer, uint32_t max_size)
+int ext2_64_read_file_inner(const char *path, uint8_t *buffer, uint32_t max_size)
 {
     /* V0.13.57: 挂载点前缀解析 (/cfg /data) */
     const char *rpath = ext2_64_resolve_path(path);
@@ -733,8 +786,17 @@ int ext2_64_read_file(const char *path, uint8_t *buffer, uint32_t max_size)
     return size;
 }
 
+/* SB-14: ext2_64_read_file 事务级持锁（位图/目录项的「读-改-写」不能跨锁交错） */
+int ext2_64_read_file(const char *path, uint8_t *buffer, uint32_t max_size)
+{
+    uint64_t fs_f = fs_lock_enter();
+    int r = ext2_64_read_file_inner(path, buffer, max_size);
+    fs_lock_exit(fs_f);
+    return r;
+}
+
 /* 从指定偏移读取文件 - V0.10.24 */
-int ext2_64_read_file_offset(const char *path, uint8_t *buffer, uint32_t max_size, uint32_t offset)
+int ext2_64_read_file_offset_inner(const char *path, uint8_t *buffer, uint32_t max_size, uint32_t offset)
 {
     /* V0.13.57: 挂载点前缀解析 (/cfg /data) */
     const char *rpath = ext2_64_resolve_path(path);
@@ -778,18 +840,36 @@ int ext2_64_read_file_offset(const char *path, uint8_t *buffer, uint32_t max_siz
     return buf_offset;
 }
 
+/* SB-14: ext2_64_read_file_offset 事务级持锁（位图/目录项的「读-改-写」不能跨锁交错） */
+int ext2_64_read_file_offset(const char *path, uint8_t *buffer, uint32_t max_size, uint32_t offset)
+{
+    uint64_t fs_f = fs_lock_enter();
+    int r = ext2_64_read_file_offset_inner(path, buffer, max_size, offset);
+    fs_lock_exit(fs_f);
+    return r;
+}
+
 /* ============================================================================
  * ext2写支持
  * ========================================================================== */
 
 /* 写入一个块到磁盘 */
-static int ext2_write_block(uint32_t block, const uint8_t *buffer)
+static int ext2_write_block_inner(uint32_t block, const uint8_t *buffer)
 {
     uint32_t lba = block * (ext2_block_size / EXT2_SECTOR_SIZE) + ext2_partition_offset;
     uint8_t count = ext2_block_size / EXT2_SECTOR_SIZE;
     /* V0.13.48: 写前失效对应块缓存（读一致性） */
     ext2_cache_invalidate(block);
     return storage_hal_write(lba, count, buffer);
+}
+
+/* SB-14: ext2_write_block 整段持 fs 锁（内层重入由 per-CPU 深度计数吸收） */
+static int ext2_write_block(uint32_t block, const uint8_t *buffer)
+{
+    uint64_t fs_f = fs_lock_enter();
+    int r = ext2_write_block_inner(block, buffer);
+    fs_lock_exit(fs_f);
+    return r;
 }
 
 /* 分配一个空闲块 */
@@ -1113,7 +1193,7 @@ static uint32_t ext2_count_meta_blocks(const ext2_inode_t *inode)
 }
 
 /* 写入文件内容 - V0.10.22: 支持二级间接块（最大文件256MB+） */
-int ext2_64_write_file(const char *path, const uint8_t *data, uint32_t size)
+int ext2_64_write_file_inner(const char *path, const uint8_t *data, uint32_t size)
 {
     /* V0.13.57: 挂载点前缀解析 (/cfg /data) */
     const char *rpath = ext2_64_resolve_path(path);
@@ -1297,10 +1377,19 @@ int ext2_64_write_file(const char *path, const uint8_t *data, uint32_t size)
     return (blocks_written == blocks_needed) ? size : blocks_written * ext2_block_size;
 }
 
+/* SB-14: ext2_64_write_file 事务级持锁（位图/目录项的「读-改-写」不能跨锁交错） */
+int ext2_64_write_file(const char *path, const uint8_t *data, uint32_t size)
+{
+    uint64_t fs_f = fs_lock_enter();
+    int r = ext2_64_write_file_inner(path, data, size);
+    fs_lock_exit(fs_f);
+    return r;
+}
+
 /* 从偏移写入文件 - V0.13.59 (swap 随机页写基础)
  * 复用 write_file 的三级间接块分配循环, 支持首/尾块读改写
  * 返回写入字节数, 失败返回-1 */
-int ext2_64_write_file_offset(const char *path, const uint8_t *data,
+static int ext2_64_write_file_offset_inner(const char *path, const uint8_t *data,
                               uint32_t size, uint32_t offset)
 {
     /* V0.13.57: 挂载点前缀解析 (/cfg /data) */
@@ -1490,8 +1579,18 @@ int ext2_64_write_file_offset(const char *path, const uint8_t *data,
     return size;
 }
 
+/* SB-14: 写偏移事务级持锁 */
+int ext2_64_write_file_offset(const char *path, const uint8_t *data,
+                              uint32_t size, uint32_t offset)
+{
+    uint64_t fs_f = fs_lock_enter();
+    int r = ext2_64_write_file_offset_inner(path, data, size, offset);
+    fs_lock_exit(fs_f);
+    return r;
+}
+
 /* 删除文件 - V0.10.18: 释放数据块+inode+目录项 */
-int ext2_64_delete_file(const char *path)
+int ext2_64_delete_file_inner(const char *path)
 {
     /* V0.13.57: 挂载点前缀解析 (/cfg /data) */
     const char *rpath = ext2_64_resolve_path(path);
@@ -1674,8 +1773,17 @@ int ext2_64_delete_file(const char *path)
     return 0;
 }
 
+/* SB-14: ext2_64_delete_file 事务级持锁（位图/目录项的「读-改-写」不能跨锁交错） */
+int ext2_64_delete_file(const char *path)
+{
+    uint64_t fs_f = fs_lock_enter();
+    int r = ext2_64_delete_file_inner(path);
+    fs_lock_exit(fs_f);
+    return r;
+}
+
 /* 删除目录 - V0.10.21: 检查空目录+释放块+释放inode+删除目录项 */
-int ext2_64_delete_dir(const char *path)
+int ext2_64_delete_dir_inner(const char *path)
 {
     /* V0.13.57: 挂载点前缀解析 (/cfg /data) */
     const char *rpath = ext2_64_resolve_path(path);
@@ -1799,6 +1907,15 @@ int ext2_64_delete_dir(const char *path)
     }
 
     return 0;
+}
+
+/* SB-14: ext2_64_delete_dir 事务级持锁（位图/目录项的「读-改-写」不能跨锁交错） */
+int ext2_64_delete_dir(const char *path)
+{
+    uint64_t fs_f = fs_lock_enter();
+    int r = ext2_64_delete_dir_inner(path);
+    fs_lock_exit(fs_f);
+    return r;
 }
 
 /* 路径查找（公开接口） */
@@ -1931,7 +2048,7 @@ int ext2_64_list_dir_entries_ex(const char *path, char names[][256], uint8_t *ty
 }
 
 /* 创建文件（公开接口） */
-int ext2_64_create_file(const char *path)
+int ext2_64_create_file_inner(const char *path)
 {
     /* V0.13.57: 挂载点前缀解析 (/cfg /data) */
     const char *rpath = ext2_64_resolve_path(path);
@@ -1940,8 +2057,17 @@ int ext2_64_create_file(const char *path)
     return ext2_create_file(rpath, 0x81A4) > 0 ? 0 : -1;  /* 普通文件，rw-r--r-- */
 }
 
+/* SB-14: ext2_64_create_file 事务级持锁（位图/目录项的「读-改-写」不能跨锁交错） */
+int ext2_64_create_file(const char *path)
+{
+    uint64_t fs_f = fs_lock_enter();
+    int r = ext2_64_create_file_inner(path);
+    fs_lock_exit(fs_f);
+    return r;
+}
+
 /* 创建目录（公开接口） */
-int ext2_64_create_dir(const char *path)
+int ext2_64_create_dir_inner(const char *path)
 {
     /* V0.13.57: 挂载点前缀解析 (/cfg /data) */
     const char *rpath = ext2_64_resolve_path(path);
@@ -1950,8 +2076,17 @@ int ext2_64_create_dir(const char *path)
     return ext2_create_file(rpath, 0x41ED) > 0 ? 0 : -1;  /* 目录，rwxr-xr-x */
 }
 
+/* SB-14: ext2_64_create_dir 事务级持锁（位图/目录项的「读-改-写」不能跨锁交错） */
+int ext2_64_create_dir(const char *path)
+{
+    uint64_t fs_f = fs_lock_enter();
+    int r = ext2_64_create_dir_inner(path);
+    fs_lock_exit(fs_f);
+    return r;
+}
+
 /* V0.13.40: 新建文件夹 (文件管理器 New Folder 入口) */
-int ext2_64_mkdir(const char *path)
+int ext2_64_mkdir_inner(const char *path)
 {
     /* V0.13.57: 挂载点前缀解析 (/cfg /data) */
     const char *rpath = ext2_64_resolve_path(path);
@@ -1959,9 +2094,18 @@ int ext2_64_mkdir(const char *path)
     return ext2_64_create_dir(rpath);
 }
 
+/* SB-14: ext2_64_mkdir 事务级持锁（位图/目录项的「读-改-写」不能跨锁交错） */
+int ext2_64_mkdir(const char *path)
+{
+    uint64_t fs_f = fs_lock_enter();
+    int r = ext2_64_mkdir_inner(path);
+    fs_lock_exit(fs_f);
+    return r;
+}
+
 /* V0.13.40: 重命名 (文件管理器 Rename 入口)
  * 返回: 0成功 / -2新名冲突 / -3旧条目未找到 / -4新增目录项失败 */
-int ext2_64_rename(const char *oldpath, const char *newpath)
+int ext2_64_rename_inner(const char *oldpath, const char *newpath)
 {
     /* V0.13.57: 挂载点前缀解析 (/cfg /data) */
     const char *rp_old = ext2_64_resolve_path(oldpath);
@@ -2038,6 +2182,15 @@ int ext2_64_rename(const char *oldpath, const char *newpath)
 
     if (ext2_add_dir_entry(new_dir_ino, new_name, ino, ftype) != 0) return -4;
     return 0;
+}
+
+/* SB-14: ext2_64_rename 事务级持锁（位图/目录项的「读-改-写」不能跨锁交错） */
+int ext2_64_rename(const char *oldpath, const char *newpath)
+{
+    uint64_t fs_f = fs_lock_enter();
+    int r = ext2_64_rename_inner(oldpath, newpath);
+    fs_lock_exit(fs_f);
+    return r;
 }
 
 /* V0.13.8 P6: 目录条目结构 + 读取到数组 (供 GUI 文件管理器显示真实 ext2) */
@@ -2485,7 +2638,7 @@ int ext2_64_stat(const char *path, uint32_t *size, uint8_t *isdir)
 /* 递归删除文件/目录 (文件管理器 Delete 用)
  * 非递归实现: 用路径栈式下降，避免内核栈上递归 + 大块缓冲叠加。
  * 返回 0=成功, -1=失败, -2=目录层级过深 */
-int ext2_64_delete_tree(const char *path)
+int ext2_64_delete_tree_inner(const char *path)
 {
     if (!path || path[0] != '/') return -1;
     uint32_t sz = 0;
@@ -2542,6 +2695,15 @@ int ext2_64_delete_tree(const char *path)
         }
     }
     return 0;
+}
+
+/* SB-14: ext2_64_delete_tree 事务级持锁（位图/目录项的「读-改-写」不能跨锁交错） */
+int ext2_64_delete_tree(const char *path)
+{
+    uint64_t fs_f = fs_lock_enter();
+    int r = ext2_64_delete_tree_inner(path);
+    fs_lock_exit(fs_f);
+    return r;
 }
 
 
