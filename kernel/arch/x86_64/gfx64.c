@@ -91,6 +91,18 @@ void gfx64_present(void)
 }
 
 
+/* P0 脏区: 只把后台缓冲的一块矩形提交到前台。
+ * 光标每移动一次原实现都会整帧重绘 + 整帧 8MB 拷贝, 实际只为了搬一个 64x64 的光标;
+ * 这里给光标合成提供"只拷两块"的路径。加锁与 gfx64_present 一致, 避免和整帧提交互斥。 */
+void gfx64_present_region(int x, int y, int w, int h)
+{
+    if (!gfx_initialized || !back_buffer) return;
+    if (w <= 0 || h <= 0) return;
+    uint64_t gfx_f = spinlock_lock_irqsave(&g_gfx_lock);
+    gfx64_blit_to(front_buffer, back_buffer, x, y, w, h);
+    spinlock_unlock_irqrestore(&g_gfx_lock, gfx_f);
+}
+
 /* 复制背景缓冲区域到帧缓冲（整行64位复制，分层渲染用） */
 void gfx64_blit_to(uint8_t *dstfb, uint8_t *bg, int x, int y, int w, int h)
 {

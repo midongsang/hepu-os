@@ -4888,6 +4888,7 @@ static int g_content_dirty = 1;
 static int g_last_mx = -1, g_last_my = -1;
 /* P0 观测: 重绘/跳过帧计数, 用于证明按需合成生效 */
 static uint32_t g_redraw_frames = 0, g_skip_frames = 0;
+static uint32_t g_cursor_frames = 0;   /* P0: 只刷光标的帧数(未整帧重绘) */
 /* P0 演示: 启动时灵动岛展开->收回一次, 展示缓动 */
 static int g_welcome_frame = -1;
 
@@ -5181,8 +5182,42 @@ void hpdesk_render(void)
             vga_printf("[P0] frames: redraw=%d skip=%d skip_pct=%d\n",
                        (int)g_redraw_frames, (int)g_skip_frames,
                        (int)(g_skip_frames * 100 / (g_redraw_frames + g_skip_frames + 1)));
+            vga_printf("[P0] cursor-only frames=%d\n", (int)g_cursor_frames);
+            g_cursor_frames = 0;
             g_redraw_frames = g_skip_frames = 0;
         }
+        return;
+    }
+    /* P0 脏区: 光标局部刷新快速路径。
+     * 鼠标每移动一次都会进重绘, 原实现要重画壁纸+全部窗口+面板, 再整帧拷 8MB(1920x1080x4),
+     * 目的只是把一个 64x64 的光标挪个位置。这里只做三件事:
+     *   1) 用后台缓冲(干净桌面, 不含光标/菜单)盖掉旧光标矩形
+     *   2) 同理铺一下新位置
+     *   3) 只在前台画光标
+     * 前提: 无内容变化、无动画、右键菜单未展开(g_ctx.open 时菜单在 as 前台叠加层, 不能只刷光标)。
+     * 光标最大 64x64(CUR_MAX_DIM), 150% 缩放约 96, 取 128 留余量。 */
+    if (!g_content_dirty && !animating && mouse_moved && !g_ctx.open) {
+        const int curb = 128, cboff = 16;
+        int ox = g_last_mx - cboff, oy = g_last_my - cboff;
+        int nx = mx - cboff, ny = my - cboff;
+        if (g_last_mx >= 0)
+            gfx64_present_region(ox, oy, curb, curb);   /* 擦旧光标 */
+        gfx64_present_region(nx, ny, curb, curb);       /* 铺新背景 */
+        gfx64_set_target_front();
+        hs_cursor_init_once();
+        {
+            extern void cursor64_set_kind(int kind);
+            extern void cursor64_set_theme(int t);
+            extern void cursor64_set_scale(int pct);
+            cursor64_set_theme(g_shell.ui.cursor_theme);
+            cursor64_set_scale(g_ui_scale_pct);
+            cursor64_set_kind(hs_cursor_kind_at(mx, my));
+        }
+        cursor64_draw(mx, my);
+        g_last_mx = mx; g_last_my = my;
+        g_cursor_frames++;
+        if (g_cursor_frames == 1)
+            vga_printf("[P0] cursor-only fast path active (x=%d y=%d)\n", mx, my);
         return;
     }
     g_redraw_frames++;

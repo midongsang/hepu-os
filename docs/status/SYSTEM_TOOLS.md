@@ -120,3 +120,10 @@
   判定后走 `shell_execute()`，shell64 里的全部命令（ps/df/dmesg/ss/pstree…）在桌面终端里可用。
 
 文件默认留空 —— 空文件不执行任何命令，只在需要取证时写进去。
+
+## 取证通道补充（V0.59.4 实测）
+
+HMP `mouse_move dx dy`（**相对位移**）在本环境可用：`socat`/python 连 monitor socket 发
+`mouse_move 40 6` 即可推动光标，桌面 `g_shell.mouse_x/y` 真实更新（实测 x=592 y=396）。
+之前失败的是 QMP 的**绝对坐标**事件（`-device usb-mouse` 不吃 abs），不是相对位移。
+`screendump` + `mouse_move` 组合足以取证"光标/悬停/局部刷新"类改动。
