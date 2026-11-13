@@ -145,7 +145,7 @@ static int shell_read_line(char *buf, int max)
                 }
             } else if (c == '\t') { /* Tab 补全 */
                 /* 简单补全：匹配常用命令 */
-                static const char *cmds[] = {"help","hepu","ls","cat","pwd","echo","ps","cd","mkdir","rm","clear","date","uname","reboot","sleep","exec","browser","scrapling","ifconfig","version","meminfo","free","top","mem","dev","sandbox","info","dmesg","sync","vmstat","pstree","id","who","w","lsblk","blkid","timedatectl","lscpu","lspci","lsusb","ss","htop",0};
+                static const char *cmds[] = {"help","hepu","ls","cat","pwd","echo","ps","cd","mkdir","rm","clear","date","uname","reboot","sleep","exec","browser","scrapling","ifconfig","version","meminfo","free","top","mem","dev","sandbox","info","dmesg","sync","vmstat","pstree","id","who","w","lsblk","blkid","timedatectl","lscpu","lspci","lsusb","ss","htop","kill","killall","renice","taskset",0};
                 char prefix[64]; int plen = 0;
                 int i = pos - 1;
                 while (i >= 0 && buf[i] != ' ') { i--; }
@@ -2390,6 +2390,93 @@ static void shell_cmd_who(int argc, char **argv)
     vga_puts("  (up)\n");
 }
 
+/* ---- 进程控制：kill / killall / renice / taskset ---- */
+static long shell_atol_local(const char *s)
+{
+    long v = 0; int neg = 0;
+    if (!s) return 0;
+    if (*s == '-') { neg = 1; s++; }
+    while (*s >= '0' && *s <= '9') { v = v * 10 + (*s - '0'); s++; }
+    return neg ? -v : v;
+}
+
+static void shell_cmd_kill(int argc, char **argv)
+{
+    extern int user_process_kill(int pid);
+    extern int process64_kill_pid(int pid, int code);
+    if (argc < 2) { vga_puts("usage: kill [-9] <pid>\n"); return; }
+    int sig = 15, idx = 1;
+    if (argv[1][0] == '-' && argv[1][1] == '9') { sig = 9; idx = 2; }
+    if (idx >= argc) { vga_puts("kill: missing pid\n"); return; }
+    int pid = (int)shell_atol_local(argv[idx]);
+    int rc = user_process_kill(pid);
+    if (rc != 0) rc = process64_kill_pid(pid, 128 + sig);
+    char num[16];
+    if (rc == 0) {
+        vga_puts("kill: pid "); shell_itoa(pid, num); vga_puts(num);
+        vga_puts(" terminated (sig "); shell_itoa(sig, num); vga_puts(num); vga_puts(")\n");
+    } else if (rc == -2) {
+        vga_puts("kill: refused (idle 或当前进程不允许终止)\n");
+    } else {
+        vga_puts("kill: no such process "); shell_itoa(pid, num); vga_puts(num); vga_puts("\n");
+    }
+}
+
+static void shell_cmd_killall(int argc, char **argv)
+{
+    extern int process64_kill_by_name(const char *name, int code);
+    if (argc < 2) { vga_puts("usage: killall <name>\n"); return; }
+    int n = process64_kill_by_name(argv[1], 128 + 9);
+    char num[16];
+    if (n < 0) { vga_puts("killall: bad name\n"); return; }
+    shell_itoa(n, num);
+    vga_puts("killall: "); vga_puts(num); vga_puts(" process(es) named ");
+    vga_puts(argv[1]); vga_puts(" terminated\n");
+    if (n == 0) vga_puts("  (当前进程不会被自己杀，改名后再试)\n");
+}
+
+static void shell_cmd_renice(int argc, char **argv)
+{
+    extern int process64_set_priority(int pid, int prio);
+    extern int process64_get_priority(int pid);
+    if (argc < 3) { vga_puts("usage: renice <prio 0-4> <pid>   (0=idle 2=normal 4=realtime)\n"); return; }
+    int prio = (int)shell_atol_local(argv[1]);
+    int pid = (int)shell_atol_local(argv[2]);
+    int old = process64_get_priority(pid);
+    int rc = process64_set_priority(pid, prio);
+    char num[16];
+    if (rc != 0) { vga_puts("renice: no such process 或 prio 超出 0-4\n"); return; }
+    vga_puts("renice: pid "); shell_itoa(pid, num); vga_puts(num);
+    vga_puts(" priority "); shell_itoa(old, num); vga_puts(num);
+    vga_puts(" -> "); shell_itoa(process64_get_priority(pid), num); vga_puts(num);
+    vga_puts("（时间片同步重算）\n");
+}
+
+static void shell_cmd_taskset(int argc, char **argv)
+{
+    extern int process64_set_affinity(int pid, int cpu);
+    extern int process64_get_affinity(int pid);
+    extern uint32_t smp_get_cpu_count(void);
+    char num[16];
+    if (argc >= 2 && argv[1][0] == '-' && argv[1][1] == 'p') {
+        int pid = (int)shell_atol_local(argv[2]);
+        int cpu = process64_get_affinity(pid);
+        if (cpu < 0) { vga_puts("taskset: no such process\n"); return; }
+        vga_puts("pid "); shell_itoa(pid, num); vga_puts(num);
+        vga_puts(" current affinity: cpu "); shell_itoa(cpu, num); vga_puts(num); vga_puts("\n");
+        return;
+    }
+    if (argc < 3) { vga_puts("usage: taskset <cpu> <pid> | taskset -p <pid>\n"); return; }
+    int cpu = (int)shell_atol_local(argv[1]);
+    int pid = (int)shell_atol_local(argv[2]);
+    int rc = process64_set_affinity(pid, cpu);
+    if (rc < 0) { vga_puts("taskset: no such process\n"); return; }
+    vga_puts("taskset: pid "); shell_itoa(pid, num); vga_puts(num);
+    vga_puts(" 亲和性 -> cpu "); shell_itoa(rc, num); vga_puts(num);
+    vga_puts("（共 "); shell_itoa((int)smp_get_cpu_count(), num); vga_puts(num); vga_puts(" 核）\n");
+    vga_puts("  注意: AP 调度尚未开放(SB-25)，绑到 AP 目前只记账、不迁移\n");
+}
+
 /* lsblk / blkid: MBR 分区表（partition64 只解析 MBR；GPT 盘会回报无签名） */
 typedef struct {
     int     present;
@@ -3194,6 +3281,10 @@ static shell_command_t shell_commands[] = {
     {"lsblk", shell_cmd_lsblk},
     {"blkid", shell_cmd_blkid},
     {"timedatectl", shell_cmd_timedatectl},
+    {"kill", shell_cmd_kill},
+    {"killall", shell_cmd_killall},
+    {"renice", shell_cmd_renice},
+    {"taskset", shell_cmd_taskset},
     /* 常用别名：linux 习惯名 -> 已有实现 */
     {"lscpu", shell_cmd_cpuinfo},
     {"lspci", shell_cmd_pci},

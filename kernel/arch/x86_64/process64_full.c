@@ -1101,12 +1101,19 @@ void process64_deliver_signals(uint64_t *kstack) {
     }
 }
 
-/* 修改进程优先级 */
+/* 修改进程优先级
+ * V0.59.3: 时间片要跟着一起重算 —— 旧实现只改了 priority，default_slice 仍是
+ * 创建时的值，调度器按 slice 判轮转，于是 renice 看起来生效、实际权重没变。
+ * 公式与 process64_create 保持一致。 */
 int process64_set_priority(int pid, int prio) {
     if (prio < 0 || prio >= PRIORITY_COUNT) return -1;
     for (int i = 0; i < MAX_PROCESSES; i++) {
         if (processes[i].pid == pid && processes[i].state != PROC_STATE_UNUSED) {
             processes[i].priority = prio;
+            processes[i].default_slice = DEFAULT_TIME_SLICE * (PRIORITY_REALTIME - prio + 1) / 2;
+            if (processes[i].default_slice < 10) processes[i].default_slice = 10;
+            if (processes[i].time_slice > processes[i].default_slice)
+                processes[i].time_slice = processes[i].default_slice;
             return 0;
         }
     }
@@ -1125,6 +1132,86 @@ int process64_count_by_env(int env) {
 }
 
 /* OOM killer：杀掉该域内存最大的进程（内部按 domain_id 过滤） */
+/* ============================================================================
+ * V0.59.3: 外部控制 API —— kill / killall / renice / taskset 的内核侧入口
+ *
+ * 只改 PCB 字段与状态，不碰栈、页表、CR3：真正的资源回收交给父进程 waitpid
+ * 或进程退出路径。两处同时释放同一块内存是这类"加一个 kill 却引出随机崩溃"
+ * 的典型来路，所以这里刻意只做标记。
+ * ========================================================================== */
+static int proc_name_eq(const char *a, const char *b)
+{
+    int i = 0;
+    while (a[i] && b[i] && a[i] == b[i]) i++;
+    return a[i] == 0 && b[i] == 0;
+}
+
+static process_t *proc_find(int pid)
+{
+    for (int i = 0; i < MAX_PROCESSES; i++) {
+        if (processes[i].pid == pid && processes[i].state != PROC_STATE_UNUSED) return &processes[i];
+    }
+    return 0;
+}
+
+/* 按 pid 终止：标 SIGKILL、置 ZOMBIE。返回 0 成功 / -1 无此进程 / -2 拒绝(idle 或自己) */
+int process64_kill_pid(int pid, int code)
+{
+    if (pid <= 0) return -2;                 /* idle 与 pid 0 不允许杀 */
+    if (pid == sched_cur_pid_internal()) return -2;
+    process_t *pr = proc_find(pid);
+    if (!pr) return -1;
+    pr->pending_signals |= (1 << 9);         /* SIGKILL 记账, 供信号分发看 */
+    pr->state = PROC_STATE_ZOMBIE;
+    pr->exit_code = code;
+    return 0;
+}
+
+/* 按名字终止：返回被杀数量 */
+int process64_kill_by_name(const char *name, int code)
+{
+    if (!name || !name[0]) return -1;
+    int cur = sched_cur_pid_internal();
+    int n = 0;
+    for (int i = 0; i < MAX_PROCESSES; i++) {
+        if (processes[i].state == PROC_STATE_UNUSED) continue;
+        if (processes[i].pid <= 0 || processes[i].pid == cur) continue;
+        if (!proc_name_eq(processes[i].name, name)) continue;
+        processes[i].pending_signals |= (1 << 9);
+        processes[i].state = PROC_STATE_ZOMBIE;
+        processes[i].exit_code = code;
+        n++;
+    }
+    return n;
+}
+
+/* 改 CPU 亲和性。注意本系统 AP 调度尚未开放（SB-25），绑到 AP 只是记账，
+ * 真正生效要等 SB-25 —— 命令输出里会明确提示，不假装成功。 */
+int process64_set_affinity(int pid, int cpu)
+{
+    extern uint32_t smp_get_cpu_count(void);
+    uint32_t cnt = smp_get_cpu_count();
+    if (cnt == 0) cnt = 1;
+    if (cpu < 0) cpu = 0;
+    if (cpu >= (int)cnt) cpu = (int)cnt - 1;
+    process_t *pr = proc_find(pid);
+    if (!pr) return -1;
+    pr->cpu_id = cpu;
+    return cpu;
+}
+
+int process64_get_priority(int pid)
+{
+    process_t *pr = proc_find(pid);
+    return pr ? pr->priority : -1;
+}
+
+int process64_get_affinity(int pid)
+{
+    process_t *pr = proc_find(pid);
+    return pr ? pr->cpu_id : -1;
+}
+
 int process64_oom_kill(int env) {
     int worst = -1;
     uint64_t worst_mem = 0;
