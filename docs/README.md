@@ -1,7 +1,7 @@
 ---
 title: 赫普OS 文档索引
 status: active
-sys_version: 0.58.0
+sys_version: 0.59.0
 updated: 2026-11-13
 generator: tools/gen_docs_index.py
 source_of_truth: frontmatter of docs/*
@@ -89,6 +89,7 @@ source_of_truth: frontmatter of docs/*
 - [FIXES 0.57.0](status/FIXES_0_57_0.md)
 - [FIXES 0.58.0](status/FIXES_0_58_0.md)
 - [赫普OS 未关闭问题清单](status/OPEN_BUGS.md)
+- [PROGRESS_0_59](status/PROGRESS_0_59.md)
 - [V0.33 开发路线板](status/PROGRESS_V033.md)
 - [VERSIONING](status/VERSIONING.md)
 

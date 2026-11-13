@@ -5,8 +5,8 @@
 [![Build](https://github.com/midongsang/hepu-os/actions/workflows/ci.yml/badge.svg)](https://github.com/midongsang/hepu-os/actions/workflows/ci.yml)
 [![Release](https://github.com/midongsang/hepu-os/actions/workflows/release.yml/badge.svg)](https://github.com/midongsang/hepu-os/actions/workflows/release.yml)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPLv3-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-v0.58.0-brightgreen.svg)](#当前版本)
-[![Kernel size](https://img.shields.io/badge/kernel-807KB-blue.svg)](#当前版本)
+[![Version](https://img.shields.io/badge/version-v0.59.0-brightgreen.svg)](#当前版本)
+[![Kernel size](https://img.shields.io/badge/kernel-852KB-blue.svg)](#当前版本)
 [![glibc 动态链接](https://img.shields.io/badge/glibc-✓-brightgreen.svg)](#核心特性)
 [![ext2](https://img.shields.io/badge/ext2-✓-brightgreen.svg)](#核心特性)
 [![SMP](https://img.shields.io/badge/SMP-4core-green.svg)](#核心特性)
@@ -17,18 +17,24 @@
 
 ## 当前版本
 
-**0.58.0** — 当前版本（版本号唯一事实源：`docs/status/VERSIONING.md` frontmatter）
+**0.59.0** — 当前版本（版本号唯一事实源：`docs/status/VERSIONING.md` frontmatter）
 
-本版把 `clone` 从"诚实返回 ENOSYS"做成真线程：用户线程成为独立调度单元（`uthread64`），
-共享父地址空间、独立用户栈、独立内核栈、子线程 `rax=0` 全部实证；并新增线程退出接口
-`SYS_HEPU_THREAD_EXIT`（235），子线程可正常结束而不带走整个进程。
+本版是桌面层的收口：任务管理器拆成 `Processes` / `Devices` 两页（进程表八列带竖线、
+PRIO/CORE/TIME 有真实数据），四条 CPU/MEM/RX/TX 视图改成连续面积图并补满宽度，
+补齐全系统通用滚动条；窗口投影从"三层不透明色带"换成真卷积高斯 mask（按窗口短边
+自适应圆角/半径/偏移，Display 页可关闭）；新增内置第二套光标 Modern（48px 线稿双色
+压缩，17 个形态共 34.7KB）并随 UI 缩放档放大，Display 页可切换。
 
-![Hepu OS 桌面（1920×1080）](docs/assets/desktop-0.58.0.png)
+期间查清了一个把前两轮阴影工作全部作废的问题：`hpdesk.c` 把 `gfx64.c` 的宏当全局
+变量 `extern`，链接一直失败，而验证命令 `grep ' error'` 匹配不到 `undefined reference`，
+于是三次"改完看着还是假"其实都在跑旧镜像 —— 详见 `docs/status/PROGRESS_0_59.md`。
 
-*Hepu OS v0.58.0 桌面：System Info、Settings 与 Quick Controls*
+![Hepu OS 桌面（1920×1080）](docs/assets/cursor-modern-0.60.5.jpg)
 
-![任务管理器：线程统计区](docs/assets/taskmgr-0.58.0.png)
-*任务管理器摘要区：`THREADS total/active` 与最近一次 clone / thread_exit 记录*
+*Hepu OS v0.59.0 桌面：Display 页的投影/光标开关、Modern 光标、Quick Controls*
+
+![任务管理器：Processes 页](docs/assets/taskmgr-grid-processes-0.59.5.png)
+*任务管理器 Processes 页：八列 + 七条列竖线，标签栏固定在顶部*
 
 **线程自检实证**（串口，同一镜像）：
 
@@ -43,7 +49,7 @@ PASS: child ran in shared address space, both counters advanced
 
 ## 核心特性
 
-- **64位长模式内核**：约807KB（826,824字节），-O2优化，113个源码模块
+- **64位长模式内核**：约852KB（872,656字节），-O2优化，114个源码模块
 - **SMP多处理器**：4核并行，per-CPU调度，负载均衡，IPI核间中断
 - **双内核混合引导**：64位内核（约807KB）+ 32位内核（约3.85MB），启动菜单选择
 - **三重引导支持**：BIOS + UEFI + CD-ROM

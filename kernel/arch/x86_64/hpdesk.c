@@ -2305,7 +2305,7 @@ static void hs_settings_window_render(hs_window_t *w)
             k = strlen(mem_str);
             strcpy(mem_str + k, " MB");
         }
-        const char *values[] = {"Hepu OS v0.58.0", "64-bit SMP", cpu_str, mem_str,
+        const char *values[] = {"Hepu OS v" HEPU_OS_VERSION, "64-bit SMP", cpu_str, mem_str,
                                 "VBE 1024x768", "ext2"};
         for (int i = 0; i < 6; i++) {
             font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,

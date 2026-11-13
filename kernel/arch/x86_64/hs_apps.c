@@ -209,7 +209,7 @@ static void t_exec(const char *line)
     if (strcmp(cmd, "echo") == 0) { t_put(arg); return; }
     if (strcmp(cmd, "whoami") == 0) { t_put("user"); return; }
     if (strcmp(cmd, "ver") == 0 || strcmp(cmd, "version") == 0) {
-        t_put("Hepu OS v0.58.0 (x86_64)");
+        t_put("Hepu OS v" HEPU_OS_VERSION " (x86_64)");
         return;
     }
     if (strcmp(cmd, "date") == 0) {
@@ -3632,7 +3632,7 @@ static void m_render(hs_window_t *w)
         extern uint32_t smp_get_cpu_count(void);
         extern int ext2_get_usage_percent(void);
         char l1[128]; char t1[16];
-        strcpy(l1, "Hepu OS v0.58.0  |  64-bit SMP  |  ");
+        strcpy(l1, "Hepu OS v" HEPU_OS_VERSION "  |  64-bit SMP  |  ");
         uint32_t nc = smp_get_cpu_count();
         hs_itoa((int)(nc ? nc : 1), t1); strcpy(l1 + hs_strlen(l1), t1);
         strcpy(l1 + hs_strlen(l1), (nc == 1) ? " core" : " cores");
@@ -3970,7 +3970,7 @@ hs_window_t *hs_terminal_create(void)
                             hs_ui_sx(520), hs_ui_sy(340));
     if (t_win) {
         t_win->render = t_render;
-        t_put("Hepu Terminal v0.58.0");
+        t_put("Hepu Terminal v" HEPU_OS_VERSION);
         t_put("Type 'help' for commands.");
         extern void vga_puts(const char *s);
         vga_puts("[HSAPPS] terminal created\n");
