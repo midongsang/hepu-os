@@ -105,6 +105,15 @@ void desktop64_run(void)
         vga_puts("[DESKTOP64] Hepu Desktop started as default desktop\n");
     }
 
+#ifdef HEPU_ATA_HILBA_TEST
+    /* OPEN-01 取证：在主盘(slave)上做高 LBA 写读回环，通过即关闭该条。 */
+    {
+        extern int ide64_selftest_high_lba(int drive, uint64_t n_lba, const uint32_t *lbas);
+        static const uint32_t lbas[] = { 0u, 0x1000u, 0x20000u, 0x3FFFFu, 0x7F000u };
+        ide64_selftest_high_lba(1, (uint64_t)(sizeof(lbas) / sizeof(lbas[0])), lbas);
+    }
+#endif
+
 #ifdef HEPU_SEC19_PROBE
     /* SEC-19 端到端探测：真正跑一次 /bin/ps.elf —— 它的栈用量超过
      * 4KB，是 SEC-19 的原始复现程序。跑到 = 跨栈页正常；崩 = 会打 #PF

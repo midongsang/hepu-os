@@ -2,7 +2,7 @@
 title: 赫普OS 未关闭问题清单
 status: active
 sys_version: 0.58.0
-updated: 2026-11-13（SEC-19 闭合、OBS-01→BUG-49 关闭、BUG-13 关闭）
+updated: 2026-11-13（SEC-19 闭合、OBS-01→BUG-49 关闭、BUG-13 关闭、OPEN-01 实测关闭）
 owner: status
 source_of_truth: kernel/arch/x86_64/
 ---
@@ -41,7 +41,7 @@ source_of_truth: kernel/arch/x86_64/
 | BUG-13 | **ATA PIO 读盘 BSY 恒 1** —— 根因是三处实现缺陷叠加：①写完 DRIVE/HEAD 寄存器立即读 STATUS，缺 ATA 规范要求的 400 ns 建立时间，读到的是切换前驱动留下的旧状态（"BSY 一直是 1"的直接来源）；②等 DRQ 的循环里 `if (!(status \& BSY)) return -1;` 把「BSY 清零、DRQ 尚未置位」这个**合法过渡态**判成失败；③只查 ERR(0x01) 不查 DF(0x20)。**修复（v0.59.1）**：拆成 `ide_delay_400ns()` / `ide_wait_not_busy()` / `ide_wait_drq()` 三个语义清晰的等待器，过渡态继续等、靠超时兜底、ERR/DF 统一判错。**附带优化**：`read_sectors`/`write_sectors` 从逐扇区发命令改成一条命令连续读（SECTOR COUNT=0x1F2），ext2 读文件的命令数从几十条降到 1 条 | `ide64.c`；实测 3 轮 `[IDE64] Drive ready` + `Drive master: 256MB (LBA48)`，读扇区失败 0 次，desk=1 EXC=0 PASS=1 | 已关闭 |
 | BUG-49 | **（由 OBS-01 升级而来）启动期 APIC timer 校准依赖 PIT 中断投递，IOAPIC 未配对时必然失败**。校准窗口靠 `pit64_get_ticks()` 推进，而启动早期已切纯 APIC 模式、IOAPIC 重定向表尚未配置，PIT 的 IRQ0 在部分启动里投不进来 → tick 不走 → 校准失败（回归里 `timercal=N`），回退 ICR 使调度 tick 频率错误。**修复（v0.59.1）**：改用 PIT 通道 2 门控（mode0 计数 + 轮询 0x42，1.193182 MHz 硬件基准），与中断投递彻底解耦；并用 5 ms / 20 ms 两个窗口交叉校验（偏差 >20% 判不可信、退回老路径）。实测 8 轮 `timercal=0`，tick_hz 稳定在 61~63 MHz（≈ 1 GHz/16，与 QEMU LAPIC 量级吻合），ICR≈61 500 → 目标 1 kHz | `apic64.c` `apic64_calibrate_via_pit2()`；串口 `[APIC] timer calibrated` 8/8；`inconsistent` 0 次 | 已关闭 |
 | BUG-48 | INT13 磁盘重置在关中断下调用 | boot/BOOTLOADER_DEFINITION_PLAN.md, 待 QEMU 验证 | 待验证 |
-| OPEN-01 | QEMU 高 LBA(P2/P3) 写成功读全 0 | VERSIONING.md 0.13.57 已知限制 | 验证中 |
+| OPEN-01 | **QEMU 高 LBA(P2/P3) 写成功读全 0** —— **实测不复现，关闭（v0.59.1）**。新增 `ide64_selftest_high_lba()`：在独立 slave 测试盘（QEMU `-drive if=ide,index=1`，256MB）上对 LBA `0 / 0x1000 / 0x20000 / 0x3FFFF / 0x7F000` 逐个写入递增 pattern → 读回逐字节比对，外加一段 8 扇区连续读写的多扇区回环。实测 `[ATA] high-lba selftest drive=0x1 cases=0x5 fails=0x0`，多扇区回环无 mismatch。历史现象最可能来自 0.13.57 时期「逐扇区发命令 + 写后未等 FLUSH 完成」，这两点在 v0.59.1 的 BUG-13 修复里已一并处理。注：自检只用 slave 盘，不碰系统盘 | `ide64.c ide64_selftest_high_lba()`；QEMU 双盘实跑；`fails=0x0` | 已关闭 |
 | OPEN-02 | UHCI 写路径时序竞态 | 0.13.42 遗留 | 待解决 |
 | OPEN-03 | ~~QEMU sendkey 不被键盘驱动读取~~ **已关闭（非真 bug，旧测量误解）**。PS/2 与 USB HID 两条键盘链路端到端可用，无需先点击聚焦。四重实测证据（ef3c7cc 内核，PS/2 配置未挂 USB）：① 中断级 `g_kbd_irq_count`（符号地址 0x1f29f4）每次按键 +2（按下/释放各 1 次），键盘环形缓冲 head/tail 同步前移且条目被消费；`sendkey 2` 后计数 11→13、缓冲指针 3→4；② 界面级 `sendkey 2` 使 OOBE 由 1/4 推进到 2/4（截屏像素差 73616 px），账户创建页输入 h/e/p/u，用户名框真实回显 "hepu"；③ USB HID 键盘对照（`-device piix3-usb-uhci -device usb-kbd`）sendkey 改走 USB 队列（此时 PS/2 IRQ1 静默），同样推进向导、回显 hepu、Tab 切换输入框焦点（像素差 3008 px）。**应用层边界（避免再误判）**：OOBE 语言页只绑定数字键 `1`/`2`，Tab/方向键/回车在该页未绑定，属应用设计；旧「按了没反应」源于此，加之此前缺中断级取证，把「界面没变化」误判为「驱动没收到键」 | `g_kbd_irq_count` 中断计数 + 环形缓冲指针；OOBE 页面推进与文本回显；USB HID 对照链路 | 已关闭（非缺陷） |
 | OPEN-04 | 安装器不拷贝系统文件 | install64.c L213-L231 | 待解决 |

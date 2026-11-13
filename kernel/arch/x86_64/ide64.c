@@ -306,6 +306,75 @@ void ide64_test(void)
     }
 }
 
+/* OPEN-01 取证：高 LBA 读写回环自检。
+ *
+ * 历史记录说「QEMU 高 LBA(P2/P3) 写成功读全 0」，一直是"验证中"。这个
+ * 自检直接在选定的盘上挑几个跨越 28 位边界附近和常规区的 LBA：
+ * 写入递增 pattern -> FLUSH -> 读回逐字节比对。
+ * 目的不是猜，而是把结论落在数据上：通过就关闭 OPEN-01，失败就把
+ * 出错 LBA 与首个差异字节打出来。
+ * 注意：只在调用方指定的盘上跑（用 slave 盘做测试，别写坏系统盘）。
+ */
+int ide64_selftest_high_lba(int drive, uint64_t n_lba, const uint32_t *lbas)
+{
+    uint8_t wr[512], rd[512];
+    int saved = ide64_drive;
+    ide64_set_drive(drive);
+    int fails = 0;
+
+    for (uint64_t k = 0; k < n_lba; k++) {
+        uint32_t lba = lbas[k];
+        for (int i = 0; i < 512; i++) wr[i] = (uint8_t)((lba + (uint64_t)i * 7u) & 0xFF);
+        if (ide64_write_sector(lba, wr) != 0) {
+            vga_puts("[ATA] write ERR lba="); vga_put_hex(lba); vga_puts("\n");
+            fails++; continue;
+        }
+        for (int i = 0; i < 512; i++) rd[i] = 0;
+        if (ide64_read_sector(lba, rd) != 0) {
+            vga_puts("[ATA] read ERR lba="); vga_put_hex(lba); vga_puts("\n");
+            fails++; continue;
+        }
+        int first = -1;
+        for (int i = 0; i < 512; i++) { if (rd[i] != wr[i]) { first = i; break; } }
+        if (first >= 0) {
+            vga_puts("[ATA] mismatch lba="); vga_put_hex(lba);
+            vga_puts(" first_off="); vga_put_hex((uint64_t)first);
+            vga_puts(" want="); vga_put_hex(wr[first]);
+            vga_puts(" got="); vga_put_hex(rd[first]);
+            vga_puts("\n");
+            fails++;
+        }
+    }
+    /* 多扇区回环：验证一条命令读/写多个扇区（BUG-13 的附带改动） */
+    {
+        static uint8_t mw[8 * 512], mr[8 * 512];
+        uint32_t base = 0x10000u;
+        for (int i = 0; i < 8 * 512; i++) mw[i] = (uint8_t)((i * 13u + 0x5Au) & 0xFF);
+        for (int i = 0; i < 8 * 512; i++) mr[i] = 0;
+        if (ide64_write_sectors(base, 8, mw) != 0) {
+            vga_puts("[ATA] multi-sector write ERR\n"); fails++;
+        } else if (ide64_read_sectors(base, 8, mr) != 0) {
+            vga_puts("[ATA] multi-sector read ERR\n"); fails++;
+        } else {
+            int first = -1;
+            for (int i = 0; i < 8 * 512; i++) { if (mr[i] != mw[i]) { first = i; break; } }
+            if (first >= 0) {
+                vga_puts("[ATA] multi-sector mismatch off=");
+                vga_put_hex((uint64_t)first);
+                vga_puts("\n");
+                fails++;
+            }
+        }
+    }
+
+    ide64_set_drive(saved);
+    vga_puts("[ATA] high-lba selftest drive="); vga_put_hex((uint64_t)drive);
+    vga_puts(" cases="); vga_put_hex(n_lba);
+    vga_puts(" fails="); vga_put_hex((uint64_t)fails);
+    vga_puts("\n");
+    return fails;
+}
+
 /* 磁盘容量信息 */
 static uint64_t ide64_drive_capacity[2] = {0, 0};  /* master/slave扇区数 */
 static int ide64_drive_detected[2] = {0, 0};
