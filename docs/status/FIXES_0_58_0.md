@@ -752,3 +752,36 @@ AP 核仍然不调度。这一步只验证"加锁本身不改变单核行为"，
 - `context_switch_64` 是"保存当前到 old、从 new 恢复"，跨核切换同一进程会
   把栈指针写串，这条比前面两条更硬。
 
+
+### §1.100 SMP 阶段 A2：`current_pid` 改 per-CPU
+
+**为什么要改**。`current_pid` 原来是文件内的全局单值，被三个地方消费：
+`process64_get_current()` 的 PID 回退分支、`process64_create()` 记录
+`parent_pid`、以及 `process64_get_current_pid()`。SMP 下两个核各跑各的进程，
+单值会被另一个核覆盖 —— 本核拿到的"当前进程"其实是对方的。这在阶段 B 打开
+AP 调度后会立刻变成错误数据（尤其 `parent_pid` 记错，进程树就是乱的）。
+
+**改动**（全部在 `process64_full.c`，单核行为不变）：
+
+- `static int current_pid` → `static volatile int per_cpu_current_pid[16]`；
+- 新增 `sched_cur_pid_internal()`，按 `smp_get_current_cpu()` 取值（越界回落 0）；
+- 两处调度切换点改为 `per_cpu_current_pid[cur_cpu] = ...`（仍在校内，持锁）；
+- `process64_create` 的 `parent_pid` 改用 `sched_cur_pid_internal()`；
+- `process64_get_current()` 的回退分支用本 CPU 的 PID 查找；
+- init 时清零全部 16 项，进程释放时只清本 CPU 那一项。
+
+**顺手收拾的两个遗留**：
+
+1. `process64_get_current_pid()` 在 `syscall64_full.c` 里被 `extern` 声明过
+   **两次，但从未定义**。补上实现，按 CPU 返回。
+2. 文件里有个 `scheduler_lock`，只在 init 里 `spinlock_init` 过一次、
+   **从来没被 lock/unlock** —— 死变量，而且容易被误认为"调度路径已经有锁了"。
+   删掉；真正生效的是 §1.99 那个 `g_sched_lock`。
+
+**验证**（20 次，`-smp 2`，AP 调度仍关）：**20/20 PASS**，`desk` 稳定
+15~16 s，`P=1`、`F=0`、`EXC=0`、`ps` 正常、`calfail=0`。内核
+829,832 → **829,896 B**（+64 B）。
+
+**阶段 B 还剩的前置**：进程归属标记（`running_on`），用来防止两核选中同一个
+进程后跨核 `context_switch_64` 把栈指针写串。这一条不解决，`smp.c:140` 的
+`&& 0` 不能动。

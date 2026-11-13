@@ -156,17 +156,39 @@ int process64_snapshot(process64_stat_t *out, int max)
     }
     return count;
 }
-static int current_pid = 0;
+/* V0.58.4: current_pid 原来是全局单值。SMP 下两个核各跑各的进程，单值会被
+   另一个核覆盖 —— process64_get_current() 的 PID 回退分支、
+   process64_get_current_pid()、以及 process64_create 记录 parent_pid 都会拿到
+   "另一个核的当前进程"。改为 per-CPU。单核行为完全不变。 */
+static volatile int per_cpu_current_pid[16];  /* 16 = MAX_CPUS */
+
+/* 取当前 CPU 的当前 PID（内部用，不加锁：调度路径本来就在锁内调用） */
+/* helper 实现在 per_cpu_current_idx 之后 */
 static int next_pid = 1;
 static int process_initialized = 0;
 static uint64_t scheduler_ticks = 0;
 
 /* Per-CPU当前进程索引（每个CPU独立运行） */
 static volatile int per_cpu_current_idx[16];  /* 16 = MAX_CPUS */
+
+static int sched_cur_pid_internal(void)
+{
+    extern uint32_t smp_get_current_cpu(void);
+    uint32_t cur = smp_get_current_cpu();
+    return (cur < 16) ? per_cpu_current_pid[cur] : 0;
+}
+
+/* 导出当前 CPU 的当前进程 PID。V0.58.4: 原实现缺失（syscall64_full.c 里只
+   extern 声明过，从未定义），且语义是全局单值。现在按 CPU 取。 */
+int process64_get_current_pid(void)
+{
+    return sched_cur_pid_internal();
+}
 static int next_cpu_assign = 0;  /* 轮询分配CPU */
 
-/* 调度器自旋锁（保护多CPU下的共享进程表和就绪队列） */
-static spinlock_t scheduler_lock;
+/* V0.58.4: 这里原本有个 scheduler_lock，只在 init 里 spinlock_init 过一次、
+   从来没有被 lock/unlock —— 死变量。真正在保护调度路径的是 g_sched_lock
+   （见 process64_schedule 上方），删掉这个误导性的旧锁。 */
 
 /* 优先级队列（每个优先级一个链表头索引） */
 static int ready_queue[PRIORITY_COUNT][MAX_PROCESSES];
@@ -200,9 +222,6 @@ void process64_init(void)
     process_initialized = 1;
     scheduler_ticks = 0;
 
-    /* 初始化调度器自旋锁 */
-    spinlock_init(&scheduler_lock);
-
     /* 初始化per-CPU当前进程为idle（索引0） */
     for (int i = 0; i < 16; i++) {
         per_cpu_current_idx[i] = 0;
@@ -223,7 +242,7 @@ void process64_init(void)
     proc_memset(processes[0].name, 0, 32);
     processes[0].name[0] = 'i'; processes[0].name[1] = 'd';
     processes[0].name[2] = 'l'; processes[0].name[3] = 'e';
-    current_pid = 0;
+    for (int _i = 0; _i < 16; _i++) { per_cpu_current_pid[_i] = 0; }
 
     /* 初始化隔离域表（创建 kernel/system/gui/linux-compat-0 预置域） */
     domain64_init();
@@ -331,7 +350,7 @@ int process64_create(const char *name, void (*entry)(void), int priority)
     processes[idx].runtime = 0;
     processes[idx].context_switches = 0;
     processes[idx].create_time = scheduler_ticks;
-    processes[idx].parent_pid = current_pid;
+    processes[idx].parent_pid = sched_cur_pid_internal();
     processes[idx].domain_id = domain64_env_to_id(processes[idx].env_type);
 
     /* 复制名称。V0.58.3: 先清零再拷 —— 槽位复用时会残留上一条进程的名字尾巴,
@@ -514,9 +533,10 @@ process_t* process64_get_current(void)
     if (idx >= 0 && idx < MAX_PROCESSES && processes[idx].state != PROC_STATE_UNUSED) {
         return &processes[idx];
     }
-    /* 回退：通过PID查找 */
+    /* 回退：通过本 CPU 的当前 PID 查找 */
+    int cur_pid = (cur_cpu < 16) ? per_cpu_current_pid[cur_cpu] : 0;
     for (int i = 0; i < MAX_PROCESSES; i++) {
-        if (processes[i].pid == current_pid) {
+        if (processes[i].pid == cur_pid) {
             return &processes[i];
         }
     }
@@ -650,7 +670,7 @@ int process64_schedule(void)
 
         processes[idx].state = PROC_STATE_RUNNING;
         processes[idx].context_switches++;
-        current_pid = processes[idx].pid;
+        per_cpu_current_pid[cur_cpu] = processes[idx].pid;
         per_cpu_current_idx[cur_cpu] = idx;
 
         /* 实际上下文切换 —— 必须先释放调度锁并恢复调用方的 IF, 见函数头注释 */
@@ -683,7 +703,7 @@ int process64_schedule(void)
 
             processes[idx].state = PROC_STATE_RUNNING;
             processes[idx].context_switches++;
-            current_pid = processes[idx].pid;
+            per_cpu_current_pid[cur_cpu] = processes[idx].pid;
             per_cpu_current_idx[cur_cpu] = idx;
 
             {
@@ -828,7 +848,11 @@ void process64_exit(int exit_code)
     /* 释放资源 */
     proc->state = PROC_STATE_UNUSED;
     proc->pid = -1;
-    current_pid = 0;
+    {
+        extern uint32_t smp_get_current_cpu(void);
+        uint32_t _cur = smp_get_current_cpu();
+        if (_cur < 16) per_cpu_current_pid[_cur] = 0;
+    }
 }
 
 /* V0.34.1: 记录子进程为zombie (子进程exit时调用) */
