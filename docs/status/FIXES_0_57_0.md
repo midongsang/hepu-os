@@ -2627,3 +2627,49 @@ SEC-02、ROADMAP P0-2、OVERVIEW 3.6 的「clone 共享父页表」全部改为
 sec_test 两个确认干净的程序。
 
 ---
+## 迁移指引（V0.58.0）
+
+**上面这一段在 V0.58.0 已闭环，请勿再按旧结论行事。** 原文保留供追溯，
+下面是当前口径。
+
+### ps.elf 可以进 autorun
+
+原判断"SYS_HEPU_PS 返回后跨用户栈第二页 `0x6FFFEFE8` 即 `#PF`，属内核页表侧
+问题"**已被实测推翻** —— 把 ps 放进 autorun 实跑并没有复现 `#PF`。真正的问题
+是另外两处，与页表无关：
+
+1. **入口点错**（§1.96）。`ps.c` 只写 `main` 没有 `_start`，而 `user.ld` 用
+   `ENTRY(_start)`；ld 找不到符号时打印 `cannot find entry symbol _start;
+   defaulting to 0000000040000000` 并把入口退化成段起始地址。对 `ps.elf` 来说
+   `0x400000` 恰好是辅助函数 `put_int`，程序一启动就跑错函数。
+2. **结构体抄错**（§1.97）。`sys_ps()` 里自己写了一份 `typedef process_t`，
+   与 `process64_full.c` 的真实结构字段顺序完全不同（真实结构里 `name[32]`
+   排在 `process_context_t context`、`stack`、`page_table` 之后），导致 NAME
+   读到别的字段的字节（乱码）、`PAGES` 恒 0。
+
+修法：两文件各补 `_start { exit(main()); }`；内核提供
+`process64_get_ps_fields()` 让 `sys_ps()` 取值，不再复制结构定义；ps 输出
+改行缓冲避免与内核串口日志穿插。
+
+### 当前 autorun 列表
+
+`kernel_main_64.c` 里生效的列表是 **hello / sec_test / clone_test / ps** 四个
+（`shell64.c` 的 `[AUTOSTART]` 段是旧路径，不生效，别在那里插钩子）。
+实机输出：
+
+```
+PID PPID STATE PRI PAGES NAME
+0 0 RUN   0 0 idle
+1 0 READY 0 4 kbeat
+2 0 READY 2 4 khouse
+3 0 READY 3 4 kstat
+```
+
+### 其它已变化的口径
+
+- `SEC-19` 不再成立（无 #PF），`OPEN_BUGS.md` 中对应条目已改为"V0.58.3 已解决"。
+- `crt0.S` 从未被任何 Makefile 链接，是孤儿文件；每个程序自己定义 `_start`。
+  V0.58.3 已把它改成正确的 64 位版本，但仍未被链接，不要指望它起作用。
+- 详见 `FIXES_0_58_0.md` §1.96 / §1.97。
+
+---
