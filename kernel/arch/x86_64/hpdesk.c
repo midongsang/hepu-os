@@ -281,6 +281,7 @@ static char g_disp_msg[48];
 static const int g_disp_scale_pcts[4] = {100, 125, 150, 200};
 #define HS_DISP_BTN_W 64
 #define HS_DISP_BTN_GAP 72
+static int g_disp_shadow_y = 0;     /* Display 页阴影开关行 */
 static int g_settings_storage_ry = 0; /* V0.13.39: 存储管理行点击区域 */
 static int g_settings_reg_ry = 0;    /* V0.13.39: 注册表查看行 */
 static int g_settings_assoc_ry = 0;  /* V0.13.39: 文件关联查看行 */
@@ -585,6 +586,10 @@ void hs_display_save(void)
     buf[p++] = 'x';
     char b[8]; itoa_hs(g_shell.screen_height, b);
     j = 0; while (b[j]) { buf[p++] = b[j++]; }
+    buf[p++] = '\n';
+    const char *k3 = "shadow=";
+    j = 0; while (k3[j]) { buf[p++] = k3[j++]; }
+    buf[p++] = g_shell.ui.window_shadow ? '1' : '0';
     buf[p++] = '\n'; buf[p] = 0;
     int rc = ext2_64_write_file(HS_DISPLAY_CFG, (const uint8_t *)buf, (uint32_t)p);
     vga_printf("[DISPLAY] save %s rc=%d\n", HS_DISPLAY_CFG, rc);
@@ -662,7 +667,8 @@ int hs_display_load(void)
     int n = ext2_64_read_file(HS_DISPLAY_CFG, (uint8_t *)buf, sizeof(buf) - 1);
     if (n <= 0) return 0;
     buf[n] = 0;
-    /* 解析 scale=<num> */
+    int found = 0;
+    /* 解析 scale=<num> / shadow=0|1 */
     for (int i = 0; buf[i]; i++) {
         if (buf[i] == 's' && buf[i + 1] == 'c' && buf[i + 2] == 'a' &&
             buf[i + 3] == 'l' && buf[i + 4] == 'e' && buf[i + 5] == '=') {
@@ -670,9 +676,18 @@ int hs_display_load(void)
             while (buf[j] >= '0' && buf[j] <= '9') { v = v * 10 + (buf[j] - '0'); j++; }
             if (v >= 100 && v <= 250) { g_ui_scale_pct = v; g_disp_scale_auto = 0; }
             vga_printf("[DISPLAY] loaded scale=%d%% (manual)\n", g_ui_scale_pct);
-            return 1;
+            found = 1;
+        }
+        if (buf[i] == 's' && buf[i + 1] == 'h' && buf[i + 2] == 'o' &&
+            buf[i + 3] == 'a' && buf[i + 4] == 'd' && buf[i + 5] == 'o' &&
+            buf[i + 6] == 'w' && buf[i + 7] == '=') {
+            g_shell.ui.window_shadow = (buf[i + 8] == '1');
+            vga_printf("[DISPLAY] loaded shadow=%d\n", g_shell.ui.window_shadow);
+            found = 1;
+            i += 8;
         }
     }
+    return found;
 }
 
 /* 数字转字符串 */
@@ -1979,18 +1994,26 @@ static inline void sh_blit_slice(const hs_window_t *w, int mx0, int my0,
 static void hs_window_shadow(const hs_window_t *w)
 {
     if (w->width <= 0 || w->height <= 0) return;
+    if (!g_shell.ui.window_shadow) return;   /* Display 页可关闭 */
 
     /* 注意: hs_s() 依赖 g_ui_scale_pct, 而 Settings/任务管理器窗口在 hpdesk_init
      * 里就建好了, 那时缩放还没从配置读出来 —— 早先版本因此把半径算成 1px, mask 糊
      * 成一团废图, 又按尺寸命中了缓存, 于是一直是废的。这里做保底, 并把半径/圆角/
      * pad 一起纳入缓存指纹, 缩放变化后会重建。 */
+    /* 随窗口尺寸自适应: 圆角/模糊半径/光源偏移都按短边比例取, 再夹到区间内。
+     * 小窗口用 24px 半径会糊成一团, 大窗口用 12px 又干瘪 —— 定值都不合适。 */
+    int mn = w->width < w->height ? w->width : w->height;
     int rc = hs_s(g_shell.ui.corner_radius);
     if (rc < 4) rc = 16;
-    int pad = hs_s(3 * SH_BLUR_R) + 6;    /* 模糊支撑 3r, 必须 >= 它, 否则边带会切出硬边 */
-    int r = hs_s(SH_BLUR_R);
-    if (r < 8) r = 24;
-    int off = hs_sy(14);
-    if (off < 4) off = 14;
+    if (rc > mn / 8) rc = mn / 8;
+    if (rc < 5) rc = 5;
+    int r = mn / 18;                 /* 短边 1/18 左右的模糊 */
+    if (r < 10) r = 10;
+    if (r > 40) r = 40;
+    if (r > mn / 4) r = mn / 4;      /* 极小窗口别让阴影比窗口还大 */
+    int pad = 3 * r + 6;             /* 模糊支撑 3r, 必须 >= 它, 否则边带会切出硬边 */
+    int off = rc / 2 + 4;            /* 光源在正上方: 下移约半个圆角 */
+    if (off > 18) off = 18;
     int pk = ((rc * 4096 + pad) * 4096 + r) * 512 + off;
 
     if (sh_kw != w->width || sh_kh != w->height || sh_kpk != pk) {
@@ -2382,7 +2405,7 @@ static void hs_settings_window_render(hs_window_t *w)
             const char *pre2 = "Available: ";
             while (pre2[q]) { mb[q] = pre2[q]; q++; }
             for (uint32_t mi = 0; mi < cnt && shown < 3 && q < 100; mi++) {
-                uint32_t mw = ml[1 + mi * SETK(2)], mh = ml[2 + mi * SETK(2)];
+                uint32_t mw = ml[1 + mi * 2], mh = ml[2 + mi * 2];
                 if (mw < 100 || mw > 6000 || mh < 100 || mh > 6000) continue;
                 char t1[8], t2[8];
                 itoa_hs((int)mw, t1); itoa_hs((int)mh, t2);
@@ -2462,6 +2485,26 @@ static void hs_settings_window_render(hs_window_t *w)
                                on ? hs_on_accent() : g_shell.colors.panel_fg, SETK(12));
         }
         ry += SETK(44);
+
+        /* 窗口投影开关 */
+        {
+            char sb[40];
+            int q = 0;
+            const char *sp = "Window Shadows: ";
+            while (sp[q]) { sb[q] = sp[q]; q++; }
+            const char *sv = g_shell.ui.window_shadow ? "On" : "Off";
+            int q2 = 0; while (sv[q2]) sb[q++] = sv[q2++];
+            const char *sh = "  [click to toggle]";
+            q2 = 0; while (sh[q2]) sb[q++] = sh[q2++];
+            sb[q] = 0;
+            font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                               rx, ry, sb,
+                               g_shell.ui.window_shadow ? g_shell.colors.accent
+                                                        : g_shell.colors.text_secondary,
+                               SETK(12));
+            g_disp_shadow_y = ry;
+            ry += SETK(24);
+        }
 
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            rx, ry, "Refresh rate: firmware-controlled", g_shell.colors.panel_fg, SETK(11));
@@ -4183,6 +4226,18 @@ void hpdesk_handle_click(int x, int y)
                     }
                 }
             }
+            /* Display 页: 窗口投影开关 */
+            if (g_settings_page == 4 && g_disp_shadow_y > 0 &&
+                y >= g_disp_shadow_y - 4 && y <= g_disp_shadow_y + 22 &&
+                x >= w->x + hs_set_k(w, 16) && x <= w->x + w->width - hs_set_k(w, 16)) {
+                g_shell.ui.window_shadow = g_shell.ui.window_shadow ? 0 : 1;
+                g_content_dirty = 1;
+                extern void hs_display_save(void);
+                hs_display_save();
+                vga_printf("[SETTINGS] window shadow = %d\n", g_shell.ui.window_shadow);
+                return;
+            }
+
             /* V0.54.7: Appearance 页色板点击 — 取色器应用源色 */
             if (g_settings_page == 0) {
                 int sw_x = w->x + 156;       /* rx = cx+140 = w->x+16+140 */
@@ -5175,6 +5230,7 @@ int hpdesk_init(int width, int height)
     g_shell.ui.dock_margin_bottom = 12;
     g_shell.ui.dock_icon_size = 44;
     g_shell.ui.corner_radius = 16;
+    g_shell.ui.window_shadow = 1;
     g_shell.ui.font_small = 12;
     g_shell.ui.font_normal = 14;
     g_shell.ui.font_large = 18;

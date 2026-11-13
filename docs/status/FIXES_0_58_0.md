@@ -2207,3 +2207,52 @@ mask 在窗口外侧 30px 处只有 3/255。
 ```
 
 全程单调过渡，没有空缝和台阶。`off` 也进了缓存指纹（`((rc*4096+pad)*4096+r)*512+off`）。
+
+---
+
+## 1.123 阴影随窗口自适应 + Display 页开关（0.60.4）
+
+### 自适应
+
+原来圆角/模糊半径/下移量都是定值（`rc=16`、`r=24`、`off=14`）。定值对谁都合适不了：
+小窗口（300px）用 24px 半径，阴影糊得比窗口还宽；大窗口（900px）用 12px 又干瘪。
+改成按**短边**比例取：
+
+```c
+int mn = min(w->width, w->height);
+int rc  = clamp(hs_s(corner_radius), 5, mn / 8);   /* 圆角不超过短边 1/8 */
+int r   = clamp(mn / 18, 10, 40);                   /* 模糊半径 ≈ 短边 1/18 */
+if (r > mn / 4) r = mn / 4;                         /* 极小窗口别让阴影比窗口大 */
+int pad = 3 * r + 6;                                /* 支撑 3r, 少一点边带就切出硬边 */
+int off = min(rc / 2 + 4, 18);                      /* 光源在正上方, 下移约半个圆角 */
+```
+
+`off` 也进了缓存指纹，所以改尺寸/改缩放都会重建 mask。
+
+### Display 页开关
+
+`g_shell.ui` 加 `window_shadow`，Display 页 UI Scale 下面一行：
+
+```
+Window Shadows: On   [click to toggle]
+```
+
+点一下切换并立刻重绘（`g_content_dirty`），同时写进 `/display.conf`：
+
+```
+scale=150
+resolution=1920x1080
+shadow=1
+```
+
+`hs_display_load()` 原来解析到 `scale=` 就 `return 1`，后面根本不看；改成扫完整行，
+`shadow=` 一起读回来，重启后保持。渲染入口第一行就是 `if (!g_shell.ui.window_shadow) return;`。
+
+### 实测
+
+开：窗口底边往下 (20,41,50) → (34,70,77) 单调过渡；关：同一位置恒定 (39,78,86)，
+无衰减、无暗晕。
+
+顺手修掉 Display 页 `Available:` 列表读错行 —— 模式表是 `count + N*(w,h)`，
+两项 2 个 uint32，原来写成 `mi * SETK(2)`（缩放后是 3），跳着读，
+出来的是 "480x800, 800x600"。现在正常显示 "640x480, 800x480"。

@@ -290,6 +290,7 @@ typedef struct {
         int island_width, island_height, island_y, island_font_size;
         int dock_width, dock_height, dock_margin_bottom, dock_icon_size;
         int corner_radius;
+        int window_shadow;   /* 窗口投影开关(Display 页可关) */
         int font_small, font_normal, font_large;
     } ui;
     /* 系统托盘 */
