@@ -20,6 +20,19 @@ typedef struct {
 /* 最大CPU数量 */
 #define MAX_CPUS 16
 
+/* SB-21: IPI 消息类型（与 smp.c 内部定义保持一致） */
+#define IPI_MSG_RESCHEDULE  1
+#define IPI_MSG_TLB_FLUSH   2
+#define IPI_MSG_STOP        3
+
+/* SB-21: IPI 通道 */
+int  smp_ipi_send(int target, int type, uint64_t arg);
+int  smp_ipi_send_others(int type, uint64_t arg);
+void smp_ipi_snapshot(uint64_t *out);
+int  smp_ipi_wait_ack(const uint64_t *snapshot, int expect, uint64_t timeout);
+uint64_t smp_ipi_ack_count(int cpu);
+uint64_t smp_ipi_dropped_count(void);
+
 /* SMP初始化 */
 int smp_init(void);
 

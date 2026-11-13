@@ -5451,6 +5451,15 @@ void hs_tray_init(void)
 
     /* 欢迎通知 */
     hs_notification_send("Welcome to Hepu OS", "Hepu Desktop loaded", 0, 5000);
+    /* SB-22 实证：启动期累计的跨核 TLB shootdown 次数 */
+    {
+        extern uint64_t vmm64_tlb_shootdown_count(void);
+        extern void vga_puts(const char *);
+        extern void vga_put_hex(uint64_t);
+        vga_puts("[SB22] tlb shootdowns=");
+        vga_put_hex(vmm64_tlb_shootdown_count());
+        vga_puts("\n");
+    }
 
     /* 创建设置浮动窗口 */
     hs_window_manager_init();

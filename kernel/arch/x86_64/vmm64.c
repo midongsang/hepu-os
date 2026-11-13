@@ -41,11 +41,45 @@ extern void *memcpy(void *dst, const void *src, size_t n);
 extern uint64_t pmm64_alloc_page(void);
 extern void pmm64_free_page(uint64_t addr);
 
+/* SB-22: 跨核 TLB flush。页表改动只影响本核 TLB，别的核仍可能命中旧映射 ——
+ * 共享内存里一个核写完 unmapped 页，另一个核还能读到，是最隐蔽的一类数据错误。
+ * 注意：本函数会自旋等应答，不能在中断上下文里调用（handler 自己收不到应答）。
+ * 主机测试环境无多核，整体退化为空实现。 */
+#ifndef HEPU_HOST_TEST
+#define VMM_FLUSH_OTHERS(v) vmm64_flush_tlb_others((uint64_t)(v))
+#else
+#define VMM_FLUSH_OTHERS(v) ((void)(v))
+#endif
+
 /* TLB 刷新（主机端测试里没有 invlpg 指令，用 -DHEPU_HOST_TEST 空实现；内核里行为与原来一致） */
 #ifdef HEPU_HOST_TEST
 #define VMM_INVLPG(v) ((void)(v))
 #else
 #define VMM_INVLPG(v) __asm__ volatile("invlpg (%0)" : : "r"(v) : "memory")
+
+#ifndef HEPU_HOST_TEST
+#include "smp.h"
+
+/* SB-22: 已发出的跨核 shootdown 次数（诊断用，桌面启动后打印一次） */
+static volatile uint64_t g_tlb_shootdowns;
+uint64_t vmm64_tlb_shootdown_count(void) { return g_tlb_shootdowns; }
+
+/* 通知其他在线核刷新该页（arg=0 表示整表刷新） */
+void vmm64_flush_tlb_others(uint64_t virt)
+{
+    /* 单核系统不存在旧映射残留问题，直接返回，避免无意义的 IPI 往返 */
+    if (smp_get_cpu_count() <= 1) return;
+
+    uint64_t snap[MAX_CPUS];
+    smp_ipi_snapshot(snap);
+    int sent = smp_ipi_send_others(IPI_MSG_TLB_FLUSH, virt);
+    if (sent <= 0) return;
+    __sync_fetch_and_add(&g_tlb_shootdowns, (uint64_t)sent);
+    /* 超时上限刻意给得短：shootdown 是同步路径，等太久会把调用方拖死。
+     * 超时也不当作致命错误 —— 位图里在线的核可能刚好已经掉线。 */
+    smp_ipi_wait_ack(snap, sent, 20000000ULL);
+}
+#endif
 #endif
 
 /* 用户窗口：PDPT[1] = 0x40000000~0x80000000（1GB）。低身份映射不得覆盖它，
@@ -212,6 +246,7 @@ int vmm64_map_page(uint64_t pml4_addr, uint64_t virt, uint64_t phys, uint64_t fl
     if (flags & PAGE_HUGE) {
         pd[PD_INDEX(virt)] = phys | flags;
         VMM_INVLPG(virt);
+        VMM_FLUSH_OTHERS(virt);
         return 0;
     }
 
@@ -232,6 +267,7 @@ int vmm64_map_page(uint64_t pml4_addr, uint64_t virt, uint64_t phys, uint64_t fl
 
     /* 刷新TLB */
     VMM_INVLPG(virt);
+    VMM_FLUSH_OTHERS(virt);
 
     return 0;
 }
@@ -261,6 +297,7 @@ void vmm64_unmap_page(uint64_t pml4_addr, uint64_t virt)
 
     /* 刷新TLB */
     VMM_INVLPG(virt);
+    VMM_FLUSH_OTHERS(virt);
 }
 
 /* V0.20.12: 修改页权限
@@ -288,6 +325,7 @@ int vmm64_protect_page(uint64_t pml4_addr, uint64_t virt, uint64_t prot)
         if (!(prot & 4)) flags |= PAGE_NX;   /* 默认不可执行 */
         pd[PD_INDEX(virt)] = flags;
         VMM_INVLPG(virt);
+        VMM_FLUSH_OTHERS(virt);
         return 0;
     }
 
@@ -302,6 +340,7 @@ int vmm64_protect_page(uint64_t pml4_addr, uint64_t virt, uint64_t prot)
     pt[PT_INDEX(virt)] = flags;
 
     VMM_INVLPG(virt);
+    VMM_FLUSH_OTHERS(virt);
     return 0;
 }
 
@@ -418,6 +457,7 @@ int vmm64_swap_out(uint64_t pml4_addr, uint64_t virt)
     *pte = ((uint64_t)(slot & 0x3FF) << 12) | PAGE_SWAPPED;
     pmm64_free_page(phys);
     VMM_INVLPG(virt);
+    VMM_FLUSH_OTHERS(virt);
     return 0;
 }
 

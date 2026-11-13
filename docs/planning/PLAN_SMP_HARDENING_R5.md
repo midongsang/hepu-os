@@ -16,6 +16,12 @@ supersedes: null
 > **2026-11-13 阶段 2 完成**：SB-10（用户进程表）、SB-11（fd 表）、
 > SB-12（TCP）、SB-13（UDP）、SB-14（ext2）五条表锁已落地，均为「表级粗锁 +
 > irqsave / per-CPU 深度计数」，提交 6332e6d、7e0fe09、bd2c010、07bcec9。
+> **SB-22（跨核 TLB shootdown）已完成**：新增 `vmm64_flush_tlb_others()`，
+> 在 vmm64 六处页表修改点（大页映射、常规映射、unmap、mprotect、COW 拆页）
+> 的本地 invlpg 之后接入，经 SB-21 的 `TLB_FLUSH` IPI 广播到在线核并汇聚应答；
+> 单核与 `HEPU_HOST_TEST` 下退化为空实现。启动期实测 shootdown 次数 2 核
+> 0x13FA / 4 核 0x3BEE / 8 核 0x8BD6，无异常。
+>
 > **SB-21（IPI 闭环）已完成**：0x50 从「空处理器 + 复用 tick 计数」改成真正
 > 的消息通道 —— 每核一个 `{pending,type,arg}` 槽，`RESCHEDULE` / `TLB_FLUSH` /
 > `STOP` 三类分发，处理完清 pending 并累加 per-CPU ack；槽忙时拒收并计入
