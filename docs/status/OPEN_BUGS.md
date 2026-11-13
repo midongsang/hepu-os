@@ -254,3 +254,18 @@ source_of_truth: kernel/arch/x86_64/
 不触发，"sleep 兜底"等于没有。已把 `ulib.h` 的 `sleep()` 改为用户态忙等（见
 FIXES §1.91），睡眠期现在能正常轮转。真正的阻塞式 sleep（`wake_tick` +
 tick 跳过未到期线程）仍未实现，属独立改造。
+
+## SEC-24 桌面主循环在十余轮后停止推进
+
+- 现象：`desktop64_run()` 的 `while(1)` 实测只推进约 13 轮就停住，画面冻结在
+  最后一次渲染帧。串口探针 `pre-hlt` / `post-hlt` 计数均为 13，之后不再增长。
+- 影响：放在主循环里创建的新窗口（如任务管理器）往往等不到下一次重绘，
+  表现为"`[WM] create Task Manager 780x570` 有日志、画面没有窗口"。
+  QEMU 截图偶有一次能看到（创建后立刻手工 `hpdesk_render()` 且恰好渲染成功）。
+- 已排除：不是 `cli` 遗留导致（`sti; hlt` 后仍复现）。
+- 未定位：`hlt` 之后 PIT/APIC 定时中断是否还进入 IRQ handler。桌面首帧与静态
+  面板（System Info / Quick Controls）正常，说明初次的渲染与初始化没问题。
+- 下一步：单核 `-smp 1 -d int -D /tmp/qemu_int.log` 抓中断轨迹，确认第 14 轮
+  `hlt` 之后 0x20 向量是否还有进入记录；同时核对 `smp_timer_tick()` /
+  `apic64_timer_eoi()` 在 CPL=0 路径上的行为。
+

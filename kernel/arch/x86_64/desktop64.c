@@ -208,7 +208,10 @@ void desktop64_run(void)
             g_pending_app = 0;
         }
 
-        /* 让出 CPU 等下一次中断(PIT 1kHz 兜底), 避免忙等 100% 占用 */
-        asm volatile("hlt");
+        /* 让出 CPU 等下一次中断(PIT 1kHz 兜底), 避免忙等 100% 占用。
+         * V0.58.2: 显式开中断再 hlt —— 若之前走过 cli 路径, 单纯 hlt 会永久挂起。
+         * 注意这是防御性加固: 实测主循环仍会在十余轮后停止推进(见 OPEN_BUGS
+         * SEC-24), 与 cli 无关, 另案排查。 */
+        asm volatile("sti; hlt");
     }
 }

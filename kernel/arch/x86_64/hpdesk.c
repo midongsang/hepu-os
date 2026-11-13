@@ -4638,11 +4638,7 @@ static void hs_present_with_cursor(int mx, int my)
 
 void hpdesk_render(void)
 {
-    {   /* TEMP-PROBE */
-        static int pr = 0;
-        extern void vga_puts(const char *s);
-        if (pr == 0) { vga_puts("[PROBE] render entered\n"); pr = 1; }
-        else if (pr < 1000000) { pr++; if (pr % 200 == 0) vga_puts("[PROBE] render 200 more\n"); }
+    {
     }
     /* V0.13.11: 双缓冲原子帧 — 全部绘制到后台缓冲, 帧末一次性提交(消除撕裂/半帧) */
     g_frame_no++;

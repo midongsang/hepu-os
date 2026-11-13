@@ -27,6 +27,9 @@
 
 *Hepu OS v0.58.0 桌面：System Info、Settings 与 Quick Controls*
 
+![任务管理器：线程统计区](docs/assets/taskmgr-0.58.0.png)
+*任务管理器摘要区：`THREADS total/active` 与最近一次 clone / thread_exit 记录*
+
 **线程自检实证**（串口，同一镜像）：
 
 ```

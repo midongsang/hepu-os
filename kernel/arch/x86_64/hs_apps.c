@@ -3574,8 +3574,10 @@ static void m_render(hs_window_t *w)
         } else if (xf > 0) {
             strcpy(cbuf, "thread_exit: tid ");
             hs_itoa(xf, tmp); strcpy(cbuf + hs_strlen(cbuf), tmp);
-            strcpy(cbuf + hs_strlen(cbuf), " -> tid ");
-            hs_itoa(xt, tmp); strcpy(cbuf + hs_strlen(cbuf), tmp);
+            if (xt > 0) {
+                strcpy(cbuf + hs_strlen(cbuf), " -> tid ");
+                hs_itoa(xt, tmp); strcpy(cbuf + hs_strlen(cbuf), tmp);
+            }
             strcpy(cbuf + hs_strlen(cbuf), "  (handed off)");
             font64_draw_string(fb, W, H, cx, cy, cbuf, g_shell.colors.text_secondary, MC(11));
         } else {
