@@ -336,7 +336,7 @@ static const char *default_config =
 "    dock_height: 64\n"
 "    dock_margin_bottom: 12\n"
 "    dock_icon_size: 44\n"
-"    corner_radius: 18\n"
+"    corner_radius: 12\n"
 "    font_small: 12\n"
 "    font_normal: 14\n"
 "    font_large: 18\n"
@@ -430,7 +430,7 @@ static void load_ui_from_config(hsqml_node_t *ui)
     g_shell.ui.dock_height = hsqml_get_number(ui, "dock_height", 64);
     g_shell.ui.dock_margin_bottom = hsqml_get_number(ui, "dock_margin_bottom", 12);
     g_shell.ui.dock_icon_size = hsqml_get_number(ui, "dock_icon_size", 44);
-    g_shell.ui.corner_radius = hsqml_get_number(ui, "corner_radius", 16);
+    g_shell.ui.corner_radius = hsqml_get_number(ui, "corner_radius", 12);
     g_shell.ui.font_small = hsqml_get_number(ui, "font_small", 12);
     g_shell.ui.font_normal = hsqml_get_number(ui, "font_normal", 14);
     g_shell.ui.font_large = hsqml_get_number(ui, "font_large", 18);
@@ -5424,7 +5424,7 @@ int hpdesk_init(int width, int height)
     g_shell.ui.dock_height = 64;
     g_shell.ui.dock_margin_bottom = 12;
     g_shell.ui.dock_icon_size = 44;
-    g_shell.ui.corner_radius = 16;
+    g_shell.ui.corner_radius = 12;
     g_shell.ui.window_shadow = 1;
     g_shell.ui.cursor_theme = 0;
     g_shell.ui.font_small = 12;
