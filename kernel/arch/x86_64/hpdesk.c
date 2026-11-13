@@ -4272,6 +4272,16 @@ void hpdesk_mouse_down(int x, int y)
                 extern int hs_files_tab_click(int x, int y);
                 if (hs_files_tab_click(x, y)) return;
             }
+            /* V0.59.4: 窗口内容区的点击派发。原来只有标题栏有处理, 内容区
+             * 的点击直接落到下层 —— 任务管理器的标签页点了没反应。 */
+            if (x >= w->x && x <= w->x + w->width &&
+                y > w->y + hs_sy(24) && y <= w->y + w->height) {
+                if (strcmp(w->title, "Task Manager") == 0) {
+                    extern int hs_taskmgr_click(int x, int y);
+                    if (hs_taskmgr_click(x, y)) return;
+                }
+            }
+
             /* V0.13.16: 标题栏三按钮: 最小化/最大化/关闭 (无背景) */
             int bw24 = hs_sx(24);
             int min_x = w->x + w->width - hs_sx(68);

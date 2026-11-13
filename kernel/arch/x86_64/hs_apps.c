@@ -3437,6 +3437,7 @@ static void f_handle_key(int key)
  * ========================================================================== */
 static hs_window_t *m_win = 0;
 /* V0.13.46: 任务管理器结束进程按键状态 */
+static int m_tab = 0;            /* V0.59.4: 0=Processes 1=Devices */
 static int m_kill_mode = 0;      /* 0=普通, 1=输入PID */
 static int m_kill_pid = 0;
 static int m_tick = 0;
@@ -3527,6 +3528,52 @@ static void m_draw_curve(void *fb, int W, int H, int x, int y, int w, int h,
     }
 }
 
+static const char *const M_TAB_NAME[2] = {"Processes", "Devices"};
+
+/* V0.59.4: 任务管理器内部标签栏。
+ * 进程表下面原来硬接一整段 KERNEL SERVICES(驱动清单), 两种性质完全不同的内容
+ * 挤在同一页 —— 进程一多就把驱动列表挤出去, 而且驱动清单混在进程表下面看着
+ * 像"进程的一部分"。分成两页后各自有完整高度。 */
+static void m_draw_tabs(void *fb, int W, int H, hs_window_t *w, int cx, int cw, int y, int th)
+{
+    int gap = hs_win_k(w, 520, 4);
+    int tw = (cw - gap) / 2;
+    for (int i = 0; i < 2; i++) {
+        int tx = cx + i * (tw + gap);
+        int on = (m_tab == i);
+        gfx64_fill_rounded_rect(tx, y, tw, th, hs_win_k(w, 520, 4),
+                                on ? g_shell.colors.accent : g_shell.colors.panel_bg);
+        int lw = (int)font64_get_string_width(M_TAB_NAME[i], hs_win_k(w, 520, 11));
+        font64_draw_string(fb, W, H, tx + (tw - lw) / 2, y + hs_win_k(w, 520, 4),
+                           M_TAB_NAME[i], on ? 0xFFFFFF : g_shell.colors.panel_fg,
+                           hs_win_k(w, 520, 11));
+    }
+}
+
+/* 标签点击: 由 hpdesk 在 Task Manager 窗口内容区按下时调用 */
+int hs_taskmgr_click(int x, int y)
+{
+    if (!m_win || !m_win->visible) return 0;
+    if (x < m_win->x || x > m_win->x + m_win->width) return 0;
+    if (y < m_win->y || y > m_win->y + m_win->height) return 0;
+    int cx = m_win->x + hs_win_k(m_win, 520, 6);
+    int cw = m_win->width - hs_win_k(m_win, 520, 12);
+    int ty = m_win->y + hs_win_k(m_win, 520, 26);
+    int th = hs_win_k(m_win, 520, 20);
+    int gap = hs_win_k(m_win, 520, 4);
+    int tw = (cw - gap) / 2;
+    if (y >= ty && y <= ty + th) {
+        for (int i = 0; i < 2; i++) {
+            int tx = cx + i * (tw + gap);
+            if (x >= tx && x <= tx + tw) {
+                if (m_tab != i) { m_tab = i; m_scroll = 0; }
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
 static void m_render(hs_window_t *w)
 {
     void *fb = gfx64_get_framebuffer();
@@ -3542,7 +3589,7 @@ static void m_render(hs_window_t *w)
      * 可滚量用上一帧量出的内容末尾算 —— 内容高度每帧变化很小, 差一帧无感,
      * 但省掉了"先算一遍高度再画一遍"的两趟遍历。 */
     int vtop_bak = m_vtop, vbot_bak = m_vbot;
-    m_vtop = w->y + MC(34);   /* 标题栏之下, 否则滚起来内容会钻到标题上 */
+    m_vtop = w->y + MC(50);   /* 标签栏之下: 标题栏 -> 标签栏 -> 内容 */
     m_vbot = w->y + w->height - MC(26);   /* 提示条占 MC(16), 再留 10 的呼吸 */
     {
         int maxs = m_content_bottom - m_vbot;
@@ -3554,6 +3601,15 @@ static void m_render(hs_window_t *w)
 
     m_tick++;
     /* V0.56.2: 标题条已由窗口管理器绘制, 这里不再重复画一遍 "Task Manager" */
+
+    /* V0.59.4: 标签栏固定在窗口顶部, 不随内容滚动 —— 所以直接调绘制函数,
+     * 不走 m_text_c/m_bar_c 那层(那层会套滚动偏移还会按内容裁剪区裁掉它)。 */
+    m_draw_tabs(fb, W, H, w, cx, cw, w->y + MC(26), MC(20));
+    cy = w->y + MC(54);
+
+    char tmp[16];   /* V0.59.4: 提到两页外面, 提示条(页外)也用 */
+
+    if (m_tab == 0) {   /* ---- Processes 页 ---- */
 
     /* V0.13.39: 真实系统摘要 (PMM/进程/驱动) */
     extern void pmm64_get_stats(uint64_t *total, uint64_t *used, uint64_t *free);
@@ -3631,7 +3687,7 @@ static void m_render(hs_window_t *w)
 
         int gh = MC(22);
         int gx = cx + MC(96);
-        int gw = cw - MC(100);
+        int gw = cw - MC(96) - MC(88);   /* V0.59.4: 收窄, 右侧留白不顶边 */
         char v[20];
 
         m_text_c(fb, W, H, cx, cy, "CPU", g_shell.colors.text_secondary, MC(11));
@@ -3656,7 +3712,7 @@ static void m_render(hs_window_t *w)
         hs_itoa((int)(ntxr / 1024), tmp); strcpy(v, tmp); strcpy(v + hs_strlen(v), "K");
         m_text_c(fb, W, H, cx + MC(46), cy, v, 0xE0A44E, MC(11));
         m_draw_curve(fb, W, H, gx, cy, gw, gh, m_tx_hist, 0xE0A44E, MC(256));
-        cy += MC(14);
+        cy += MC(20);   /* V0.59.4: 最后一条曲线与 THREADS 之间留开, 否则贴着 */
     }
 
     m_bar_c(cx, cy, cw, 1, g_shell.colors.border);
@@ -3686,6 +3742,9 @@ static void m_render(hs_window_t *w)
         m_text_c(fb, W, H, cx, cy, tbuf, g_shell.colors.text_secondary, MC(11));
         cy += MC(19);
     }
+    /* V0.59.4: THREADS 行与表头之间加一条分隔线, 免得计数行和表格粘在一起 */
+    m_bar_c(cx, cy - MC(4), cw, 1, hs_apps_mix(g_shell.colors.panel_bg, 0xFFFFFF, 9));
+
     /* 表头 (V0.13.46: 加PID与状态列)
      * V0.57.1: 改成分列绘制。旧实现把表头和整行都拼成一个含空格的字符串再一次性画,
      * 而 font64 是比例字体, 空格宽度与 "0"/"16"/"100%" 的宽度不一致 —— 于是每行列位置
@@ -3757,51 +3816,51 @@ static void m_render(hs_window_t *w)
             else if (procs[i].pid >= 100) st = "idle";
             m_text_c(fb, W, H, c_state, cy, st, col, MC(11));
 
-            cy += MC(15);
+            /* V0.59.4: 行分隔线 —— 没有它, 进程行只是一列列文字, 不像表格 */
+            m_bar_c(cx, cy + MC(15), cw, 1,
+                    hs_apps_mix(g_shell.colors.panel_bg, 0xFFFFFF, 9));
+            cy += MC(17);
         }
     }
 
-    /* V0.57.0: 内核服务/驱动清单。
-     * 进程表一直只有 idle(PID 0) —— 桌面与驱动都还没注册成调度进程, 表格看着像
-     * "没接上数据"。这里把真正注册进驱动框架的驱动列出来, 让面板反映系统里确实
-     * 在跑什么, 而不是用假进程凑数(进程模型补齐是另一件事, 见 FIXES 遗留)。 */
-    {
+    } else {   /* ---- Devices 页 ---- */
+        /* V0.59.4: 驱动/服务清单从进程页挪到独立标签页, 并做成两列表格。
+         * 原来它硬接在进程表下面, 进程一多就被挤掉, 而且和进程混在同一页看着
+         * 像"进程的一部分"。 */
         extern int drv_get_all(drv_desc_t **out, int max);
-        static const char *svc_state[] = {"UNLOAD", "LOADED", "PROBED", "ACTIVE", "SUSP", "ERROR"};
+        static const char *svc_state2[] = {"UNLOAD", "LOADED", "PROBED", "ACTIVE", "SUSP", "ERROR"};
         drv_desc_t *ds[DRV_MAX_COUNT];
         int dn = drv_get_all(ds, DRV_MAX_COUNT);
-        if (dn > 0) {   /* V0.59.2: 不做底部截断, 交给裁剪层 */
-            cy += MC(4);
-            m_bar_c(cx, cy, cw, 1, g_shell.colors.border);
-            cy += MC(6);
-            m_text_c(fb, W, H, cx, cy, "KERNEL SERVICES (drivers loaded)",
-                               g_shell.colors.text_secondary, MC(10));
-            /* V0.59.3: 进程/驱动计数原来在顶部 MEM 行, 那行拆了, 挪到这里右对齐 */
-            {
-                char pb[32]; char t9[16];
-                strcpy(pb, "PROC ");
-                hs_itoa(process64_get_count(), t9); strcpy(pb + hs_strlen(pb), t9);
-                strcpy(pb + hs_strlen(pb), "  DRV ");
-                hs_itoa(drv_get_count(), t9); strcpy(pb + hs_strlen(pb), t9);
-                int pw2 = (int)font64_get_string_width(pb, MC(10));
-                m_text_c(fb, W, H, cx + cw - pw2 - MC(12), cy, pb, g_shell.colors.text_secondary, MC(10));
-            }
-            cy += MC(14);
-            /* V0.58.3: 旧上限是未缩放的裸 22px, 而底部提示条画在 height - MC(16),
-             * 两者实际落在同一行 —— 截图里 "IDE ACTIVE" 与 "Press K then PID..." 重叠。
-             * 这里按缩放后的行高给提示条让出位置。 */
-            for (int i = 0; i < dn && cy < w->y + w->height - MC(16) - MC(14); i++) {
-                char sline[96];
-                strcpy(sline, ds[i]->name ? ds[i]->name : "?");
-                while (hs_strlen(sline) < 20) strcpy(sline + hs_strlen(sline), " ");
-                int stt = (int)ds[i]->state;
-                strcpy(sline + hs_strlen(sline),
-                       (stt >= 0 && stt < 6) ? svc_state[stt] : "?");
-                m_text_c(fb, W, H, cx, cy, sline, g_shell.colors.window_fg, MC(11));
-                cy += MC(14);
-            }
+        int dc_name = cx;
+        int dc_state = cx + MC(210);
+
+        m_text_c(fb, W, H, dc_name, cy, "DRIVER", g_shell.colors.text_secondary, MC(10));
+        m_text_c(fb, W, H, dc_state, cy, "STATE", g_shell.colors.text_secondary, MC(10));
+        {
+            char pb[32]; char t9[16];
+            strcpy(pb, "PROC ");
+            hs_itoa(process64_get_count(), t9); strcpy(pb + hs_strlen(pb), t9);
+            strcpy(pb + hs_strlen(pb), "  DRV ");
+            hs_itoa(drv_get_count(), t9); strcpy(pb + hs_strlen(pb), t9);
+            int pw2 = (int)font64_get_string_width(pb, MC(10));
+            m_text_c(fb, W, H, cx + cw - pw2 - MC(12), cy, pb, g_shell.colors.text_secondary, MC(10));
+        }
+        cy += MC(13);
+        m_bar_c(cx, cy, cw, 1, g_shell.colors.border);
+        cy += MC(4);
+
+        for (int i = 0; i < dn; i++) {
+            int stt = (int)ds[i]->state;
+            const char *nm = ds[i]->name ? ds[i]->name : "?";
+            m_text_c(fb, W, H, dc_name, cy, nm, g_shell.colors.window_fg, MC(11));
+            m_text_c(fb, W, H, dc_state, cy,
+                     (stt >= 0 && stt < 6) ? svc_state2[stt] : "?", g_shell.colors.window_fg, MC(11));
+            /* 行分隔: 极淡的线, 只为了把行从"一堆文字"变成"一张表" */
+            m_bar_c(cx, cy + MC(15), cw, 1, hs_apps_mix(g_shell.colors.panel_bg, 0xFFFFFF, 9));
+            cy += MC(17);
         }
     }
+
 
     /* V0.59.2: 内容末尾(虚拟坐标)供下一帧算可滚量; 然后关掉裁剪区。 */
     m_content_bottom = cy;
@@ -3826,8 +3885,11 @@ static void m_render(hs_window_t *w)
         strcpy(kbuf + hs_strlen(kbuf), tmp);
         strcpy(kbuf + hs_strlen(kbuf), " (Enter=end, Esc=cancel)");
         m_text_c(fb, W, H, cx, cy, kbuf, 0xE0A44E, MC(10));
+    } else if (m_tab == 0) {
+        m_text_c(fb, W, H, cx, cy, "K + PID ends a process   ·   arrows switch page",
+                           g_shell.colors.text_secondary, MC(10));
     } else {
-        m_text_c(fb, W, H, cx, cy, "Press K then PID + Enter to end a process",
+        m_text_c(fb, W, H, cx, cy, "Drivers registered with the driver framework",
                            g_shell.colors.text_secondary, MC(10));
     }
 #undef MC
@@ -4176,6 +4238,13 @@ int hs_apps_handle_key(int key)
         } else if (key == 'k' || key == 'K') {
             m_kill_mode = 1;
             m_kill_pid = 0;
+        } else if (key == KEY_EXT_LEFT || key == KEY_EXT_RIGHT) {
+            /* V0.59.4: 左右方向键切标签页。
+             * 不用 Tab —— hpdesk 在应用窗口之前就把 Tab 截走了(切侧栏标签),
+             * 任务管理器根本收不到。 */
+            m_tab = (key == KEY_EXT_LEFT) ? 0 : 1;
+            m_scroll = 0;
+            m_kill_mode = 0;
         }
         return 1;
     }
