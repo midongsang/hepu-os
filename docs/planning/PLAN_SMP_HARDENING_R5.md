@@ -16,6 +16,11 @@ supersedes: null
 > **2026-11-13 阶段 2 完成**：SB-10（用户进程表）、SB-11（fd 表）、
 > SB-12（TCP）、SB-13（UDP）、SB-14（ext2）五条表锁已落地，均为「表级粗锁 +
 > irqsave / per-CPU 深度计数」，提交 6332e6d、7e0fe09、bd2c010、07bcec9。
+> **SB-20（AP 启动协议）已完成**：`ap_started_count` 改 `__sync_fetch_and_add`
+> 原子递增（+ 每核到位位图），trampoline 参数按 CR3→RSP→entry 顺序发布并
+> 在发 IPI 前 `mfence`，超时会点名缺失核 APIC ID，AP 栈底加 16KB 越界哨兵
+> 并在屏障后复核。4 核 / 8 核冷启动实测 AP 全到位。
+>
 > SB-15（gfx）与 SB-16（窗口）随后完成：`gfx64_present` 改为显式目标参数
 > （不再临时改全局 `gfx_target`），新增 `g_gfx_lock` 包 present/set_target*/
 > set_mode、`g_ttf_lock` 包字形槽查找（单出口，光栅化在锁外）、`g_wm_lock`

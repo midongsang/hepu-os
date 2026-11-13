@@ -23,6 +23,13 @@ static cpu_info_t cpu_table[MAX_CPUS];
 static uint32_t cpu_count = 0;
 static uint32_t bsp_cpu_id = 0;
 static volatile int ap_started_count = 0;
+/* SB-20: 每核到位标记。计数只能告诉你「几个核到了」，报超时时说不清
+ * 是哪几个核没到 —— 有了位图，超时可以直接列出缺失核的 APIC ID。 */
+static volatile int g_ap_arrived[MAX_CPUS];
+/* SB-20: AP 栈底哨兵。AP 栈向下增长，栈底（低地址）是最深位置；
+ * 被踩说明该核栈溢出到了相邻核的栈区。 */
+#define AP_STACK_SENTINEL 0xA5A5C3C3DEAD5A5AULL
+static uint64_t g_ap_stack_sentinel_before[MAX_CPUS];
 
 /* BSP完成IDT填充/加载后置1，AP核此前自旋等待（不启用中断）。
    由 irq64_init() 结束时设置。 */
@@ -143,9 +150,12 @@ void ap_c_entry(void)
         cpu_table[cpu_id].online = 1;
     }
 
-    /* 到达安全点：中断保持关闭。ap_started_count 递增是BSP的同步点，
-       表示本核已完成FPU/定时器相关初始化。 */
-    ap_started_count++;
+    /* 到达安全点：中断保持关闭。ap_started_count 是BSP的同步点，
+       表示本核已完成FPU/TSS/GDT/IDT/LAPIC/定时器初始化。
+       SB-20: 原子递增 —— 原来是裸 ++，4 核以上同时到位会丢计数，
+       BSP 的屏障永远等不齐（表现为启动挂死或超时误报）。 */
+    if (cpu_id < MAX_CPUS) g_ap_arrived[cpu_id] = 1;
+    __sync_fetch_and_add((int *)&ap_started_count, 1);
 
     /* (1) AP核必须切换回内核GDT: trampoline 的 ap_gdt 中 0x08 是32位代码段,
      *     而 IDT 所有中断门用 selector 0x08, 若 AP 保持 ap_gdt, 首个中断
@@ -275,6 +285,15 @@ void smp_ipi_handler(void)
     }
 }
 
+/* SB-20: 供屏障后复核 AP 栈底哨兵（ap_stacks 在启动函数内是 static，
+ * 这里用同一份符号做读取入口） */
+static uint8_t *g_ap_stack_base[MAX_CPUS];
+uint64_t smp_ap_stack_sentinel_probe(int cpu)
+{
+    if (cpu < 0 || cpu >= MAX_CPUS || !g_ap_stack_base[cpu]) return AP_STACK_SENTINEL;
+    return *(uint64_t *)g_ap_stack_base[cpu];
+}
+
 /* 启动单个AP */
 static int smp_start_single_ap(uint32_t cpu_id, uint64_t pml4_addr)
 {
@@ -288,6 +307,11 @@ static int smp_start_single_ap(uint32_t cpu_id, uint64_t pml4_addr)
     /* 分配AP栈（每个AP 16KB） */
     static uint8_t ap_stacks[MAX_CPUS][16384] __attribute__((aligned(16)));
     uint64_t stack_top = (uint64_t)&ap_stacks[cpu_id][16384];
+    /* SB-20: 栈底哨兵。先记录写入前的原值（静态区应为 0），
+     * 屏障之后如果发现哨兵被改写，说明该核栈溢出了 16KB。 */
+    g_ap_stack_base[cpu_id] = &ap_stacks[cpu_id][0];
+    g_ap_stack_sentinel_before[cpu_id] = *(uint64_t *)&ap_stacks[cpu_id][0];
+    *(uint64_t *)&ap_stacks[cpu_id][0] = AP_STACK_SENTINEL;
 
     /* 填充trampoline参数（固定地址0x9000，避免与GDT冲突） */
     /* 0x9000 = PML4地址（4字节） */
@@ -297,9 +321,16 @@ static int smp_start_single_ap(uint32_t cpu_id, uint64_t pml4_addr)
     /* 0x9010 = ap_c_entry地址（8字节） */
     volatile uint64_t *entry_ptr = (volatile uint64_t *)0x9010;
 
+    /* SB-20: 参数发布顺序固化 —— CR3 → RSP → entry，三步之间各插一个
+     * 编译器屏障，最后整体 mfence 再发 IPI。trampoline 一上电就按
+     * 0x9000 / 0x9008 / 0x9010 顺序读，若编译器或 CPU 把「先写 RSP 后写
+     * CR3」重排出去了，AP 会用旧 CR3 上的栈地址跑，直接跑飞。 */
     *pml4_ptr = (uint32_t)pml4_addr;
+    __asm__ volatile("" ::: "memory");
     *stack_ptr = stack_top;
+    __asm__ volatile("" ::: "memory");
     *entry_ptr = (uint64_t)ap_c_entry;
+    __asm__ volatile("mfence" ::: "memory");
 
     /* 发送INIT IPI */
     apic64_send_init(cpu_id);
@@ -453,7 +484,32 @@ int smp_init(void)
             vga_put_hex(ap_started_count);
             vga_puts(" expected=");
             vga_put_hex(expected_aps);
+            vga_puts(" missing_apic_ids=");
+            for (uint32_t id = 0; id < MAX_CPUS; id++) {
+                if (id == bsp_cpu_id) continue;
+                if (!cpu_table[id].online) continue;
+                if (g_ap_arrived[id]) continue;
+                vga_put_hex(id);
+                vga_puts(" ");
+            }
             vga_puts("\n");
+        }
+
+        /* SB-20: 栈哨兵复核。屏障之后所有 AP 都停在自己的 hlt 循环里，
+         * 栈使用量已稳定，此时检查是最有意义的时点。 */
+        for (int id = 0; id < MAX_CPUS; id++) {
+            if (id == bsp_cpu_id || !g_ap_arrived[id]) continue;
+            extern uint64_t smp_ap_stack_sentinel_probe(int cpu);
+            uint64_t now = smp_ap_stack_sentinel_probe(id);
+            if (now != AP_STACK_SENTINEL) {
+                vga_puts("[SMP] WARN: AP stack overflow on cpu=");
+                vga_put_hex(id);
+                vga_puts(" sentinel=");
+                vga_put_hex(now);
+                vga_puts(" (was ");
+                vga_put_hex(g_ap_stack_sentinel_before[id]);
+                vga_puts(")\n");
+            }
         }
     }
 
