@@ -346,7 +346,7 @@ static const char *default_config =
 "    weather_height: 120\n"
 "    weather_temp_font: 36\n"
 "    weather_desc_font: 16\n"
-"    sidebar_x: 12\n"
+"    sidebar_x: 10\n"
 "    sidebar_y: 50\n"
 "    sidebar_width: 280\n"
 "    sidebar_height: 500\n"
@@ -439,7 +439,9 @@ static void load_ui_from_config(hsqml_node_t *ui)
     g_shell.ui.weather_height = hsqml_get_number(ui, "weather_height", 120);
     g_shell.ui.weather_temp_font = hsqml_get_number(ui, "weather_temp_font", 36);
     g_shell.ui.weather_desc_font = hsqml_get_number(ui, "weather_desc_font", 16);
-    g_shell.ui.sidebar_x = hsqml_get_number(ui, "sidebar_x", 12);
+    /* V0.59.3: 默认 10 —— 与顶栏胶囊 margin(hs_sx(10)) 同值。
+     * 原来是 12, 150% 下侧栏左边落在 x=18、顶栏左边缘在 15, 扫描线实测差 3px。 */
+    g_shell.ui.sidebar_x = hsqml_get_number(ui, "sidebar_x", 10);
     g_shell.ui.sidebar_y = hsqml_get_number(ui, "sidebar_y", 50);
     g_shell.ui.sidebar_width = hsqml_get_number(ui, "sidebar_width", 280);
     g_shell.ui.sidebar_height = hsqml_get_number(ui, "sidebar_height", 500);
@@ -5835,6 +5837,7 @@ void hs_notification_render(void)
     int w = hs_sx(288);
     int h = hs_sy(64);
     int gap = hs_sy(10);
+
     int popup_count = 0;
 
     for (int i = g_shell.notifications.count - 1; i >= 0 && popup_count < 3; i--) {
@@ -5874,6 +5877,13 @@ void hs_notification_render(void)
             int slide = t * t * (w + 16) / 100;
             x += right_side ? slide : -slide;
         }
+
+        /* 动画期间必须夹在屏内: 旧实现从右侧滑入时 x 会临时越出右边界,
+         * 卡片右边框被裁掉、贴死在屏幕边缘(截图里右上角卡片右边看不到描边)。 */
+        int n_margin = hs_sx(10);   /* 与顶栏胶囊同一 margin, 右端才对得齐 */
+        if (x + w > g_shell.screen_width - n_margin) x = g_shell.screen_width - n_margin - w;
+        if (x < n_margin) x = n_margin;
+        if (y + h > g_shell.screen_height) y = g_shell.screen_height - h;
 
         /* 卡片底: surfaceContainerHigh + 细描边, 圆角 10 */
         gfx64_fill_rounded_rect(x, y, w, h, HS_RD_WIN, g_shell.colors.titlebar_bg);

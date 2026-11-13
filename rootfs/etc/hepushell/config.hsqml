@@ -22,7 +22,7 @@ UI {
     weather_height: 120
     weather_temp_font: 36
     weather_desc_font: 16
-    sidebar_x: 12
+    sidebar_x: 10
     sidebar_y: 50
     sidebar_width: 280
     sidebar_height: 500
