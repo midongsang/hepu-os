@@ -112,11 +112,47 @@ static inline void wrmsr(uint32_t msr, uint64_t val)
 #define APIC_BASE_ENABLE    (1 << 11)
 #define APIC_BASE_BSP       (1 << 8)
 
-/* 全局状态 */
-static volatile int apic_initialized = 0;
-static volatile int apic_mode = 0;  /* 0=PIC模式, 1=APIC模式（volatile：AP核需可见BSP的切换） */
-static uint32_t apic_id = 0;
-static uint32_t apic_version = 0;
+/* SB-19: LAPIC 的 ID / 版本 / 初始化标志改成 per-CPU。
+ * 之前是三个全局单值, BSP 初始化时写一次, AP 既读不到自己的 ID,
+ * 也会把 BSP 的初始化状态当成自己的。这里每核一份, BSP 只写 0 号槽,
+ * AP 由 apic64_enable_for_ap() 写本核槽。
+ *
+ * apic_mode 仍是全局的 —— 它是"整机用 PIC 还是 IOAPIC"这个系统级选择,
+ * 由 BSP 单方面决定; 但 SB-19 之后的约定是 AP 绝不回写它。 */
+#define APIC_PCPU_MAX 16
+typedef struct {
+    uint32_t id;          /* 本核 LAPIC ID (原始 8 位) */
+    uint32_t version;     /* 本核 LAPIC 版本 */
+    uint32_t initialized; /* 本核是否已完成 LAPIC enable */
+    uint32_t tpr;         /* 本核最近一次写入的 TPR */
+    uint32_t svr;         /* 本核最近一次写入的 SVR */
+    uint32_t lvt_timer;   /* 本核最近一次写入的 LVT Timer */
+} apic_pcpu_t;
+
+static apic_pcpu_t apic_pcpu[APIC_PCPU_MAX];
+
+static volatile int apic_mode = 0;  /* 0=PIC模式, 1=APIC模式（仅 BSP 写） */
+
+/* LAPIC MMIO 页是否已映射。apic64_init() 之前读 0xF0000020 会 #PF
+ * (实测 CR2=0xF0000020, PDPTe=0), 所以映射前一律不碰硬件。 */
+static volatile int apic_mapped = 0;
+
+/* 本核 LAPIC ID: 直读硬件寄存器。
+ * PIC 模式下同样要读 —— 不能像旧代码那样回落到 BSP 的全局 apic_id,
+ * 否则 AP 会误判成 CPU0 (smp_get_current_cpu 直接依赖本函数)。
+ * 映射未建立时(启动早期 BSP)回落到已缓存的槽值, 避免 #PF。 */
+static uint32_t apic_hw_id(void)
+{
+    if (!apic_mapped) return apic_pcpu[0].id;
+    return (apic_read(APIC_ID) >> 24) & 0xFF;
+}
+
+/* 当前核在 per-CPU 表里的下标(用 LAPIC ID 直接映射) */
+static int apic_cur_slot(void)
+{
+    uint32_t id = apic_hw_id();
+    return (id < APIC_PCPU_MAX) ? (int)id : 0;
+}
 static int ioapic_available = 0;
 static uint32_t ioapic_version = 0;
 static uint32_t ioapic_max_redir = 0;
@@ -211,11 +247,17 @@ void apic64_init(void)
                        PAGE_PRESENT | PAGE_WRITABLE | (1 << 4) | (1 << 3));
         vmm64_map_page(pml4, IOAPIC_BASE_ADDR, IOAPIC_PHYS_ADDR,
                        PAGE_PRESENT | PAGE_WRITABLE | (1 << 4) | (1 << 3));
+        apic_mapped = 1;   /* SB-19: 之后才允许读 LAPIC MMIO */
     }
 
-    /* 读取APIC ID和版本 */
-    apic_id = apic_read(APIC_ID) >> 24;
-    apic_version = apic_read(APIC_VERSION) & 0xFF;
+    /* 读取APIC ID和版本 —— SB-19: 写本核(BSP=0 号)槽, 不再写全局 */
+    {
+        int slot = apic_cur_slot();
+        apic_pcpu[slot].id = apic_hw_id();
+        apic_pcpu[slot].version = apic_read(APIC_VERSION) & 0xFF;
+    }
+    uint32_t apic_id = apic_pcpu[apic_cur_slot()].id;
+    uint32_t apic_version = apic_pcpu[apic_cur_slot()].version;
     vga_puts("[APIC64] Local APIC ID=");
     char buf[8];
     int n = apic_id, i = 0;
@@ -244,8 +286,14 @@ void apic64_init(void)
     apic_write(APIC_LVT_LINT1, 0x10000);
     apic_write(APIC_LVT_TIMER, 0x10000);
 
-    apic_initialized = 1;
-    apic_mode = 0;  /* PIC模式 */
+    {
+        int slot = apic_cur_slot();
+        apic_pcpu[slot].initialized = 1;
+        apic_pcpu[slot].tpr = 0;
+        apic_pcpu[slot].svr = 0x1FF;
+        apic_pcpu[slot].lvt_timer = 0x10000;
+    }
+    apic_mode = 0;  /* PIC模式（仅 BSP 写） */
     ioapic_available = 0;
     vga_puts("[APIC64] Local APIC initialized (PIC compatible mode)\n");
 }
@@ -276,7 +324,7 @@ int apic64_enable_irq(uint8_t irq, uint8_t vector)
 {
     if (!ioapic_available) return -1;
     /* 固定投递模式、物理目标、高电平有效、边沿触发、目标CPU0 */
-    return apic64_set_irq_redirect(irq, vector, 0, 0, 0, 0, apic_id);
+    return apic64_set_irq_redirect(irq, vector, 0, 0, 0, 0, apic_hw_id());
 }
 
 /* 禁用IRQ */
@@ -298,16 +346,62 @@ int apic64_disable_irq(uint8_t irq)
    每个CPU读取本地LAPIC（0xF0000020）得到自己的真实ID。 */
 uint32_t apic64_get_id(void)
 {
-    if (apic_mode) {
-        return (*(volatile uint32_t *)(APIC_BASE_ADDR + APIC_ID) >> 24) & 0xFF;
-    }
-    return apic_id;  /* PIC模式下只有BSP */
+    /* SB-19: 任何模式下都直读本核 LAPIC ID 寄存器。
+     * 旧版在 PIC 模式下回落到 BSP 的全局 apic_id, 于是 AP 也报 0,
+     * 所有 per-CPU 下标全部塌到 0 号槽。 */
+    return apic_hw_id();
 }
 
-/* 检查APIC是否已初始化 */
+/* 检查APIC是否已初始化 —— 按本核判断(旧版返回 BSP 的全局标志) */
 int apic64_is_initialized(void)
 {
-    return apic_initialized;
+    return apic_pcpu[apic_cur_slot()].initialized;
+}
+
+/* SB-19: 读取指定核的 LAPIC 状态快照。返回 0 成功, -1 下标越界。
+ * 供诊断使用 —— 各核 ID/版本/初始化/TPR/SVR/LVT 都能按核区分。 */
+int apic64_get_pcpu_state(int cpu, apic_pcpu_t *out)
+{
+    if (!out || cpu < 0 || cpu >= APIC_PCPU_MAX) return -1;
+    *out = apic_pcpu[cpu];
+    return 0;
+}
+
+/* SB-19: 轻量 getter —— 调用方(如 smp.c 的 AP 启动路径)自己做串口输出,
+ * 这里只提供按核查值, 避免 apic64 依赖某个特定的打印实现。 */
+uint32_t apic64_pcpu_id(int cpu)
+{
+    if (cpu < 0 || cpu >= APIC_PCPU_MAX) return 0;
+    return apic_pcpu[cpu].id;
+}
+
+uint32_t apic64_pcpu_version(int cpu)
+{
+    if (cpu < 0 || cpu >= APIC_PCPU_MAX) return 0;
+    return apic_pcpu[cpu].version;
+}
+
+/* SB-19: 把全部已初始化核的 LAPIC 状态打到串口(启动期诊断, 仅 BSP 上下文调用) */
+void apic64_dump_pcpu(void)
+{
+    extern void sb18_serial_puts(const char *s);
+    extern void sb18_serial_hex(uint64_t v);
+    for (int i = 0; i < APIC_PCPU_MAX; i++) {
+        if (!apic_pcpu[i].initialized) continue;
+        sb18_serial_puts("[APIC] cpu=");
+        sb18_serial_hex((uint64_t)i);
+        sb18_serial_puts(" id=");
+        sb18_serial_hex((uint64_t)apic_pcpu[i].id);
+        sb18_serial_puts(" ver=");
+        sb18_serial_hex((uint64_t)apic_pcpu[i].version);
+        sb18_serial_puts(" tpr=");
+        sb18_serial_hex((uint64_t)apic_pcpu[i].tpr);
+        sb18_serial_puts(" svr=");
+        sb18_serial_hex((uint64_t)apic_pcpu[i].svr);
+        sb18_serial_puts(" lvt=");
+        sb18_serial_hex((uint64_t)apic_pcpu[i].lvt_timer);
+        sb18_serial_puts("\n");
+    }
 }
 
 /* 检查I/O APIC是否可用 */
@@ -371,7 +465,8 @@ static void ioapic_init(void)
 /* 切换到纯APIC模式（IMCR + I/O APIC重定向） */
 int apic64_switch_to_apic_mode(void)
 {
-    if (!apic_initialized) {
+    /* SB-19: 按本核判断, 不再看 BSP 的全局标志 */
+    if (!apic_pcpu[apic_cur_slot()].initialized) {
         vga_puts("[APIC] ERROR: Local APIC not initialized\n");
         return -1;
     }
@@ -503,6 +598,19 @@ void apic64_enable_for_ap(void)
     /* 清掉可能存在的错误状态（写ESR再读） */
     apic_write(0x280, 0);
     (void)apic_read(0x280);
+
+    /* SB-19: 只写本核槽 —— 读自己的 ID/版本, 记下自己的 TPR/SVR/LVT。
+     * 绝不回写 apic_mode / apic_initialized 这类系统级全局。 */
+    {
+        int slot = apic_cur_slot();
+        apic_pcpu[slot].id = apic_hw_id();
+        apic_pcpu[slot].version = apic_read(APIC_VERSION) & 0xFF;
+        apic_pcpu[slot].initialized = 1;
+        apic_pcpu[slot].tpr = 0;
+        apic_pcpu[slot].svr = 0x1FF;
+        apic_pcpu[slot].lvt_timer = apic_read(APIC_LVT_TIMER);
+
+    }
 }
 
 /* 校准窗口长度（毫秒）。基准是 PIT channel 0 的软件 tick（1ms/tick，

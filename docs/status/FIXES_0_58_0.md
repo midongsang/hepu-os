@@ -1138,3 +1138,73 @@ Kernel 64-bit SMP、CPU 2 cores、Memory 976 MB）。
 
 （读 MBR 时注意：槽 1 的 type 在文件偏移 **466**，462 是 boot flag，
 按 462 判断会误以为没写进去。）
+
+---
+
+## 1.105 SB-19：LAPIC 状态 per-CPU 化（0.58.7）
+
+### 动机
+
+SB-17 把 syscall 栈槽做成 per-CPU 之后，暴露出一个更底层的问题：
+`smp_get_current_cpu()` 的实现就是 `return apic64_get_id()`，而
+`apic64_get_id()` 在 PIC 模式下返回的是**全局单值 `apic_id`**。也就是说
+
+```c
+uint32_t apic64_get_id(void)
+{
+    if (apic_mode) return 直读LAPIC_ID;
+    return apic_id;      /* PIC 模式：所有核都返回 BSP 的 0 */
+}
+```
+
+**PIC 模式下每个核都自称 CPU0**，所有 per-CPU 下标全部塌到 0 号槽。
+SB-17 的双核 dump 看着正常（0x23CA00 / 0x23CA60），是因为 AP 那条路径
+显式传了 `cpu_id`；但任何走 `smp_get_current_cpu()` 的代码，在 AP 上都算错。
+
+### 落地
+
+`apic64.c`：
+
+- `apic_id` / `apic_version` / `apic_initialized` 三个全局单值删除，
+  改为 `apic_pcpu[16]`（`id` / `version` / `initialized` / `tpr` / `svr` / `lvt_timer`）。
+- `apic_hw_id()` 一律直读本核 LAPIC ID 寄存器，**PIC 模式下也读**；
+  `apic64_get_id()` 直接返回它。
+- `apic64_init()` 只写 0 号槽；`apic64_enable_for_ap()` 只写本核槽，
+  记下本核 TPR/SVR/LVT，**绝不回写 `apic_mode` 这类系统级全局**。
+- `apic64_is_initialized()` 改为按本核判断。
+- 新增 `apic64_get_pcpu_state()` / `apic64_pcpu_id()` / `apic64_pcpu_version()`
+  / `apic64_dump_pcpu()` 诊断接口，各核状态可按核区分读取。
+
+`smp.c`：AP 在 `apic64_enable_for_ap()` 之后打
+`[SB19] cpu=N lapic_id=N ver=N`。
+
+### 踩到的坑：早期 #PF
+
+第一版把 `apic64_get_id()` 直接改成读硬件，结果启动早期就：
+
+```
+[EXCEPTION] vector=0xE error=0x0 rip=0x1449BB
+  CR2=0xF0000020
+  PML4e=0x26A3027 PDPTe=0x0
+```
+
+`CR2=0xF0000020` 就是 LAPIC ID 寄存器地址，`PDPTe=0` 说明那一页还没映射。
+`apic64_init()` 之前，启动流程里已经有代码经 `smp_get_current_cpu()`
+调到 `apic64_get_id()`（旧版这时候返回全局 0，不碰硬件，所以一直没出事）。
+
+修法：加 `apic_mapped` 标志，`apic64_init()` 映射完 LAPIC/IOAPIC 页才置 1；
+`apic_hw_id()` 在未映射时回落到已缓存的 0 号槽值，不碰 MMIO。
+
+### 验证
+
+5/5 轮 `desk=1 EXC=0 PASS=1 FAIL=0`，每轮 AP 都打：
+
+```
+[SB19] cpu=0x1 lapic_id=0x1 ver=0x14
+[APIC64] Local APIC ID=0 Ver=0x14
+```
+
+**AP 拿到自己的 ID=1** —— 这是改造前做不到的（旧代码这里恒为 0）。
+`timer calibration failed` 出现 2 次，属已知 OBS-01（约 16% 概率），非本轮引入。
+
+截图入库 `docs/assets/smp-sb19-0.58.7.png`。

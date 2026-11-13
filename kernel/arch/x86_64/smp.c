@@ -205,6 +205,18 @@ void ap_c_entry(void)
     /* 启用AP核本地APIC（SVR软件使能位per-CPU） */
     extern void apic64_enable_for_ap(void);
     apic64_enable_for_ap();
+    /* SB-19: 确认本核 LAPIC 状态按核独立(不再是 BSP 的全局单值) */
+    {
+        extern uint32_t apic64_pcpu_id(int cpu);
+        extern uint32_t apic64_pcpu_version(int cpu);
+        sb18_serial_puts("[SB19] cpu=");
+        sb18_serial_hex((uint64_t)cpu_id);
+        sb18_serial_puts(" lapic_id=");
+        sb18_serial_hex((uint64_t)apic64_pcpu_id((int)cpu_id));
+        sb18_serial_puts(" ver=");
+        sb18_serial_hex((uint64_t)apic64_pcpu_version((int)cpu_id));
+        sb18_serial_puts("\n");
+    }
 
     /* 启动LAPIC定时器（周期模式约1000Hz，向量0x40） */
     extern void apic64_init_timer(void);
