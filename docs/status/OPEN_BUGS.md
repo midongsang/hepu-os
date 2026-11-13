@@ -2,7 +2,7 @@
 title: 赫普OS 未关闭问题清单
 status: active
 sys_version: 0.58.0
-updated: 2026-11-13（SEC-19 闭合、OBS-01 升级为 BUG-49 并关闭）
+updated: 2026-11-13（SEC-19 闭合、OBS-01→BUG-49 关闭、BUG-13 关闭）
 owner: status
 source_of_truth: kernel/arch/x86_64/
 ---
@@ -38,7 +38,7 @@ source_of_truth: kernel/arch/x86_64/
 
 | 编号 | 问题 | 现状依据 | 状态 |
 |------|------|---------|------|
-| BUG-13 | ATA PIO 读盘 BSY 恒 1 | DEVLOG 01 L25 标"待解决" | 待解决 |
+| BUG-13 | **ATA PIO 读盘 BSY 恒 1** —— 根因是三处实现缺陷叠加：①写完 DRIVE/HEAD 寄存器立即读 STATUS，缺 ATA 规范要求的 400 ns 建立时间，读到的是切换前驱动留下的旧状态（"BSY 一直是 1"的直接来源）；②等 DRQ 的循环里 `if (!(status \& BSY)) return -1;` 把「BSY 清零、DRQ 尚未置位」这个**合法过渡态**判成失败；③只查 ERR(0x01) 不查 DF(0x20)。**修复（v0.59.1）**：拆成 `ide_delay_400ns()` / `ide_wait_not_busy()` / `ide_wait_drq()` 三个语义清晰的等待器，过渡态继续等、靠超时兜底、ERR/DF 统一判错。**附带优化**：`read_sectors`/`write_sectors` 从逐扇区发命令改成一条命令连续读（SECTOR COUNT=0x1F2），ext2 读文件的命令数从几十条降到 1 条 | `ide64.c`；实测 3 轮 `[IDE64] Drive ready` + `Drive master: 256MB (LBA48)`，读扇区失败 0 次，desk=1 EXC=0 PASS=1 | 已关闭 |
 | BUG-49 | **（由 OBS-01 升级而来）启动期 APIC timer 校准依赖 PIT 中断投递，IOAPIC 未配对时必然失败**。校准窗口靠 `pit64_get_ticks()` 推进，而启动早期已切纯 APIC 模式、IOAPIC 重定向表尚未配置，PIT 的 IRQ0 在部分启动里投不进来 → tick 不走 → 校准失败（回归里 `timercal=N`），回退 ICR 使调度 tick 频率错误。**修复（v0.59.1）**：改用 PIT 通道 2 门控（mode0 计数 + 轮询 0x42，1.193182 MHz 硬件基准），与中断投递彻底解耦；并用 5 ms / 20 ms 两个窗口交叉校验（偏差 >20% 判不可信、退回老路径）。实测 8 轮 `timercal=0`，tick_hz 稳定在 61~63 MHz（≈ 1 GHz/16，与 QEMU LAPIC 量级吻合），ICR≈61 500 → 目标 1 kHz | `apic64.c` `apic64_calibrate_via_pit2()`；串口 `[APIC] timer calibrated` 8/8；`inconsistent` 0 次 | 已关闭 |
 | BUG-48 | INT13 磁盘重置在关中断下调用 | boot/BOOTLOADER_DEFINITION_PLAN.md, 待 QEMU 验证 | 待验证 |
 | OPEN-01 | QEMU 高 LBA(P2/P3) 写成功读全 0 | VERSIONING.md 0.13.57 已知限制 | 验证中 |

@@ -75,19 +75,65 @@ static inline void outw(uint16_t port, uint16_t val)
     __asm__ volatile("outw %0, %1" : : "a"(val), "Nd"(port));
 }
 
-/* 等待IDE就绪 */
-static int ide_wait_ready(void)
+/* BUG-13 修复（v0.59.1）：ATA PIO 等待逻辑整体重写。
+ *
+ * 原实现的三个硬伤：
+ *   ① 写完 DRIVE/HEAD 寄存器后立刻读 STATUS —— ATA 规范要求先等 400 ns
+ *      （读 4 次 status 即可），否则可能读到切换前那个驱动留下的旧值，
+ *      "BSY 一直是 1" 就是这么来的：读到的根本不是新选中驱动器的状态。
+ *   ② 等 DRQ 的循环里写着 `if (!(status & BSY)) return -1;` —— BSY 清零
+ *      但 DRQ 尚未置位是**合法过渡态**（PIO 读：BSY=1 → BSY=0,DRQ=1），
+ *      这里直接判失败，于是偶发"读不出来"。
+ *   ③ 只查 ERR(0x01)，不查 DF(0x20) 设备故障位；超时也没有区分。
+ *
+ * 现在拆成两个语义清晰的等待器，并统一处理错误位。
+ */
+static void ide_delay_400ns(void)
 {
-    for (int i = 0; i < 100000; i++) {
+    /* ATA 规范：读 4 次 alternate/fixed status 即可满足 400 ns 建立时间 */
+    for (int i = 0; i < 4; i++) {
+        (void)inb(IDE_PRIMARY_STATUS);
+    }
+}
+
+/* 状态位语义：返回 0=就绪, -1=超时, -2=ERR/DF（设备报错） */
+static int ide_status_error(uint8_t status)
+{
+    return (status & (IDE_STATUS_ERR | IDE_STATUS_DF)) ? -2 : 0;
+}
+
+/* 等 BSY 清零（不要求 DRDY，有些老盘 DRDY 是滞后置位的） */
+static int ide_wait_not_busy(void)
+{
+    for (int i = 0; i < 200000; i++) {
         uint8_t status = inb(IDE_PRIMARY_STATUS);
-        if (status & IDE_STATUS_ERR) {
-            return -2;  /* 错误 */
-        }
-        if (!(status & IDE_STATUS_BSY)) {
-            return (status & IDE_STATUS_DRDY) ? 0 : -1;
-        }
+        if (ide_status_error(status) != 0) return -2;
+        if (!(status & IDE_STATUS_BSY)) return 0;
+        __asm__ volatile("pause" ::: "memory");
     }
     return -1;
+}
+
+/* 等 BSY=0 且 DRQ=1（PIO 数据阶段的正确判据） */
+static int ide_wait_drq(void)
+{
+    for (int i = 0; i < 200000; i++) {
+        uint8_t status = inb(IDE_PRIMARY_STATUS);
+        if (ide_status_error(status) != 0) return -2;
+        if (!(status & IDE_STATUS_BSY)) {
+            if (status & IDE_STATUS_DRQ) return 0;
+            /* BSY=0 且 DRQ=0：过渡态，继续等；真失败靠上面的超时兜住 */
+        }
+        __asm__ volatile("pause" ::: "memory");
+    }
+    return -1;
+}
+
+/* 等待IDE就绪（初始化/命令间用） */
+static int ide_wait_ready(void)
+{
+    ide_delay_400ns();
+    return ide_wait_not_busy();
 }
 
 /* 初始化IDE */
@@ -111,11 +157,12 @@ void ide64_init(void)
 /* 读取一个扇区（512字节） */
 int ide64_read_sector(uint32_t lba, uint8_t *buffer)
 {
-    /* 先选择磁盘 */
+    /* 先选择磁盘（bit4=0 master / 1 slave，高 4 位放 LBA27-24） */
     outb(IDE_PRIMARY_DRIVE, (ide64_drive ? 0xF0 : 0xE0) | ((lba >> 24) & 0x0F));
+    ide_delay_400ns();               /* 切换驱动器必须等 400ns */
 
     /* 等待所选磁盘就绪 */
-    if (ide_wait_ready() != 0) {
+    if (ide_wait_not_busy() != 0) {
         return -1;
     }
 
@@ -124,19 +171,15 @@ int ide64_read_sector(uint32_t lba, uint8_t *buffer)
     outb(IDE_PRIMARY_LBA0, (uint8_t)(lba & 0xFF));
     outb(IDE_PRIMARY_LBA1, (uint8_t)((lba >> 8) & 0xFF));
     outb(IDE_PRIMARY_LBA2, (uint8_t)((lba >> 16) & 0xFF));
-    /* 再次选择磁盘（有些控制器需要） */
+    /* 再次选择磁盘（有些控制器需要），带 LBA27-24 */
     outb(IDE_PRIMARY_DRIVE, (ide64_drive ? 0xF0 : 0xE0) | ((lba >> 24) & 0x0F));
+    ide_delay_400ns();
 
     /* 发送读命令 */
     outb(IDE_PRIMARY_COMMAND, IDE_CMD_READ);
 
-    /* 等待DRQ（数据请求）位设置 */
-    for (int i = 0; i < 100000; i++) {
-        uint8_t status = inb(IDE_PRIMARY_STATUS);
-        if (status & IDE_STATUS_ERR) return -1;
-        if (status & IDE_STATUS_DRQ) break;
-        if (!(status & IDE_STATUS_BSY)) return -1;
-    }
+    /* 等 BSY=0 且 DRQ=1（合法的过渡态不再被误判为失败） */
+    if (ide_wait_drq() != 0) return -1;
 
     /* 读取数据（256个16位字 = 512字节） */
     for (int i = 0; i < 256; i++) {
@@ -151,9 +194,10 @@ int ide64_write_sector(uint32_t lba, const uint8_t *buffer)
 {
     /* 先选择磁盘 */
     outb(IDE_PRIMARY_DRIVE, (ide64_drive ? 0xF0 : 0xE0) | ((lba >> 24) & 0x0F));
+    ide_delay_400ns();
 
     /* 等待所选磁盘就绪 */
-    if (ide_wait_ready() != 0) {
+    if (ide_wait_not_busy() != 0) {
         return -1;
     }
 
@@ -163,17 +207,13 @@ int ide64_write_sector(uint32_t lba, const uint8_t *buffer)
     outb(IDE_PRIMARY_LBA1, (uint8_t)((lba >> 8) & 0xFF));
     outb(IDE_PRIMARY_LBA2, (uint8_t)((lba >> 16) & 0xFF));
     outb(IDE_PRIMARY_DRIVE, (ide64_drive ? 0xF0 : 0xE0) | ((lba >> 24) & 0x0F));
+    ide_delay_400ns();
 
     /* 发送写命令 */
     outb(IDE_PRIMARY_COMMAND, IDE_CMD_WRITE);
 
-    /* 等待DRQ（数据请求）位设置 */
-    for (int i = 0; i < 100000; i++) {
-        uint8_t status = inb(IDE_PRIMARY_STATUS);
-        if (status & IDE_STATUS_ERR) return -1;
-        if (status & IDE_STATUS_DRQ) break;
-        if (!(status & IDE_STATUS_BSY)) return -1;
-    }
+    /* 等 BSY=0 且 DRQ=1 */
+    if (ide_wait_drq() != 0) return -1;
 
     /* 写入数据 */
     for (int i = 0; i < 256; i++) {
@@ -187,25 +227,63 @@ int ide64_write_sector(uint32_t lba, const uint8_t *buffer)
     return 0;
 }
 
-/* 读取多个扇区 */
+/* 读取多个扇区
+ * BUG-13 附带优化：PIO 支持一条命令读多个扇区（SECTOR COUNT = 0x1F2）。
+ * 原来逐扇区发 READ 命令，ext2 读一个文件要发几十上百条命令，每次还要
+ * 等一轮 BSY/DRQ；改成一条命令连续读，命令数降为 1，加载明显变快。
+ * 上限 255 扇区（寄存器 8 位，0 表示 256，这里不碰那个边界）。 */
 int ide64_read_sectors(uint32_t lba, uint8_t count, uint8_t *buffer)
 {
-    for (uint8_t i = 0; i < count; i++) {
-        if (ide64_read_sector(lba + i, buffer + i * 512) != 0) {
-            return -1;
-        }
+    if (count == 0) return 0;
+    if (count == 1) return ide64_read_sector(lba, buffer);
+
+    outb(IDE_PRIMARY_DRIVE, (ide64_drive ? 0xF0 : 0xE0) | ((lba >> 24) & 0x0F));
+    ide_delay_400ns();
+    if (ide_wait_not_busy() != 0) return -1;
+
+    outb(IDE_PRIMARY_SECTOR, count);
+    outb(IDE_PRIMARY_LBA0, (uint8_t)(lba & 0xFF));
+    outb(IDE_PRIMARY_LBA1, (uint8_t)((lba >> 8) & 0xFF));
+    outb(IDE_PRIMARY_LBA2, (uint8_t)((lba >> 16) & 0xFF));
+    outb(IDE_PRIMARY_DRIVE, (ide64_drive ? 0xF0 : 0xE0) | ((lba >> 24) & 0x0F));
+    ide_delay_400ns();
+
+    outb(IDE_PRIMARY_COMMAND, IDE_CMD_READ);
+
+    for (int s = 0; s < count; s++) {
+        if (ide_wait_drq() != 0) return -1;
+        uint16_t *dst = (uint16_t *)(buffer + (uint64_t)s * 512);
+        for (int i = 0; i < 256; i++) dst[i] = inw(IDE_PRIMARY_DATA);
     }
     return 0;
 }
 
-/* 写入多个扇区 */
+/* 写入多个扇区（同样一条命令写完，写后 FLUSH CACHE） */
 int ide64_write_sectors(uint32_t lba, uint8_t count, const uint8_t *buffer)
 {
-    for (uint8_t i = 0; i < count; i++) {
-        if (ide64_write_sector(lba + i, buffer + i * 512) != 0) {
-            return -1;
-        }
+    if (count == 0) return 0;
+    if (count == 1) return ide64_write_sector(lba, buffer);
+
+    outb(IDE_PRIMARY_DRIVE, (ide64_drive ? 0xF0 : 0xE0) | ((lba >> 24) & 0x0F));
+    ide_delay_400ns();
+    if (ide_wait_not_busy() != 0) return -1;
+
+    outb(IDE_PRIMARY_SECTOR, count);
+    outb(IDE_PRIMARY_LBA0, (uint8_t)(lba & 0xFF));
+    outb(IDE_PRIMARY_LBA1, (uint8_t)((lba >> 8) & 0xFF));
+    outb(IDE_PRIMARY_LBA2, (uint8_t)((lba >> 16) & 0xFF));
+    outb(IDE_PRIMARY_DRIVE, (ide64_drive ? 0xF0 : 0xE0) | ((lba >> 24) & 0x0F));
+    ide_delay_400ns();
+
+    outb(IDE_PRIMARY_COMMAND, IDE_CMD_WRITE);
+
+    for (int s = 0; s < count; s++) {
+        if (ide_wait_drq() != 0) return -1;
+        const uint16_t *src = (const uint16_t *)(buffer + (uint64_t)s * 512);
+        for (int i = 0; i < 256; i++) outw(IDE_PRIMARY_DATA, src[i]);
     }
+    outb(IDE_PRIMARY_COMMAND, 0xE7);   /* FLUSH CACHE */
+    if (ide_wait_not_busy() != 0) return -1;
     return 0;
 }
 
