@@ -80,24 +80,28 @@ static void ut_save(uthread_t *t, uint64_t *f)
     t->rflags = f[21];
     t->rsp = f[22];
     /* V0.58.3: 连带把这组 syscall 返回状态记进线程, 见结构体注释 */
-    extern uint64_t g_syscall_ret_rip, g_syscall_ret_rflags, g_syscall_ustack_slot;
+    extern uint64_t g_syscall_ret_rip, g_syscall_ret_rflags;
+    extern uint64_t *syscall64_ustack_slot_ptr(void);
     t->sret_rip = g_syscall_ret_rip;
     t->sret_rflags = g_syscall_ret_rflags;
-    t->sustack = g_syscall_ustack_slot;
+    /* SB-17: 从本核的 per-CPU 槽取, 不再是全局单值 */
+    t->sustack = *syscall64_ustack_slot_ptr();
 }
 
 static void ut_restore(uthread_t *t, uint64_t *f)
 {
     for (int i = 0; i < 15; i++) f[UT_FRAME_GPR_BASE + i] = t->raw[i];
+    extern uint64_t *syscall64_kstack_slot_ptr(void);
+    extern uint64_t *syscall64_ustack_slot_ptr(void);
     if (t->kstack_top) {
-        extern uint64_t g_syscall_kstack_slot;
-        g_syscall_kstack_slot = t->kstack_top;
+        /* SB-17: 写本核的 per-CPU 槽 */
+        *syscall64_kstack_slot_ptr() = t->kstack_top;
     }
     /* V0.58.3: 恢复该线程自己的 syscall 返回状态 */
-    extern uint64_t g_syscall_ret_rip, g_syscall_ret_rflags, g_syscall_ustack_slot;
+    extern uint64_t g_syscall_ret_rip, g_syscall_ret_rflags;
     g_syscall_ret_rip = t->sret_rip;
     g_syscall_ret_rflags = t->sret_rflags;
-    g_syscall_ustack_slot = t->sustack;
+    *syscall64_ustack_slot_ptr() = t->sustack;
     f[19] = t->rip;
     f[21] = t->rflags;
     f[22] = t->rsp;
@@ -259,9 +263,10 @@ uint64_t uthread_apply_redirect(uint64_t *f)
     f[12] = t->rip;             /* rcx = 目标 RIP */
     f[4]  = t->rflags;          /* r11 = 目标 RFLAGS */
 
-    extern uint64_t g_syscall_ustack_slot, g_syscall_kstack_slot;
-    g_syscall_ustack_slot = t->rsp;
-    if (t->kstack_top) g_syscall_kstack_slot = t->kstack_top;
+    extern uint64_t *syscall64_ustack_slot_ptr(void), *syscall64_kstack_slot_ptr(void);
+    /* SB-17: 只写本核的 per-CPU 槽; t->sustack 与 t->rsp 的统一见 OPEN_BUGS */
+    *syscall64_ustack_slot_ptr() = t->rsp;
+    if (t->kstack_top) *syscall64_kstack_slot_ptr() = t->kstack_top;
 
     return t->raw[14];          /* 作为返回值写进 rax 槽 */
 }

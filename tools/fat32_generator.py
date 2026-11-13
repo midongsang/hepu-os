@@ -73,8 +73,8 @@ class FAT32Generator:
         struct.pack_into('<H', bs, 24, 63)
         # 磁头数
         struct.pack_into('<H', bs, 26, 255)
-        # 隐藏扇区数
-        struct.pack_into('<I', bs, 28, 0)
+        # 隐藏扇区数 = 本分区在磁盘上的起始 LBA(V0.58.5 修正: 原来恒为 0)
+        struct.pack_into('<I', bs, 28, 2048)
         # 大总扇区数
         struct.pack_into('<I', bs, 32, self.total_sectors)
 
@@ -310,6 +310,12 @@ class FAT32Generator:
         self.create_boot_sector()
         self.create_fsinfo()
         self.init_fat()
+        # V0.58.5: BPB 的 BPB_BkBootSec 声明了备份引导扇区(6 号扇区),
+        # 必须真的写一份, 否则严格实现(OVMF 的 FAT 驱动)会判定卷无效,
+        # 表现是"找到硬盘但找不到 \EFI\BOOT\BOOTX64.EFI"→ 掉 PXE。
+        ss = self.sector_size
+        self.data[6 * ss:7 * ss] = self.data[0:ss]          # 备份引导扇区
+        self.data[7 * ss:8 * ss] = self.data[ss:2 * ss]     # 备份 FSInfo
         return bytes(self.data)
 
 

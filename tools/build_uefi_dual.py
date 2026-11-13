@@ -250,7 +250,7 @@ def create_ext2_data(img):
 
     os.remove(ext2_tmp)
     print("[EXT2] 根分区创建完成")
-    write_hybrid_mbr(IMG_PATH, DATA_START, DATA_SECTORS)
+    # hybrid MBR 统一在 main() 收尾由 _write_protective_mbr 写入
 
 
 def create_gpt_via_sgdisk(img_path):
@@ -284,7 +284,8 @@ def create_fat32_esp_tool(img_path):
         with open(k32, 'rb') as f:
             files['KERNEL32.BIN'] = f.read()
     files['HEPBOOT.CFG'] = (b"# HepuBoot UEFI Configuration v0.57.0\n"
-                            b"timeout=5\ndefault=0\nkernel_arch=64\ncmdline=\n")
+                            b"timeout=5\ndefault=0\nkernel_arch=64\n"
+                            b"resolution=1920x1080\ncmdline=\n")
 
     subprocess.run(['dd', 'if=/dev/zero', f'of={esp_tmp}', 'bs=512',
                     f'count={ESP_SECTORS}', 'status=none'], check=True)
@@ -310,24 +311,72 @@ def create_fat32_esp_tool(img_path):
 
 
 
-def write_hybrid_mbr(img_path, root_lba, root_sectors):
+def write_hybrid_mbr(f, root_lba, root_sectors):
     """在保护性 MBR 里补一个 0x83 分区块, 指向 ext2 根分区。
     UEFI 固件读 GPT, 不看 MBR; 而内核 IDE 扫描只认 MBR 的 0x83 项,
     GPT 盘原本只有 0xEE 保护项 -> 内核拿不到根分区偏移, 会把 GPT 头当超级块。
-    这是让两边各取所需的桥。"""
+    这是让两边各取所需的桥。
+
+    V0.58.5: 改成复用调用方的句柄 —— 之前这里自己 open() 一次,
+    与外层 create_ext2_data 的句柄缓冲交错, 最后落盘的 LBA 0 变成全 0。
+    """
+    f.seek(446)
+    mbr = bytearray(f.read(66))
+    if len(mbr) < 66:
+        mbr = bytearray(66)
+    e = bytearray(16)
+    e[0] = 0x00; e[4] = 0x83
+    e[8:12] = root_lba.to_bytes(4, 'little')
+    e[12:16] = root_sectors.to_bytes(4, 'little')
+    mbr[16:32] = e
+    f.seek(446)
+    f.write(mbr)
+    f.seek(510); f.write(b'\x55\xaa')
+    print('  [MBR] hybrid 0x83 -> LBA %d (%d sectors)' % (root_lba, root_sectors))
+
+
+def _write_protective_mbr(img_path, root_lba, root_sectors):
+    """构建收尾: 用独立描述符重写 LBA 0 的 446..512 区段。
+
+    - 槽 0 必须是类型 0xEE 的保护项(GPT 规范);
+    - 槽 1 写 hybrid 0x83 指向 ext2 根分区(本机内核只解析 MBR 分区项);
+    - 0x55AA 结尾。
+
+    V0.58.5: 这个函数必须在所有其它写操作关闭句柄之后再调用, 并且只写
+    446..512 这 66 字节 —— 之前用共享句柄整块重写 512B, 与外层 120MB 写入
+    的缓冲交错, 最终落盘的 LBA 0 要么全 0、要么 hybrid 槽被冲掉。
+    """
+    total = IMG_SIZE // 512
+    e0 = bytearray(16)
+    e0[0] = 0x00
+    e0[1] = 0x00; e0[2] = 0x02; e0[3] = 0x00     # start CHS
+    e0[4] = 0xEE
+    e0[5] = 0xFF; e0[6] = 0xFF; e0[7] = 0xFF     # end CHS
+    struct.pack_into('<I', e0, 8, 1)
+    struct.pack_into('<I', e0, 12, min(total - 1, 0xFFFFFFFF))
+
+    e1 = bytearray(16)
+    e1[0] = 0x00
+    e1[4] = 0x83
+    struct.pack_into('<I', e1, 8, root_lba)
+    struct.pack_into('<I', e1, 12, root_sectors)
+
+    tail = bytearray(66)          # 446..512
+    tail[0:16] = e0
+    tail[16:32] = e1
+    tail[64] = 0x55; tail[65] = 0xAA
+
     with open(img_path, 'r+b') as f:
         f.seek(446)
-        mbr = bytearray(f.read(66))
-        # 保留原有 0xEE 保护项(entry0), 用 entry1 放 0x83
-        e = bytearray(16)
-        e[0] = 0x00; e[4] = 0x83
-        e[8:12] = root_lba.to_bytes(4, 'little')
-        e[12:16] = root_sectors.to_bytes(4, 'little')
-        mbr[16:32] = e
-        f.seek(446)
-        f.write(mbr)
-        f.seek(510); f.write(b'\x55\xaa')
-    print('  [MBR] hybrid 0x83 -> LBA %d (%d sectors)' % (root_lba, root_sectors))
+        f.write(tail)
+        f.flush()
+        os.fsync(f.fileno())
+    print("[GPT] MBR: slot0=0xEE(start=1, %d sectors) slot1=0x83(start=%d, %d sectors)" %
+          (min(total - 1, 0xFFFFFFFF), root_lba, root_sectors))
+
+
+def _open_img(path):
+    return open(path, 'r+b')
 
 
 def main():
@@ -335,11 +384,22 @@ def main():
     with open(IMG_PATH, 'wb') as img:
         img.truncate(IMG_SIZE)
 
+    # V0.58.5: 环境里 sgdisk / mkfs.vfat / mtools 已被清理且无 root 权限,
+    # 回到本脚本自带的纯 Python 实现(GPT CRC 与 FAT32 由 tools/fat32_generator.py 保证)。
+    # V0.58.5: 环境重置后 sgdisk / mkfs.vfat / mtools 已用 dpkg -x 从 jammy 包
+    # 还原到 /tmp/pkg/root3(sgdisk 1.0.8 / mtools 4.0.43 / dosfstools 4.2),
+    # 构建回到历史上验证过 OVMF 能认的路径。
+    # 自研 create_gpt_partition_table / create_fat32_esp 保留作研究用途 ——
+    # 它们产出的 GPT 与 FAT32 即使逐字段合规, OVMF 仍然 "Not Found" 掉 PXE
+    # (缺少 SimpleFileSystem 协议实例), 不能用作出镜像。
     create_gpt_via_sgdisk(IMG_PATH)
     create_fat32_esp_tool(IMG_PATH)
 
     with open(IMG_PATH, 'r+b') as img:
         create_ext2_data(img)
+
+    # 收尾: 所有句柄关闭后再写 MBR(见函数注释)
+    _write_protective_mbr(IMG_PATH, DATA_START, DATA_SECTORS)
 
     size = os.path.getsize(IMG_PATH)
     print(f"\n=== 构建完成 ===\n  镜像: {IMG_PATH}\n  大小: {size} bytes ({size//1024//1024}MB)")

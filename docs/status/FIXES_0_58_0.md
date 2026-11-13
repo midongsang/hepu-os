@@ -1025,3 +1025,116 @@ v=08  e=0000  cpl=0  IP=0008:000000000014552c
 `PLAN_SMP_HARDENING_R5.md` 的 SB-18 条目假设"TSS 在 `gdt64.c` 里"。实测是
 反的：`gdt64.c` 那套是死代码，真表在汇编、真初始化在 `tss64_init()`。
 改 SB-18 之前必须先确认这一点，否则整轮改动都落在不会执行的分支上。
+
+---
+
+## 1.104 SB-17 完整版：per-CPU syscall 栈槽（0.58.6）
+
+### 目标
+
+把 syscall 入口/出口用的两个全局单值（`g_syscall_kstack_slot` /
+`g_syscall_ustack_slot`）换成每核一份，为此把 GS 段当 per-CPU 基址用：
+`MSR_KERNEL_GS_BASE` 指向本核的 `percpu_data[cpu]`，入口汇编走 `%gs:0x00` /
+`%gs:0x08` 直接取栈。
+
+### 落地的改动
+
+| 文件 | 内容 |
+|---|---|
+| `entry_64.S` | syscall 入口 `movq %rsp,%gs:0x08` / `movq %gs:0x00,%rsp`；出口 `movq %gs:0x08,%rsp` |
+| `syscall64_simple.c` | `percpu_data[16]`；`PERCPU_SIZE 64` 与编译期 `percpu_size_check`；`syscall_current_cpu()` / `syscall64_pcpu()` / `syscall64_kstack_slot_ptr()` / `syscall64_ustack_slot_ptr()`；`syscall64_init_for_cpu(cpu,kstack_top)` 写本核 MSR |
+| `uthread64.c` | `ut_save` / `ut_restore` / `uthread_apply_redirect` 三处改走 `syscall64_*_slot_ptr()` |
+| `syscall64_full.c` | fork 的两处读改走 `syscall64_ustack_slot_ptr()` |
+| `smp.c` | `ap_c_entry` 在 SB-18 块后调 `syscall64_init_for_cpu(cpu_id, gdt64_kstack_top_for_cpu(cpu_id))`，打 `[SB17]` 串口行 |
+
+实测核 0 `msr_gsbase=0x23CA00`、核 1 `gs_percpu=0x23CA60`，布局正确。
+
+### 踩到的坑：切换用户态时 GS 段协议不一致 → #DF
+
+改完第一轮验证，`exec /bin/sec_test.elf` 切到用户态后立刻：
+
+```
+[EXCEPTION] vector=0x8 error=0x0 rip=0x1001C1
+```
+
+`0x1001C1` 正是 `syscall_entry_64` 里 `swapgs` → 存用户栈 → 取内核栈之后的
+第一条 `push %rax`。
+
+**取证过程**（全部用开源工具，没靠猜）：
+
+1. `objdump -d` 定位到 `push %rax`（`0x1001C1`）。
+2. QEMU `-d int` 抓第一次异常：`v=0e e=0002 ... IP=0010:...? SP=0010:0000000000000000 CR2=fffffffffffffff8`
+   —— **`SP=0`**，`CR2=-8`，即 `push` 踩在 `rsp-8`。也就是说 `%gs:0x00` 读出来是 **0**。
+3. QEMU monitor `xp /1gx 0x23ca00` 直接读物理内存：崩溃后该槽是**正常值**
+   `0x1E56D0`，说明问题不在初始化写的值，而在**那一刻 GS 基址不对**。
+4. 在 `syscall_handler_64` 入口临时读 `MSR_GS_BASE(0xC0000101)` /
+   `MSR_KERNEL_GS_BASE(0xC0000102)` / `%gs:0` 打到串口：
+
+```
+[DIAG] #1 gsbase=0          kgsbase=0x23CA20 gs0=0
+[DIAG] #2 gsbase=0x23CA20   kgsbase=0         gs0=0x1E56D0
+[DIAG] #3 gsbase=0x23CA20   kgsbase=0         gs0=0x1E56D0
+```
+
+**第一次 syscall 时 GS=0，第二次起就正常了。** 两次都执行了同一个 `swapgs`，
+差别只能是**进入 syscall 之前 GS 的初始状态不同**。
+
+根因：`user_process_switch()`（`user_process.c`）里的 `user_enter()` 只做
+`iretq`。它经常是在 syscall handler 上下文里被调用的（exec / 切进程），
+那时 `swapgs` 已经把 GS 换成了 percpu —— **直接 iretq 就把 percpu 带进了用户态**。
+于是用户第一次 syscall 的 `swapgs` 又把它换回 0，`%gs:0x00` 读出 0，
+第一条 `push` 踩到 `rsp-8 = -8` → #PF → 抬不起 #PF 帧 → #DF。
+
+关键点：**`%gs:0x08`（地址 8）和 `%gs:0x00`（地址 0）都落在低 1MB 已映射区**，
+所以两条 GS 访问本身都不报 #PF，只有随后的 `push` 才暴露 —— 这也是为什么
+异常 RIP 落在 `push` 而不是 GS 访问指令上，容易看错方向。
+
+### 修法
+
+在 `user_process_switch()` 调 `user_enter()` 之前，按当前 GS 状态补一次：
+
+```c
+uint64_t gsb = read_msr(0xC0000101);       /* MSR_GS_BASE */
+if (gsb != 0) __asm__ volatile("swapgs");   /* 还在 syscall 上下文, 还原成 0 */
+```
+
+GS 协议因此固定为：**内核普通态 GS_BASE=0；syscall 入口 swapgs 后 GS_BASE=percpu；
+返回用户态前必须让 GS_BASE 回到 0**。`user_enter` 是唯一"从 syscall 上下文
+直出用户态"的路径，所以只需要在这里补。
+
+### 验证
+
+5/5 轮全 PASS：
+
+```
+run1 desk=1 EXC=0 PASS=1 FAIL=0 timercal=0
+run2 desk=1 EXC=0 PASS=1 FAIL=0 timercal=0
+run3 desk=1 EXC=0 PASS=1 FAIL=0 timercal=0
+run4 desk=1 EXC=0 PASS=1 FAIL=0 timercal=0
+run5 desk=1 EXC=0 PASS=1 FAIL=0 timercal=0
+```
+
+桌面截图入库 `docs/assets/smp-sb17-0.58.6.png`（Info 面板 Uptime 0s、
+Kernel 64-bit SMP、CPU 2 cores、Memory 976 MB）。
+
+### 附带修掉的镜像构建问题
+
+同一轮里发现"重建镜像后 ext2 根分区挂载失败、落到首启 OOBE"，根因是
+`tools/build_uefi_dual.py` 收尾的 `_write_protective_mbr()` **整块重写 512 字节**，
+把 `create_ext2_data` 刚写的 hybrid `0x83` 项冲掉了。本机内核只解析 MBR 分区项
+（不解析 GPT），根分区就是靠这条 hybrid 项认出来的；冲掉之后内核把 GPT 头
+（LBA 2）当超级块，于是 `invalid superblock parameters` → 挂载失败 → OOBE。
+
+修法：`_write_protective_mbr(*, root_lba, root_sectors)` 改为在所有句柄关闭之后
+用独立描述符**只写 446..512 这 66 字节**（槽 0 = `0xEE` 保护项，槽 1 = `0x83`
+指向 ext2 根，末尾 `0x55AA`），`write_hybrid_mbr` 也在同一收尾步骤里统一写。
+重建后：
+
+```
+[PARTS] P0x1 type=0xEE lba=0x1 sz=0x7FFFF ext2=0x0
+[PARTS] P0x2 type=0x83 lba=0x40800 sz=0x3C000 ext2=0x1
+[AUTH] Account loaded: dev (role 2)
+```
+
+（读 MBR 时注意：槽 1 的 type 在文件偏移 **466**，462 是 boot flag，
+按 462 判断会误以为没写进去。）

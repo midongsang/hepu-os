@@ -81,8 +81,12 @@ syscall_entry_64:
      *   [rsp+0x20]=r11 [rsp+0x28]=r10 [rsp+0x30]=r9  [rsp+0x38]=r8
      *   [rsp+0x40]=rbp [rsp+0x48]=rdi [rsp+0x50]=rsi [rsp+0x58]=rdx
      *   [rsp+0x60]=rcx [rsp+0x68]=rbx [rsp+0x70]=rax(nr) */
-    movq %rsp, g_syscall_ustack_slot(%rip)   /* 直接存用户栈 (不碰 rax) */
-    movq g_syscall_kstack_slot(%rip), %rsp   /* 直接读内核栈顶 */
+    /* V0.58.5 / SB-17: swapgs 之后 GS 就指向本核的 percpu_data,
+     * 于是直接按 GS 相对取栈 —— 不再走全局单值槽, 避免两个核互相覆盖。
+     * (V0.13.43 当年记的"QEMU 上 gs:0x00 读取不可靠", 实际是当时
+     *  MSR_KERNEL_GS_BASE 没设对, 不是段基址本身的问题) */
+    movq %rsp, %gs:0x08                      /* 保存用户栈到本核槽 */
+    movq %gs:0x00, %rsp                      /* 取本核内核栈顶 */
     /* V0.33 修复：这里原本是 `movq %rsp, %r13` —— 它在 pushq %r13 之前
      * 就把**用户的 r13** 覆盖成了内核栈指针，于是 pushq %r13 存进去的
      * 是内核地址，popq %r13 恢复给用户的也是内核地址。
@@ -181,8 +185,8 @@ syscall_entry_64:
     popq %rbx
     popq %rax          /* 恢复系统调用返回值（rax 槽已被结果覆盖） */
 
-    /* 恢复用户栈 (绝对地址槽, 直接读值 - 保护 rax 返回值) */
-    movq g_syscall_ustack_slot(%rip), %rsp
+    /* 恢复用户栈 (V0.58.5 / SB-17: 从本核 GS 槽取, 保护 rax 返回值) */
+    movq %gs:0x08, %rsp
     swapgs
 
     /* 返回用户态 */

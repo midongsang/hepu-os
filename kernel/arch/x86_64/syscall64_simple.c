@@ -36,12 +36,39 @@ typedef struct {
     uint64_t reserved[6];
 } percpu_data_t;
 
-static percpu_data_t percpu_data;
+/* SB-17: per-CPU 存储。每个核一份, GS 段基址指向自己那份。
+ * 之前是单份全局结构, 只有 BSP 在 syscall64_init() 里写 MSR_KERNEL_GS_BASE,
+ * 所以 AP 一旦进 syscall, swapgs 之后 %gs:0x00/0x08 读的是 BSP 的栈槽 ——
+ * 两个核会互相踩栈。这里改成每核一份, AP 在自己的 ap_c_entry 里写自己的 MSR。 */
+#define SYSCALL_MAX_CPUS 16
+#define PERCPU_SIZE 64          /* 一个槽 64 字节 = 8 个 uint64_t, 页内布局对齐 */
 
-/* V0.13.43 修复: QEMU 上 GS 段寻址(gs:0x00/0x08)不可靠, 提供绝对地址槽给 entry_64.S 使用
- * V0.13.43: 槽改为直接值语义 (entry 直接读写; 用指针中转会覆盖 rax 返回值) */
-uint64_t g_syscall_kstack_slot = 0;
-uint64_t g_syscall_ustack_slot = 0;
+static percpu_data_t percpu_data[SYSCALL_MAX_CPUS];
+/* 编译期保证每份结构不超过 PERCPU_SIZE, 防止以后加字段时踩到别人的槽 */
+typedef char percpu_size_check[(sizeof(percpu_data_t) <= PERCPU_SIZE) ? 1 : -1];
+
+static int syscall_current_cpu(void)
+{
+    extern int smp_get_current_cpu(void);
+    return smp_get_current_cpu();
+}
+
+/* 当前核的 percpu 结构 (GS 段基址就是它) */
+percpu_data_t *syscall64_pcpu(void)
+{
+    return &percpu_data[syscall_current_cpu()];
+}
+
+/* 当前核的栈槽地址。entry_64.S 走 %gs:0x00 / %gs:0x08, C 侧统一经这里取,
+ * 保证"同一个数据只有一个来源"(旧代码里 g_syscall_*_slot 这个全局单值就是第二个来源)。 */
+uint64_t *syscall64_kstack_slot_ptr(void) { return &syscall64_pcpu()->kernel_stack; }
+uint64_t *syscall64_ustack_slot_ptr(void) { return &syscall64_pcpu()->user_stack; }
+
+/* 兼容别名(过渡一个版本): 保留符号, 但语义已改为"当前核的值", 不再是独立存储。
+ * 老代码里直接赋值 g_syscall_*_slot 的地方必须改成写 syscall64_*_slot_ptr(),
+ * 否则写进去的值会被下一轮 per-CPU 切换覆盖掉。 */
+uint64_t g_syscall_kstack_slot = 0;   /* 仅用于旧符号链接, 不再作为存储 */
+uint64_t g_syscall_ustack_slot = 0;   /* 仅用于旧符号链接, 不再作为存储 */
 
 /* 内核栈顶（在entry_64.S中定义） */
 /* V0.13.43 修复: kernel_main_64.c 定义的是指针变量, 数组声明导致取到符号地址 */
@@ -124,6 +151,22 @@ uint64_t syscall_handler_64(uint64_t syscall_num, uint64_t arg1, uint64_t arg2,
     }
 }
 
+/* SB-17: 为指定核心初始化 syscall 的 per-CPU 存储。
+ * 核 0 由 syscall64_init() 调用; 其余核在 ap_c_entry 里各自调用,
+ * 每个核写自己的 IA32_KERNEL_GS_BASE, 让 swapgs 后 %gs 落在本核的槽上。
+ * kstack_top 传本核 syscall 用的内核栈顶 (0 表示暂用 kernel_stack_top)。 */
+void syscall64_init_for_cpu(int cpu, uint64_t kstack_top)
+{
+    if (cpu < 0 || cpu >= SYSCALL_MAX_CPUS) return;
+    if (!kstack_top) kstack_top = (uint64_t)kernel_stack_top;
+
+    percpu_data[cpu].kernel_stack = kstack_top;
+    percpu_data[cpu].user_stack = 0;
+    for (int i = 0; i < 6; i++) percpu_data[cpu].reserved[i] = 0;
+
+    x86_64_write_msr(MSR_KERNEL_GS_BASE, (uint64_t)&percpu_data[cpu]);
+}
+
 /* 初始化系统调用 */
 void syscall64_init(void)
 {
@@ -150,20 +193,19 @@ void syscall64_init(void)
      * 否则用户态设置的这些标志会带入内核执行 */
     x86_64_write_msr(MSR_SFMASK, (1 << 8) | (1 << 9) | (1 << 10) | (1 << 14) | (1 << 18));  /* TF+IF+DF+NT+AC */
 
-    /* 设置IA32_KERNEL_GS_BASE：swapgs后GS指向per-cpu数据 */
-    percpu_data.kernel_stack = (uint64_t)kernel_stack_top;
-    percpu_data.user_stack = 0;
-    x86_64_write_msr(MSR_KERNEL_GS_BASE, (uint64_t)&percpu_data);
-    /* V0.13.43 修复: 绝对地址槽 (entry 绕过 GS 段寻址; 直接值语义) */
-    g_syscall_kstack_slot = percpu_data.kernel_stack;  /* 内核栈顶值 */
-    g_syscall_ustack_slot = 0;                          /* 运行时 entry 写入 */
+    /* 设置IA32_KERNEL_GS_BASE: swapgs 后 GS 指向本核的 per-cpu 数据。
+     * SB-17: 这里只负责 BSP(核 0); 其余核在 ap_c_entry 里调
+     * syscall64_init_for_cpu(cpu, kstack_top) 各自设置自己的 MSR。 */
+    syscall64_init_for_cpu(0, (uint64_t)kernel_stack_top);
+    g_syscall_kstack_slot = percpu_data[0].kernel_stack;  /* 旧符号, 仅镜像 */
+    g_syscall_ustack_slot = 0;
     /* V0.13.43 调试: 验证 MSR 与 kernel_stack 值 */
     {
         extern void serial_hex(uint64_t v);
         vga_puts("[SYSCALL64] percpu=0x");
-        serial_hex((uint64_t)&percpu_data);
+        serial_hex((uint64_t)&percpu_data[0]);
         vga_puts(" kstack=0x");
-        serial_hex(percpu_data.kernel_stack);
+        serial_hex(percpu_data[0].kernel_stack);
         vga_puts(" msr_gsbase=");
         serial_hex(x86_64_read_msr(MSR_KERNEL_GS_BASE));
         vga_puts("\n");

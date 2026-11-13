@@ -172,6 +172,27 @@ void ap_c_entry(void)
         sb18_serial_puts("\n");
     }
 
+    /* (3) SB-17: 给本核装一份独立的 syscall per-CPU 存储。
+     *     之前只有 BSP 写过 MSR_KERNEL_GS_BASE, AP 的 GS 基址是 0 ——
+     *     AP 一旦进 syscall, swapgs 之后 %gs:0x00/0x08 落不到自己的栈槽,
+     *     会和 BSP 共用同一份。这里每核写自己的 MSR。 */
+    {
+        extern void syscall64_init_for_cpu(int cpu, uint64_t kstack_top);
+        extern uint64_t gdt64_kstack_top_for_cpu(int cpu);
+
+        uint64_t ktop = gdt64_kstack_top_for_cpu((int)cpu_id);
+        syscall64_init_for_cpu((int)cpu_id, ktop);
+
+        extern void sb18_serial_puts(const char *s);
+        extern void sb18_serial_hex(uint64_t v);
+        extern uint64_t x86_64_read_msr(uint32_t msr);
+        sb18_serial_puts("[SB17] cpu=");
+        sb18_serial_hex(cpu_id);
+        sb18_serial_puts(" gs_percpu=");
+        sb18_serial_hex(x86_64_read_msr(0xC0000102));   /* IA32_KERNEL_GS_BASE */
+        sb18_serial_puts("\n");
+    }
+
     /* 等待BSP完成IDT填充/加载（irq64_init 结束时置位） */
     while (!g_apic_idt_ready) {
         __asm__ volatile("pause" ::: "memory");

@@ -1974,12 +1974,13 @@ static int64_t sys_fork(void)
      * 避免父进程后续 syscall 覆盖全局槽导致子进程回不到用户态 */
     extern uint64_t g_syscall_ret_rip;
     extern uint64_t g_syscall_ret_rflags;
-    extern uint64_t g_syscall_ustack_slot;
+    /* SB-17: 从本核的 per-CPU 槽取用户栈, 不再是全局单值 */
+    extern uint64_t *syscall64_ustack_slot_ptr(void);
     extern uint64_t g_fork_child_rip;
     extern uint64_t g_fork_child_rsp;
     extern uint64_t g_fork_child_rflags;
     g_fork_child_rip = g_syscall_ret_rip;
-    g_fork_child_rsp = g_syscall_ustack_slot;
+    g_fork_child_rsp = *syscall64_ustack_slot_ptr();
     g_fork_child_rflags = g_syscall_ret_rflags;
 
     /* 创建子进程（使用fork_trampoline_64，子进程从syscall返回点继续执行） */
@@ -1997,7 +1998,7 @@ static int64_t sys_fork(void)
     g_fork_parent_rflags = g_syscall_ret_rflags;
     g_fork_parent_cr3 = cur_pml4;
     g_fork_parent_kstack = g_syscall_kernel_rsp;
-    g_fork_parent_ustack = g_syscall_ustack_slot;
+    g_fork_parent_ustack = *syscall64_ustack_slot_ptr();
     g_fork_parent_retval = (uint64_t)child_pid;
     /* 拷贝父进程GPR快照到独立缓冲 (子进程syscall会覆盖内核栈) */
     for (int i = 0; i < 15; i++)

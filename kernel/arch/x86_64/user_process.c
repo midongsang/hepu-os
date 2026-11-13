@@ -1647,6 +1647,20 @@ int user_process_switch(int pid)
             "a"((uint32_t)proc->fsbase), "d"((uint32_t)(proc->fsbase>>32)));
     }
 
+    /* SB-17: GS 段协议一致性。
+     * 本系统的约定是「内核普通态 GS_BASE=0, syscall 入口 swapgs 后 GS_BASE=percpu」。
+     * user_process_switch 常常是在 syscall handler 里被调用的(exec/切换进程),
+     * 那时 GS_BASE 已经是 percpu —— 直接 iretq 会把 percpu 带进用户态,
+     * 用户第一次 syscall 的 swapgs 又把它换回 0, 于是 %gs:0x00 读到 0,
+     * 第一条 push 就 #PF -> #DF (实测 vector=0x8 rip=0x1001c1)。
+     * 所以: 若当前 GS_BASE 非 0(说明还在 syscall 上下文), 先 swapgs 还原成 0。 */
+    {
+        uint32_t lo, hi; uint64_t gsb;
+        __asm__ volatile("rdmsr" : "=a"(lo), "=d"(hi) : "c"(0xC0000101));
+        gsb = ((uint64_t)hi << 32) | lo;
+        if (gsb != 0) __asm__ volatile("swapgs");
+    }
+
     /* 切换到用户态（IRETQ） */
     user_enter(proc->rip, proc->rsp, proc->rflags);
 
