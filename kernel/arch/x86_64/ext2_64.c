@@ -1771,6 +1771,30 @@ int ext2_64_delete_file_inner(const char *path)
                         }
                         ext2_write_data_block(&dir_inode, b, block_buf);
                         found = 1;
+
+                        /* FS-07: 删空的目录块要回收。
+                         * 旧行为只合并 rec_len，块本身永远留在目录里 ——
+                         * 目录只会变大不会变小，长期增删（日志轮转、临时文件）
+                         * 会把空目录块攒到把盘占满。只回收「整块已无有效项
+                         * 且是最后一块」的直接块，避免中间块收缩导致索引错位。 */
+                        if (b < 12 && blocks > 1 && b == blocks - 1) {
+                            int all_empty = 1;
+                            uint32_t o2 = 0;
+                            while (o2 < ext2_block_size) {
+                                ext2_dir_entry_t *e2 = (ext2_dir_entry_t *)(block_buf + o2);
+                                if (e2->rec_len == 0 ||
+                                    e2->rec_len > ext2_block_size - o2) break;
+                                if (e2->inode != 0) { all_empty = 0; break; }
+                                o2 += e2->rec_len;
+                            }
+                            if (all_empty && dir_inode.i_block[b] != 0) {
+                                ext2_free_block(dir_inode.i_block[b]);
+                                dir_inode.i_block[b] = 0;
+                                dir_inode.i_size = b * ext2_block_size;
+                                dir_inode.i_blocks = b * (ext2_block_size / 512);
+                                ext2_write_inode(dir_ino, &dir_inode);
+                            }
+                        }
                         break;
                     }
 

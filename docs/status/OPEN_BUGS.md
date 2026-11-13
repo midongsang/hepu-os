@@ -119,6 +119,8 @@ source_of_truth: kernel/arch/x86_64/
 | FS-03 | 块设备部分写失败后脏读：raw write 失败先 blk_cache_invalidate 再返回 -1 | `blk_cache64.c:115`（前向声明）、`:127`（失效调用） | ef3c7cc | 已关闭 |
 | FS-04 | free_inode inode 表块 32 位截断：先 64 位算 itb64、校验后再截断 | `ext2_algo.c:625-626`、`:647-648` | ef3c7cc | 已关闭 |
 | FS-05 | 写文件末尾偏移 32 位溢出：end_offset 改 64 位计算 | `ext2_64.c:1319`（end_offset64） | ef3c7cc | 已关闭 |
+| FS-06 | 覆盖写变小文件泄漏数据块：`inode.i_size > size` 时走删除重建，回收直接/一~三级间接块后重新分配 | `ext2_64.c`（`ext2_64_write_file_inner` 开头） | 7865c01 | 已关闭 |
+| FS-07 | 删空的目录块不回收：删除后若整块已无有效项且是最后一块直接块，释放该块并收缩 `i_size`/`i_blocks` | `ext2_64.c`（`ext2_64_delete_file_inner` 目录项清除段） | 本次 | 已关闭 |
 | BLD-14 | CSPRNG 熵源 extern 宽度/元素数不匹配：extern 改 uint64_t irq_count[256]，256 项 uint64 累加 | `csprng.c:64-69` | ef3c7cc | 已关闭 |
 | GFX-01 | Tab 补全候选列表栈溢出：out[80] 改逐字符有界拼接，将满安全截断并强制 NUL | `hs_apps.c:461`（t_complete）、`:495`/`:504`/`:507`（有界写） | ef3c7cc | 已关闭 |
 | DRV-02 | 内核模块 PLT 静态索引跨模块累计：删 static 改模块级局部 | `kmod64.c:287`（plt_slot_idx 局部） | ef3c7cc | 已关闭 |
