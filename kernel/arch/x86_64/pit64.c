@@ -91,7 +91,15 @@ void pit64_init(void)
 /* 获取当前滴答数 */
 uint64_t pit64_get_ticks(void)
 {
-    return pit_ticks;
+    /* V0.58.4: PIT 中断在部分启动里根本不投递（见 OPEN_BUGS OBS-01），此时
+       pit_ticks 冻住。而桌面帧节流 gfx64_frame_throttle() 恰好用它判断
+       "距上一帧是否够 2ms" —— 差值恒为 0 就永不渲染，"Desktop loaded" 要等到
+       别处超时才打印（实测 53~57 s），连带 clone 测试也超时失败。
+       这里用 APIC timer 的 1kHz 计数 g_kernel_tick64 兜底，两者取大：
+       谁在走就用谁，单调不冻。校准成功时两者都是 1ms 粒度，取大不会有偏差。 */
+    extern uint64_t g_kernel_tick64;
+    uint64_t apic_tick = g_kernel_tick64;
+    return (apic_tick > pit_ticks) ? apic_tick : pit_ticks;
 }
 
 /* 保存最近用户态RIP (供看门狗调试) */

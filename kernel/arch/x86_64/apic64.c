@@ -553,7 +553,11 @@ static int apic64_calibrate_timer_inner(void)
        "AP trampoline copied to 0x8000" 这一行, 只能重跑 QEMU 撞运气。
        加有界超时: 超时直接返回 -1, 走调用方已有的 ICR=6250 回退路径,
        启动可以继续（PIT 1kHz 仍在投递调度 tick）, 把"偶发死机"降级为"偶发降级"。 */
-    #define CAL_SPIN_LIMIT  20000000ULL   /* ≈ 数十 ms, 远超 1ms 边界的正常开销 */
+    /* V0.58.4: 原值 20000000 实测每个循环要自旋约 2 秒（QEMU TCG 下 pause 约
+       110ns/次）。而 PIT 不投递时"3 次重试 × BSP/AP 两核 = 6 次调用 × 2 个
+       循环 ≈ 27 秒"，这正是 OBS-01 里"到桌面 43~57 秒"的来历。降到 2000000:
+       单循环约 0.2 秒，最坏情况总开销压到 1 秒以内。 */
+    #define CAL_SPIN_LIMIT  2000000ULL
 
     uint64_t t = pit64_get_ticks();
     uint64_t spin = 0;
@@ -601,9 +605,10 @@ void apic64_init_timer(void)
        calibrate 里的 INT-02 注释)。单次失败就退回 ICR=6250 代价太大 —— 那样
        tick 频率会漂移数倍, 用户态调度 tick 随之失效。这里最多重试 3 次。 */
     if (g_apic_timer_hz == 0) {
-        for (int _try = 0; _try < 3 && g_apic_timer_hz == 0; _try++) {
-            if (apic64_calibrate_timer() == 0) break;
-        }
+        /* V0.58.4: 去掉先前的 3 次重试。校准靠 PIT tick 推进，PIT 不投递时
+           重试必然再失败，只是把同一段自旋乘以 3（实测把慢启动从约 15 秒额外
+           放大到约 27 秒）。PIT 可用时单次校准本就成功，重试没有收益。 */
+        apic64_calibrate_timer();
     }
     if (g_apic_timer_hz == 0) {
         /* V0.58.4: 校准失败回退值从 6250 改为 35000（同实测量级）。
