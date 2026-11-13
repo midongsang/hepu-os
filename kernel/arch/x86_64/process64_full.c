@@ -84,6 +84,11 @@ typedef struct {
     uint32_t cap_mask;     /* 能力位图(域ACL) */
     uint64_t signal_handlers[32];  /* signal handler函数指针 */
     int pending_signals;       /* 待处理信号位图 */
+    /* V0.58.4: 归属标记 —— 本进程当前正在哪个 CPU 上执行, -1 = 未运行。
+       存在的意义: context_switch_64 是「保存 old、从 new 恢复」, 若两个核
+       同时对同一进程做这件事, 栈指针会被两个核互相覆盖, 而且不报错、只是
+       静默写坏内存。选进程时用这个标记把「已被别的核占着」的进程跳过。 */
+    volatile int running_on;
 } process_t;
 
 _Static_assert((__builtin_offsetof(process_t, context) % 16) == 0,
@@ -243,6 +248,13 @@ void process64_init(void)
     processes[0].name[0] = 'i'; processes[0].name[1] = 'd';
     processes[0].name[2] = 'l'; processes[0].name[3] = 'e';
     for (int _i = 0; _i < 16; _i++) { per_cpu_current_pid[_i] = 0; }
+    {
+        /* 用真实 APIC ID 而不是硬编码 0: QEMU 下 BSP=0, 但不能指望 */
+        extern uint32_t smp_get_current_cpu(void);
+        processes[0].running_on = (int)smp_get_current_cpu();
+    }
+    /* 其余槽位默认 0, 用 UNUSED 判定跳过, 这里统一置 -1 以明确语义 */
+    for (int _i = 1; _i < MAX_PROCESSES; _i++) { processes[_i].running_on = -1; }
 
     /* 初始化隔离域表（创建 kernel/system/gui/linux-compat-0 预置域） */
     domain64_init();
@@ -350,6 +362,7 @@ int process64_create(const char *name, void (*entry)(void), int priority)
     processes[idx].runtime = 0;
     processes[idx].context_switches = 0;
     processes[idx].create_time = scheduler_ticks;
+    processes[idx].running_on = -1;  /* 新建进程还没在任何核上跑 */
     processes[idx].parent_pid = sched_cur_pid_internal();
     processes[idx].domain_id = domain64_env_to_id(processes[idx].env_type);
 
@@ -623,6 +636,10 @@ int process64_schedule(void)
         int cn = 0;
         for (int i = 0; i < ready_queue_count[prio] && cn < 64; i++) {
             int idx = ready_queue[prio][i];
+            /* 归属过滤: 已被别的核占着的进程不能被本核选中 —— 否则两个核会
+               对同一个进程各做一次 context_switch, 把它的栈指针写串。 */
+            int ro = processes[idx].running_on;
+            if (ro >= 0 && ro != (int)cur_cpu) continue;
             if (processes[idx].cpu_id == (int)cur_cpu || processes[idx].cpu_id == 0) {
                 cands[cn] = idx;
                 int did = processes[idx].domain_id;
@@ -672,6 +689,9 @@ int process64_schedule(void)
         processes[idx].context_switches++;
         per_cpu_current_pid[cur_cpu] = processes[idx].pid;
         per_cpu_current_idx[cur_cpu] = idx;
+        /* 归属交接: old 不再由本核执行, new 改由本核执行 */
+        if (old) old->running_on = -1;
+        processes[idx].running_on = (int)cur_cpu;
 
         /* 实际上下文切换 —— 必须先释放调度锁并恢复调用方的 IF, 见函数头注释 */
         {
@@ -688,8 +708,16 @@ int process64_schedule(void)
     /* 如果当前CPU没有专属进程，选择任意就绪进程（工作窃取） */
     for (int prio = PRIORITY_REALTIME; prio >= PRIORITY_IDLE; prio--) {
         if (ready_queue_count[prio] > 0) {
-            int idx = ready_queue[prio][0];
-            for (int i = 0; i < ready_queue_count[prio] - 1; i++) {
+            /* 归属过滤: 队列首项可能被别的核占着, 换一个 */
+            int pick_pos = -1;
+            for (int i = 0; i < ready_queue_count[prio]; i++) {
+                int cand = ready_queue[prio][i];
+                int ro = processes[cand].running_on;
+                if (ro < 0 || ro == (int)cur_cpu) { pick_pos = i; break; }
+            }
+            if (pick_pos < 0) continue;
+            int idx = ready_queue[prio][pick_pos];
+            for (int i = pick_pos; i < ready_queue_count[prio] - 1; i++) {
                 ready_queue[prio][i] = ready_queue[prio][i+1];
             }
             ready_queue_count[prio]--;
@@ -705,6 +733,8 @@ int process64_schedule(void)
             processes[idx].context_switches++;
             per_cpu_current_pid[cur_cpu] = processes[idx].pid;
             per_cpu_current_idx[cur_cpu] = idx;
+            if (old) old->running_on = -1;
+            processes[idx].running_on = (int)cur_cpu;
 
             {
                 extern void context_switch_64(uint64_t *old_ctx, uint64_t *new_ctx);

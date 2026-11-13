@@ -785,3 +785,58 @@ AP 调度后会立刻变成错误数据（尤其 `parent_pid` 记错，进程树
 **阶段 B 还剩的前置**：进程归属标记（`running_on`），用来防止两核选中同一个
 进程后跨核 `context_switch_64` 把栈指针写串。这一条不解决，`smp.c:140` 的
 `&& 0` 不能动。
+
+### §1.101 SMP 阶段 A3：进程归属标记 `running_on`
+
+**它防的是什么**。`context_switch_64()` 的语义是"把当前上下文存进 old、从 new
+恢复"。如果两个核同时对**同一个进程**做这件事，那个进程的 `rsp` 会被两个核
+轮流写，而且**不报异常、不打日志，只是静默把栈写坏** —— 修起来是噩梦。单核
+下不存在这个问题，一开 AP 调度就有。
+
+**改动**（`process64_full.c`）：
+
+- `process_t` 尾部加 `volatile int running_on;`（-1 = 未在任何核上跑，
+  否则为执行它的 CPU id）。加在尾部不影响 `_Static_assert` 对 `context`
+  偏移的对齐检查。
+- 初始化：idle 记成**真实的 `smp_get_current_cpu()`**（不硬编码 0 —— 虽然
+  QEMU 下 BSP 就是 0，但没理由指望这一点）；其余槽位置 -1。
+- `process64_create`：新进程置 -1（还没在任何核上跑过）。
+- **选进程时过滤**：候选收集循环里 `if (ro >= 0 && ro != cur_cpu) continue;`。
+- **工作窃取分支也过滤**：原来直接取 `ready_queue[prio][0]`，现在先扫一个
+  `running_on < 0 || == cur_cpu` 的候选，找不到就 `continue` 到下一个优先级。
+  移除时用命中的下标，不再假定首项。
+- **切换时交接**：两处切换点都在 `context_switch_64` 之前做
+  `old->running_on = -1;` 与 `processes[idx].running_on = cur_cpu;`。
+
+**边界**：**`smp.c:140` 的 `if (cpu_id != bsp_cpu_id && 0)` 依然没动**。这
+一轮只是让数据结构和过滤规则就位，单核下这些条件恒不触发。
+
+**验证**（20 次，`-smp 2`，AP 调度仍关）：**20/20 PASS**，`desk` 13~15 s，
+`P=1`、`F=0`、`EXC=0`、`ps` 正常、`[SPINLOCK] ERROR` 零次；
+其中 2 次仍 `calfail=1` 但同样 PASS。内核 829,896 → **830,024 B**。
+
+#### 阶段 B 剩下的真正阻塞：idle 被所有核共享
+
+`running_on` 不能单独解决问题。初始化的这两行把所有 16 个 CPU 的"当前进程"
+都指向了 `processes[0]`（idle）：
+
+```c
+per_cpu_current_idx[i] = 0;      /* 全部指向 idle */
+per_cpu_current_pid[i] = 0;
+```
+
+于是 AP 核一调 `process64_schedule()`，`old = process64_get_current()` 拿到的
+就是 idle，它会把 `idle->state = READY`、入队、并**把 idle 的栈存进
+`processes[0].context`** —— 而 BSP 此刻也正在跑 idle，两边对同一份
+`context.rsp` 互相覆盖。`running_on` 挡不住这个，因为问题不在"选谁"，而在
+"AP 核误以为自己已经在跑 idle"。
+
+**要开 `&& 0` 之前必须先做**（顺序不能反）：
+
+1. AP 核的当前进程初始化为 **-1（无当前）**，而不是指向 idle；
+2. `process64_schedule()` 支持 `old == NULL` 的首次切入 —— 即用一个 per-CPU
+   的 dummy 上下文作为 `old_ctx` 传给 `context_switch_64`，让"本来没在跑任何
+   东西"的核也能切进第一个进程；
+3. 每核有自己的 idle 循环（或在无进程可跑时进 `hlt` 而不占用 idle 的 context）。
+
+这三条都要在**打开开关之前**完成并单独验证，不能和"双核并发"混在一起试。
