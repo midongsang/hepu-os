@@ -12,6 +12,7 @@
 #include "ext2_shared.h"
 #include "seccomp64.h"
 #include "syscall.h"   /* V0.54.6: 统一 syscall 号（唯一真源） */
+#include "spinlock.h"
 
 int g_running_linux_elf = 0;  /* V0.20.70: 当前是否在运行Linux ABI ELF */
 
@@ -241,11 +242,25 @@ static inline int fd_table_index(void)
 }
 #define sys_files (sys_files_tbl[fd_table_index()])
 
+
+/* SB-11: fd 表锁（表级，irqsave）。
+ * 旧行为：open 的「找空槽 + 写字段」没有互斥，两核同时 open 会拿到同一 fd，
+ * 后写者覆盖前者的 path/mode/offset —— 表现为一个进程读到另一个进程的文件；
+ * close 的 used=0 与并发 read/write 撞车会读到已被复用的槽。
+ * 只锁表本身，ext2 IO 与 copy_to_user 一律在锁外做（持锁做 IO 会把别的核
+ * 的 open/close 一起堵住，且 copy_to_user 缺页会带着锁进异常路径）。 */
+static spinlock_t g_fd_lock;
+static spinlock_t g_pipe_lock;
+static volatile int g_fd_lock_holder = -1;   /* 诊断：持锁时的 fd 表下标 */
+
 /* 进程退出/被终止时清空该槽位的 fd 表（由 user_process_release 调用） */
 void syscall_fd_table_reset(int slot)
 {
     if (slot < 0 || slot >= MAX_FD_TABLES - 1) return;
+    /* SB-11: 复位与并发使用互斥（该槽已被判死，但另一核可能还在 close 路上） */
+    uint64_t f = spinlock_lock_irqsave(&g_fd_lock);
     for (int i = 0; i < MAX_FILES; i++) sys_files_tbl[slot][i].used = 0;
+    spinlock_unlock_irqrestore(&g_fd_lock, f);
 }
 
 static int syscall_initialized = 0;
@@ -254,6 +269,27 @@ static void sys_memcpy(void *dst, const void *src, int n) {
     uint8_t *d = (uint8_t*)dst;
     const uint8_t *s = (const uint8_t*)src;
     for (int i = 0; i < n; i++) d[i] = s[i];
+}
+
+/* SB-11: 在锁内取一份 fd 槽位快照，返回后调用方不再触碰表。
+ * 0 = 槽位有效；-1 = fd 越界或未使用。 */
+static int fd_snapshot(int fd, char *path, int *mode, int *is_pipe, int *pipe_buf)
+{
+    if (fd < 0 || fd >= MAX_FILES) return -1;
+    uint64_t f = spinlock_lock_irqsave(&g_fd_lock);
+    int ti = fd_table_index();
+    g_fd_lock_holder = ti;
+    int ok = 0;
+    if (sys_files_tbl[ti][fd].used) {
+        ok = 1;
+        if (path) { sys_memcpy(path, sys_files_tbl[ti][fd].path, 256); path[255] = 0; }
+        if (mode) *mode = sys_files_tbl[ti][fd].mode;
+        if (is_pipe) *is_pipe = sys_files_tbl[ti][fd].is_pipe;
+        if (pipe_buf) *pipe_buf = sys_files_tbl[ti][fd].pipe_buf;
+    }
+    g_fd_lock_holder = -1;
+    spinlock_unlock_irqrestore(&g_fd_lock, f);
+    return ok ? 0 : -1;
 }
 
 static int sys_strlen(const char *s) {
@@ -265,6 +301,8 @@ static int sys_strlen(const char *s) {
 /* 初始化系统调用 */
 void syscall64_full_init(void)
 {
+    spinlock_init(&g_fd_lock);
+    spinlock_init(&g_pipe_lock);
     for (int t = 0; t < MAX_FD_TABLES; t++)
         for (int i = 0; i < MAX_FILES; i++)
             sys_files_tbl[t][i].used = 0;
@@ -305,29 +343,43 @@ static int64_t sys_write(int fd, const char *buf, int count)
         return count;
     }
 
-    /* 文件写入 */
-    if (fd >= 0 && fd < MAX_FILES && sys_files[fd].used) {
-        /* V0.20.18: 管道写 */
-        if (sys_files[fd].is_pipe) {
-            int pid = sys_files[fd].pipe_buf;
-            if (pid < 0 || pid >= MAX_PIPES) { kfree(kernel_buf); return -1; }
-            pipe_t *p = &g_pipes[pid];
-            int written = 0;
-            for (int i = 0; i < count; i++) {
-                int next = (p->tail + 1) % PIPE_BUF_SIZE;
-                if (next == p->head) break;  /* 满 */
-                p->data[p->tail] = kernel_buf[i];
-                p->tail = next;
-                written++;
+    /* 文件写入（SB-11: 表访问走快照，IO 在锁外） */
+    {
+        char kpath[256];
+        int fmode = -1, is_pipe = 0, pbuf = -1;
+        if (fd_snapshot(fd, kpath, &fmode, &is_pipe, &pbuf) == 0) {
+            /* V0.20.18: 管道写（锁只保护 head/tail 与缓冲搬运） */
+            if (is_pipe) {
+                if (pbuf < 0 || pbuf >= MAX_PIPES) { kfree(kernel_buf); return -1; }
+                pipe_t *p = &g_pipes[pbuf];
+                uint64_t pf = spinlock_lock_irqsave(&g_pipe_lock);
+                int written = 0;
+                for (int i = 0; i < count; i++) {
+                    int next = (p->tail + 1) % PIPE_BUF_SIZE;
+                    if (next == p->head) break;  /* 满 */
+                    p->data[p->tail] = kernel_buf[i];
+                    p->tail = next;
+                    written++;
+                }
+                spinlock_unlock_irqrestore(&g_pipe_lock, pf);
+                kfree(kernel_buf);
+                return written;
+            }
+            if (fmode == 0) { kfree(kernel_buf); return -1; }  /* 只读打开，禁止写 */
+            ext2_64_write_file(kpath, kernel_buf, count);
+            /* offset 回写必须在锁内：并发写会各自基于旧 offset 累加 */
+            {
+                uint64_t f2 = spinlock_lock_irqsave(&g_fd_lock);
+                int ti = fd_table_index();
+                g_fd_lock_holder = ti;
+                if (sys_files_tbl[ti][fd].used && !sys_files_tbl[ti][fd].is_pipe)
+                    sys_files_tbl[ti][fd].offset += count;
+                g_fd_lock_holder = -1;
+                spinlock_unlock_irqrestore(&g_fd_lock, f2);
             }
             kfree(kernel_buf);
-            return written;
+            return count;
         }
-        if (sys_files[fd].mode == 0) { kfree(kernel_buf); return -1; }  /* 只读打开，禁止写 */
-        ext2_64_write_file(sys_files[fd].path, kernel_buf, count);
-        sys_files[fd].offset += count;
-        kfree(kernel_buf);
-        return count;
     }
 
     kfree(kernel_buf);
@@ -363,44 +415,70 @@ static int64_t sys_read(int fd, char *buf, int count)
         return read_count;
     }
 
-    /* 文件读取 */
-    if (fd >= 0 && fd < MAX_FILES && sys_files[fd].used) {
-        /* V0.20.18: 管道读 */
-        if (sys_files[fd].is_pipe) {
-            int pid = sys_files[fd].pipe_buf;
-            if (pid < 0 || pid >= MAX_PIPES) return -1;
-            pipe_t *p = &g_pipes[pid];
-            int n = 0;
-            while (n < count && p->head != p->tail) {
-                uint8_t c = p->data[p->head];
-                p->head = (p->head + 1) % PIPE_BUF_SIZE;
-                if (copy_to_user(buf + n, &c, 1) != 0) return -1;
-                n++;
+    /* 文件读取（SB-11: 表访问走快照，copy_to_user 与 ext2 读都在锁外） */
+    {
+        char kpath[256];
+        int fmode = -1, is_pipe = 0, pbuf = -1;
+        uint64_t foff = 0;
+        if (fd_snapshot(fd, kpath, &fmode, &is_pipe, &pbuf) == 0) {
+            /* V0.20.18: 管道读 —— 锁内搬到本地缓冲，copy_to_user 在锁外 */
+            if (is_pipe) {
+                if (pbuf < 0 || pbuf >= MAX_PIPES) return -1;
+                pipe_t *p = &g_pipes[pbuf];
+                extern void *kmalloc(uint32_t size);
+                extern void kfree(void *ptr);
+                uint8_t *tmp = (uint8_t *)kmalloc((uint32_t)count);
+                if (!tmp) return -1;
+                uint64_t pf = spinlock_lock_irqsave(&g_pipe_lock);
+                int n = 0;
+                while (n < count && p->head != p->tail) {
+                    tmp[n++] = p->data[p->head];
+                    p->head = (p->head + 1) % PIPE_BUF_SIZE;
+                }
+                spinlock_unlock_irqrestore(&g_pipe_lock, pf);
+                int copied = (n > 0 && copy_to_user(buf, tmp, n) == 0) ? n : -1;
+                kfree(tmp);
+                return copied;
             }
-            return n;
-        }
-        if (sys_files[fd].mode == 1) return -1;   /* 只写打开，禁止读 */
-        if (sys_files[fd].offset < 0) return -1;  /* 负偏移会让 file_buf+offset 越界 */
-        extern void *kmalloc(uint32_t size);
-        extern void kfree(void *ptr);
-        uint8_t *file_buf = (uint8_t *)kmalloc(4096);
-        if (!file_buf) return -1;
-        /* V0.54.6: 按文件内偏移读，不再「每次只读前 4KB」。
-         * 旧实现 ext2_64_read_file(path, buf, 4096) 返回的是「文件前 4KB」，
-         * 偏移一旦越过 4KB 就永远返回 0 —— 动态链接器读 2MB 的 libc 时
-         * 会直接卡死在这条边界上。 */
-        int len = ext2_64_read_file_offset(sys_files[fd].path, file_buf,
-                                          (uint32_t)count, (uint32_t)sys_files[fd].offset);
-        if (len <= 0) { kfree(file_buf); return 0; }
+            if (fmode == 1) return -1;   /* 只写打开，禁止读 */
+            {
+                uint64_t f2 = spinlock_lock_irqsave(&g_fd_lock);
+                int ti = fd_table_index();
+                g_fd_lock_holder = ti;
+                if (sys_files_tbl[ti][fd].used && sys_files_tbl[ti][fd].offset < 0) {
+                    g_fd_lock_holder = -1;
+                    spinlock_unlock_irqrestore(&g_fd_lock, f2);
+                    return -1;          /* 负偏移会让 file_buf+offset 越界 */
+                }
+                foff = (uint64_t)(sys_files_tbl[ti][fd].used ? sys_files_tbl[ti][fd].offset : 0);
+                g_fd_lock_holder = -1;
+                spinlock_unlock_irqrestore(&g_fd_lock, f2);
+            }
+            extern void *kmalloc(uint32_t size);
+            extern void kfree(void *ptr);
+            uint8_t *file_buf = (uint8_t *)kmalloc(4096);
+            if (!file_buf) return -1;
+            /* V0.54.6: 按文件内偏移读，不再「每次只读前 4KB」。 */
+            int len = ext2_64_read_file_offset(kpath, file_buf, (uint32_t)count, (uint32_t)foff);
+            if (len <= 0) { kfree(file_buf); return 0; }
 
-        /* 安全：从内核缓冲区复制到用户空间 */
-        if (copy_to_user(buf, file_buf, len) != 0) {
+            /* 安全：从内核缓冲区复制到用户空间 */
+            if (copy_to_user(buf, file_buf, len) != 0) {
+                kfree(file_buf);
+                return -1;
+            }
+            {
+                uint64_t f3 = spinlock_lock_irqsave(&g_fd_lock);
+                int ti = fd_table_index();
+                g_fd_lock_holder = ti;
+                if (sys_files_tbl[ti][fd].used && !sys_files_tbl[ti][fd].is_pipe)
+                    sys_files_tbl[ti][fd].offset += len;
+                g_fd_lock_holder = -1;
+                spinlock_unlock_irqrestore(&g_fd_lock, f3);
+            }
             kfree(file_buf);
-            return -1;
+            return len;
         }
-        sys_files[fd].offset += len;
-        kfree(file_buf);
-        return len;
     }
 
     return -1;
@@ -413,14 +491,16 @@ static int64_t sys_pread(int fd, char *buf, int count, int64_t offset)
     if (count <= 0) return 0;
     if (count > 4096) count = 4096;
     if (offset < 0) return -1;
-    if (fd < 0 || fd >= MAX_FILES || !sys_files[fd].used) return -1;
-    if (sys_files[fd].mode == 1) return -1;
+    char kpath[256];
+    int fmode = -1;
+    if (fd_snapshot(fd, kpath, &fmode, 0, 0) != 0) return -1;
+    if (fmode == 1) return -1;
 
     extern void *kmalloc(uint32_t size);
     extern void kfree(void *ptr);
     uint8_t *kernel_buf = (uint8_t *)kmalloc((uint32_t)count);
     if (!kernel_buf) return -1;
-    int len = ext2_64_read_file_offset(sys_files[fd].path, kernel_buf,
+    int len = ext2_64_read_file_offset(kpath, kernel_buf,
                                       (uint32_t)count, (uint32_t)offset);
     if (len <= 0) { kfree(kernel_buf); return 0; }
     if (copy_to_user(buf, kernel_buf, len) != 0) {
@@ -452,35 +532,51 @@ static int64_t sys_open(const char *path, int flags, int mode)
      * 启动自检电池直接断在那里。
      *
      * 这里改成从 3 开始分配，与 Linux 语义一致。 */
-    for (int i = 3; i < MAX_FILES; i++) {
-        if (!sys_files[i].used) {
-            sys_files[i].used = 1;
-            int len = sys_strlen(kernel_path);
-            if (len > 255) len = 255;
-            sys_memcpy(sys_files[i].path, kernel_path, len);
-            sys_files[i].path[len] = 0;
-            sys_files[i].offset = 0;
-            sys_files[i].mode = flags & 3;
-
-            /* 如果是创建模式，创建文件 */
-            if (flags & 0x40) {  /* O_CREAT */
-                ext2_64_create_file(kernel_path);
+    /* SB-11: 找空槽 + 写字段整段在锁内，两核 open 不会拿到同一个 fd。
+     * O_CREAT 的 ext2 调用放在锁外（文件系统层自己串行化）。 */
+    int fd_out = -1;
+    {
+        uint64_t fflags_fd = spinlock_lock_irqsave(&g_fd_lock);
+        int ti = fd_table_index();
+        g_fd_lock_holder = ti;
+        for (int i = 3; i < MAX_FILES; i++) {
+            if (!sys_files_tbl[ti][i].used) {
+                sys_files_tbl[ti][i].used = 1;
+                int len = sys_strlen(kernel_path);
+                if (len > 255) len = 255;
+                sys_memcpy(sys_files_tbl[ti][i].path, kernel_path, len);
+                sys_files_tbl[ti][i].path[len] = 0;
+                sys_files_tbl[ti][i].offset = 0;
+                sys_files_tbl[ti][i].mode = flags & 3;
+                fd_out = i;
+                break;
             }
-
-            return i;
         }
+        g_fd_lock_holder = -1;
+        spinlock_unlock_irqrestore(&g_fd_lock, fflags_fd);
     }
-    return -1;
+    if (fd_out < 0) return -1;
+
+    /* 如果是创建模式，创建文件 */
+    if (flags & 0x40) {  /* O_CREAT */
+        ext2_64_create_file(kernel_path);
+    }
+    return fd_out;
 }
 
 /* sys_close */
 static int64_t sys_close(int fd)
 {
-    if (fd >= 0 && fd < MAX_FILES && sys_files[fd].used) {
-        sys_files[fd].used = 0;
-        return 0;
-    }
-    return -1;
+    if (fd < 0 || fd >= MAX_FILES) return -1;
+    /* SB-11: used=0 在锁内，避免与并发 read/write 的快照撞车 */
+    uint64_t f = spinlock_lock_irqsave(&g_fd_lock);
+    int ti = fd_table_index();
+    g_fd_lock_holder = ti;
+    int ok = 0;
+    if (sys_files_tbl[ti][fd].used) { sys_files_tbl[ti][fd].used = 0; ok = 1; }
+    g_fd_lock_holder = -1;
+    spinlock_unlock_irqrestore(&g_fd_lock, f);
+    return ok ? 0 : -1;
 }
 
 /* sys_mkfs: 安装器格式化分区为 ext2。a1=lba a2=sectors a3=label(ptr,可空) */
@@ -2206,25 +2302,46 @@ static int64_t sys_rmdir(const char *path)
 /* sys_lseek - 移动文件指针 */
 static int64_t sys_lseek(int fd, int64_t offset, int whence)
 {
-    if (fd < 0 || fd >= MAX_FILES || !sys_files[fd].used) return -1;
+    if (fd < 0 || fd >= MAX_FILES) return -1;
     int64_t newpos;
+    /* SB-11: 读当前偏移 + 校验 + 写回，三步同在锁内（否则两个 lseek 会互相吃掉） */
+    uint64_t f = spinlock_lock_irqsave(&g_fd_lock);
+    int ti = fd_table_index();
+    g_fd_lock_holder = ti;
+    if (!sys_files_tbl[ti][fd].used) {
+        g_fd_lock_holder = -1;
+        spinlock_unlock_irqrestore(&g_fd_lock, f);
+        return -1;
+    }
+    int64_t cur = sys_files_tbl[ti][fd].offset;
     switch (whence) {
         case 0: /* SEEK_SET */
             newpos = offset;
             break;
         case 1: /* SEEK_CUR */
-            if (__builtin_add_overflow((int64_t)sys_files[fd].offset, offset, &newpos)) return -1;
+            if (__builtin_add_overflow(cur, offset, &newpos)) {
+                g_fd_lock_holder = -1;
+                spinlock_unlock_irqrestore(&g_fd_lock, f);
+                return -1;
+            }
             break;
         case 2: /* SEEK_END */
-            /* 简化：不支持文件大小查询，返回当前偏移 */
-            newpos = sys_files[fd].offset;
+            newpos = cur;
             break;
         default:
+            g_fd_lock_holder = -1;
+            spinlock_unlock_irqrestore(&g_fd_lock, f);
             return -1;
     }
     /* 安全修复：旧实现允许负偏移，sys_read 会据此读取 file_buf 之前的内核内存并拷给用户 */
-    if (newpos < 0 || newpos > 0x7FFFFFFF) return -1;
-    sys_files[fd].offset = (int)newpos;
+    if (newpos < 0 || newpos > 0x7FFFFFFF) {
+        g_fd_lock_holder = -1;
+        spinlock_unlock_irqrestore(&g_fd_lock, f);
+        return -1;
+    }
+    sys_files_tbl[ti][fd].offset = (int)newpos;
+    g_fd_lock_holder = -1;
+    spinlock_unlock_irqrestore(&g_fd_lock, f);
     return newpos;
 }
 
