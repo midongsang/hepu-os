@@ -1805,17 +1805,40 @@ static uint32_t hs_mix_color(uint32_t a, uint32_t b, int pct)
     return (uint32_t)((r << 16) | (g << 8) | bl);
 }
 
-/* V0.57.0: 窗口投影 —— 三层阶梯圆角, 由外向内加深, 近似柔和阴影。
- * 之前窗口直接压在桌面上, 层叠关系全靠边框区分, 多个窗口重叠时分不清谁在前面。 */
+/* V0.59.7: 窗口投影重做。
+ *
+ * 原来只有 3 层、每层 4px、颜色分别是 window_bg 混黑 10/19/28% —— 三层之间
+ * 差 9 个百分点, 叠出来是三条清清楚楚的**实心色带**, 看着像给窗口描了三圈边,
+ * 而不是影子。用户的原话是"阴影怎么那么假"。
+ *
+ * 现在:
+ *   1) 层数加到 7、每层 2.5px, 相邻层只差 4 个百分点 —— 台阶细到看不出来;
+ *   2) 基色不再用 window_bg, 而是**取窗口下方真实像素**。阴影必须贴合它下面
+ *      那层的内容, 用一个固定的浅灰/深灰当基色, 在壁纸或另一种主题上就会露出
+ *      一圈突兀的色环(这就是"假"的另一半原因);
+ *   3) 向下偏移稍多, 光从上方来, 影子偏下。 */
 static void hs_window_shadow(const hs_window_t *w)
 {
+    extern uint32_t gfx64_get_pixel(int x, int y);
+    extern int gfx_width, gfx_height;
+
     int r = hs_s(g_shell.ui.corner_radius);
-    uint32_t base = g_shell.colors.window_bg;
-    for (int k = 3; k >= 1; k--) {
-        int d = k * hs_s(4);
-        /* 由外向内逐渐加深向黑靠拢: 外层最浅, 贴近窗口处最深, 光源假定在窗口上方 */
-        uint32_t c = hs_mix_color(base, 0x000000, 10 + (3 - k) * 9);
-        gfx64_fill_rounded_rect(w->x - d, w->y - d + hs_sy(6),
+    int step = hs_s(2);
+    int layers = 9;
+
+    /* 采样点取窗口下缘正中往下一点 —— 这里通常是桌面/壁纸, 也是影子真正会落到的地方 */
+    int sx = w->x + w->width / 2;
+    int sy2 = w->y + w->height + hs_sy(12);
+    if (sy2 >= (int)gfx_height) sy2 = (int)gfx_height - 1;
+    if (sx >= (int)gfx_width) sx = (int)gfx_width - 1;
+    uint32_t base = gfx64_get_pixel(sx, sy2);
+
+    for (int k = layers; k >= 1; k--) {
+        int d = k * step;
+        /* 外圈淡(6%) -> 内圈浓(30%), 每层只差 4 个百分点 */
+        int pct = 5 + (layers - k) * 3;
+        uint32_t c = hs_mix_color(base, 0x000000, pct);
+        gfx64_fill_rounded_rect(w->x - d, w->y - d + hs_sy(8),
                                 w->width + d * 2, w->height + d * 2,
                                 r + d, c);
     }
