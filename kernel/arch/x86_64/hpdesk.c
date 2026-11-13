@@ -1805,42 +1805,56 @@ static uint32_t hs_mix_color(uint32_t a, uint32_t b, int pct)
     return (uint32_t)((r << 16) | (g << 8) | bl);
 }
 
-/* V0.59.7: 窗口投影重做。
+/* V0.59.8: 窗口投影改成真正的 alpha 混合。
  *
- * 原来只有 3 层、每层 4px、颜色分别是 window_bg 混黑 10/19/28% —— 三层之间
- * 差 9 个百分点, 叠出来是三条清清楚楚的**实心色带**, 看着像给窗口描了三圈边,
- * 而不是影子。用户的原话是"阴影怎么那么假"。
+ * 之前的路子是"多层不透明色块叠出渐变"：越靠近窗口的色块越深。层数再多也只是骗
+ * 眼睛, 层间一定有台阶; 而且基色必须猜(取窗口下方像素), 一旦那点落在别的窗口上
+ * 阴影就偏色。0.59.7 把 3 层做到 9 层只是把台阶变细, 问题本身没解决。
  *
- * 现在:
- *   1) 层数加到 7、每层 2.5px, 相邻层只差 4 个百分点 —— 台阶细到看不出来;
- *   2) 基色不再用 window_bg, 而是**取窗口下方真实像素**。阴影必须贴合它下面
- *      那层的内容, 用一个固定的浅灰/深灰当基色, 在壁纸或另一种主题上就会露出
- *      一圈突兀的色环(这就是"假"的另一半原因);
- *   3) 向下偏移稍多, 光从上方来, 影子偏下。 */
+ * 现在直接逐像素混黑:
+ *   - 只遍历窗口外侧的那一圈(内部跳过, 窗口自己会盖住), 800x640 的窗口约 90k 像素,
+ *     和原来 9 次整块圆角填充(每次 50 万像素写)是同一个量级, 甚至更省;
+ *   - 每个像素按它到窗口边界的距离算 alpha, 平方衰减 —— 连续, 没有台阶;
+ *   - 因为是真的混合, 底下是什么颜色都自然变暗, 不再需要采样基色, 也就不存在偏色;
+ *   - 四角用 math64_isqrt 取欧氏距离, 阴影跟着圆角走。
+ * 光源假定在上方: 阴影矩形整体下移 6px, 所以上边只露 10px、下边 22px。 */
 static void hs_window_shadow(const hs_window_t *w)
 {
-    extern uint32_t gfx64_get_pixel(int x, int y);
+    extern void gfx64_blend_pixel(int x, int y, uint32_t fg, int alpha);
+    extern uint32_t math64_isqrt(uint32_t v);
     extern int gfx_width, gfx_height;
 
-    int r = hs_s(g_shell.ui.corner_radius);
-    int step = hs_s(2);
-    int layers = 9;
+    int dmax = hs_s(16);          /* 扩散半径 */
+    int off = hs_sy(6);           /* 下移, 制造"光在上方"的偏向 */
+    int x0 = w->x;
+    int x1 = w->x + w->width - 1;
+    int y0 = w->y + off;
+    int y1 = w->y + w->height - 1 + off;
+    int amax = 70;                /* 最深约 27% 黑 */
 
-    /* 采样点取窗口下缘正中往下一点 —— 这里通常是桌面/壁纸, 也是影子真正会落到的地方 */
-    int sx = w->x + w->width / 2;
-    int sy2 = w->y + w->height + hs_sy(12);
-    if (sy2 >= (int)gfx_height) sy2 = (int)gfx_height - 1;
-    if (sx >= (int)gfx_width) sx = (int)gfx_width - 1;
-    uint32_t base = gfx64_get_pixel(sx, sy2);
+    int ybeg = y0 - dmax, yend = y1 + dmax;
+    int xbeg = x0 - dmax, xend = x1 + dmax;
+    if (ybeg < 0) ybeg = 0;
+    if (xbeg < 0) xbeg = 0;
+    int ylim = (yend < gfx_height) ? yend : gfx_height - 1;
+    int xlim = (xend < gfx_width) ? xend : gfx_width - 1;
 
-    for (int k = layers; k >= 1; k--) {
-        int d = k * step;
-        /* 外圈淡(6%) -> 内圈浓(30%), 每层只差 4 个百分点 */
-        int pct = 5 + (layers - k) * 3;
-        uint32_t c = hs_mix_color(base, 0x000000, pct);
-        gfx64_fill_rounded_rect(w->x - d, w->y - d + hs_sy(8),
-                                w->width + d * 2, w->height + d * 2,
-                                r + d, c);
+    for (int y = ybeg; y <= ylim; y++) {
+        for (int x = xbeg; x <= xlim; x++) {
+            if (x >= x0 && x <= x1 && y >= y0 && y <= y1) continue;   /* 被窗口盖住 */
+            int dx = 0, dy = 0;
+            if (x < x0) dx = x0 - x;
+            else if (x > x1) dx = x - x1;
+            if (y < y0) dy = y0 - y;
+            else if (y > y1) dy = y - y1;
+            int dist;
+            if (dx > 0 && dy > 0) dist = (int)math64_isqrt((uint32_t)(dx * dx + dy * dy));
+            else dist = dx ? dx : dy;
+            if (dist >= dmax) continue;
+            int t = dmax - dist;
+            int a = (t * t) * amax / (dmax * dmax);
+            if (a > 0) gfx64_blend_pixel(x, y, 0x000000, a);
+        }
     }
 }
 
