@@ -369,16 +369,23 @@ void vg_fill_round_rect(int x, int y, int w, int h, int r, uint32_t color)
 
 void vg_stroke_round_rect(int x, int y, int w, int h, int r, int width, uint32_t color)
 {
-    /* 外轮廓 - 内轮廓: 用外描边 (线段膨胀) 简化实现 */
+    /* OBS-03: 必须和 vg_fill_round_rect 走同一条路径（同样的二次贝塞尔圆角）。
+     * 旧实现直接用 line_to 从"圆角起点"拉到"圆角终点"，四个角是斜切的直线，
+     * 半径一大就变成八边形 —— 窗口描边一上圆角就露馅。 */
+    fixed_t fx0 = (fixed_t)x << 16, fy0 = (fixed_t)y << 16;
+    fixed_t fx1 = (fixed_t)(x + w) << 16, fy1 = (fixed_t)(y + h) << 16;
+    fixed_t fr = (fixed_t)r << 16;
+    fixed_t k = fix_mul(fr, f2fx(0.5523f));
     vg_begin();
-    vg_move_to((fixed_t)(x + r) << 16, (fixed_t)y << 16);
-    vg_line_to((fixed_t)(x + w - r) << 16, (fixed_t)y << 16);
-    vg_line_to((fixed_t)(x + w) << 16, (fixed_t)(y + r) << 16);
-    vg_line_to((fixed_t)(x + w) << 16, (fixed_t)(y + h - r) << 16);
-    vg_line_to((fixed_t)(x + w - r) << 16, (fixed_t)(y + h) << 16);
-    vg_line_to((fixed_t)(x + r) << 16, (fixed_t)(y + h) << 16);
-    vg_line_to((fixed_t)x << 16, (fixed_t)(y + h - r) << 16);
-    vg_line_to((fixed_t)x << 16, (fixed_t)(y + r) << 16);
+    vg_move_to(fx0 + fr, fy0);
+    vg_line_to(fx1 - fr, fy0);
+    vg_quad_to(fx1 - fr + k, fy0, fx1, fy0 + fr);
+    vg_line_to(fx1, fy1 - fr);
+    vg_quad_to(fx1, fy1 - fr + k, fx1 - fr, fy1);
+    vg_line_to(fx0 + fr, fy1);
+    vg_quad_to(fx0 + fr - k, fy1, fx0, fy1 - fr);
+    vg_line_to(fx0, fy0 + fr);
+    vg_quad_to(fx0, fy0 + fr - k, fx0 + fr, fy0);
     vg_close();
     vg_stroke(color, width);
 }

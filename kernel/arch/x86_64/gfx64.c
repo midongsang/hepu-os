@@ -748,17 +748,21 @@ void gfx64_draw_rounded_rect(int x, int y, int w, int h, int radius, uint32_t co
     if (radius > w / 2) radius = w / 2;
     if (radius > h / 2) radius = h / 2;
 
-    /* 四条边 */
-    gfx64_fill_rect(x + radius, y, w - 2 * radius, 1, color);
-    gfx64_fill_rect(x + radius, y + h - 1, w - 2 * radius, 1, color);
-    gfx64_fill_rect(x, y + radius, 1, h - 2 * radius, color);
-    gfx64_fill_rect(x + w - 1, y + radius, 1, h - 2 * radius, color);
+    /* 四条边 —— 矩形范围按 [x..x+W]、[y..y+H] 计（W/H 为末像素坐标），
+     * 四角圆弧的圆心也落在同一套坐标上。之前直边用 h-1 而弧按 h 展开，
+     * 底部两角会多出 1px 的直角凸起（表现为"弧外还留着一小块方角"），
+     * 顶部两角则是接缝处出现缺口 —— 统一坐标后弧与直边首尾相接。 */
+    int W = w - 1, H = h - 1;
+    gfx64_fill_rect(x + radius, y,     W - 2 * radius, 1, color);
+    gfx64_fill_rect(x + radius, y + H, W - 2 * radius, 1, color);
+    gfx64_fill_rect(x,          y + radius, 1, H - 2 * radius, color);
+    gfx64_fill_rect(x + W,      y + radius, 1, H - 2 * radius, color);
 
     /* 四角 AA 环带 */
     rounded_corner_aa(x + radius,     y + radius,     -radius - 2, 0, -radius - 2, 0, radius, color, 0);
-    rounded_corner_aa(x + w - radius, y + radius,     0, radius + 2, -radius - 2, 0, radius, color, 0);
-    rounded_corner_aa(x + radius,     y + h - radius, -radius - 2, 0, 0, radius + 2, radius, color, 0);
-    rounded_corner_aa(x + w - radius, y + h - radius, 0, radius + 2, 0, radius + 2, radius, color, 0);
+    rounded_corner_aa(x + W - radius, y + radius,     0, radius + 2, -radius - 2, 0, radius, color, 0);
+    rounded_corner_aa(x + radius,     y + H - radius, -radius - 2, 0, 0, radius + 2, radius, color, 0);
+    rounded_corner_aa(x + W - radius, y + H - radius, 0, radius + 2, 0, radius + 2, radius, color, 0);
 }
 
 /* 毛玻璃效果：模糊指定区域并叠加半透明颜色 */

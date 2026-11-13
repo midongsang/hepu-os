@@ -53,6 +53,7 @@ extern void gfx64_fill_rect(int x, int y, int w, int h, uint32_t color);
 extern void gfx64_draw_rect(int x, int y, int w, int h, uint32_t color);
 extern void gfx64_fill_rounded_rect(int x, int y, int w, int h, int radius, uint32_t color);
 extern void gfx64_draw_rounded_rect(int x, int y, int w, int h, int radius, uint32_t color);
+extern void vg_stroke_round_rect(int x, int y, int w, int h, int r, int width, uint32_t color);
 extern void gfx64_blur_region(int x, int y, int w, int h, int blur_radius, uint32_t overlay_color, int overlay_alpha);
 extern void gfx64_fill_circle_gradient(int cx, int cy, int r, uint32_t c1, uint32_t c2);
 extern uint32_t gfx64_get_pixel(int x, int y);
@@ -2041,6 +2042,19 @@ static inline void sh_blit_slice(const hs_window_t *w, int mx0, int my0,
     }
 }
 
+/* OBS-03: 窗口本体与投影掩膜必须用同一个圆角半径，否则四个角会错位 1-2px
+ * （窗口是尖角、阴影已经削圆，底角看起来"压"在阴影上）。
+ * 圆角随窗口短边自适应，公式与投影保持一致。 */
+static int hs_window_corner_radius(const hs_window_t *w)
+{
+    int mn = w->width < w->height ? w->width : w->height;
+    int rc = hs_s(g_shell.ui.corner_radius);
+    if (rc < 4) rc = 16;
+    if (rc > mn / 8) rc = mn / 8;
+    if (rc < 5) rc = 5;
+    return rc;
+}
+
 static void hs_window_shadow(const hs_window_t *w)
 {
     if (w->width <= 0 || w->height <= 0) return;
@@ -2053,10 +2067,7 @@ static void hs_window_shadow(const hs_window_t *w)
     /* 随窗口尺寸自适应: 圆角/模糊半径/光源偏移都按短边比例取, 再夹到区间内。
      * 小窗口用 24px 半径会糊成一团, 大窗口用 12px 又干瘪 —— 定值都不合适。 */
     int mn = w->width < w->height ? w->width : w->height;
-    int rc = hs_s(g_shell.ui.corner_radius);
-    if (rc < 4) rc = 16;
-    if (rc > mn / 8) rc = mn / 8;
-    if (rc < 5) rc = 5;
+    int rc = hs_window_corner_radius(w);
     int r = mn / 18;                 /* 短边 1/18 左右的模糊 */
     if (r < 10) r = 10;
     if (r > 40) r = 40;
@@ -2117,15 +2128,40 @@ void hs_window_render_all(void)
         }
 
         /* 窗口背景 */
-        gfx64_fill_rect(w->x, w->y, w->width, w->height, w->bg_color);
+        /* OBS-03: 浮动窗口走圆角，半径与投影掩膜完全一致；最大化窗口与面板
+           保持直角（贴边圆角反而突兀）。
+           边框用「外圆角填边框色 + 内缩 1px 圆角填背景色」两笔成形：两笔走
+           同一条矢量圆角路径，半径只差 1，所以弧段与直边粗细一致、首尾闭合，
+           不会出现「直边粗、弧段细」或「角上露壁纸缝」。 */
+        int wrc = 0;
+        if (w->type == HS_WINDOW_FLOATING && w->state != HS_WINDOW_STATE_MAXIMIZED)
+            wrc = hs_window_corner_radius(w);
+        if (wrc > 0) {
+            uint32_t brd = w->focus ? g_shell.colors.accent : w->border_color;
+            gfx64_fill_rounded_rect(w->x, w->y, w->width, w->height, wrc, brd);
+            gfx64_fill_rounded_rect(w->x + 1, w->y + 1, w->width - 2, w->height - 2,
+                                    wrc - 1, w->bg_color);
+        } else {
+            gfx64_fill_rect(w->x, w->y, w->width, w->height, w->bg_color);
+        }
 
         /* 标题栏（浮动窗口） */
         if (w->type == HS_WINDOW_FLOATING) {
             /* 标题栏高度跟随 DPI: 内容已按窗口尺寸放大, 标题栏若留 24 物理像素,
              * 125% 下相对就变窄, 标题与按钮会挤到一起。 */
             int th = hs_sy(24);
-            gfx64_fill_rect(w->x, w->y, w->width, th,
-                            g_shell.colors.titlebar_bg);
+            /* OBS-03: 标题栏顶部两角跟随窗口圆角，底部两角保持直角（贴内容区） */
+            if (wrc > 0) {
+                int trc = (wrc - 1) < th ? (wrc - 1) : th;
+                gfx64_fill_rounded_rect(w->x + 1, w->y + 1, w->width - 2, th, trc,
+                                        g_shell.colors.titlebar_bg);
+                if (th > trc)
+                    gfx64_fill_rect(w->x + 1, w->y + 1 + trc, w->width - 2, th - trc,
+                                    g_shell.colors.titlebar_bg);
+            } else {
+                gfx64_fill_rect(w->x, w->y, w->width, th,
+                                g_shell.colors.titlebar_bg);
+            }
             /* V0.55: 标题栏前景跟随主题, 深色主题下不再不可见 */
             uint32_t tb_fg = g_shell.colors.window_fg;
             int by = w->y + hs_sy(5);
@@ -2171,7 +2207,9 @@ void hs_window_render_all(void)
         /* 边框 */
         uint32_t border = w->focus ?
                           g_shell.colors.accent : w->border_color;
-        gfx64_draw_rect(w->x, w->y, w->width, w->height, border);
+        /* 圆角窗口的边框已由上面「外圈+内缩」两笔填充成形，这里只处理直角窗口 */
+        if (wrc == 0)
+            gfx64_draw_rect(w->x, w->y, w->width, w->height, border);
 
         /* 标题（跟随主题前景色） */
         if (w->type != HS_WINDOW_POPUP || w->title[0]) {
