@@ -35,6 +35,29 @@ extern void vga_put_hex(uint64_t val);
 extern uint64_t pmm64_alloc_page(void);
 extern uint64_t vmm64_get_pml4(void);
 extern int vmm64_map_page(uint64_t pml4, uint64_t virt, uint64_t phys, uint64_t flags);
+
+/* SEC-19: 映射必须可观测。
+ * vmm64_map_page 有五种失败路径（PDPT/PD/PT 分配失败、2MB 大页拆不出来），
+ * 一律返回 -1；而这里原来 7 处调用点全部丢弃返回值 —— 物理页照常记进
+ * g_user_stack_phys，页表里却没这一页，exec 继续跑，用户第一次碰到就是
+ * 「页面不在却毫无提示」的 #PF。改成统一走这个包装：失败打日志并把
+ * 地址/物理页暴出来，调用方按需中止。 */
+static int upc_map_page_checked(uint64_t pml4, uint64_t virt, uint64_t phys, uint64_t flags)
+{
+    int r = vmm64_map_page(pml4, virt, phys, flags);
+    if (r != 0) {
+        extern void vga_puts(const char *);
+        extern void vga_put_hex(uint64_t);
+        vga_puts("[USER64] map failed virt=");
+        vga_put_hex(virt);
+        vga_puts(" phys=");
+        vga_put_hex(phys);
+        vga_puts(" flags=");
+        vga_put_hex(flags);
+        vga_puts("\n");
+    }
+    return r;
+}
 extern int vmm64_page_present(uint64_t pml4, uint64_t virt);
 extern void pmm64_free_page(uint64_t addr);
 extern void kfree(void *ptr);
@@ -168,9 +191,39 @@ static uint64_t create_user_page_table_ex(void *code_data, uint64_t code_size, u
         uint64_t phys = pmm64_alloc_page();
         if (!phys) { ua_fail(user_pml4_phys, isolated); return 0; }
         uint64_t virt = USER_STACK_TOP - (i + 1) * 4096;
-        vmm64_map_page(user_pml4_phys, virt, phys,
-                       PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER);
+        /* SEC-19: 栈页映射失败必须中止 —— 已经分配了物理页却没进页表，
+         * 用户一跨到那页就是 #PF，而且现场看不出任何线索。 */
+        if (upc_map_page_checked(user_pml4_phys, virt, phys,
+                                 PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER) != 0) {
+            ua_fail(user_pml4_phys, isolated);
+            return 0;
+        }
         g_user_stack_phys[i] = phys;
+    }
+
+    /* SEC-19 自检：逐页核对 1MB 栈是否都真正可被用户态访问。
+     * 只看返回值不够 —— map_page 成功也可能落在不该落的表里，
+     * 这里从用户页表出发重走一遍，任何一页 present+U 不成立都报出来。 */
+    {
+        extern int vmm64_check_user_page(uint64_t pml4, uint64_t virt);
+        extern void vga_puts(const char *);
+        extern void vga_put_hex(uint64_t);
+        int bad = 0;
+        uint64_t first_bad = 0;
+        for (int i = 0; i < HEPU_USER_STACK_PAGES; i++) {
+            uint64_t v = USER_STACK_TOP - (i + 1) * 4096;
+            if (vmm64_check_user_page(user_pml4_phys, v) != 1) {
+                if (!bad) first_bad = v;
+                bad++;
+            }
+        }
+        if (bad) {
+            vga_puts("[SEC19] stack pages not user-accessible: ");
+            vga_put_hex((uint64_t)bad);
+            vga_puts(" first=");
+            vga_put_hex(first_bad);
+            vga_puts("\n");
+        }
     }
 
     /* 映射用户代码段（按4KB页对齐） */
@@ -185,7 +238,7 @@ static uint64_t create_user_page_table_ex(void *code_data, uint64_t code_size, u
                 /* V0.21.2: 拷第一个LOAD段(ELF头+phdr+rela.plt)从raw_elf */
                 uint64_t copy0 = 4096;
                 for (uint64_t z = 0; z < copy0; z++) dst0[z] = ((uint8_t*)raw_elf)[z];
-                vmm64_map_page(user_pml4_phys, 0x40000000ULL, phys0,
+                upc_map_page_checked(user_pml4_phys, 0x40000000ULL, phys0,
                                PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER);
             }
         }
@@ -202,7 +255,7 @@ static uint64_t create_user_page_table_ex(void *code_data, uint64_t code_size, u
             if (i * 4096 + 4096 > code_size) copy_len = code_size - i * 4096;
             for (uint64_t j = 0; j < copy_len; j++) dst[j] = src[i * 4096 + j];
             /* 映射到用户地址空间（可读可执行可写） */
-            vmm64_map_page(user_pml4_phys, virt, phys,
+            upc_map_page_checked(user_pml4_phys, virt, phys,
                            PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER);
         }
         vga_puts("[USER64] Mapped code: ");
@@ -239,7 +292,7 @@ static uint64_t create_user_page_table_ex(void *code_data, uint64_t code_size, u
             vdso[4] = (ticks>>32)&0xFF; vdso[5] = (ticks>>40)&0xFF;
             vdso[6] = (ticks>>48)&0xFF; vdso[7] = (ticks>>56)&0xFF;
             /* offset 8 = wall_sec */
-            vmm64_map_page(user_pml4_phys, 0x7FFF0000, vdso_phys,
+            upc_map_page_checked(user_pml4_phys, 0x7FFF0000, vdso_phys,
                            PAGE_PRESENT | PAGE_USER);
         }
     }
@@ -883,7 +936,7 @@ int user_process_map_extra(int pid, void *data, uint64_t size, uint64_t vaddr)
                         for (uint64_t j = 0; j < n; j++)
                             dst[off_in_page + j] = elf[off_in_file + j];
                     }
-                    vmm64_map_page(pml4, pg, phys,
+                    upc_map_page_checked(pml4, pg, phys,
                                    PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER);
                 }
             }
@@ -1174,7 +1227,7 @@ static int module_map_pages(uint64_t pml4, uint64_t vaddr, const void *data, uin
         uint64_t copy_len = 4096;
         if (pg * 4096 + 4096 > size) copy_len = size - pg * 4096;
         for (uint64_t j = 0; j < copy_len; j++) dst[j] = src[pg * 4096 + j];
-        vmm64_map_page(pml4, vaddr + pg * 4096, phys,
+        upc_map_page_checked(pml4, vaddr + pg * 4096, phys,
                        PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER);
     }
     return 0;

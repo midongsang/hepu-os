@@ -181,6 +181,18 @@ void vmm64_init(uint64_t pml4_addr)
 /* 获取或创建页表 */
 static pte_t *vmm64_get_or_create_table(pte_t *parent, int index, uint64_t flags)
 {
+    /* SEC-19 修复②: 大页防护。
+     * 大页 PDE 同样是 present，原来会顺着 `parent[index] & PAGE_MASK` 把
+     * 那 2MB 数据的物理基址当成页表基址返回，调用方接着往里面写 PTE ——
+     * 写坏一块物理内存，而大页映射本身还在（"以为映射成功，实际把别人的
+     * 数据改了"）。V0.33 只在 map_page 这个调用点插了 split，函数本体一直
+     * 没有防护；现在把它变成函数自保：见到大页直接拒绝。 */
+    if ((parent[index] & PAGE_PRESENT) && (parent[index] & PAGE_HUGE)) {
+        vga_puts("[VMM64] ERROR: huge page used as table, index=");
+        vga_put_hex((uint64_t)index);
+        vga_puts("\n");
+        return 0;
+    }
     if (!(parent[index] & PAGE_PRESENT)) {
         uint64_t new_table = pmm64_alloc_page();
         if (!new_table) {
@@ -204,9 +216,10 @@ static pte_t *vmm64_get_or_create_table(pte_t *parent, int index, uint64_t flags
  *   vmm64_get_or_create_table 会把大页 PDE 的物理基址当成页表基址，
  *   然后把 PTE 写进那 2MB 数据的头 4KB —— 大页映射本身还在，于是
  *   「内核以为映射了新页，实际写坏了一整块物理内存」。
- *   更糟的是 vmm64_unmap_page 遇到大页时直接 pd[i]=0，
- *   把内核的低身份映射（0..1GB，2MB 大页）整段拆掉：
- *   之后内核再访问这块物理内存就打到别的物理页上，
+ *   （历史）vmm64_unmap_page 早期遇到大页直接 pd[i]=0，会把内核的低身份映射
+ *   （0..1GB，2MB 大页）整段拆掉 —— 这一段已在 V0.33 改为「先 split 再清单个
+ *   PTE」，如下方 vmm64_unmap_page 所示；此处保留记录是为了说明为什么那里
+ *   必须先 split：
  *   表现为「写用户栈没写进去」「读回来是别的内容」这类神出鬼没的现象。
  *
  * 修复：需要在大页区域做 4KB 映射时，先把该 2MB 大页拆成一张 4KB 页表
@@ -425,6 +438,29 @@ static pte_t *vmm64_get_pte(uint64_t pml4_addr, uint64_t virt)
     if (!(pd[PD_INDEX(virt)] & PAGE_PRESENT)) return 0;
     pte_t *pt = (pte_t *)(pd[PD_INDEX(virt)] & PAGE_MASK);
     return &pt[PT_INDEX(virt)];
+}
+
+/* SEC-19 自检：判断某虚拟地址在给定页表里是否「present + 用户可访问」。
+ * 与 vmm64_get_pte 的区别是它会正确处理 2MB 大页（大页时没有 PT 级，
+ * 直接看 PDE 的 U 位），用来在 exec 之后逐页核对用户栈是否真的全部进表。
+ * 返回 1=可访问, 0=不可访问/未映射, -1=中间级表缺失。 */
+int vmm64_check_user_page(uint64_t pml4_addr, uint64_t virt)
+{
+    pte_t *pml4 = (pte_t *)vmm64_phys_to_virt(pml4_addr);
+    if (!(pml4[PML4_INDEX(virt)] & PAGE_PRESENT)) return -1;
+    pte_t *pdpt = (pte_t *)vmm64_phys_to_virt(pml4[PML4_INDEX(virt)] & PAGE_MASK);
+    if (!(pdpt[PDPT_INDEX(virt)] & PAGE_PRESENT)) return -1;
+    pte_t *pd = (pte_t *)vmm64_phys_to_virt(pdpt[PDPT_INDEX(virt)] & PAGE_MASK);
+    pte_t pde = pd[PD_INDEX(virt)];
+    if (!(pde & PAGE_PRESENT)) return 0;
+    if (pde & PAGE_HUGE) {
+        /* 2MB 大页：只需看 PDE 自己的 U 位 */
+        return (pde & PAGE_USER) ? 1 : 0;
+    }
+    pte_t *pt = (pte_t *)vmm64_phys_to_virt(pde & PAGE_MASK);
+    pte_t pte = pt[PT_INDEX(virt)];
+    if (!(pte & PAGE_PRESENT)) return 0;
+    return (pte & PAGE_USER) ? 1 : 0;
 }
 
 /* 判断页是否已换出 */
