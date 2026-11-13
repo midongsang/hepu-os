@@ -1209,6 +1209,18 @@ int ext2_64_write_file_inner(const char *path, const uint8_t *data, uint32_t siz
     ext2_inode_t inode;
     if (ext2_read_inode(ino, &inode) != 0) return -1;
 
+    /* FS-06: 全量覆盖写且新内容更小时，旧的多余数据块永远不会被引用到
+     * （写循环只重用到 blocks_needed 为止），位图仍标着占用 —— 反复
+     * 「写大文件再写小文件」会把盘写满，inode 大小却显示很小。
+     * 这里走「删掉重建」回收：delete 内部会释放直接/间接块、inode 与目录项，
+     * 随后 create 拿到的新 inode 从零块开始。同一把 fs 锁内完成，不留窗口。 */
+    if (inode.i_size > size) {
+        ext2_64_delete_file_inner(rpath);
+        ino = ext2_create_file(rpath, 0x81A4);
+        if (ino <= 0) return -1;
+        if (ext2_read_inode(ino, &inode) != 0) return -1;
+    }
+
     uint32_t blocks_needed = (size + ext2_block_size - 1) / ext2_block_size;
     uint32_t blocks_written = 0;
     uint32_t max_blocks = 12 + 256 + 65536 + 16777216;  /* 直接+一级+二级+三级间接块 */
