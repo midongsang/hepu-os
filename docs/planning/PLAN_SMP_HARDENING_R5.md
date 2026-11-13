@@ -2,13 +2,20 @@
 title: 组合B：SMP 硬化包实施计划（PLAN_SMP_HARDENING_R5）
 status: active
 sys_version: 0.58.0
-updated: 2026-11-11
+updated: 2026-11-13
 owner: kernel
 source_of_truth: null
 supersedes: null
 ---
 
 # 组合 B：SMP 硬化包实施计划
+
+> **进度（2026-11-13）**：SB-23 与 SB-17 的「当前进程 PID」部分已落地，
+> 另有计划外的 `running_on` 归属标记。**顺序偏离了本计划的阶段划分**（先做了
+> 阶段 4 的 SB-23），偏离的安全前提是 `smp.c:140` 的 AP 调度开关仍关闭。
+> 对账、偏离论证、以及两条本计划未覆盖的 SB-25 阻塞
+> （`context_switch_64` 不支持 `old == NULL`、AP 把 idle 当自己的当前进程且
+> 没有调度循环）见 [SMP_PROGRESS_0_58_4.md](./SMP_PROGRESS_0_58_4.md)。
 
 > 定位：把当前 x86_64 单体内核（C）从「AP 能上电、但临界区基本靠全局 cli/sti 与全局变量冒充 per-CPU」的状态，分阶段硬化到「多核并发下共享状态有明确同步原语、跨核 TLB/IPI 闭环、调度器可安全被多核进入」的状态。
 >
