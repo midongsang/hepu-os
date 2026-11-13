@@ -364,3 +364,35 @@ PASS: child ran in shared address space, both counters advanced
 但能让调度器照常工作。真正的阻塞/唤醒式 sleep 需要给 `uthread_t` 加
 `wake_tick` 并让 tick 跳过未到期线程，属独立改造。
 
+### §1.92 侧栏 Info 与任务管理器职责去重；任务管理器接真实 CPU 采样
+
+**问题一：同一组占用数据画两遍。**
+
+侧栏 Info 页有 CPU/MEM/DSK 三条占用条（`hpdesk.c` 侧栏渲染），而任务管理器摘要行
+同样给出 `CPU: x%  MEM: y%`，两处呈现的是同一组数据。侧栏这三条既没有曲线，
+也没有进程级明细，信息密度明显低于任务管理器；同时侧栏内容只占面板上部约三分之一，
+下面大片空区。占用指标属于任务管理器职责，侧栏不应重复承担。
+
+修法：删掉侧栏三条占用条，改为两组纯文本行（左标签右对齐值）：
+- `STATUS`：Uptime、Processes、Threads(active/total)、Net RX、Net TX
+- `SYSTEM`：Version、Kernel、CPU(core 数)、Memory(总量)
+
+数据源分别为 `pit64_get_ms()`、`process64_count()`、`uthread_get_stats()`、
+`e1000_get_net_stats()`、`smp_get_cpu_count()`、`pmm64_get_stats()`。右对齐用
+`font64_get_string_width()` 实测文本宽度，避免靠空格凑对齐。
+
+**问题二：任务管理器里的 CPU 没接上真采样。**
+
+`hs_apps.c` 的摘要行与 CPU 曲线都调 `hs_process_get_cpu_usage()`
+（`hsservices.c:272`），该函数直接返回 `g_proc.total_cpu` —— 这个字段全仓没有
+任何地方更新，因此**恒为 0**：数字永远显示 `CPU: 0%`，曲线永远是一条平线。
+
+修法：两处改用 `process64_cpu_usage()`（`process64_full.c:657`），它由 PIT 调度
+tick 累计 `g_total_ticks` 与 idle 进程 tick 得出真实占用率，且已有 `g_total_ticks < 50`
+的启动期保护。
+
+**验证**：内核 829,000 B（+768 B）；连续 2 次启动 2/2 PASS、`EXCEPTION=0`；
+侧栏实机截图见 `docs/assets/desktop-0.58.0.png`（STATUS/SYSTEM 两组，占用条已移除）。
+任务管理器窗口侧的截图受 SEC-24（桌面主循环十余轮后停止推进）影响未能取到，
+CPU 采样改动已编译进镜像并通过启动回归，待 SEC-24 修好后可一并截图取证。
+

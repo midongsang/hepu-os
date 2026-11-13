@@ -3150,87 +3150,113 @@ static void hs_sidebar_render(void)
     if (s_bar_w < hs_sx(30)) s_bar_w = hs_sx(30);
     int s_pct_x = sx + sw - hs_sx(20) - hs_sx(26);
     if (g_sidebar_tab == 0) {
-        /* 信息标签：系统状态 (V0.13.39: 真实数据) */
-        extern int process64_cpu_usage(void);
+        /* 信息标签：状态摘要 + 硬件规格。
+         * V0.58.3: CPU/MEM/DSK 三条占用条移除此处 —— 占用是任务管理器的职责,
+         * 两处同时呈现等于同一组数据画两遍, 而且这里没有曲线、没有进程明细,
+         * 信息量远不如任务管理器。侧栏改为只放"一眼可见的运行状态"与"规格"。 */
         extern void pmm64_get_stats(uint64_t *total, uint64_t *used, uint64_t *free);
-        extern uint32_t ext2_64_used_percent(void);
+        extern int process64_count(void);
+        extern uint64_t pit64_get_ms(void);
+        extern void e1000_get_net_stats(uint64_t *tx, uint64_t *rx, uint32_t *txr, uint32_t *rxr);
+        extern int uthread_get_stats(int *total, int *active, int *last_parent, int *last_child);
+        extern uint32_t smp_get_cpu_count(void);
+        extern void hs_itoa(int v, char *out);
+
         uint64_t tp = 0, up = 0, fp = 0;
         pmm64_get_stats(&tp, &up, &fp);
-        int cpu_p = process64_cpu_usage();
-        int mem_p = (tp > 0) ? (int)(up * 100 / tp) : 0;
-        int dsk_p = ext2_64_used_percent();
+        uint64_t txb = 0, rxb = 0; uint32_t txr = 0, rxr = 0;
+        e1000_get_net_stats(&txb, &rxb, &txr, &rxr);
+        int ttot = 0, tact = 0, lp = 0, lc = 0;
+        uthread_get_stats(&ttot, &tact, &lp, &lc);
+
+        int s_vx = sx + sw - hs_sx(20);      /* 值列右边缘(右对齐) */
+        int lsz = hs_s(12);
+        char val[32]; char tmp2[16];
+
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            sx + hs_sx(20), content_y, "System Info", g_shell.colors.panel_fg, hs_s(18));
-        content_y += hs_sy(35);
+        content_y += hs_sy(34);
 
-        /* CPU */
-        font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           sx + hs_sx(20), content_y, "CPU", g_shell.colors.panel_fg, hs_s(14));
-        gfx64_fill_rounded_rect(s_bar_x, content_y + hs_sy(2), s_bar_w, hs_sy(12), hs_s(4), g_shell.colors.border);
-        gfx64_fill_rounded_rect(s_bar_x, content_y + hs_sy(2), s_bar_w * cpu_p / 100, hs_sy(12), hs_s(4), g_shell.colors.accent | 0xFF000000u);
-        {
-            char pc[8];
-            hs_pct_str(cpu_p, pc);
-            font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                               s_pct_x, content_y, pc, g_shell.colors.panel_fg, hs_s(12));
-        }
-        content_y += hs_sy(28);
+#define SIDE_ROW(lbl, vs, vc) do { \
+            font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height, \
+                               sx + hs_sx(20), content_y, (lbl), g_shell.colors.panel_fg, lsz); \
+            font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height, \
+                               s_vx - (int)font64_get_string_width((vs), (uint16_t)lsz), \
+                               content_y, (vs), (vc), lsz); \
+        } while (0)
 
-        /* Memory */
+        /* ---- 运行状态 ---- */
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           sx + hs_sx(20), content_y, "MEM", g_shell.colors.panel_fg, hs_s(14));
-        gfx64_fill_rounded_rect(s_bar_x, content_y + hs_sy(2), s_bar_w, hs_sy(12), hs_s(4), g_shell.colors.border);
-        gfx64_fill_rounded_rect(s_bar_x, content_y + hs_sy(2), s_bar_w * mem_p / 100, hs_sy(12), hs_s(4), g_shell.colors.accent | 0xFF000000u);
-        {
-            char pc[8];
-            hs_pct_str(mem_p, pc);
-            font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                               s_pct_x, content_y, pc, g_shell.colors.panel_fg, hs_s(12));
-        }
-        content_y += hs_sy(28);
-
-        /* Disk */
-        font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           sx + hs_sx(20), content_y, "DSK", g_shell.colors.panel_fg, hs_s(14));
-        gfx64_fill_rounded_rect(s_bar_x, content_y + hs_sy(2), s_bar_w, hs_sy(12), hs_s(4), g_shell.colors.border);
-        gfx64_fill_rounded_rect(s_bar_x, content_y + hs_sy(2), s_bar_w * dsk_p / 100, hs_sy(12), hs_s(4), g_shell.colors.accent | 0xFF000000u);
-        {
-            char pc[8];
-            hs_pct_str(dsk_p, pc);
-            font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                               s_pct_x, content_y, pc, g_shell.colors.panel_fg, hs_s(12));
-        }
-        content_y += hs_sy(40);
-
-        /* 系统信息 */
-        font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           sx + hs_sx(20), content_y, "Hepu OS v0.58.0", g_shell.colors.accent, hs_s(14));
+                           sx + hs_sx(20), content_y, "STATUS", g_shell.colors.accent, hs_s(10));
         content_y += hs_sy(24);
-        font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           sx + hs_sx(20), content_y, "Kernel: 64-bit SMP", g_shell.colors.panel_fg, hs_s(12));
-        content_y += hs_sy(20);
-        /* V0.56.1: 原有 "CPU: 4 cores" / "Memory: 2GB" 是写死文案, 与实际机器无关 */
-        {
-            extern uint32_t smp_get_cpu_count(void);
-            static char cpuline[32];
-            static char memline[32];
-            uint32_t nc = smp_get_cpu_count();
-            strcpy(cpuline, "CPU: ");
-            char nb[8];
-            hs_itoa((int)(nc ? nc : 1), nb);
-            strcpy(cpuline + strlen(cpuline), nb);
-            strcpy(cpuline + strlen(cpuline), (nc == 1) ? " core" : " cores");
-            font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                               sx + hs_sx(20), content_y, cpuline, g_shell.colors.panel_fg, hs_s(12));
-            content_y += hs_sy(20);
-            strcpy(memline, "Memory: ");
-            char mb[8];
-            hs_itoa((int)(tp / (1024ULL * 1024ULL)), mb);
-            strcpy(memline + strlen(memline), mb);
-            strcpy(memline + strlen(memline), " MB");
-            font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                               sx + hs_sx(20), content_y, memline, g_shell.colors.panel_fg, hs_s(12));
+
+        {   /* Uptime */
+            uint64_t ms = pit64_get_ms(); int sec = (int)(ms / 1000);
+            if (sec >= 3600) {
+                int hh = sec / 3600, mm = (sec % 3600) / 60;
+                hs_itoa(hh, val); strcpy(val + strlen(val), "h ");
+                hs_itoa(mm, tmp2); strcpy(val + strlen(val), tmp2);
+                strcpy(val + strlen(val), "m");
+            } else if (sec >= 60) {
+                int mm = sec / 60, ss = sec % 60;
+                hs_itoa(mm, val); strcpy(val + strlen(val), "m ");
+                hs_itoa(ss, tmp2); strcpy(val + strlen(val), tmp2);
+                strcpy(val + strlen(val), "s");
+            } else {
+                hs_itoa(sec, val); strcpy(val + strlen(val), "s");
+            }
+            SIDE_ROW("Uptime", val, g_shell.colors.panel_fg);
         }
+        content_y += hs_sy(22);
+
+        {   /* Processes */
+            hs_itoa(process64_count(), val);
+            SIDE_ROW("Processes", val, g_shell.colors.panel_fg);
+        }
+        content_y += hs_sy(22);
+
+        {   /* Threads: active / total */
+            hs_itoa(tact, val);
+            strcpy(val + strlen(val), " / ");
+            hs_itoa(ttot, tmp2); strcpy(val + strlen(val), tmp2);
+            SIDE_ROW("Threads", val,
+                     (tact > 0) ? 0x52C41Au : g_shell.colors.panel_fg);
+        }
+        content_y += hs_sy(22);
+
+        {   /* Network RX / TX */
+            hs_itoa((int)rxr, val); strcpy(val + strlen(val), " KB/s");
+            SIDE_ROW("Net RX", val, g_shell.colors.panel_fg);
+        }
+        content_y += hs_sy(22);
+        {
+            hs_itoa((int)txr, val); strcpy(val + strlen(val), " KB/s");
+            SIDE_ROW("Net TX", val, g_shell.colors.panel_fg);
+        }
+        content_y += hs_sy(34);
+
+        /* ---- 规格 ---- */
+        font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                           sx + hs_sx(20), content_y, "SYSTEM", g_shell.colors.accent, hs_s(10));
+        content_y += hs_sy(24);
+
+        SIDE_ROW("Version", "v0.58.0", g_shell.colors.accent);
+        content_y += hs_sy(22);
+        SIDE_ROW("Kernel", "64-bit SMP", g_shell.colors.panel_fg);
+        content_y += hs_sy(22);
+        {
+            uint32_t nc = smp_get_cpu_count();
+            hs_itoa((int)(nc ? nc : 1), val);
+            strcpy(val + strlen(val), (nc == 1) ? " core" : " cores");
+            SIDE_ROW("CPU", val, g_shell.colors.panel_fg);
+        }
+        content_y += hs_sy(22);
+        {
+            hs_itoa((int)(tp / (1024ULL * 1024ULL)), val);
+            strcpy(val + strlen(val), " MB");
+            SIDE_ROW("Memory", val, g_shell.colors.panel_fg);
+        }
+#undef SIDE_ROW
     } else if (g_sidebar_tab == 1) {
         /* 应用抽屉 (V0.55: 真实注册应用列表 + Clavis 式垂直滚动) */
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,

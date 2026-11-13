@@ -3524,11 +3524,11 @@ static void m_render(hs_window_t *w)
 
     /* V0.56.2: 整机占用摘要(用户看这里, 不必读曲线) */
     {
-        extern int hs_process_get_cpu_usage(void);
+        extern int process64_cpu_usage(void);   /* V0.58.3: 真采样(PIT tick - idle) */
         extern int hs_process_get_mem_usage(void);
         char sbuf[64];
         strcpy(sbuf, "CPU: ");
-        hs_itoa(hs_process_get_cpu_usage(), tmp);
+        hs_itoa(process64_cpu_usage(), tmp);
         strcpy(sbuf + hs_strlen(sbuf), tmp);
         strcpy(sbuf + hs_strlen(sbuf), "%    MEM: ");
         hs_itoa(hs_process_get_mem_usage(), tmp);
@@ -3588,7 +3588,7 @@ static void m_render(hs_window_t *w)
     }
 
     /* 实时曲线: CPU + 网络 */
-    int cpu = hs_process_get_cpu_usage();
+    int cpu = process64_cpu_usage();     /* V0.58.3: 曲线也接真采样, 原来恒 0 是平线 */
     uint64_t tx = 0, rx = 0; uint32_t txr = 0, rxr = 0;
     e1000_get_net_stats(&tx, &rx, &txr, &rxr);
     m_hist_push(m_cpu_hist, cpu);
