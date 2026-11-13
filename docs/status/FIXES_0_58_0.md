@@ -840,3 +840,64 @@ per_cpu_current_pid[i] = 0;
 3. 每核有自己的 idle 循环（或在无进程可跑时进 `hlt` 而不占用 idle 的 context）。
 
 这三条都要在**打开开关之前**完成并单独验证，不能和"双核并发"混在一起试。
+
+### §1.102 SMP 阶段 1 起步：原子原语统一 + 计数原子化 + PMM 加锁
+
+按 `SMP_PROGRESS_0_58_4.md` 的建议顺序，从阶段的第 1 步开始做：先立原子原语，
+再把两处最基础的计数器原子化，最后给 PMM 上锁（**这是开 AP 调度的硬门槛**）。
+
+#### SB-01 新增 `atomic64.h`
+
+此前内核里的原子操作有三套来源，屏障口径还不一致：`spinlock.c` 里两个文件
+私有的 `static inline`、`kheap64.c` 的 `__atomic_exchange_n`、`klog64.c` 的
+`__sync_lock_test_and_set`。多核下这一点很容易变成"看起来锁住了其实没同步"。
+
+新头文件统一提供：
+
+- 屏障：`mb()/rmb()/wmb()`（`mfence/lfence/sfence`）、`barrier_compiler()`；
+- 32 位：`atomic_load32/store32/xchg32/cmpxchg32/inc32/dec32/add32/xadd32`；
+- 64 位：同上一整套；
+- 类型别名 `atomic_u32/atomic_u64`（只是 `volatile` 别名，所以现有
+  `volatile uint64_t` 变量不用改类型就能直接传）。
+
+设计约定：所有读-改-写都用带 `lock` 前缀的指令（本身就是完整屏障，不需要
+额外 fence）；load/store 用普通 mov，x86 对 8 字节对齐访问本身是原子的，
+跨核可见处配合 `mb()`。
+
+`spinlock.c` 的本地 `static inline` 已删除、改调新接口，行为等价。
+
+#### SB-02 / SB-03 两个基础计数器原子化
+
+- `g_kernel_tick64`（`lib64.c:349`）：多核的 `0x40` 中断会并发写，
+  `++` 改 `atomic_inc64`；
+- `irq_count[]`（`irq64_simple.c:32`）：类型加 `volatile`，三处递增
+  （含 spurious 的 `0xFF` 槽）改 `atomic_inc64`。
+
+两者都是纯表达式替换，不改语义。
+
+#### SB-09 PMM 加锁（新增 `g_pmm_lock`）
+
+`pmm64_alloc_page / alloc_pages / free_page / free_pages / reserve_range` 此前
+**完全没有互斥**。单核没事，两核同时扫位图就会把同一个空闲页帧判给两个进程，
+两边各自写入互相覆盖 —— **不报错，只随机踩内存**，事后从栈回溯几乎定位不到。
+计划 1.2 节把它列为最严重的一条。
+
+实现要点：
+
+- 用新加的 **`spinlock_lock_irqsave / spinlock_unlock_irqrestore`**（`spinlock.h`）
+  —— PMM 会在中断上下文被调用，必须先 `cli` 再拿锁，`pushfq` 记原 IF，
+  解锁时只在原 IF 为 1 时才 `sti`；
+- **外层入口加锁、内部用 `*_nolock` 版本**：`alloc_pages` 原本会调
+  `alloc_page`、`free_pages` 原本会调 `free_page`。`spinlock_lock` 虽然支持
+  递归，但递归解锁只做 `recursion_count--` 而不真正释放锁 —— 此时
+  `irqrestore` 若照 flags 开中断，就会出现"锁还拿着但中断已开"。所以拆成
+  无锁内核函数，避免嵌套。`irqsave` 这一对也在注释里明确写了**不支持嵌套**。
+
+#### 验证
+
+QEMU `-smp 2` 20 次：**20/20 PASS**，`desk` 13~15 s，`P=1`、`F=0`、`EXC=0`、
+`ps` 正常、`[SPINLOCK] ERROR` 零次；5 次仍 `calfail=1`（OBS-01 偶发，行为不变）
+但同样 PASS。内核 830,024 → **830,344 B**。
+
+**边界**：`smp.c:140` 的 `&& 0` 依然没动。PMM 锁在单核下恒无竞争，它的价值
+要等 AP 真正参与调度时才体现 —— 但必须**在那之前**就就位。

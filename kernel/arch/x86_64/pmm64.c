@@ -7,6 +7,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include "pmm64.h"
+#include "spinlock.h"
 
 /* 页面大小 */
 #define PAGE_SIZE 4096
@@ -121,6 +122,16 @@ int cow_handle_fault(uint64_t cr2) {
 /* 静态位图数组（管理最多2GB = 524288页，需要65536字节 = 16页） */
 static uint8_t pmm64_static_bitmap[65536] __attribute__((aligned(4096)));
 
+/* V0.58.5 / SB-09: PMM 全局锁。
+ * 之前 alloc/free 完全没有互斥 —— 单核没事, 两核同时扫位图就会把同一个
+ * 空闲页帧判给两个进程, 然后两边各自写入互相覆盖。而且不报错, 只是随机
+ * 踩内存, 事后从栈回溯几乎定位不到。
+ *
+ * 用 irqsave 版: pmm 可能在中断上下文被调用。
+ * 外层入口加锁, 内部用 *_nolock 版本, 避免 spinlock 递归导致的
+ * "递归解锁不真正释放 + irqrestore 提前开中断"。 */
+static spinlock_t g_pmm_lock;
+
 /* 添加内存区域 */
 static void pmm64_add_region(uint64_t base, uint64_t length, mem_region_type_t type)
 {
@@ -139,6 +150,8 @@ static void pmm64_add_region(uint64_t base, uint64_t length, mem_region_type_t t
 int pmm64_init(uint64_t memory_size, uint64_t bitmap_addr)
 {
     (void)bitmap_addr;  /* 使用静态数组，忽略此参数 */
+
+    spinlock_init(&g_pmm_lock);
 
     /* 限制最大内存 */
     if (memory_size > MAX_MEMORY_SIZE) {
@@ -220,7 +233,7 @@ int pmm64_init(uint64_t memory_size, uint64_t bitmap_addr)
 /* 分配一个物理页面
  * 返回：物理地址，0表示失败
  */
-uint64_t pmm64_alloc_page(void)
+static uint64_t pmm64_alloc_page_nolock(void)
 {
     if (pmm64.free_pages == 0) {
         return 0;
@@ -253,11 +266,19 @@ uint64_t pmm64_alloc_page(void)
     return 0;
 }
 
+uint64_t pmm64_alloc_page(void)
+{
+    uint64_t flags = spinlock_lock_irqsave(&g_pmm_lock);
+    uint64_t r = pmm64_alloc_page_nolock();
+    spinlock_unlock_irqrestore(&g_pmm_lock, flags);
+    return r;
+}
+
 /* 保留一段物理地址（标记为已用，分配器不会再发出去）。
  * V0.33：内核栈是 .bss 里的静态数组，必须显式保留 ——
  * 否则它会被当成普通空闲页分配给用户进程栈，
  * 用户栈一写就覆盖内核栈（表现为 auxv 里出现内核地址）。 */
-void pmm64_reserve_range(uint64_t base, uint64_t length)
+static void pmm64_reserve_range_nolock(uint64_t base, uint64_t length)
 {
     if (!length) return;
     uint64_t start = base / PAGE_SIZE;
@@ -270,8 +291,16 @@ void pmm64_reserve_range(uint64_t base, uint64_t length)
     }
 }
 
+void pmm64_reserve_range(uint64_t base, uint64_t length)
+{
+    if (!length) return;   /* 提前返回, 免得为空区间白拿一次锁 */
+    uint64_t flags = spinlock_lock_irqsave(&g_pmm_lock);
+    pmm64_reserve_range_nolock(base, length);
+    spinlock_unlock_irqrestore(&g_pmm_lock, flags);
+}
+
 /* 释放一个物理页面 */
-void pmm64_free_page(uint64_t phys_addr)
+static void pmm64_free_page_nolock(uint64_t phys_addr)
 {
     uint64_t page = phys_addr / PAGE_SIZE;
     if (page >= pmm64.total_pages) {
@@ -293,13 +322,25 @@ void pmm64_free_page(uint64_t phys_addr)
     }
 }
 
+void pmm64_free_page(uint64_t phys_addr)
+{
+    uint64_t flags = spinlock_lock_irqsave(&g_pmm_lock);
+    pmm64_free_page_nolock(phys_addr);
+    spinlock_unlock_irqrestore(&g_pmm_lock, flags);
+}
+
 /* 分配连续物理页面 */
 uint64_t pmm64_alloc_pages(size_t count)
 {
     if (count == 0) return 0;
     if (count == 1) return pmm64_alloc_page();
 
-    if (count > pmm64.free_pages) return 0;
+    uint64_t flags = spinlock_lock_irqsave(&g_pmm_lock);
+
+    if (count > pmm64.free_pages) {
+        spinlock_unlock_irqrestore(&g_pmm_lock, flags);
+        return 0;
+    }
 
     uint64_t first = 0;
     size_t contiguous = 0;
@@ -315,6 +356,7 @@ uint64_t pmm64_alloc_pages(size_t count)
                     pmm64.free_pages--;
                 }
                 pmm64.alloc_count++;
+                spinlock_unlock_irqrestore(&g_pmm_lock, flags);
                 return first * PAGE_SIZE;
             }
         } else {
@@ -322,15 +364,19 @@ uint64_t pmm64_alloc_pages(size_t count)
         }
     }
 
+    spinlock_unlock_irqrestore(&g_pmm_lock, flags);
     return 0;
 }
 
 /* 释放连续物理页面 */
 void pmm64_free_pages(uint64_t phys_addr, size_t count)
 {
+    if (count == 0) return;
+    uint64_t flags = spinlock_lock_irqsave(&g_pmm_lock);
     for (size_t i = 0; i < count; i++) {
-        pmm64_free_page(phys_addr + i * PAGE_SIZE);
+        pmm64_free_page_nolock(phys_addr + i * PAGE_SIZE);
     }
+    spinlock_unlock_irqrestore(&g_pmm_lock, flags);
 }
 
 /* 获取内存统计信息 */

@@ -4,6 +4,7 @@
  * ========================================================================== */
 
 #include "spinlock.h"
+#include "atomic64.h"
 
 /* 外部函数 */
 extern void vga_puts(const char *str);
@@ -15,32 +16,6 @@ void spinlock_init(spinlock_t *lock)
     lock->lock = 0;
     lock->owner_cpu = 0xFFFFFFFF;  /* 无主 */
     lock->recursion_count = 0;
-}
-
-/* 原子交换指令：返回旧值并设置新值 */
-static inline uint32_t atomic_xchg(volatile uint32_t *ptr, uint32_t val)
-{
-    uint32_t result;
-    __asm__ volatile(
-        "xchgl %0, %1"
-        : "=r"(result), "+m"(*ptr)
-        : "0"(val)
-        : "memory"
-    );
-    return result;
-}
-
-/* 原子比较并交换 */
-static inline uint32_t atomic_cmpxchg(volatile uint32_t *ptr, uint32_t expected, uint32_t new_val)
-{
-    uint32_t result;
-    __asm__ volatile(
-        "lock cmpxchgl %2, %1"
-        : "=a"(result), "+m"(*ptr)
-        : "r"(new_val), "0"(expected)
-        : "memory"
-    );
-    return result;
 }
 
 /* 加锁（阻塞等待，支持递归） */
@@ -55,7 +30,7 @@ void spinlock_lock(spinlock_t *lock)
     }
 
     /* 自旋等待锁释放 */
-    while (atomic_xchg(&lock->lock, 1) == 1) {
+    while (atomic_xchg32(&lock->lock, 1) == 1) {
         /* 自旋等待，PAUSE指令减少功耗 */
         __asm__ volatile("pause" ::: "memory");
     }
@@ -99,7 +74,7 @@ int spinlock_trylock(spinlock_t *lock)
     }
 
     /* 尝试获取锁 */
-    if (atomic_cmpxchg(&lock->lock, 0, 1) == 0) {
+    if (atomic_cmpxchg32(&lock->lock, 0, 1) == 0) {
         lock->owner_cpu = cpu_id;
         lock->recursion_count = 1;
         return 1;  /* 成功 */

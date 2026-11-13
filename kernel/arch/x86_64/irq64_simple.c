@@ -4,6 +4,7 @@
  * ========================================================================== */
 
 #include <stdint.h>
+#include "atomic64.h"
 #include <stddef.h>
 
 /* 中断描述符 */
@@ -29,7 +30,8 @@ static idt_entry64_t idt64[IDT_ENTRIES] __attribute__((aligned(16)));
 static idt_ptr64_t idt64_ptr;
 
 /* 中断计数（导出供 CSPRNG 作熵源） */
-uint64_t irq_count[IDT_ENTRIES];
+/* V0.58.5 / SB-03: 多核中断并发递增，改原子 */
+volatile uint64_t irq_count[IDT_ENTRIES];
 
 /* 外部中断处理函数（在entry_64.S中定义） */
 extern void irq_entry_0(void);
@@ -244,14 +246,14 @@ void idt64_load_for_ap(void)
 /* Spurious中断处理函数（不发送EOI，只计数） */
 void irq_spurious_handler(uint64_t *stack_frame)
 {
-    irq_count[0xFF]++;
+    atomic_inc64(&irq_count[0xFF]);
     /* spurious中断不需要发送EOI，直接返回 */
 }
 
 /* 异常处理函数（从汇编入口调用） */
 void irq64_exception_handler(int vector, uint64_t error_code, uint64_t rip, uint64_t cs, uint64_t rflags)
 {
-    irq_count[vector]++;
+    atomic_inc64(&irq_count[vector]);
 
     vga_puts("\n[EXCEPTION] ");
     vga_put_hex(vector);
@@ -333,7 +335,7 @@ void irq64_exception_handler(int vector, uint64_t error_code, uint64_t rip, uint
 /* 通用中断处理 */
 void irq64_handler(int vector)
 {
-    irq_count[vector]++;
+    atomic_inc64(&irq_count[vector]);
     /* 后续添加具体中断处理 */
 }
 

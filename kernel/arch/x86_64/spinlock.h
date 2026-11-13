@@ -30,4 +30,32 @@ int spinlock_trylock(spinlock_t *lock);
 /* 检查是否已锁定 */
 int spinlock_is_locked(spinlock_t *lock);
 
+/* -------------------------------------------------------------------------
+ * 关中断版加锁（V0.58.5）
+ *
+ * 为什么需要这一对: spinlock_lock() 本身不关中断。如果一个临界区会被本核
+ * 中断上下文重入(时钟中断里也去拿同一把锁), 就必须先 cli 再拿锁, 否则
+ * 自己会等自己 -> 自死锁。返回的 flags 用于解锁时按原状态恢复 IF。
+ *
+ * 注意: 这对函数**不支持嵌套**。spinlock_unlock() 在递归层只做
+ * recursion_count-- 而不真正释放锁, 此时 irqrestore 若照 flags 开中断,
+ * 就会出现"锁还拿着但中断已开"。嵌套场景请改用外层加锁 + 内部无锁版。
+ * ------------------------------------------------------------------------- */
+static inline uint64_t spinlock_lock_irqsave(spinlock_t *lock)
+{
+    uint64_t flags;
+    __asm__ volatile("pushfq\n\tpopq %0" : "=r"(flags) : : "memory");
+    __asm__ volatile("cli" ::: "memory");
+    spinlock_lock(lock);
+    return flags;
+}
+
+static inline void spinlock_unlock_irqrestore(spinlock_t *lock, uint64_t flags)
+{
+    spinlock_unlock(lock);
+    if (flags & (1ULL << 9)) {   /* 原来是开着的才开回去 */
+        __asm__ volatile("sti" ::: "memory");
+    }
+}
+
 #endif /* SPINLOCK_H */

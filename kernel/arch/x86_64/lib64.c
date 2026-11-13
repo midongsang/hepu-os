@@ -4,6 +4,7 @@
  * ========================================================================== */
 
 #include <stdint.h>
+#include "atomic64.h"
 #include <stddef.h>
 #include <stdarg.h>
 
@@ -346,6 +347,7 @@ void irq64_register_handler(int irq, irq_handler_t handler)
 static uint8_t fpu_save_area[8][512] __attribute__((aligned(64)));
 
 /* V0.13.46: 内核tick（vec40每1ms递增，未响应看门狗用） */
+/* V0.58.5 / SB-02: 多核的 0x40 中断会并发写，改原子递增 */
 uint64_t g_kernel_tick64 = 0;
 /* V0.33: 用户态异常累计次数（启动自检电池用来给可判定结论） */
 volatile uint64_t g_user_exception_count = 0;
@@ -423,7 +425,7 @@ static void irq_handler_64_body(uint64_t *stack_frame)
     } else if (vector == 0x40) {
         /* APIC定时器中断（每个CPU独立, 1000Hz=1ms） */
         extern uint64_t g_kernel_tick64;
-        g_kernel_tick64++;
+        atomic_inc64(&g_kernel_tick64);
         /* V0.13.46: 用户态强制终止截获（kill请求 或 未响应超时看门狗） */
         extern int user_process_kill_pending(void);
         extern int user_process_timeout_triggered(void);
