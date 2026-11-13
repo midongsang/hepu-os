@@ -135,7 +135,13 @@ int cursor64_pick_size(int screen_w, int screen_h)
     return 24;
 }
 
-/* Modern 主题: 位图 48px, 逐像素 alpha 混合 */
+/* 光标尺寸跟随 UI 缩放档(100/125/150/200): 指针是 DIP 尺寸, 高 DPI 下要同步放大 */
+static int g_scale_pct = 100;
+void cursor64_set_scale(int pct) { g_scale_pct = (pct >= 100 && pct <= 250) ? pct : 100; }
+int  cursor64_scale(void)        { return g_scale_pct; }
+
+/* Modern 主题: 位图 48px, 按缩放档最近邻放大后逐像素 alpha 混合。
+ * 最近邻而不是双线性 —— 线稿放大后要保持硬边, 插值会把描边糊成灰边。 */
 static void cur_modern_draw(int x, int y)
 {
     int k = g_active;
@@ -146,12 +152,26 @@ static void cur_modern_draw(int x, int y)
         if (g_cur_modern[i].id == idx) { b = &g_cur_modern[i]; break; }
     }
     if (!b) b = &g_cur_modern[0];
-    int ox = x - b->hx, oy = y - b->hy;
-    for (int j = 0; j < b->h; j++) {
-        for (int i = 0; i < b->w; i++) {
-            int off = j * b->w + i;
-            int a = b->alpha[off];
+
+    int tw = b->w * g_scale_pct / 100;
+    int th = b->h * g_scale_pct / 100;
+    if (tw < 8) tw = 8;
+    if (th < 8) th = 8;
+    if (tw > 128) tw = 128;
+    if (th > 128) th = 128;
+    int hx = b->hx * g_scale_pct / 100;      /* 热点同比缩放, 否则放大后落点偏 */
+    int hy = b->hy * g_scale_pct / 100;
+    int ox = x - hx, oy = y - hy;
+
+    for (int j = 0; j < th; j++) {
+        int sj = j * b->h / th;
+        const uint8_t *arow = b->alpha + sj * b->w;
+        int brow = sj * b->w;
+        for (int i = 0; i < tw; i++) {
+            int si = i * b->w / tw;
+            int a = arow[si];
             if (!a) continue;
+            int off = brow + si;
             uint32_t c = (b->bits[off >> 3] >> (off & 7)) & 1 ? b->fill : b->stroke;
             if (a >= 200) gfx64_put_pixel(ox + i, oy + j, c);
             else          gfx64_blend_pixel(ox + i, oy + j, c, a);

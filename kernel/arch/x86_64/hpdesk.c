@@ -4876,7 +4876,9 @@ static void hs_present_with_cursor(int mx, int my)
     {
         extern void cursor64_set_kind(int kind);
         extern void cursor64_set_theme(int t);
+        extern void cursor64_set_scale(int pct);
         cursor64_set_theme(g_shell.ui.cursor_theme);
+        cursor64_set_scale(g_ui_scale_pct);
         cursor64_set_kind(hs_cursor_kind_at(mx, my));
     }
     cursor64_draw(mx, my);
