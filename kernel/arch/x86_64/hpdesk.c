@@ -1886,12 +1886,12 @@ static void sh_box_v(const uint8_t *src, uint8_t *dst, int w, int h, int r)
 }
 
 /* 生成 mask: 返回 1 成功, 0 表示内存不够(调用方回退到解析式) */
-static int sh_build(int ww, int hh, int pad, int rc, int r)
+static int sh_build(int ww, int hh, int pad, int rc, int r, int off)
 {
     extern void *kmalloc(uint64_t size);
     extern void kfree(void *ptr);
 
-    int mw = ww + 2 * pad, mh = hh + 2 * pad;
+    int mw = ww + 2 * pad, mh = hh + 2 * pad + off;
     if (mw <= 0 || mh <= 0 || mw > 2048 || mh > 1400) return 0;
     uint32_t need = (uint32_t)mw * (uint32_t)mh;
     if (need > sh_cap) {
@@ -1906,7 +1906,7 @@ static int sh_build(int ww, int hh, int pad, int rc, int r)
     for (long y = 0; y < mh; y++) {
         uint8_t *row = sh_mask + y * mw;
         for (long x = 0; x < mw; x++) {
-            row[x] = sh_in_rounded(x, y, pad, pad, pad + ww - 1, pad + hh - 1, rc) ? 255 : 0;
+            row[x] = sh_in_rounded(x, y, pad, pad + off, pad + ww - 1, pad + off + hh - 1, rc) ? 255 : 0;
         }
     }
     if (r < 1) r = 1;
@@ -1991,23 +1991,25 @@ static void hs_window_shadow(const hs_window_t *w)
     if (r < 8) r = 24;
     int off = hs_sy(14);
     if (off < 4) off = 14;
-    int pk = (rc * 4096 + pad) * 4096 + r;
+    int pk = ((rc * 4096 + pad) * 4096 + r) * 512 + off;
 
     if (sh_kw != w->width || sh_kh != w->height || sh_kpk != pk) {
-        if (!sh_build(w->width, w->height, pad, rc, r)) {
+        if (!sh_build(w->width, w->height, pad, rc, r, off)) {
             hs_window_shadow_analytic(w);   /* 内存不够, 退回解析式 */
             return;
         }
     }
     int mx0 = w->x - pad;
-    int my0 = w->y + off - pad;
+    /* 阴影源在 mask 里下移了 off, 但 blit 原点必须对齐真实窗口, 否则窗口正下方
+     * 那 off 一段既没阴影、又被当成"窗口内部"跳过, 会出现一条空缝。 */
+    int my0 = w->y - pad;
 
     sh_kpk = pk;
     /* 只走四条边带, 中间整块跳过 —— 那是窗口自己会盖住的区域, 算它纯属浪费 */
-    sh_blit_slice(w, mx0, my0, 0, sh_mw, 0, pad, pad, rc);                  /* 上 */
-    sh_blit_slice(w, mx0, my0, 0, sh_mw, sh_mh - pad, sh_mh, pad, rc);      /* 下 */
-    sh_blit_slice(w, mx0, my0, 0, pad, pad, sh_mh - pad, pad, rc);          /* 左 */
-    sh_blit_slice(w, mx0, my0, sh_mw - pad, sh_mw, pad, sh_mh - pad, pad, rc); /* 右 */
+    sh_blit_slice(w, mx0, my0, 0, sh_mw, 0, pad, pad, rc);                        /* 上 */
+    sh_blit_slice(w, mx0, my0, 0, sh_mw, pad + w->height, sh_mh, pad, rc);        /* 下: 从窗口底往下整条 */
+    sh_blit_slice(w, mx0, my0, 0, pad, pad, pad + w->height, pad, rc);            /* 左 */
+    sh_blit_slice(w, mx0, my0, sh_mw - pad, sh_mw, pad, pad + w->height, pad, rc);/* 右 */
 }
 
 void hs_window_render_all(void)
