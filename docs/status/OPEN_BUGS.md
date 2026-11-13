@@ -2,7 +2,7 @@
 title: 赫普OS 未关闭问题清单
 status: active
 sys_version: 0.58.0
-updated: 2026-11-13（SEC-19 部分修复）
+updated: 2026-11-13（SEC-19 闭合、OBS-01 升级为 BUG-49 并关闭）
 owner: status
 source_of_truth: kernel/arch/x86_64/
 ---
@@ -39,6 +39,7 @@ source_of_truth: kernel/arch/x86_64/
 | 编号 | 问题 | 现状依据 | 状态 |
 |------|------|---------|------|
 | BUG-13 | ATA PIO 读盘 BSY 恒 1 | DEVLOG 01 L25 标"待解决" | 待解决 |
+| BUG-49 | **（由 OBS-01 升级而来）启动期 APIC timer 校准依赖 PIT 中断投递，IOAPIC 未配对时必然失败**。校准窗口靠 `pit64_get_ticks()` 推进，而启动早期已切纯 APIC 模式、IOAPIC 重定向表尚未配置，PIT 的 IRQ0 在部分启动里投不进来 → tick 不走 → 校准失败（回归里 `timercal=N`），回退 ICR 使调度 tick 频率错误。**修复（v0.59.1）**：改用 PIT 通道 2 门控（mode0 计数 + 轮询 0x42，1.193182 MHz 硬件基准），与中断投递彻底解耦；并用 5 ms / 20 ms 两个窗口交叉校验（偏差 >20% 判不可信、退回老路径）。实测 8 轮 `timercal=0`，tick_hz 稳定在 61~63 MHz（≈ 1 GHz/16，与 QEMU LAPIC 量级吻合），ICR≈61 500 → 目标 1 kHz | `apic64.c` `apic64_calibrate_via_pit2()`；串口 `[APIC] timer calibrated` 8/8；`inconsistent` 0 次 | 已关闭 |
 | BUG-48 | INT13 磁盘重置在关中断下调用 | boot/BOOTLOADER_DEFINITION_PLAN.md, 待 QEMU 验证 | 待验证 |
 | OPEN-01 | QEMU 高 LBA(P2/P3) 写成功读全 0 | VERSIONING.md 0.13.57 已知限制 | 验证中 |
 | OPEN-02 | UHCI 写路径时序竞态 | 0.13.42 遗留 | 待解决 |
@@ -330,7 +331,15 @@ tick 跳过未到期线程）仍未实现，属独立改造。
 - 验证：到桌面耗时 46–55 s → **13–14 s**；HOL blocking 消失后 Uptime 连续推进
   （15 s → 2 m 39 s），时钟逐分前进，通知与网络状态正常渲染。
 
-## OBS-01 部分启动里 PIT 中断不投递（偶发约 16%）—— 后果已消除（V0.58.4）
+## OBS-01 部分启动里 PIT 中断不投递（偶发约 16%）—— **已定位根因并修复，升级为 BUG-49（v0.59.1）**
+
+> **升级记录（v0.59.1）**：根因已定位 —— 不是"PIT 本身不投递"这个笼统现象，
+> 而是**启动期 APIC timer 校准把「等 PIT 中断」当成了时间基准**，而那个时刻
+> IOAPIC 重定向表还没配好，IRQ0 投不进来是必然结果，与概率无关。修复见主表
+> **BUG-49**：改用 PIT ch2 门控（纯轮询、1.193182 MHz 硬件基准）测窗口，
+> 8 轮回归 `timercal` 全 0。下面保留原始排查记录（含已排除假设与临时计数器
+> 数据），供追溯当时的推理路径。
+
 
 > **状态更新（V0.58.4）**：**可观测后果已消除，根因仍未定位。**
 > 定位过程中发现「慢启动 43~57 秒」与「clone FAIL」是两件不同的事：

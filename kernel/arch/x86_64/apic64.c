@@ -645,6 +645,65 @@ static int apic64_calibrate_timer(void)
     return rc;
 }
 
+/* OBS-01 根因修复：PIT 通道 2 门控测窗口。
+ *
+ * 原来校准靠 pit64_get_ticks() 推进 —— 那是一条「等 PIT 中断送达」的路径。
+ * 而启动早期已经切到纯 APIC 模式、IOAPIC 重定向表还没配好，PIT 的 IRQ0
+ * 在某些启动里根本投递不进来 → tick 不走 → 校准必然失败（回归里的 timercal）。
+ *
+ * PIT ch2 门控不需要中断：把 ch2 配成 mode0 写一个计数值，硬件按
+ * 1.193182 MHz 递减，读 0x42 就知道过了多久。用它当基准，校准与中断投递解耦。
+ */
+#define PIT_BASE_HZ 1193182ULL
+
+static uint16_t pit2_read_count(void)
+{
+    uint8_t lo, hi;
+    __asm__ volatile("inb $0x42, %0" : "=a"(lo));
+    __asm__ volatile("inb $0x42, %0" : "=a"(hi));
+    return (uint16_t)((uint16_t)lo | ((uint16_t)hi << 8));
+}
+
+/* 用 ch2 门控量出 APIC timer 在 window_ms 内的递减量，换算成 Hz。
+ * 返回 0 成功并写 *hz_out；-1 表示门控没动/计数为 0/数值不合理。 */
+static int apic64_calibrate_via_pit2(uint64_t window_ms, uint64_t *hz_out)
+{
+    uint64_t count = (PIT_BASE_HZ * window_ms) / 1000ULL;
+    if (count > 65535ULL) count = 65535ULL;
+    if (count < 4ULL) count = 4ULL;
+
+    uint8_t p61;
+    __asm__ volatile("inb $0x61, %0" : "=a"(p61));
+    __asm__ volatile("outb %0, $0x61" :: "a"((uint8_t)((p61 & (uint8_t)~0x02) | 0x01)));
+
+    __asm__ volatile("outb %0, $0x43" :: "a"((uint8_t)0xB0));
+    __asm__ volatile("outb %0, $0x42" :: "a"((uint8_t)(count & 0xFFULL)));
+    __asm__ volatile("outb %0, $0x42" :: "a"((uint8_t)((count >> 8) & 0xFFULL)));
+
+    apic_write(APIC_TIMER_DCR, 0x3);
+    apic_write(APIC_LVT_TIMER, APIC_TIMER_VECTOR | 0x10000);
+    apic_write(APIC_TIMER_ICR, 0xFFFFFFFFu);
+    uint32_t ccr_start = apic_read(APIC_TIMER_CCR);
+
+    uint64_t spin = 0;
+    while (pit2_read_count() != 0) {
+        if (++spin > 4000000ULL) {
+            __asm__ volatile("outb %0, $0x61" :: "a"(p61));
+            return -1;
+        }
+        __asm__ volatile("pause" ::: "memory");
+    }
+    __asm__ volatile("outb %0, $0x61" :: "a"(p61));
+
+    uint32_t ccr_end = apic_read(APIC_TIMER_CCR);
+    uint32_t ticks = ccr_start - ccr_end;
+    if (ticks == 0) return -1;
+    uint64_t hz = (uint64_t)ticks * 1000ULL / window_ms;
+    if (hz < 500000ULL || hz > 100000000ULL) return -1;
+    *hz_out = hz;
+    return 0;
+}
+
 static int apic64_calibrate_timer_inner(void)
 {
     /* 1. LAPIC：一次性、最大计数、DCR=16（与最终周期配置一致）。
@@ -652,6 +711,30 @@ static int apic64_calibrate_timer_inner(void)
     apic_write(APIC_TIMER_DCR, 0x3);
     apic_write(APIC_LVT_TIMER, APIC_TIMER_VECTOR | 0x10000);
     apic_write(APIC_TIMER_ICR, 0xFFFFFFFFu);
+
+    /* OBS-01: 优先用 ch2 门控（不依赖中断投递），成功即可靠；
+       下面基于 tick 的等待只是老路径的兜底。
+       两个不同长度的窗口各测一次：门控是线性的，两次结果应当一致，
+       偏差超过 20% 说明轮询读到的计数值不可信，宁可退回老路径也不
+       拿一个错频率去配置调度 tick（错了会让 tick 快/慢近一倍，
+       表现为时钟漂移和动画变快变慢）。 */
+    {
+        uint64_t hz_a = 0, hz_b = 0;
+        if (apic64_calibrate_via_pit2(5ULL, &hz_a) == 0 &&
+            apic64_calibrate_via_pit2(20ULL, &hz_b) == 0) {
+            uint64_t lo = hz_a < hz_b ? hz_a : hz_b;
+            uint64_t hi = hz_a < hz_b ? hz_b : hz_a;
+            if (hi * 10ULL <= lo * 12ULL) {      /* 两次相差不超过 20% */
+                g_apic_timer_hz = (uint32_t)((hz_a + hz_b) / 2ULL);
+                return 0;
+            }
+            vga_puts("[APIC] ch2 calibration inconsistent: ");
+            vga_put_hex(hz_a);
+            vga_puts(" vs ");
+            vga_put_hex(hz_b);
+            vga_puts("\n");
+        }
+    }
 
     extern uint64_t pit64_get_ticks(void);
     /* V0.57.0 INT-02: 两个等待循环原来都没有上限。校准靠 PIT tick 推进，而
