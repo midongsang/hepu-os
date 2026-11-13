@@ -105,6 +105,21 @@ void desktop64_run(void)
         vga_puts("[DESKTOP64] Hepu Desktop started as default desktop\n");
     }
 
+#ifdef HEPU_SEC19_PROBE
+    /* SEC-19 端到端探测：真正跑一次 /bin/ps.elf —— 它的栈用量超过
+     * 4KB，是 SEC-19 的原始复现程序。跑到 = 跨栈页正常；崩 = 会打 #PF
+     * 现场。探测完照常进桌面主循环。 */
+    {
+        extern int user_process_exec(const char *path);
+        extern void vga_put_hex(uint64_t);
+        vga_puts("[SEC19] probe exec /bin/ps.elf\n");
+        int pr = user_process_exec("/bin/ps.elf");
+        vga_puts("[SEC19] probe done ret=");
+        vga_put_hex((uint64_t)pr);
+        vga_puts("\n");
+    }
+#endif
+
 
 
 
