@@ -91,12 +91,19 @@ static void sb18_serial_putc(char c)
     sb18_outb(0x3F8, (uint8_t)c);
 }
 
+/* 注意: 这里的输出和 BSP 的 vga_puts 会并发写同一个串口, 必须持同一把
+ * print_lock, 否则两个核的日志会互相插进半个词。 */
 static void sb18_serial_puts(const char *str)
 {
+    extern uint64_t print_lock_acquire(void);
+    extern void print_lock_release(uint64_t flags);
+
+    uint64_t f = print_lock_acquire();
     while (*str) {
         if (*str == '\n') sb18_serial_putc('\r');
         sb18_serial_putc(*str++);
     }
+    print_lock_release(f);
 }
 
 static void sb18_serial_hex(uint64_t v)

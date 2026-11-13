@@ -3240,21 +3240,43 @@ static void hs_sidebar_render(void)
                            sx + hs_sx(20), content_y, "SYSTEM", g_shell.colors.accent, hs_s(10));
         content_y += hs_sy(24);
 
+        /* 去冗余: 旧版这里是 "Kernel: 64-bit SMP" + "CPU: N cores" 两行,
+         * 说的是同一件事(平台规格), 合并成一行; Memory 行补上占用百分比 ——
+         * 老版那三根进度条(MEM 4%)虽然被去掉, 但"用了多少"这个信息不该丢。 */
         SIDE_ROW("Version", "v0.58.0", g_shell.colors.accent);
         content_y += hs_sy(22);
-        SIDE_ROW("Kernel", "64-bit SMP", g_shell.colors.panel_fg);
-        content_y += hs_sy(22);
         {
+            extern uint32_t smp_get_cpu_count(void);
             uint32_t nc = smp_get_cpu_count();
             hs_itoa((int)(nc ? nc : 1), val);
             strcpy(val + strlen(val), (nc == 1) ? " core" : " cores");
-            SIDE_ROW("CPU", val, g_shell.colors.panel_fg);
+            char kb[40];
+            strcpy(kb, "64-bit SMP  ");
+            strcpy(kb + strlen(kb), val);
+            SIDE_ROW("Kernel", kb, g_shell.colors.panel_fg);
         }
         content_y += hs_sy(22);
         {
             hs_itoa((int)(tp / (1024ULL * 1024ULL)), val);
             strcpy(val + strlen(val), " MB");
+            if (tp > 0) {
+                int pct = (int)((up * 100) / tp);
+                strcpy(val + strlen(val), "  ");
+                hs_itoa(pct, tmp2); strcpy(val + strlen(val), tmp2);
+                strcpy(val + strlen(val), "%");
+            }
             SIDE_ROW("Memory", val, g_shell.colors.panel_fg);
+        }
+        content_y += hs_sy(22);
+        {
+            extern int ext2_get_usage_percent(void);
+            int dpct = ext2_get_usage_percent();
+            if (dpct >= 0) {
+                hs_itoa(dpct, val); strcpy(val + strlen(val), "%");
+            } else {
+                strcpy(val, "--");
+            }
+            SIDE_ROW("Disk", val, g_shell.colors.panel_fg);
         }
 #undef SIDE_ROW
     } else if (g_sidebar_tab == 1) {

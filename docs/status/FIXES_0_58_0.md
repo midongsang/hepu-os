@@ -1300,3 +1300,89 @@ process using the image`，而 `pgrep` 查下来一个残留进程都没有。�
 
 `tools/build_uefi_dual.py` 的输出路径改为读环境变量 `HEPU_IMG`（默认仍是
 `/tmp/hepu_uefi_dual.img`），回归脚本可以指到项目目录下。
+
+---
+
+## 1.107 SB-05 补口：串口直写路径纳入 print_lock（0.58.9）
+
+### 发现过程
+
+跑完 SB-04..08 的回归后翻串口原文，发现这样一行：
+
+```
+[SB19] cpu=[SMP] 0x0000000000000001 lapic_id=AP 0x0000000000000001 ver=0x...
+```
+
+BSP 打的 `[SMP]` 和 AP 打的 `[SB19]` 插进了同一行。但 VGA 侧画面是干净的，
+`SPINERR=0` 也是 0 —— 说明 SB-05 的 `print_lock` 生效了，只是没覆盖全。
+
+### 根因
+
+`smp.c` 里 `[SB17]` / `[SB18]` / `[SB19]` 这些诊断输出走的是
+`sb18_serial_puts()` 一个 **static 函数，`sb18_outb(0x3F8, ...)` 直接写 COM1
+端口**。它完全绕过 `vga_puts`，自然也绕过了 `print_lock`。于是：
+
+- BSP 的 `[SMP] ...` 走 `vga_puts` → 持锁 → 写串口；
+- AP 的 `[SB19] ...` 走 `sb18_serial_puts` → 不持锁 → 同时写串口；
+- 两个核在 `0x3F8` 上抢 LSR 的 THR 位，字节就交错。
+
+### 修法
+
+`lib64.c` 把同一把 `print_lock` 开一对导出接口：
+
+```c
+uint64_t print_lock_acquire(void);   /* spinlock_lock_irqsave(&print_lock) */
+void     print_lock_release(uint64_t flags);
+```
+
+`sb18_serial_puts()` 整个循环包进这对接口。**不做成两个独立的锁**——两把锁
+保护同一个资源等于没保护。
+
+### 验证
+
+3/3 轮回归后，串口里是干净的整行：
+
+```
+[SB19] cpu=0x0000000000000001 lapic_id=0x0000000000000001 ver=0x0000000000000014
+```
+
+再 `-smp 12` 时 11 条 AP 行也全部完整。这条补上之后，**串口日志才能当证据用**。
+
+### 顺带记录
+
+本轮 3 轮里 2 轮出现 `[APIC] WARN: timer calibration failed, fallback ICR=35000`，
+且每轮是两条（BSP 首次校准 + 之后一次 recalibrate 各一条），比历史记录的
+约 16% 明显偏高。已知根因在 OBS-01，且 `apic64_timer_recalibrate()` 失败后
+**未恢复 LVT 周期模式**（校准函数开头会置屏蔽位）。三轮 `desk=1 PASS=1` 说明
+后果仍被兜住，但这件事要单独处理，本轮不混入。
+
+---
+
+## 1.108 Info 面板去冗余（0.58.9）
+
+用户最早提的那条：侧栏 Info 面板的 System Info 区块里，CPU/MEM/DSK 三根
+进度条下面又跟一段文字（`CPU: 2 cores` / `Memory: 979 MB`），一根条和一个
+数字说同一件事。
+
+核对下来，那三根进度条在 V0.55 侧栏改版时已经被去掉了，当前是纯文本版。
+但新的问题出现了：**Memory 只剩总量、没有占用率**——老版进度条上的
+"4%"这个信息被一起砍掉了；Disk 则完全不在面板里。
+
+所以这轮不是"再删一遍"，而是把信息重排成不重复、也不丢：
+
+| 旧版（三进度条 + 文本） | 现在 |
+|---|---|
+| CPU 条 0% + `CPU: 2 cores` | `Kernel  64-bit SMP  2 cores`（合并成一行） |
+| MEM 条 4% + `Memory: 979 MB` | `Memory  979 MB  4%`（合并成一行） |
+| DSK 条 9% | `Disk  9%` |
+
+- `Kernel: 64-bit SMP` 和 `CPU: N cores` 说的都是平台规格，合并；
+- `Memory` 用 `pmm64_get_stats()` 的"非空闲物理内存"口径算占用率
+  （V0.56.1 已把 used 口径修正为 `total - free`，含内核镜像/页表/固件保留区）；
+- 新增 `Disk`，数据来自 `ext2_get_usage_percent()`（读超级块的
+  `s_blocks_count` / `s_free_blocks_count`）。这两个值只在挂载时读取，
+  运行期新写入不会实时反映，面板只给量级，不做强一致承诺；
+  读不到时显示 `--` 而不是 `0%`。
+
+实机数值 4% / 9% 与用户原始截图完全一致，说明数据源本来就对，只是展示方式重复。
+截图入库 `docs/assets/info-panel-0.58.9.png`。

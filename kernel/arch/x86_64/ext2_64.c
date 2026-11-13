@@ -2543,3 +2543,24 @@ int ext2_64_delete_tree(const char *path)
     }
     return 0;
 }
+
+
+/* 供桌面 Info 面板显示磁盘占用。注意 s_free_blocks_count 是挂载时读到的值,
+ * 运行期新写入的块不会实时反映 —— 面板只是给个量级, 不做强一致承诺。 */
+int ext2_get_usage_percent(void)
+{
+    if (!ext2_sb.s_blocks_count) return -1;
+    uint64_t total = (uint64_t)ext2_sb.s_blocks_count;
+    uint64_t freeb = (uint64_t)ext2_sb.s_free_blocks_count;
+    if (freeb > total) return -1;
+    return (int)(((total - freeb) * 100) / total);
+}
+
+/* 根分区总容量(换算成 MB, 向上取整) */
+int ext2_get_total_mb(void)
+{
+    if (!ext2_sb.s_blocks_count) return -1;
+    uint64_t block_size = 1024ULL << ext2_sb.s_log_block_size;
+    uint64_t bytes = (uint64_t)ext2_sb.s_blocks_count * block_size;
+    return (int)((bytes + 1024ULL * 1024ULL - 1) / (1024ULL * 1024ULL));
+}

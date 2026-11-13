@@ -230,6 +230,21 @@ void vga_puts_nolock(const char *str)
     }
 }
 
+/* SB-05 补口: 给"绕过 vga_puts 直接写串口"的路径提供同一把锁。
+ * smp.c 的 sb18_serial_puts() 是 static 直写 COM1 端口的, 完全不走 vga_puts,
+ * 于是 AP 的 [SB19] 和 BSP 的 [SMP] 在串口上互相插进半个词:
+ *   "[SB19] cpu=[SMP] 0x1 lapic_id=AP 0x1 ver=0x14"
+ * 这里把同一把锁开一对 acquire/release 出来, 让那些路径也能串行化。 */
+uint64_t print_lock_acquire(void)
+{
+    return spinlock_lock_irqsave(&print_lock);
+}
+
+void print_lock_release(uint64_t flags)
+{
+    spinlock_unlock_irqrestore(&print_lock, flags);
+}
+
 /* SB-05: 带打印锁的对外入口(默认路径) */
 void vga_puts(const char *str)
 {
