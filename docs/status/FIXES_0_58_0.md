@@ -1208,3 +1208,95 @@ SB-17 的双核 dump 看着正常（0x23CA00 / 0x23CA60），是因为 AP 那条
 `timer calibration failed` 出现 2 次，属已知 OBS-01（约 16% 概率），非本轮引入。
 
 截图入库 `docs/assets/smp-sb19-0.58.7.png`。
+
+---
+
+## 1.106 SB-04 / SB-05 / SB-06 / SB-07 / SB-08：阶段 1 收口（0.58.8）
+
+阶段 1 原本剩 5 条，本轮一次做完。这 5 条全是"改动小、但多核下一定会暴露"的
+计数与输出问题。
+
+### SB-04 异常计数原子化
+
+`lib64.c` 里 `g_user_exception_count++` 改为 `atomic_inc64(&g_user_exception_count)`。
+这个计数被启动自检电池用来判定"是否发生过用户态异常"，多核同时异常时旧版
+`++` 是读-改-写三步，两个核会丢掉一次递增，导致自检计数偏低、结论偏向"干净"。
+类型和对外符号不变。
+
+### SB-05 打印锁
+
+新增 `static spinlock_t print_lock`，`vga_puts` 拆成两层：
+
+```c
+void vga_puts_nolock(const char *str);   /* 原实现 */
+void vga_puts(const char *str)           /* 对外入口 */
+{
+    uint64_t f = spinlock_lock_irqsave(&print_lock);
+    vga_puts_nolock(str);
+    spinlock_unlock_irqrestore(&print_lock, f);
+}
+```
+
+拆两层而不是在函数体内逐 `return` 收口，是因为 `vga_puts` 有"输出重定向到钩子"
+的提前返回分支，逐点收口容易漏一个就是一个死锁。
+
+三条约束：
+
+1. 锁内只做字节输出。`serial_puts_local()` 直接写端口、不回调 `vga_puts`，安全。
+2. **panic 路径走 `vga_puts_nolock()`**——崩溃时很可能正持有这把锁，再去拿就是
+   自己等自己。`hepu_panic()` 保留原来的 `vga_puts` 调用是安全的：它一般在
+   非持锁上下文被调用；真在持锁时崩溃的极端场景，靠串口直出不丢信息。
+3. 锁用 `irqsave` 版本：时钟中断里的日志输出会和主循环抢同一把锁，不先 `cli`
+   就是本核自死锁。
+
+### SB-06 堆统计读取加锁
+
+核对下来 `kmalloc`/`kfree` 的统计与 `trace_add`/`trace_del` **本来就在**
+`heap_lock` 临界区里（`alloc_locked` / 释放路径的调用方持锁），写侧没有缺口。
+真正缺的是读侧：`kheap64_get_stats()` 不带锁逐字段读，跨核可能读到
+`heap_used` 已加、`free` 还没算的中间态，出现 `used + free != total`。
+改为一次性在临界区内取完快照再赋值；`kheap64_get_usage_percent()` 同样处理。
+
+### SB-07 IP ID 原子递增
+
+`net64_ip.c` 的 `ip_id_counter` 从 `uint16_t` 改为 `volatile uint32_t`，
+取 ID 改 `atomic_xadd32(&ip_id_counter, 1)` 取返回值低 16 位。
+旧版 `ip_id_counter++` 在多核同时发包时会取到相同 ID，而分片按
+`(src, dst, id)` 归并——重复 ID 会让两片**不同数据**被拼成同一个包。
+
+### SB-08 FPU 保存区扩到 16 槽
+
+原来 `fpu_save_area[8][512]`，而 `MAX_CPUS` 是 16，`irq_handler_64` 里算核 ID 时
+写的是 `(... >> 24) & 7`。也就是说 **核 ID ≥ 8 会回绕到低编号核的槽**，
+两个核共用一块 FXSAVE 区，中断嵌套时互相覆盖浮点状态。
+
+改法：
+
+- `#define FPU_SAVE_MAX_CPUS 16`，数组改成 `[FPU_SAVE_MAX_CPUS][512]`；
+- 核 ID 读取去掉 `& 7`，改成 `& 0xFF`（LAPIC ID 是 8 位）；
+- 越界时明确报 `[FPU] ERROR: cpu id beyond fpu_save_area` 并停机，
+  而不是悄悄复用别人的槽。
+
+**这条不改的话 `-smp 12` 是隐性踩内存**，而且症状是浮点结果错乱，
+排查起来会怀疑到编译器或 SSE 支持上。
+
+### 验证
+
+- 5/5 轮 `desk=1 EXC=0 PASS=1 FAIL=0 SPINERR=0`，`timer calibration failed` 0 次；
+- 追加 `-smp 12`：`desk=1 exc=0 fpuerr=0`，11 个 AP 全部打出 `[SB19]`，无 FPU 越界；
+- `-smp 4`：3 个 AP，同样干净。
+
+截图入库 `docs/assets/smp-sb04-08-0.58.8.png`（Net RX 772 KB/s 持续刷新，
+日志无半行交错，说明打印锁生效）。
+
+### 环境侧：工具链迁出 /tmp
+
+本轮 `/tmp/pkg` 又被周期性清理（这是第三次），连带 QEMU、sgdisk、mkfs.vfat、
+mtools 全丢。这次把工具链直接装在项目目录下 `.toolchain/pkg/root2`，
+按 jammy 索引解析依赖闭包共 101 个包。另发现一个问题：**家目录所在文件系统
+不支持 fcntl 文件锁**，QEMU 打开镜像时报 `Failed to get "write" lock: Is another
+process using the image`，而 `pgrep` 查下来一个残留进程都没有。解法是给
+`-drive` 加 `,file.locking=off`。
+
+`tools/build_uefi_dual.py` 的输出路径改为读环境变量 `HEPU_IMG`（默认仍是
+`/tmp/hepu_uefi_dual.img`），回归脚本可以指到项目目录下。

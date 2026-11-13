@@ -3,6 +3,7 @@
  * ========================================================================== */
 
 #include <stdint.h>
+#include "atomic64.h"
 #include <stddef.h>
 
 #define IP_PROTO_ICMP 1
@@ -64,12 +65,14 @@ static uint32_t htonl32(uint32_t v) {
 }
 
 static int ip_initialized = 0;
-static uint16_t ip_id_counter = 0;
+/* SB-07: IP ID 改原子递增 —— 多核并发发包时旧版 ++ 会取到重复 ID,
+ * 分片按 (src,dst,id) 归并, 重复 ID 会让两片不同数据被并成同一个包。 */
+static volatile uint32_t ip_id_counter = 0;
 
 /* 初始化IP */
 void ip64_init(void)
 {
-    ip_id_counter = 0;
+    atomic_store32(&ip_id_counter, 0);
     ip_initialized = 1;
     vga_puts("[IP64] IPv4 protocol initialized\n");
 }
@@ -89,7 +92,10 @@ int ip64_send(uint32_t dst_ip, uint8_t protocol, const uint8_t *data, int data_l
     ip->ver_ihl = 0x45;  /* IPv4, 20字节头 */
     ip->tos = 0;
     ip->total_len = htons16(total_len);
-    ip->id = htons16(ip_id_counter++);
+    {
+        extern uint32_t atomic_xadd32(volatile uint32_t *p, uint32_t delta);
+        ip->id = htons16((uint16_t)atomic_xadd32(&ip_id_counter, 1));
+    }
     ip->flags_frag = 0;
     ip->ttl = 64;
     ip->protocol = protocol;

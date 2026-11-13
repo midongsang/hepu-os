@@ -476,18 +476,30 @@ void kheap64_get_stats(uint64_t *total, uint64_t *used,
                        uint64_t *free, uint64_t *alloc_count,
                        uint64_t *free_count)
 {
-    if (total) *total = heap_total;
-    if (used) *used = heap_used;
-    if (free) *free = heap_total - heap_used;
-    if (alloc_count) *alloc_count = kmalloc_calls;
-    if (free_count) *free_count = kfree_calls;
+    /* SB-06: 统计字段本来就在 alloc_locked/kfree_locked 的临界区里更新,
+     * 这里读取也必须持同一把锁 —— 否则跨核读到 heap_used 已加、free 还没减
+     * 的中间态, 会看到 used+free != total。 */
+    uint64_t f = heap_lock_acquire();
+    uint64_t u = heap_used;
+    uint64_t t = heap_total;
+    uint64_t ac = kmalloc_calls, fc = kfree_calls;
+    heap_lock_release(f);
+
+    if (total) *total = t;
+    if (used) *used = u;
+    if (free) *free = t - u;
+    if (alloc_count) *alloc_count = ac;
+    if (free_count) *free_count = fc;
 }
 
 /* 获取堆使用百分比 */
 int kheap64_get_usage_percent(void)
 {
-    if (heap_total == 0) return 0;
-    return (int)(heap_used * 100 / heap_total);
+    uint64_t f = heap_lock_acquire();
+    uint64_t u = heap_used, t = heap_total;
+    heap_lock_release(f);
+    if (t == 0) return 0;
+    return (int)(u * 100 / t);
 }
 
 /* 获取堆峰值使用 */

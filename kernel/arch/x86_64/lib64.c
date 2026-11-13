@@ -5,6 +5,7 @@
 
 #include <stdint.h>
 #include "atomic64.h"
+#include "spinlock.h"
 #include <stddef.h>
 #include <stdarg.h>
 
@@ -199,8 +200,20 @@ void vga_putchar(char c)
     }
 }
 
-/* 输出字符串（同时输出到VGA和串口） */
-void vga_puts(const char *str)
+/* SB-05: 多核打印串行化。
+ * vga_puts 会在多个核上并发调用, 而内部的 vga_x/vga_y、滚动、输出钩子都是
+ * 全局状态, 不加锁就会出现光标错位和半行交错。这里用一把 irqsave 自旋锁把
+ * 整个输出过程包住: 关中断 + 拿锁 -> 输出 -> 解锁 + 按原 IF 恢复。
+ *
+ * 注意两点:
+ *   1) 锁内只做字节输出, 不调用任何可能再次进入 vga_puts 的路径
+ *      (serial_puts_local 直接写端口, 不回调, 安全);
+ *   2) panic 路径用 vga_puts_nolock() —— 崩溃时可能正持有这把锁,
+ *      再去拿就是自死锁。 */
+static spinlock_t print_lock = { 0, 0, 0 };
+
+/* 无锁版: 内部实现 + panic 等不可加锁的场景直接用 */
+void vga_puts_nolock(const char *str)
 {
     serial_puts_local(str);
 
@@ -215,6 +228,14 @@ void vga_puts(const char *str)
     while (*str) {
         vga_putchar(*str++);
     }
+}
+
+/* SB-05: 带打印锁的对外入口(默认路径) */
+void vga_puts(const char *str)
+{
+    uint64_t f = spinlock_lock_irqsave(&print_lock);
+    vga_puts_nolock(str);
+    spinlock_unlock_irqrestore(&print_lock, f);
 }
 
 /* 输出16进制数（64位） */
@@ -342,9 +363,11 @@ void irq64_register_handler(int irq, irq_handler_t handler)
 }
 
 /* 中断处理 - 支持IRQ和异常 */
-/* per-CPU FPU状态保存区（8个CPU × 512字节，64字节对齐）
-   解决SMP多核中断时全局单缓冲区互相覆盖的竞态 */
-static uint8_t fpu_save_area[8][512] __attribute__((aligned(64)));
+/* per-CPU FPU状态保存区（SB-08: 原 8 槽 × 512 字节, 而 MAX_CPUS 是 16,
+   核 ID >= 8 时会用 & 7 回绕到低编号核的槽, 两个核共用一块 FXSAVE 区。
+   现在扩到 16 槽并去掉 & 7, 越界时明确报错而不是踩邻槽。 */
+#define FPU_SAVE_MAX_CPUS 16
+static uint8_t fpu_save_area[FPU_SAVE_MAX_CPUS][512] __attribute__((aligned(64)));
 
 /* V0.13.46: 内核tick（vec40每1ms递增，未响应看门狗用） */
 /* V0.58.5 / SB-02: 多核的 0x40 中断会并发写，改原子递增 */
@@ -591,7 +614,7 @@ static void irq_handler_64_body(uint64_t *stack_frame)
                 stack_frame[23] = 0x10;   /* 内核数据段 */
                 vga_puts("[EXCEPTION] user-mode fault handled: process terminated, returning to kernel\n");
                 /* V0.33: 用户态异常计数 —— 供启动自检电池给出可判定结论 */
-                g_user_exception_count++;
+                atomic_inc64(&g_user_exception_count);   /* SB-04: 多核并发递增 */
                 return;   /* 交回中断桩，桩会 iretq 回内核 */
             }
             vga_puts("[EXCEPTION] user-mode fault with no active process, stopping\n");
@@ -632,7 +655,13 @@ void irq_handler_64(uint64_t *stack_frame)
     uint32_t cpu = 0;
     if (apic64_is_apic_mode()) {
         /* 读取Local APIC ID（虚拟地址0xF0000020，每CPU读到自己的ID） */
-        cpu = ((*(volatile uint32_t *)0xF0000020) >> 24) & 7;
+        cpu = ((*(volatile uint32_t *)0xF0000020) >> 24) & 0xFF;
+    }
+    /* SB-08: 不再 & 7 回绕。核 ID 超出保存区就是真 bug, 明确报错停机,
+     * 而不是悄悄和别的核共用一个 FXSAVE 缓冲。 */
+    if (cpu >= FPU_SAVE_MAX_CPUS) {
+        vga_puts("[FPU] ERROR: cpu id beyond fpu_save_area\n");
+        while (1) { __asm__ volatile("cli; hlt"); }
     }
     uint8_t *area = fpu_save_area[cpu];
 

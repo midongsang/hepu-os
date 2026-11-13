@@ -13,7 +13,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from fat32_generator import create_esp_partition
 
 PROJECT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-IMG_PATH = "/tmp/hepu_uefi_dual.img"
+# 镜像输出路径可用环境变量覆盖（/tmp 会被周期性清理，构建/回归可指到项目目录下）
+IMG_PATH = os.environ.get("HEPU_IMG", "/tmp/hepu_uefi_dual.img")
 IMG_SIZE = 256 * 1024 * 1024  # 256MB
 
 # 分区布局
