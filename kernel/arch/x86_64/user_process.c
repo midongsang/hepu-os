@@ -8,6 +8,7 @@
 #include "hepu_smap.h"
 #include "elf64.h"
 #include "domain64.h"
+#include "spinlock.h"
 
 /* V0.13.43: 与 GDT Linux 标准布局一致 (0x18=用户数据, 0x20=用户代码) */
 #define USER_CS 0x20  /* 用户代码段选择子 */
@@ -89,6 +90,14 @@ static int g_last_isolated;                        /* 最近一次创建页表�
 static void user_free_aspace(int idx);
 int current_user_proc = -1;
 static int user_proc_initialized = 0;
+
+/* SB-10: 用户进程表锁（表级粗锁，irqsave 版）。
+ * 保护「扫描空闲槽 + 占用槽」这一对判断与写：两核同时 scan 会拿到同一槽，
+ * 后写者覆盖前者的 pid/page_table，进程凭空消失或页表串位。
+ * 只覆盖判断+写槽，不覆盖页表构建等重活，避免把临界区拉长成瓶颈。 */
+static spinlock_t g_proc_table_lock;
+static volatile int g_pt_lock_holder = -1;   /* 诊断：当前持锁槽位/pid */
+static volatile uint32_t g_pt_lock_wait;     /* 诊断：等待次数 */
 
 /* 返回当前隔离 ELF 进程的页表 PML4 物理地址；无活动用户进程返回 0 */
 uint64_t user_process_current_pml4(void)
@@ -259,6 +268,7 @@ static uint64_t create_user_page_table(void)
 /* 初始化用户态进程管理 */
 void user_process_init(void)
 {
+    spinlock_init(&g_proc_table_lock);
     for (int i = 0; i < MAX_USER_PROCS; i++) {
         user_procs[i].active = 0;
         user_procs[i].pid = -1;
@@ -272,6 +282,8 @@ int user_process_create(const char *name, void (*entry)(void))
 {
     if (!user_proc_initialized) return -1;
 
+    uint64_t pt_flags = spinlock_lock_irqsave(&g_proc_table_lock);
+    g_pt_lock_holder = current_user_proc;
     int idx = -1;
     for (int i = 0; i < MAX_USER_PROCS; i++) {
         if (!user_procs[i].active) {
@@ -280,13 +292,17 @@ int user_process_create(const char *name, void (*entry)(void))
         }
     }
     if (idx < 0) {
+        g_pt_lock_holder = -1;
+        spinlock_unlock_irqrestore(&g_proc_table_lock, pt_flags);
         vga_puts("[USER64] No free process slot\n");
         return -1;
     }
 
     user_process_t *proc = &user_procs[idx];
     proc->pid = idx + 100;  /* 用户进程PID从100开始 */
-    proc->active = 1;
+    proc->active = 1;       /* 占槽与 pid 同在锁内，避免两核拿到同槽 */
+    g_pt_lock_holder = -1;
+    spinlock_unlock_irqrestore(&g_proc_table_lock, pt_flags);
     proc->env_type = ENV_NATIVE;   /* P1: 内置测试进程属于原生交互域 */
     proc->domain_id = domain64_env_to_id(ENV_NATIVE);
     user_process_mem_init(idx);    /* P1: 初始化域内存配额 */
@@ -591,6 +607,8 @@ int user_process_create_elf(const char *name, void *code_data, uint64_t code_siz
 {
     if (!user_proc_initialized) return -1;
 
+    uint64_t pt_flags = spinlock_lock_irqsave(&g_proc_table_lock);
+    g_pt_lock_holder = current_user_proc;
     int idx = -1;
     for (int i = 0; i < MAX_USER_PROCS; i++) {
         if (!user_procs[i].active) {
@@ -599,13 +617,17 @@ int user_process_create_elf(const char *name, void *code_data, uint64_t code_siz
         }
     }
     if (idx < 0) {
+        g_pt_lock_holder = -1;
+        spinlock_unlock_irqrestore(&g_proc_table_lock, pt_flags);
         vga_puts("[USER64] No free process slot\n");
         return -1;
     }
 
     user_process_t *proc = &user_procs[idx];
     proc->pid = idx + 100;
-    proc->active = 1;
+    proc->active = 1;      /* SB-10: 占槽与 pid 在锁内完成 */
+    g_pt_lock_holder = -1;
+    spinlock_unlock_irqrestore(&g_proc_table_lock, pt_flags);
     proc->kill_requested = 0;
     proc->env_type = env_type;   /* V0.33: 进程级 ABI 标记 */
     proc->domain_id = domain64_env_to_id(env_type);
@@ -1041,10 +1063,13 @@ static va_region_t g_va_pending[VA_REGION_MAX];
 static int user_proc_slot_by_pid(int pid)
 {
     if (pid <= 0) return -1;
+    uint64_t pt_flags = spinlock_lock_irqsave(&g_proc_table_lock);
+    int found = -1;
     for (int i = 0; i < MAX_USER_PROCS; i++) {
-        if (user_procs[i].active && user_procs[i].pid == pid) return i;
+        if (user_procs[i].active && user_procs[i].pid == pid) { found = i; break; }
     }
-    return -1;
+    spinlock_unlock_irqrestore(&g_proc_table_lock, pt_flags);
+    return found;
 }
 
 static va_region_t *va_table_for_owner(int owner)
@@ -2237,10 +2262,14 @@ static void user_process_release(int idx)
         proc->kernel_stack = 0;
     }
     /* 页表保留（内核共享PML4，后续复用由create重建） */
-    proc->active = 0;
-    proc->kill_requested = 0;
-    if (current_user_proc == idx) {
-        current_user_proc = -1;
+    {
+        uint64_t pt_flags = spinlock_lock_irqsave(&g_proc_table_lock);
+        proc->active = 0;          /* SB-10: 放槽与 current 复位同在锁内 */
+        proc->kill_requested = 0;
+        if (current_user_proc == idx) {
+            current_user_proc = -1;
+        }
+        spinlock_unlock_irqrestore(&g_proc_table_lock, pt_flags);
     }
 }
 
