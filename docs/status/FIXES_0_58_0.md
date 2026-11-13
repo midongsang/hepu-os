@@ -2256,3 +2256,60 @@ shadow=1
 顺手修掉 Display 页 `Available:` 列表读错行 —— 模式表是 `count + N*(w,h)`，
 两项 2 个 uint32，原来写成 `mi * SETK(2)`（缩放后是 3），跳着读，
 出来的是 "480x800, 800x600"。现在正常显示 "640x480, 800x480"。
+
+---
+
+## 1.124 内置第二套光标 Modern + Display 页切换（0.60.5）
+
+### 素材与压缩
+
+用户给了 17 张 128×128 透明底线稿（arrow / wait / help / hourglass / cross / text / pen /
+no / sb_v / sb_h / diag1 / diag2 / move / sb_up / hand）。原来那套是外部 `/usr/share/cursors/*.xcur`
+（24px 生效，150% 缩放下放大后糊）。
+
+直接嵌 48px ARGB 要 17×9216 ≈ 157KB，内核会顶到 1MB 上限（当时 837KB）。所以按素材特性
+压缩：**每像素只存 alpha(8bit) + 1bit 前景/描边选择**，颜色每图两组常量。
+
+- 裁到 alpha 包围盒，按长边缩放到 48（保持比例），所以 arrow 是 28×48、I-beam 24×48；
+- 每图取不透明像素亮度中位数二分，亮的一组平均成 `fill`、暗的一组平均成 `stroke`；
+- 每图约 2592 B，17 张 ≈ 44KB，实际内核增加 34.7KB（同形图有重复，压缩后更小）。
+
+`tools/gen_modern_cursor.py` 是生成脚本，素材原图存在 `docs/assets/cursors/`（88KB），
+以后换图重跑脚本即可。
+
+### 渲染与热点
+
+`cursor64.c` 加 `g_theme`：0 = 外部 xcur（经典），1 = 内置 Modern。
+`cursor64_draw()` 首行分流到 `cur_modern_draw()`，逐像素 alpha 混合，`a>=200` 直接写。
+
+热点按形态给：箭头类 `(0,0)`（尖端）、I-beam / move / cross 取中心、上箭头取底边中点、
+hand 取指尖 `(0.45, 0)`。系统当前只用 4 种 kind，映射表：
+
+```c
+static const int g_modern_map[CUR_KIND_MAX] = { 0, 14, 5, 12 };  /* arrow, hand, text, move */
+```
+
+其余 13 个形态留在表里，为以后加 resize / busy 场景留位。
+
+### Display 页
+
+```
+Window Shadows: On   [click to toggle]
+Cursor Theme: Modern [click to toggle]
+```
+
+切换即时生效（`cursor64_set_theme`）+ 走 `g_content_dirty` 重绘，写 `/display.conf`：
+
+```
+cursor=1
+```
+
+`hs_display_load()` 里与 `shadow=` 同一条扫描循环读回，重启保持。
+
+### 实测
+
+Modern 箭头 48px、带深色描边，比经典那版（24px）在同屏下大一圈且清楚；
+Display 页显示 `Cursor Theme: Modern`；内核 872,464 B（上限 1MB），回归 1 轮 PASS。
+
+注意：内置位图是固定 48px，没有跟随 `g_ui_scale_pct` 缩放（200% 档下会显得偏小），
+要跟随的话得在 `cur_modern_draw()` 里做最近邻放大，暂未做。

@@ -291,6 +291,7 @@ typedef struct {
         int dock_width, dock_height, dock_margin_bottom, dock_icon_size;
         int corner_radius;
         int window_shadow;   /* 窗口投影开关(Display 页可关) */
+        int cursor_theme;    /* 0=经典(素材包 xcur), 1=Modern(内置) */
         int font_small, font_normal, font_large;
     } ui;
     /* 系统托盘 */

@@ -11,6 +11,7 @@
  * 未装载成功时回退到 gfx64 内置位图，保证任何情况下都有指针可画。
  * ========================================================================== */
 #include <stdint.h>
+#include "cursor_modern.h"
 
 extern void gfx64_put_pixel(int x, int y, uint32_t color);
 extern void gfx64_blend_pixel(int x, int y, uint32_t color, int alpha);
@@ -35,6 +36,15 @@ typedef struct {
 
 static cur_slot_t g_slot[CUR_KIND_MAX];
 static int g_active;
+
+/* 主题: 0 = 外部 Xcursor 素材包(经典), 1 = 内置 Modern */
+static int g_theme;
+
+/* 内置形态映射: 系统只用到 4 种 kind, 其余形态留在表里供后续扩展 */
+static const int g_modern_map[CUR_KIND_MAX] = { 0, 14, 5, 12 };
+
+void cursor64_set_theme(int t) { g_theme = (t == 1) ? 1 : 0; }
+int  cursor64_theme(void)      { return g_theme; }
 
 static uint32_t rd32(const uint8_t *p)
 {
@@ -125,9 +135,34 @@ int cursor64_pick_size(int screen_w, int screen_h)
     return 24;
 }
 
+/* Modern 主题: 位图 48px, 逐像素 alpha 混合 */
+static void cur_modern_draw(int x, int y)
+{
+    int k = g_active;
+    if (k < 0 || k >= CUR_KIND_MAX) k = 0;
+    int idx = g_modern_map[k];
+    const cur_modern_t *b = 0;
+    for (int i = 0; i < g_cur_modern_count; i++) {
+        if (g_cur_modern[i].id == idx) { b = &g_cur_modern[i]; break; }
+    }
+    if (!b) b = &g_cur_modern[0];
+    int ox = x - b->hx, oy = y - b->hy;
+    for (int j = 0; j < b->h; j++) {
+        for (int i = 0; i < b->w; i++) {
+            int off = j * b->w + i;
+            int a = b->alpha[off];
+            if (!a) continue;
+            uint32_t c = (b->bits[off >> 3] >> (off & 7)) & 1 ? b->fill : b->stroke;
+            if (a >= 200) gfx64_put_pixel(ox + i, oy + j, c);
+            else          gfx64_blend_pixel(ox + i, oy + j, c, a);
+        }
+    }
+}
+
 /* 绘制当前光标（热点对齐），未装载时回退内置位图 */
 void cursor64_draw(int x, int y)
 {
+    if (g_theme == 1) { cur_modern_draw(x, y); return; }
     const cur_slot_t *sl = &g_slot[g_active];
     if (!sl->ready) sl = &g_slot[0];     /* 回退箭头 */
     if (!sl->ready) {

@@ -282,6 +282,7 @@ static const int g_disp_scale_pcts[4] = {100, 125, 150, 200};
 #define HS_DISP_BTN_W 64
 #define HS_DISP_BTN_GAP 72
 static int g_disp_shadow_y = 0;     /* Display 页阴影开关行 */
+static int g_disp_cursor_y = 0;     /* Display 页光标主题行 */
 static int g_settings_storage_ry = 0; /* V0.13.39: 存储管理行点击区域 */
 static int g_settings_reg_ry = 0;    /* V0.13.39: 注册表查看行 */
 static int g_settings_assoc_ry = 0;  /* V0.13.39: 文件关联查看行 */
@@ -590,6 +591,10 @@ void hs_display_save(void)
     const char *k3 = "shadow=";
     j = 0; while (k3[j]) { buf[p++] = k3[j++]; }
     buf[p++] = g_shell.ui.window_shadow ? '1' : '0';
+    buf[p++] = '\n';
+    const char *k4 = "cursor=";
+    j = 0; while (k4[j]) { buf[p++] = k4[j++]; }
+    buf[p++] = g_shell.ui.cursor_theme ? '1' : '0';
     buf[p++] = '\n'; buf[p] = 0;
     int rc = ext2_64_write_file(HS_DISPLAY_CFG, (const uint8_t *)buf, (uint32_t)p);
     vga_printf("[DISPLAY] save %s rc=%d\n", HS_DISPLAY_CFG, rc);
@@ -685,6 +690,14 @@ int hs_display_load(void)
             vga_printf("[DISPLAY] loaded shadow=%d\n", g_shell.ui.window_shadow);
             found = 1;
             i += 8;
+        }
+        if (buf[i] == 'c' && buf[i + 1] == 'u' && buf[i + 2] == 'r' &&
+            buf[i + 3] == 's' && buf[i + 4] == 'o' && buf[i + 5] == 'r' &&
+            buf[i + 6] == '=') {
+            g_shell.ui.cursor_theme = (buf[i + 7] == '1');
+            vga_printf("[DISPLAY] loaded cursor=%d\n", g_shell.ui.cursor_theme);
+            found = 1;
+            i += 7;
         }
     }
     return found;
@@ -2506,6 +2519,26 @@ static void hs_settings_window_render(hs_window_t *w)
             ry += SETK(24);
         }
 
+        /* 光标主题 */
+        {
+            char cb[48];
+            int q = 0;
+            const char *cp = "Cursor Theme: ";
+            while (cp[q]) { cb[q] = cp[q]; q++; }
+            const char *cv = g_shell.ui.cursor_theme ? "Modern" : "Classic";
+            int q2 = 0; while (cv[q2]) cb[q++] = cv[q2++];
+            const char *ch = "  [click to toggle]";
+            q2 = 0; while (ch[q2]) cb[q++] = ch[q2++];
+            cb[q] = 0;
+            font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                               rx, ry, cb,
+                               g_shell.ui.cursor_theme ? g_shell.colors.accent
+                                                       : g_shell.colors.text_secondary,
+                               SETK(12));
+            g_disp_cursor_y = ry;
+            ry += SETK(24);
+        }
+
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            rx, ry, "Refresh rate: firmware-controlled", g_shell.colors.panel_fg, SETK(11));
         ry += SETK(20);
@@ -4238,6 +4271,20 @@ void hpdesk_handle_click(int x, int y)
                 return;
             }
 
+            /* Display 页: 光标主题切换 */
+            if (g_settings_page == 4 && g_disp_cursor_y > 0 &&
+                y >= g_disp_cursor_y - 4 && y <= g_disp_cursor_y + 22 &&
+                x >= w->x + hs_set_k(w, 16) && x <= w->x + w->width - hs_set_k(w, 16)) {
+                g_shell.ui.cursor_theme = g_shell.ui.cursor_theme ? 0 : 1;
+                { extern void cursor64_set_theme(int t);
+                  cursor64_set_theme(g_shell.ui.cursor_theme); }
+                g_content_dirty = 1;
+                extern void hs_display_save(void);
+                hs_display_save();
+                vga_printf("[SETTINGS] cursor theme = %d\n", g_shell.ui.cursor_theme);
+                return;
+            }
+
             /* V0.54.7: Appearance 页色板点击 — 取色器应用源色 */
             if (g_settings_page == 0) {
                 int sw_x = w->x + 156;       /* rx = cx+140 = w->x+16+140 */
@@ -4828,6 +4875,8 @@ static void hs_present_with_cursor(int mx, int my)
     hs_ctx_menu_render();     /* 菜单与光标同为前台叠加层 */
     {
         extern void cursor64_set_kind(int kind);
+        extern void cursor64_set_theme(int t);
+        cursor64_set_theme(g_shell.ui.cursor_theme);
         cursor64_set_kind(hs_cursor_kind_at(mx, my));
     }
     cursor64_draw(mx, my);
@@ -5231,6 +5280,7 @@ int hpdesk_init(int width, int height)
     g_shell.ui.dock_icon_size = 44;
     g_shell.ui.corner_radius = 16;
     g_shell.ui.window_shadow = 1;
+    g_shell.ui.cursor_theme = 0;
     g_shell.ui.font_small = 12;
     g_shell.ui.font_normal = 14;
     g_shell.ui.font_large = 18;
