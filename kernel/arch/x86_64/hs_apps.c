@@ -1957,6 +1957,17 @@ static void f_render(hs_window_t *w)
         gfx64_fill_rect(px, hdr_y + FS(14), pw, 1, g_shell.colors.border);
     }
 
+    /* V0.59.2: 列表溢出时右侧显示滑块。
+     * 之前文件管理器滚轮能滚, 但屏幕上没有任何"下面还有"的提示, 用户以为
+     * 目录就这么多。与任务管理器共用 hs_scrollbar_draw, 粗细/颜色一致。 */
+    if (f_view_mode == 0) {
+        int vr = f_visible_rows();
+        int maxs = f_match_count - vr;
+        if (maxs > 0) {
+            hs_scrollbar_draw(px + pw - FS(7), list_y, vr * f_row_h(), f_scroll, maxs);
+        }
+    }
+
     /* 网格模式: 大图标 + 名称 */
     if (f_view_mode == 1) {
         int gs = FS(76), cols = pw / gs;
@@ -3456,16 +3467,43 @@ static uint32_t hs_apps_mix(uint32_t a, uint32_t b, int pct)
                       ((ab * (100 - pct) + bb * pct) / 100));
 }
 
+/* V0.59.2: 任务管理器的内容裁剪 + 滚动偏移层。
+ * 图形层没有 clip rect, 窗口内容一旦超出边框就会画到外面覆盖别的窗口 ——
+ * 所以"加滚动"不只是加一根条, 必须同时有裁剪。
+ * 这里用一层薄包装代替 clip: 绘制先减 m_scroll_off, 再按 [m_vtop,m_vbot]
+ * 判断是否可见。m_vtop/m_vbot 只在 m_render 期间被设成窗口内容区, 其余时间
+ * 是无限区间, 所以同文件里其他 app 的绘制完全不受影响。 */
+static int m_scroll = 0;
+static int m_scroll_off = 0;
+static int m_vtop = -0x40000000;
+static int m_vbot = 0x40000000;
+static int m_content_bottom = 0;
+
+static void m_text_c(void *fb, int W, int H, int x, int y, const char *s,
+                     uint32_t c, int sz)
+{
+    y -= m_scroll_off;
+    if (y + sz * 2 < m_vtop || y > m_vbot) return;
+    font64_draw_string(fb, W, H, x, y, s, c, sz);
+}
+
+static void m_bar_c(int x, int y, int ww, int hh, uint32_t c)
+{
+    y -= m_scroll_off;
+    if (y + hh < m_vtop || y > m_vbot) return;
+    gfx64_fill_rect(x, y, ww, hh, c);
+}
+
 static void m_draw_curve(void *fb, int W, int H, int x, int y, int w, int h,
                          int *hist, uint32_t color, int maxv)
 {
     /* V0.56.2: 背景用主题面板色 —— 原硬编码 0x000000 在浅色主题下是三块黑块 */
-    gfx64_fill_rect(x, y, w, h, g_shell.colors.panel_bg);
+    m_bar_c(x, y, w, h, g_shell.colors.panel_bg);
     gfx64_draw_rect(x, y, w, h, g_shell.colors.border);
     /* V0.57.0: 25/50/75% 三条刻度线。draw_line 在窗口内容层不可见, 统一用 1px 填充 */
     for (int q = 1; q <= 3; q++) {
         int gy = y + h - 2 - (h - 4) * q / 4;
-        gfx64_fill_rect(x + 2, gy, w - 4, 1,
+        m_bar_c(x + 2, gy, w - 4, 1,
                         hs_apps_mix(g_shell.colors.panel_bg, g_shell.colors.border, 55));
     }
     /* V0.56.2: 折线在窗口内容层上看不见, 改为柱状条(gfx64_fill_rect 已验证可用),
@@ -3484,7 +3522,7 @@ static void m_draw_curve(void *fb, int W, int H, int x, int y, int w, int h,
         if (bh < 1) bh = 1;
         uint32_t c = (v > 0) ? color
                              : hs_apps_mix(g_shell.colors.panel_bg, color, 40);
-        gfx64_fill_rect(px, y + h - 2 - bh, 2, bh, c);
+        m_bar_c(px, y + h - 2 - bh, 2, bh, c);
     }
 }
 
@@ -3498,6 +3536,20 @@ static void m_render(hs_window_t *w)
     int W = g_shell.screen_width, H = g_shell.screen_height;
     int cx = w->x + MC(6), cy = w->y + MC(26);
     int cw = w->width - MC(12);
+
+    /* V0.59.2: 打开本帧的裁剪区, 内容溢出时右侧出现滑块。
+     * 可滚量用上一帧量出的内容末尾算 —— 内容高度每帧变化很小, 差一帧无感,
+     * 但省掉了"先算一遍高度再画一遍"的两趟遍历。 */
+    int vtop_bak = m_vtop, vbot_bak = m_vbot;
+    m_vtop = w->y + MC(34);   /* 标题栏之下, 否则滚起来内容会钻到标题上 */
+    m_vbot = w->y + w->height - MC(26);   /* 提示条占 MC(16), 再留 10 的呼吸 */
+    {
+        int maxs = m_content_bottom - m_vbot;
+        if (maxs < 0) maxs = 0;
+        if (m_scroll > maxs) m_scroll = maxs;
+        if (m_scroll < 0) m_scroll = 0;
+    }
+    m_scroll_off = m_scroll;
 
     m_tick++;
     /* V0.56.2: 标题条已由窗口管理器绘制, 这里不再重复画一遍 "Task Manager" */
@@ -3527,7 +3579,7 @@ static void m_render(hs_window_t *w)
         } else {
             strcpy(l1 + hs_strlen(l1), "--");
         }
-        font64_draw_string(fb, W, H, cx, cy, l1, g_shell.colors.text_secondary, MC(11));
+        m_text_c(fb, W, H, cx, cy, l1, g_shell.colors.text_secondary, MC(11));
         cy += MC(16);
     }
 
@@ -3543,7 +3595,7 @@ static void m_render(hs_window_t *w)
     hs_itoa(pcnt, tmp); strcpy(buf + hs_strlen(buf), tmp);
     strcpy(buf + hs_strlen(buf), "   DRV: ");
     hs_itoa(dcount, tmp); strcpy(buf + hs_strlen(buf), tmp);
-    font64_draw_string(fb, W, H, cx, cy, buf, g_shell.colors.window_fg, MC(12));
+    m_text_c(fb, W, H, cx, cy, buf, g_shell.colors.window_fg, MC(12));
     cy += MC(18);
 
     /* V0.56.2: 整机占用摘要(用户看这里, 不必读曲线) */
@@ -3565,7 +3617,7 @@ static void m_render(hs_window_t *w)
         hs_itoa((int)(pit64_get_ms() / 1000), tmp);
         strcpy(sbuf + hs_strlen(sbuf), tmp);
         strcpy(sbuf + hs_strlen(sbuf), "s");
-        font64_draw_string(fb, W, H, cx, cy, sbuf, g_shell.colors.accent, MC(12));
+        m_text_c(fb, W, H, cx, cy, sbuf, g_shell.colors.accent, MC(12));
         cy += MC(18);
     }
 
@@ -3584,7 +3636,7 @@ static void m_render(hs_window_t *w)
         hs_itoa(tot, tmp); strcpy(tbuf + hs_strlen(tbuf), tmp);
         strcpy(tbuf + hs_strlen(tbuf), "   active: ");
         hs_itoa(act, tmp); strcpy(tbuf + hs_strlen(tbuf), tmp);
-        font64_draw_string(fb, W, H, cx, cy, tbuf, g_shell.colors.text_secondary, MC(11));
+        m_text_c(fb, W, H, cx, cy, tbuf, g_shell.colors.text_secondary, MC(11));
         cy += MC(15);
 
         char cbuf[96];
@@ -3594,7 +3646,7 @@ static void m_render(hs_window_t *w)
             strcpy(cbuf + hs_strlen(cbuf), " -> ");
             hs_itoa(lc, tmp); strcpy(cbuf + hs_strlen(cbuf), tmp);
             strcpy(cbuf + hs_strlen(cbuf), "  RUNNING (shared aspace)");
-            font64_draw_string(fb, W, H, cx, cy, cbuf, 0x52C41A, MC(11));
+            m_text_c(fb, W, H, cx, cy, cbuf, 0x52C41A, MC(11));
         } else if (xf > 0) {
             strcpy(cbuf, "thread_exit: tid ");
             hs_itoa(xf, tmp); strcpy(cbuf + hs_strlen(cbuf), tmp);
@@ -3603,10 +3655,10 @@ static void m_render(hs_window_t *w)
                 hs_itoa(xt, tmp); strcpy(cbuf + hs_strlen(cbuf), tmp);
             }
             strcpy(cbuf + hs_strlen(cbuf), "  (handed off)");
-            font64_draw_string(fb, W, H, cx, cy, cbuf, g_shell.colors.text_secondary, MC(11));
+            m_text_c(fb, W, H, cx, cy, cbuf, g_shell.colors.text_secondary, MC(11));
         } else {
             strcpy(cbuf, "clone: none yet");
-            font64_draw_string(fb, W, H, cx, cy, cbuf, g_shell.colors.text_secondary, MC(11));
+            m_text_c(fb, W, H, cx, cy, cbuf, g_shell.colors.text_secondary, MC(11));
         }
         cy += MC(15);
     }
@@ -3621,15 +3673,15 @@ static void m_render(hs_window_t *w)
 
     int gh = MC(38), gw = cw - MC(80);
     m_draw_curve(fb, W, H, cx, cy, gw, gh, m_cpu_hist, 0x52C41A, MC(100));
-    font64_draw_string(fb, W, H, cx + gw + MC(6), cy + MC(6), "CPU%", 0x52C41A, MC(10));
+    m_text_c(fb, W, H, cx + gw + MC(6), cy + MC(6), "CPU%", 0x52C41A, MC(10));
     m_draw_curve(fb, W, H, cx, cy + gh + MC(4), gw, gh, m_rx_hist, 0x4A9EEC, MC(256));
-    font64_draw_string(fb, W, H, cx + gw + MC(6), cy + gh + MC(10), "RX", 0x4A9EEC, MC(10));
+    m_text_c(fb, W, H, cx + gw + MC(6), cy + gh + MC(10), "RX", 0x4A9EEC, MC(10));
     m_draw_curve(fb, W, H, cx, cy + MC(2) * (gh + MC(4)), gw, gh, m_tx_hist, 0xE0A44E, MC(256));
-    font64_draw_string(fb, W, H, cx + gw + MC(6), cy + MC(2) * (gh + MC(4)) + MC(10), "TX", 0xE0A44E, MC(10));
+    m_text_c(fb, W, H, cx + gw + MC(6), cy + MC(2) * (gh + MC(4)) + MC(10), "TX", 0xE0A44E, MC(10));
     cy += MC(3) * gh + MC(12);
 
     /* 分隔线 */
-    gfx64_fill_rect(cx, cy, cw, 1, g_shell.colors.border);
+    m_bar_c(cx, cy, cw, 1, g_shell.colors.border);
     cy += MC(6);
 
     /* 表头 (V0.13.46: 加PID与状态列)
@@ -3645,11 +3697,11 @@ static void m_render(hs_window_t *w)
     int c_state = cx + MC(250);
     {
         uint32_t hc = g_shell.colors.text_secondary;
-        font64_draw_string(fb, W, H, c_pid, cy, "PID", hc, MC(10));
-        font64_draw_string(fb, W, H, c_name, cy, "NAME", hc, MC(10));
-        font64_draw_string(fb, W, H, c_cpu, cy, "CPU", hc, MC(10));
-        font64_draw_string(fb, W, H, c_mem, cy, "MEM", hc, MC(10));
-        font64_draw_string(fb, W, H, c_state, cy, "STATE", hc, MC(10));
+        m_text_c(fb, W, H, c_pid, cy, "PID", hc, MC(10));
+        m_text_c(fb, W, H, c_name, cy, "NAME", hc, MC(10));
+        m_text_c(fb, W, H, c_cpu, cy, "CPU", hc, MC(10));
+        m_text_c(fb, W, H, c_mem, cy, "MEM", hc, MC(10));
+        m_text_c(fb, W, H, c_state, cy, "STATE", hc, MC(10));
     }
     cy += MC(14);
 
@@ -3672,27 +3724,27 @@ static void m_render(hs_window_t *w)
     }
 
     if (procs && pcount > 0) {
-        for (int i = 0; i < pcount && cy < w->y + w->height - 28; i++) {
+        for (int i = 0; i < pcount; i++) {   /* V0.59.2: 不做底部截断, 交给裁剪层 */
             char tmp2[16];
             /* 运行中进程高亮 */
             int col = g_shell.colors.window_fg;
             if (procs[i].pid >= 100 && procs[i].state == 0) col = 0x52C41A;
 
             hs_itoa(procs[i].pid, tmp2);
-            font64_draw_string(fb, W, H, c_pid, cy, tmp2, col, MC(11));
+            m_text_c(fb, W, H, c_pid, cy, tmp2, col, MC(11));
 
             char nmbuf[16];
             int nl = 0;
             while (procs[i].name[nl] && nl < 12) { nmbuf[nl] = procs[i].name[nl]; nl++; }
             nmbuf[nl] = 0;
-            font64_draw_string(fb, W, H, c_name, cy, nmbuf, col, MC(11));
+            m_text_c(fb, W, H, c_name, cy, nmbuf, col, MC(11));
 
             hs_itoa(procs[i].cpu_usage, tmp2);
             strcpy(tmp2 + hs_strlen(tmp2), "%");
-            font64_draw_string(fb, W, H, c_cpu, cy, tmp2, col, MC(11));
+            m_text_c(fb, W, H, c_cpu, cy, tmp2, col, MC(11));
 
             hs_itoa(procs[i].mem_usage, tmp2);
-            font64_draw_string(fb, W, H, c_mem, cy, tmp2, col, MC(11));
+            m_text_c(fb, W, H, c_mem, cy, tmp2, col, MC(11));
 
             /* V0.57.1: 内核线程标 "kthr" 而不是混在 "sys" 里 —— idle/kbeat 这类线程
              * 有的在轮转、有的是登记挂起(见 process64_create_suspended), 统一写 sys 会
@@ -3701,7 +3753,7 @@ static void m_render(hs_window_t *w)
             if (procs[i].pid == 0) st = "sys";
             else if (procs[i].pid >= 100 && procs[i].state == 0) st = "RUN";
             else if (procs[i].pid >= 100) st = "idle";
-            font64_draw_string(fb, W, H, c_state, cy, st, col, MC(11));
+            m_text_c(fb, W, H, c_state, cy, st, col, MC(11));
 
             cy += MC(15);
         }
@@ -3716,11 +3768,11 @@ static void m_render(hs_window_t *w)
         static const char *svc_state[] = {"UNLOAD", "LOADED", "PROBED", "ACTIVE", "SUSP", "ERROR"};
         drv_desc_t *ds[DRV_MAX_COUNT];
         int dn = drv_get_all(ds, DRV_MAX_COUNT);
-        if (dn > 0 && cy + MC(20) < w->y + w->height - MC(22)) {
+        if (dn > 0) {   /* V0.59.2: 不做底部截断, 交给裁剪层 */
             cy += MC(4);
-            gfx64_fill_rect(cx, cy, cw, 1, g_shell.colors.border);
+            m_bar_c(cx, cy, cw, 1, g_shell.colors.border);
             cy += MC(6);
-            font64_draw_string(fb, W, H, cx, cy, "KERNEL SERVICES (drivers loaded)",
+            m_text_c(fb, W, H, cx, cy, "KERNEL SERVICES (drivers loaded)",
                                g_shell.colors.text_secondary, MC(10));
             cy += MC(14);
             /* V0.58.3: 旧上限是未缩放的裸 22px, 而底部提示条画在 height - MC(16),
@@ -3733,9 +3785,23 @@ static void m_render(hs_window_t *w)
                 int stt = (int)ds[i]->state;
                 strcpy(sline + hs_strlen(sline),
                        (stt >= 0 && stt < 6) ? svc_state[stt] : "?");
-                font64_draw_string(fb, W, H, cx, cy, sline, g_shell.colors.window_fg, MC(11));
+                m_text_c(fb, W, H, cx, cy, sline, g_shell.colors.window_fg, MC(11));
                 cy += MC(14);
             }
+        }
+    }
+
+    /* V0.59.2: 内容末尾(虚拟坐标)供下一帧算可滚量; 然后关掉裁剪区。 */
+    m_content_bottom = cy;
+    m_scroll_off = 0;
+    m_vtop = vtop_bak;
+    m_vbot = vbot_bak;
+    {
+        int maxs = m_content_bottom - (w->y + w->height - MC(26));
+        if (maxs > 0) {
+            /* 滑块离右边框留 10, 否则 3px 宽会压在描边上 */
+            hs_scrollbar_draw(w->x + w->width - MC(10), w->y + MC(34),
+                              w->height - MC(60), m_scroll, maxs);
         }
     }
 
@@ -3747,9 +3813,9 @@ static void m_render(hs_window_t *w)
         hs_itoa(m_kill_pid, tmp);
         strcpy(kbuf + hs_strlen(kbuf), tmp);
         strcpy(kbuf + hs_strlen(kbuf), " (Enter=end, Esc=cancel)");
-        font64_draw_string(fb, W, H, cx, cy, kbuf, 0xE0A44E, MC(10));
+        m_text_c(fb, W, H, cx, cy, kbuf, 0xE0A44E, MC(10));
     } else {
-        font64_draw_string(fb, W, H, cx, cy, "Press K then PID + Enter to end a process",
+        m_text_c(fb, W, H, cx, cy, "Press K then PID + Enter to end a process",
                            g_shell.colors.text_secondary, MC(10));
     }
 #undef MC
@@ -3801,6 +3867,7 @@ hs_window_t *hs_files_create(void)
 
 hs_window_t *hs_taskmgr_create(void)
 {
+    m_scroll = 0;
     if (m_win && m_win->visible) { m_win->focus = 1; return m_win; }
     m_win = hs_window_create(HS_WINDOW_FLOATING, "Task Manager", -1, -1,
                             hs_ui_sx(520), hs_ui_sy(380));
@@ -4119,6 +4186,20 @@ void hs_apps_handle_wheel(int delta)
         if (f_scroll > max_scroll) f_scroll = max_scroll;
         if (f_sel < f_scroll) f_sel = f_scroll;
         if (f_sel >= f_scroll + rows) f_sel = f_scroll + rows - 1;
+        return;
+    }
+
+    /* 任务管理器: 滚轮滚动内容 (V0.59.2)。
+     * 之前这里没有分支, 滚轮到任务管理器会被最后一段终端逻辑吃掉, 表现是
+     * "在任务管理器上滚轮, 终端在滚"。 */
+    if (m_win && m_win->visible && foc == m_win) {
+        int step = hs_win_k(m_win, 520, 18);
+        int maxs = m_content_bottom - (m_win->y + m_win->height - hs_win_k(m_win, 520, 26));
+        if (maxs < 0) maxs = 0;
+        if (delta > 0) m_scroll -= step;
+        else if (delta < 0) m_scroll += step;
+        if (m_scroll < 0) m_scroll = 0;
+        if (m_scroll > maxs) m_scroll = maxs;
         return;
     }
 

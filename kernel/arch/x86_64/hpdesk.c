@@ -2997,6 +2997,31 @@ static void hs_login_screen_render(void)
     }
 }
 
+/* V0.59.2: 通用细滚动条。
+ * 之前只有侧栏 Apps 页手绘了一处滑块, 其余窗口(终端/文件管理器/任务管理器)
+ * 全靠滚轮或键盘滚, 屏幕上没有任何"还能往下滚"的提示, 用户看窗口以为内容
+ * 就这么多。抽成公共函数后每个窗口调用同一份画法, 粗细/颜色/圆角一致。
+ *
+ * thumb 高度按 视口/(视口+可滚量) 折算, 最小 16px 基准, 否则内容一长滑块
+ * 会细到看不见。 */
+void hs_scrollbar_draw(int x, int track_y, int track_h, int offset, int max_scroll)
+{
+    if (max_scroll <= 0 || track_h <= 8) return;
+    void *fb = gfx64_get_framebuffer();
+    int W = g_shell.screen_width, H = g_shell.screen_height;
+    int bw = hs_sx(3);
+    gfx64_fill_rounded_rect(x, track_y, bw, track_h, hs_s(2), g_shell.colors.border);
+    int thumb_h = track_h * track_h / (track_h + hs_sy(max_scroll));
+    int min_h = hs_sy(16);
+    if (thumb_h < min_h) thumb_h = min_h;
+    if (thumb_h > track_h) thumb_h = track_h;
+    int span = track_h - thumb_h;
+    int thumb_y = track_y + (max_scroll > 0 ? span * offset / max_scroll : 0);
+    if (thumb_y < track_y) thumb_y = track_y;
+    if (thumb_y > track_y + span) thumb_y = track_y + span;
+    gfx64_fill_rounded_rect(x, thumb_y, bw, thumb_h, hs_s(2), g_shell.colors.accent);
+}
+
 /* V0.55: 侧栏内容高度(基准单位) — 内容超出可视区的高度即可滚动量 */
 static int hs_sidebar_max_scroll(int tab)
 {
@@ -5087,6 +5112,7 @@ void hs_tray_init(void)
     if (settings_win) {
         settings_win->render = hs_settings_window_render;
     }
+
 }
 
 int hs_tray_add_icon(const char *name, const char *icon)

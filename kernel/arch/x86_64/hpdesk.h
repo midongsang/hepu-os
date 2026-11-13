@@ -438,6 +438,7 @@ void hs_window_hide(hs_window_t *win);
 void hs_window_maximize(hs_window_t *win);
 void hs_window_restore(hs_window_t *win);
 void hs_window_raise(hs_window_t *win);
+void hs_scrollbar_draw(int x, int track_y, int track_h, int offset, int max_scroll);
 void hs_window_lower(hs_window_t *win);
 void hs_window_move(hs_window_t *win, int x, int y);
 void hs_window_resize(hs_window_t *win, int w, int h);
