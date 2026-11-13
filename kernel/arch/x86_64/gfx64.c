@@ -740,6 +740,30 @@ void gfx64_fill_rounded_rect(int x, int y, int w, int h, int radius, uint32_t co
     vg_fill_round_rect(x, y, w, h, radius, color);
 }
 
+/* OBS-03: 圆角填充（圆方程 + 边缘 AA）
+ * 与 gfx64_draw_rounded_rect 共用 rounded_corner_aa，填充与描边因此是同一条
+ * 曲线 —— 窗口背景和它自己的边框不会各走各的。 */
+void gfx64_fill_round_rect_aa(int x, int y, int w, int h, int radius, uint32_t color)
+{
+    if (!gfx_initialized) return;
+    if (w <= 0 || h <= 0) return;
+    if (radius < 0) radius = 0;
+    if (radius > w / 2) radius = w / 2;
+    if (radius > h / 2) radius = h / 2;
+    if (radius == 0) { gfx64_fill_rect(x, y, w, h, color); return; }
+
+    /* 中间竖条 + 左右两条 */
+    gfx64_fill_rect(x + radius, y, w - 2 * radius, h, color);
+    gfx64_fill_rect(x, y + radius, radius, h - 2 * radius, color);
+    gfx64_fill_rect(x + w - radius, y + radius, radius, h - 2 * radius, color);
+
+    /* 四角（以末像素坐标定位圆心，与描边保持一致） */
+    rounded_corner_aa(x + radius,         y + radius,         -radius - 2, 0, -radius - 2, 0, radius, color, 1);
+    rounded_corner_aa(x + w - 1 - radius, y + radius,         0, radius + 2, -radius - 2, 0, radius, color, 1);
+    rounded_corner_aa(x + radius,         y + h - 1 - radius, -radius - 2, 0, 0, radius + 2, radius, color, 1);
+    rounded_corner_aa(x + w - 1 - radius, y + h - 1 - radius, 0, radius + 2, 0, radius + 2, radius, color, 1);
+}
+
 /* 绘制圆角矩形边框（V0.13.3 AA角） */
 void gfx64_draw_rounded_rect(int x, int y, int w, int h, int radius, uint32_t color)
 {

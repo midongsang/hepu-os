@@ -50,10 +50,12 @@ static int g_sw_order[HS_MAX_WINDOWS];
 
 /* 外部函数 */
 extern void gfx64_fill_rect(int x, int y, int w, int h, uint32_t color);
+extern void gfx64_put_pixel(int x, int y, uint32_t color);
 extern void gfx64_draw_rect(int x, int y, int w, int h, uint32_t color);
 extern void gfx64_fill_rounded_rect(int x, int y, int w, int h, int radius, uint32_t color);
 extern void gfx64_draw_rounded_rect(int x, int y, int w, int h, int radius, uint32_t color);
 extern void vg_stroke_round_rect(int x, int y, int w, int h, int r, int width, uint32_t color);
+extern void gfx64_fill_round_rect_aa(int x, int y, int w, int h, int radius, uint32_t color);
 extern void gfx64_blur_region(int x, int y, int w, int h, int blur_radius, uint32_t overlay_color, int overlay_alpha);
 extern void gfx64_fill_circle_gradient(int cx, int cy, int r, uint32_t c1, uint32_t c2);
 extern uint32_t gfx64_get_pixel(int x, int y);
@@ -2055,6 +2057,64 @@ static int hs_window_corner_radius(const hs_window_t *w)
     return rc;
 }
 
+/* OBS-03: 窗口圆角的统一几何 —— 圆心在 (x+r, y+r)，判定 d2 <= r^2，
+ * 与投影掩膜 sh_in_rounded() 完全同一套。逐行/逐列算"圆内最外侧像素"的
+ * 水平内缩量，填充与描边共用这张表，所以：
+ *   · 窗口背景与边框是同一条曲线（不会露壁纸缝）
+ *   · 边框 1px 线逐行连续（不会像 SDF 环带那样在 45 度处断成缺口，
+ *     也不会与直边重叠出 2px 粗块）
+ *   · 与阴影掩膜的曲线也一致（内缩量逐像素相同）
+ * isqrt 只在半径变化时算一遍，建成查表。 */
+static int g_inset_r = -1;
+static int g_inset_tbl[260];
+
+static int hs_round_inset(int dy, int r)
+{
+    extern uint32_t math64_isqrt(uint32_t v);
+    if (r > 255) r = 255;
+    if (dy < 0) dy = -dy;
+    if (dy >= r) return 0;
+    if (g_inset_r != r) {
+        for (int i = 0; i <= r; i++) {
+            int v = r * r - i * i;
+            if (v < 0) v = 0;
+            g_inset_tbl[i] = r - (int)math64_isqrt((uint32_t)v);
+        }
+        g_inset_r = r;
+    }
+    return g_inset_tbl[dy];
+}
+
+/* 圆角矩形 1px 描边 —— 画"圆内最外侧"那一圈像素 */
+static void hs_stroke_round(int x, int y, int w, int h, int r, uint32_t color)
+{
+    extern void gfx64_put_pixel(int x, int y, uint32_t color);
+    if (w <= 0 || h <= 0) return;
+    if (r > w / 2) r = w / 2;
+    if (r > h / 2) r = h / 2;
+    if (r <= 0) {
+        extern void gfx64_draw_rect(int x, int y, int w, int h, uint32_t color);
+        gfx64_draw_rect(x, y, w, h, color);
+        return;
+    }
+    for (int yy = 0; yy < h; yy++) {
+        int dy = 0;
+        if (yy < r)              dy = r - yy;
+        else if (yy > h - 1 - r) dy = yy - (h - 1 - r);
+        int inset = dy ? hs_round_inset(dy, r) : 0;
+        if (w - 2 * inset <= 0) continue;
+        gfx64_put_pixel(x + inset, y + yy, color);
+        gfx64_put_pixel(x + w - 1 - inset, y + yy, color);
+    }
+    /* 上下两条直边只画中段：圆角区（x < r 或 x > w-1-r）若也按 inset 画，
+     * 得到的是从角点出发的 45 度斜线（因为那里边界是圆弧，不是水平线），
+     * 会在角外拖出一条斜痕。圆角区的像素已经由上面的逐行左右边界覆盖完了。 */
+    for (int xx = r; xx <= w - 1 - r; xx++) {
+        gfx64_put_pixel(x + xx, y, color);
+        gfx64_put_pixel(x + xx, y + h - 1, color);
+    }
+}
+
 static void hs_window_shadow(const hs_window_t *w)
 {
     if (w->width <= 0 || w->height <= 0) return;
@@ -2137,10 +2197,7 @@ void hs_window_render_all(void)
         if (w->type == HS_WINDOW_FLOATING && w->state != HS_WINDOW_STATE_MAXIMIZED)
             wrc = hs_window_corner_radius(w);
         if (wrc > 0) {
-            uint32_t brd = w->focus ? g_shell.colors.accent : w->border_color;
-            gfx64_fill_rounded_rect(w->x, w->y, w->width, w->height, wrc, brd);
-            gfx64_fill_rounded_rect(w->x + 1, w->y + 1, w->width - 2, w->height - 2,
-                                    wrc - 1, w->bg_color);
+            gfx64_fill_round_rect_aa(w->x, w->y, w->width, w->height, wrc, w->bg_color);
         } else {
             gfx64_fill_rect(w->x, w->y, w->width, w->height, w->bg_color);
         }
@@ -2152,11 +2209,11 @@ void hs_window_render_all(void)
             int th = hs_sy(24);
             /* OBS-03: 标题栏顶部两角跟随窗口圆角，底部两角保持直角（贴内容区） */
             if (wrc > 0) {
-                int trc = (wrc - 1) < th ? (wrc - 1) : th;
-                gfx64_fill_rounded_rect(w->x + 1, w->y + 1, w->width - 2, th, trc,
-                                        g_shell.colors.titlebar_bg);
+                int trc = wrc < th ? wrc : th;
+                gfx64_fill_round_rect_aa(w->x, w->y, w->width, th, trc,
+                                         g_shell.colors.titlebar_bg);
                 if (th > trc)
-                    gfx64_fill_rect(w->x + 1, w->y + 1 + trc, w->width - 2, th - trc,
+                    gfx64_fill_rect(w->x, w->y + trc, w->width, th - trc,
                                     g_shell.colors.titlebar_bg);
             } else {
                 gfx64_fill_rect(w->x, w->y, w->width, th,
@@ -2207,8 +2264,9 @@ void hs_window_render_all(void)
         /* 边框 */
         uint32_t border = w->focus ?
                           g_shell.colors.accent : w->border_color;
-        /* 圆角窗口的边框已由上面「外圈+内缩」两笔填充成形，这里只处理直角窗口 */
-        if (wrc == 0)
+        if (wrc > 0)
+            hs_stroke_round(w->x, w->y, w->width, w->height, wrc, border);
+        else
             gfx64_draw_rect(w->x, w->y, w->width, w->height, border);
 
         /* 标题（跟随主题前景色） */
