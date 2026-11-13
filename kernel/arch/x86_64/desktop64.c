@@ -114,6 +114,14 @@ void desktop64_run(void)
     }
 #endif
 
+#ifdef HEPU_FS_STRESS
+    /* SEC-18 大负载写入演练（默认不编译） */
+    {
+        extern void fs64_stress_run(int iters);
+        fs64_stress_run(8);
+    }
+#endif
+
 #ifdef HEPU_SEC19_PROBE
     /* SEC-19 端到端探测：真正跑一次 /bin/ps.elf —— 它的栈用量超过
      * 4KB，是 SEC-19 的原始复现程序。跑到 = 跨栈页正常；崩 = 会打 #PF

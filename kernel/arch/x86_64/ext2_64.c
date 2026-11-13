@@ -2762,3 +2762,68 @@ int ext2_get_total_mb(void)
     uint64_t bytes = (uint64_t)ext2_sb.s_blocks_count * block_size;
     return (int)((bytes + 1024ULL * 1024ULL - 1) / (1024ULL * 1024ULL));
 }
+
+/* SEC-18 大负载写入演练：
+ * 反复「写一个 96KB 文件 -> 读回逐字节比对 -> 删除」，把 ext2 的
+ * 分配 / 目录项插入 / 间接块写 / 块释放 / 缓存刷新全部压一遍。
+ * 96KB 会跨一级间接块，正好覆盖历史记录里出问题的那类路径。
+ * 只在编译开关打开时执行，默认零开销。 */
+void fs64_stress_run(int iters)
+{
+    extern int ext2_64_write_file(const char *path, const uint8_t *data, uint32_t size);
+    extern int ext2_64_read_file(const char *path, uint8_t *buf, uint32_t max);
+    extern int ext2_64_delete_file(const char *path);
+    extern void *kmalloc(uint64_t size);
+    extern void kfree(void *ptr);
+    extern void vga_puts(const char *);
+    extern void vga_put_hex(uint64_t);
+
+    const uint32_t SZ = 512u * 1024u;
+    uint8_t *w = (uint8_t *)kmalloc(SZ);
+    uint8_t *r = (uint8_t *)kmalloc(SZ);
+    if (!w || !r) { vga_puts("[FS-STRESS] kmalloc failed\n"); if (w) kfree(w); if (r) kfree(r); return; }
+
+    /* 分档探测：小文件 / 新路径大文件 / 已存在路径大文件，用来区分
+       "create 目录项失败" 还是 "多块分配失败" */
+    {
+        static uint8_t pb[48];
+        for (int i = 0; i < 48; i++) pb[i] = (uint8_t)(i + 1);
+        int a = ext2_64_write_file("/probe_a.bin", pb, 33);
+        int b = ext2_64_write_file("/probe_b.bin", pb, 48);
+        int c = ext2_64_write_file("/test_write.txt", pb, 48);
+        vga_puts("[FS-STRESS] probe small_new="); vga_put_hex((uint64_t)(uint32_t)a);
+        vga_puts(" 48B_new="); vga_put_hex((uint64_t)(uint32_t)b);
+        vga_puts(" exist="); vga_put_hex((uint64_t)(uint32_t)c);
+        vga_puts("\n");
+    }
+
+    int fails = 0;
+    for (int it = 0; it < iters; it++) {
+        for (uint32_t i = 0; i < SZ; i++) w[i] = (uint8_t)((i * 31u + (uint32_t)it * 7u) & 0xFF);
+        for (uint32_t i = 0; i < SZ; i++) r[i] = 0;
+
+        /* 语义注意：write_file 成功返回写入字节数，失败才返回负数 */
+        if (ext2_64_write_file("/stress.bin", w, SZ) < 0) {
+            vga_puts("[FS-STRESS] write ERR iter="); vga_put_hex((uint64_t)it); vga_puts("\n");
+            fails++; continue;
+        }
+        if (ext2_64_read_file("/stress.bin", r, SZ) < 0) {
+            vga_puts("[FS-STRESS] read ERR iter="); vga_put_hex((uint64_t)it); vga_puts("\n");
+            fails++; continue;
+        }
+        int first = -1;
+        for (uint32_t i = 0; i < SZ; i++) { if (r[i] != w[i]) { first = (int)i; break; } }
+        if (first >= 0) {
+            vga_puts("[FS-STRESS] mismatch iter="); vga_put_hex((uint64_t)it);
+            vga_puts(" off="); vga_put_hex((uint64_t)first); vga_puts("\n");
+            fails++;
+        }
+        if (ext2_64_delete_file("/stress.bin") < 0) {
+            vga_puts("[FS-STRESS] delete ERR iter="); vga_put_hex((uint64_t)it); vga_puts("\n");
+            fails++;
+        }
+    }
+    kfree(w); kfree(r);
+    vga_puts("[FS-STRESS] done iters="); vga_put_hex((uint64_t)iters);
+    vga_puts(" fails="); vga_put_hex((uint64_t)fails); vga_puts("\n");
+}
