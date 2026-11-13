@@ -234,6 +234,33 @@ static void hs_save_bg_color(uint32_t c)
     }
 }
 
+/* 侧栏收起状态持久化：把 config.hsqml 里 sidebar_collapsed: 后的单个数字改掉。
+ * 键缺失时不做追加（模板里已含），避免在语句中间插入破坏 hsqml。 */
+static void hs_save_sidebar_collapsed(int v)
+{
+    extern int ext2_64_read_file(const char *path, uint8_t *buffer, uint32_t max_size);
+    extern int ext2_64_write_file(const char *path, const uint8_t *data, uint32_t size);
+    static char sbuf[4096];
+    int n = ext2_64_read_file("/etc/hepushell/config.hsqml", (uint8_t *)sbuf, 4095);
+    if (n <= 0) return;
+    sbuf[n] = 0;
+    for (int i = 0; i + 17 < n; i++) {
+        if (sbuf[i] == 's' && sbuf[i+1] == 'i' && sbuf[i+2] == 'd' && sbuf[i+3] == 'e' &&
+            sbuf[i+4] == 'b' && sbuf[i+5] == 'a' && sbuf[i+6] == 'r' && sbuf[i+7] == '_' &&
+            sbuf[i+8] == 'c' && sbuf[i+9] == 'o' && sbuf[i+10] == 'l' && sbuf[i+11] == 'l' &&
+            sbuf[i+12] == 'a' && sbuf[i+13] == 'p' && sbuf[i+14] == 's' &&
+            sbuf[i+15] == 'e' && sbuf[i+16] == 'd' && sbuf[i+17] == ':') {
+            int j = i + 18;
+            while (j < n && (sbuf[j] == ' ' || sbuf[j] == '\t')) j++;
+            if (j < n && (sbuf[j] == '0' || sbuf[j] == '1')) {
+                sbuf[j] = v ? '1' : '0';
+                ext2_64_write_file("/etc/hepushell/config.hsqml", (uint8_t *)sbuf, (uint32_t)n);
+            }
+            break;
+        }
+    }
+}
+
 /* 右键菜单: 由 g_ctx(见下) 统一承载, 旧的 g_context_menu_* 那套已下线 */
 /* V0.13.39: 通知位置配置 (0=右上 1=左上 2=右下 3=左下) */
 static int g_notif_pos = 0;
@@ -338,6 +365,7 @@ static const char *default_config =
 "    dock_margin_bottom: 12\n"
 "    dock_icon_size: 44\n"
 "    corner_radius: 12\n"
+"    sidebar_collapsed: 0\n"
 "    font_small: 12\n"
 "    font_normal: 14\n"
 "    font_large: 18\n"
@@ -432,6 +460,7 @@ static void load_ui_from_config(hsqml_node_t *ui)
     g_shell.ui.dock_margin_bottom = hsqml_get_number(ui, "dock_margin_bottom", 12);
     g_shell.ui.dock_icon_size = hsqml_get_number(ui, "dock_icon_size", 44);
     g_shell.ui.corner_radius = hsqml_get_number(ui, "corner_radius", 12);
+    g_sidebar_collapsed = hsqml_get_number(ui, "sidebar_collapsed", 0);
     g_shell.ui.font_small = hsqml_get_number(ui, "font_small", 12);
     g_shell.ui.font_normal = hsqml_get_number(ui, "font_normal", 14);
     g_shell.ui.font_large = hsqml_get_number(ui, "font_large", 18);
@@ -4526,6 +4555,7 @@ void hpdesk_handle_click(int x, int y)
             int hy = sy + shh / 2 - hh / 2;
             if (x >= sx && x <= sx + hw && y >= hy && y <= hy + hh) {
                 g_sidebar_collapsed = 0;
+                hs_save_sidebar_collapsed(0);
                 hpdesk_mark_dirty();
                 return;
             }
@@ -4535,6 +4565,7 @@ void hpdesk_handle_click(int x, int y)
             int byy = sy + hs_sy(12) + hs_sy(4);
             if (x >= bx && x <= bx + bw && y >= byy && y <= byy + bh) {
                 g_sidebar_collapsed = 1;
+                hs_save_sidebar_collapsed(1);
                 hpdesk_mark_dirty();
                 return;
             }

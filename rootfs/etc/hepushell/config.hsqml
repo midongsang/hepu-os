@@ -26,6 +26,7 @@ UI {
     sidebar_y: 50
     sidebar_width: 280
     sidebar_height: 500
+    sidebar_collapsed: 0
     cc_margin_right: 384
     cc_y: 108
     cc_width: 360
@@ -39,7 +40,7 @@ UI {
     dock_height: 64
     dock_margin_bottom: 12
     dock_icon_size: 44
-    corner_radius: 16
+    corner_radius: 12
     font_small: 12
     font_normal: 14
     font_large: 18
