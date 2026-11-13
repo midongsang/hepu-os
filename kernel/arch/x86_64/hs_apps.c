@@ -3699,7 +3699,10 @@ static void m_render(hs_window_t *w)
             font64_draw_string(fb, W, H, cx, cy, "KERNEL SERVICES (drivers loaded)",
                                g_shell.colors.text_secondary, MC(10));
             cy += MC(14);
-            for (int i = 0; i < dn && cy < w->y + w->height - 22; i++) {
+            /* V0.58.3: 旧上限是未缩放的裸 22px, 而底部提示条画在 height - MC(16),
+             * 两者实际落在同一行 —— 截图里 "IDE ACTIVE" 与 "Press K then PID..." 重叠。
+             * 这里按缩放后的行高给提示条让出位置。 */
+            for (int i = 0; i < dn && cy < w->y + w->height - MC(16) - MC(14); i++) {
                 char sline[96];
                 strcpy(sline, ds[i]->name ? ds[i]->name : "?");
                 while (hs_strlen(sline) < 20) strcpy(sline + hs_strlen(sline), " ");

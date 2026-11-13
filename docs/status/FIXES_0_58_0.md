@@ -440,3 +440,21 @@ HTTP 改成后台状态机 / 独立线程，让主循环永不阻塞 —— 记�
 QEMU 用户态网络访问外网 HTTP 常被丢弃，因此天气卡在模拟环境里多为 `N/A`，
 这不是解析逻辑的问题。
 
+### §1.94 任务管理器底部提示条与服务列表重叠
+
+**现象**：`KERNEL SERVICES (drivers loaded)` 展开的服务行最后一条会与底部的
+`Press K then PID + Enter to end a process` 叠在同一行（截图里 "IDE ACTIVE"
+直接压在提示文字上）。
+
+**根因**：服务列表的绘制上限写的是未缩放的裸像素
+`cy < w->y + w->height - 22`，而提示条是按缩放函数定位的
+`cy = w->y + w->height - MC(16)`。窗口放大后 `MC(16)` 远大于 22，两者就撞在一行。
+
+**修法**：上限改为 `w->y + w->height - MC(16) - MC(14)`，按缩放后的行高给提示条
+让出一整行。
+
+**验证**：实机截图 `docs/assets/taskmgr-0.58.0.png` 中 `KERNEL SERVICES` 与
+`Press K then PID...` 已分成两行；同时该图确认上一轮修的
+`thread_exit` 文案已不含 `-> tid 0`，显示为 `thread_exit: tid 1000  (handed off)`。
+内核 829,128 B；2/2 PASS、`EXCEPTION=0`。
+
