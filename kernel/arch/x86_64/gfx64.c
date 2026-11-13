@@ -340,9 +340,13 @@ void gfx64_fill_rect(int x, int y, int w, int h, uint32_t color)
  * V0.13.4: 缓存key升为uint32, 支持CJK码点
  * V0.13.6: 缓存扩容至64并支持锁定槽(桌面大时钟48px字形锁定, 防止环形替换
  *          挤出后 miss 重光栅化带来的时序竞态 -- 间歇性"时钟消失"根因) */
-#define TTF_CACHE_ITEMS 24
-#define TTF_CACHE_W 128
-#define TTF_CACHE_H 128
+/* V0.58.3: 24 槽对一屏上百个 (字符,字号) 组合几乎必然全未命中 —— 缓存等于没有,
+ * 每次重绘都要重新光栅化, 单串文本绘制耗时被放大到数百毫秒级(见 §1.93)。
+ * 扩到 256 槽, 同时把单槽 128x128 收到 64x64: 256*64*64 = 1 MB, 与原来 24 槽
+ * 的 384 KB 同量级, 但命中率覆盖整屏。超宽字形仍由 ttf_canary 兜底不缓存。 */
+#define TTF_CACHE_ITEMS 256
+#define TTF_CACHE_W 64
+#define TTF_CACHE_H 64
 typedef struct {
     uint32_t c;
     uint16_t size;

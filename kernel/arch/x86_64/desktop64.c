@@ -164,8 +164,10 @@ void desktop64_run(void)
          * 最多 6 次, 每次间隔 60 帧; 成功后不再请求。 */
         static int wx_tick = 0;
         static int wx_tries = 0;
-        if (wx_tries < 6) {
-            if (++wx_tick >= 60) {
+        /* V0.58.3: 6 次 × 每次最多阻塞数秒 = 启动期累计卡顿近 20 秒。
+         * 降到 3 次、间隔 300 帧, 累计阻塞控制在 10 秒内且分散。 */
+        if (wx_tries < 3) {
+            if (++wx_tick >= 300) {
                 wx_tick = 0;
                 extern int hpdesk_fetch_weather(void);
                 if (hpdesk_fetch_weather()) wx_tries = 6;

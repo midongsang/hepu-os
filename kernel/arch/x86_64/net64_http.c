@@ -124,10 +124,16 @@ int http64_get(const char *url, uint8_t *response, int max_response)
 
     /* 等待连接建立 */
     extern void net64_poll(void);  /* V0.13.9: 收包泵 (原缺失导致连接永不建立) */
-    for (int i = 0; i < 5000; i++) {
+    /* V0.58.3: 旧实现是 5000 轮 × 100 万次空转。在 QEMU 的软件 CPU 上单轮就要
+     * 几十毫秒, 外网不可达时会跑满 5000 轮 —— 实测桌面主循环长时间停在
+     * http64_get+421 不前, 时钟与 Uptime 一起冻住(见 §1.93)。改为 RTC 秒级
+     * 3 秒墙钟上限 + 短空转: 连不上最多损失 3 秒, 不会堵死桌面。 */
+    extern uint64_t rtc64_get_timestamp(void);
+    uint64_t ct0 = rtc64_get_timestamp();
+    while (rtc64_get_timestamp() - ct0 < 3) {
         net64_poll();
         if (tcp64_get_state(sock) == TCP_ESTABLISHED) break;
-        for (volatile int dw = 0; dw < 1000000; dw++);  /* ~25ms */
+        for (volatile int dw = 0; dw < 10000; dw++);
     }
     if (tcp64_get_state(sock) != TCP_ESTABLISHED) {
         vga_puts("[HTTP64] Connection timeout\n");
