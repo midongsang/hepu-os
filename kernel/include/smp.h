@@ -1,6 +1,10 @@
 #ifndef SMP_H
 #define SMP_H
 
+/* 【SB-24 归属标注】这是早期 SMP 框架的遗留头文件，未编入 64 位镜像。
+ * 64 位内核请用 kernel/arch/x86_64/smp.h（其中 MAX_CPUS = 16）。
+ * 注意本文件的 MAX_CPUS 是 8，与 arch 版不一致 —— 误引用会让核 ID 8..15
+ * 越界访问本文件定义的数组。不改代码、不改行为，清理留待独立立项。 */
 #include <stdint.h>
 
 #define MAX_CPUS 8
