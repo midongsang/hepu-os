@@ -8,7 +8,7 @@
 
 #include <stdint.h>
 
-#define PROCESS64_MAX_SLOTS 32
+#define PROCESS64_MAX_SLOTS 64
 
 typedef struct {
     int pid;
@@ -35,7 +35,7 @@ int process64_snapshot(process64_stat_t *out, int max);
 
 static inline int hepu_process_snapshot(hepu_process_stat_t *out, int max) {
     if (!out || max <= 0) return -1;
-    static process64_stat_t tmp[64];
+    static process64_stat_t tmp[128];
     int n = process64_snapshot(tmp, max);
     for (int i = 0; i < n; i++) {
         out[i].pid        = tmp[i].pid;

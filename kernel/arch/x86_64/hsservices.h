@@ -13,7 +13,7 @@
 /* 最大配置 */
 #define HS_MAX_AUDIO_STREAMS  8
 #define HS_MAX_WATCH_FILES    16
-#define HS_MAX_PROC_INFO      32
+#define HS_MAX_PROC_INFO      64
 
 /* 音频流 */
 typedef struct {
