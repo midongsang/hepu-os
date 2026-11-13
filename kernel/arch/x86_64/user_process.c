@@ -217,6 +217,18 @@ static uint64_t create_user_page_table_ex(void *code_data, uint64_t code_size, u
                 bad++;
             }
         }
+        /* 顺带确认整个栈区间所在的 PD 项已经不是 2MB 大页：
+         * 若仍是大页(PS=1)，说明 split 没发生，256 页要么写进了大页数据区、
+         * 要么根本没生效 —— 这是 SEC-19 第 4 条的可判定证据。 */
+        {
+            extern uint64_t vmm64_get_pde(uint64_t pml4, uint64_t virt);
+            uint64_t pde = vmm64_get_pde(user_pml4_phys, USER_STACK_TOP - 4096);
+            if (pde & 0x80ULL) {
+                vga_puts("[SEC19] stack PD entry STILL a huge page: pde=");
+                vga_put_hex(pde);
+                vga_puts("\n");
+            }
+        }
         if (bad) {
             vga_puts("[SEC19] stack pages not user-accessible: ");
             vga_put_hex((uint64_t)bad);

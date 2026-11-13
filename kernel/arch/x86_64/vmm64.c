@@ -463,6 +463,18 @@ int vmm64_check_user_page(uint64_t pml4_addr, uint64_t virt)
     return (pte & PAGE_USER) ? 1 : 0;
 }
 
+/* SEC-19 诊断：返回某虚拟地址所在 PD 项的原始 PDE 值（0 表示中间级表缺失）。
+ * 用于确认「这个 2MB 区间到底还是不是大页」—— 拆成功的话 PS 位必须为 0。 */
+uint64_t vmm64_get_pde(uint64_t pml4_addr, uint64_t virt)
+{
+    pte_t *pml4 = (pte_t *)vmm64_phys_to_virt(pml4_addr);
+    if (!(pml4[PML4_INDEX(virt)] & PAGE_PRESENT)) return 0;
+    pte_t *pdpt = (pte_t *)vmm64_phys_to_virt(pml4[PML4_INDEX(virt)] & PAGE_MASK);
+    if (!(pdpt[PDPT_INDEX(virt)] & PAGE_PRESENT)) return 0;
+    pte_t *pd = (pte_t *)vmm64_phys_to_virt(pdpt[PDPT_INDEX(virt)] & PAGE_MASK);
+    return pd[PD_INDEX(virt)];
+}
+
 /* 判断页是否已换出 */
 int vmm64_is_swapped(uint64_t pml4_addr, uint64_t virt)
 {
