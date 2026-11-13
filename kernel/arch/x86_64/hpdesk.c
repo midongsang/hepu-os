@@ -2017,7 +2017,7 @@ static void hs_window_shadow_analytic(const hs_window_t *w)
             if (dist < d1) { long u = d1 - dist; a += (int)(u * u * a1 / ((long)d1 * d1)); }
             if (dist < d2) { long u = d2 - dist; a += (int)(u * u * a2 / ((long)d2 * d2)); }
             if (a > 90) a = 90;
-            if (a > 0) gfx64_blend_pixel(x, y, 0x0A1620, a);
+            if (a > 0) gfx64_blend_pixel(x, y, 0x000000, a);
         }
     }
 }
@@ -2025,7 +2025,7 @@ static void hs_window_shadow_analytic(const hs_window_t *w)
 /* 单条边带的合成 */
 static inline void sh_blit_slice(const hs_window_t *w, int mx0, int my0,
                                  int xb, int xe, int yb, int ye,
-                                 int pad, int rc)
+                                 int pad, int rc, int off)
 {
     extern void gfx64_blend_pixel(int x, int y, uint32_t fg, int alpha);
     extern int gfx64_get_width(void);
@@ -2037,9 +2037,14 @@ static inline void sh_blit_slice(const hs_window_t *w, int mx0, int my0,
         for (int x = xb; x < xe; x++) {
             int sx = mx0 + x;
             if (sx < 0 || sx >= gfx64_get_width()) continue;
-            if (sh_in_rounded(x, y, pad, pad, pad + w->width - 1, pad + w->height - 1, rc)) continue;
+            /* OBS-03: 遮挡体在 mask 里是 [pad, pad+off] 起算的（阴影整体下移 off），
+             * 这里必须用同一组坐标判"窗口内部"。原先按 pad 起算会把窗口上方
+             * pad..pad+off、下方 pad+h-1..pad+off+h-1 的阴影一起当内部抹掉，
+             * 表现为四个角外侧阴影缺失、只贴边 1px 留一道暗线。 */
+            if (sh_in_rounded(x, y, pad, pad + off,
+                              pad + w->width - 1, pad + off + w->height - 1, rc)) continue;
             int a = (int)row[x] * SH_STRENGTH / 255;
-            if (a >= 3) gfx64_blend_pixel(sx, sy, 0x0A1620, a);
+            if (a >= 3) gfx64_blend_pixel(sx, sy, 0x000000, a);
         }
     }
 }
@@ -2133,8 +2138,11 @@ static void hs_window_shadow(const hs_window_t *w)
     if (r > 40) r = 40;
     if (r > mn / 4) r = mn / 4;      /* 极小窗口别让阴影比窗口还大 */
     int pad = 3 * r + 6;             /* 模糊支撑 3r, 必须 >= 它, 否则边带会切出硬边 */
-    int off = rc / 2 + 4;            /* 光源在正上方: 下移约半个圆角 */
-    if (off > 18) off = 18;
+    /* 光源偏移只做"轻微下移"：off 是遮挡体在 mask 里的下移量，而"窗口内部"一律按
+     * 遮挡体判定，所以 off 越大、上/左/右三边被吃掉的就越多 —— 取 rc/2+4(最大 12)
+     * 会让三边阴影整圈消失，只剩下方远处一圈，看起来就是"阴影没补上"。
+     * 保持 3px 的量，四边都有近场暗部，下方再多一点点即可。 */
+    int off = 3;
     int pk = ((rc * 4096 + pad) * 4096 + r) * 512 + off;
 
     if (sh_kw != w->width || sh_kh != w->height || sh_kpk != pk) {
@@ -2150,10 +2158,12 @@ static void hs_window_shadow(const hs_window_t *w)
 
     sh_kpk = pk;
     /* 只走四条边带, 中间整块跳过 —— 那是窗口自己会盖住的区域, 算它纯属浪费 */
-    sh_blit_slice(w, mx0, my0, 0, sh_mw, 0, pad, pad, rc);                        /* 上 */
-    sh_blit_slice(w, mx0, my0, 0, sh_mw, pad + w->height, sh_mh, pad, rc);        /* 下: 从窗口底往下整条 */
-    sh_blit_slice(w, mx0, my0, 0, pad, pad, pad + w->height, pad, rc);            /* 左 */
-    sh_blit_slice(w, mx0, my0, sh_mw - pad, sh_mw, pad, pad + w->height, pad, rc);/* 右 */
+    int oy = pad + off, ob = pad + off + w->height;   /* 遮挡体上下边界(mask 坐标) */
+    int ox1 = pad + w->width;                          /* 遮挡体右边界 */
+    sh_blit_slice(w, mx0, my0, 0, sh_mw, 0, oy, pad, rc, off);                     /* 上 */
+    sh_blit_slice(w, mx0, my0, 0, sh_mw, ob, sh_mh, pad, rc, off);                 /* 下 */
+    sh_blit_slice(w, mx0, my0, 0, pad, oy, ob, pad, rc, off);                      /* 左 */
+    sh_blit_slice(w, mx0, my0, ox1, sh_mw, oy, ob, pad, rc, off);                  /* 右 */
 }
 
 void hs_window_render_all(void)
