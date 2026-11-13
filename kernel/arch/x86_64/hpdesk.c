@@ -1824,13 +1824,20 @@ static void hs_window_shadow(const hs_window_t *w)
     extern uint32_t math64_isqrt(uint32_t v);
     extern int gfx_width, gfx_height;
 
-    int dmax = hs_s(16);          /* 扩散半径 */
-    int off = hs_sy(6);           /* 下移, 制造"光在上方"的偏向 */
+    /* V0.60.0: 单一半径的衰减怎么调都"假" —— 半径小就显得硬、半径大就显得脏。
+     * 真阴影是**两个尺度叠加**的结果: 近场一圈密度较高(窗口压住桌面那一块),
+     * 远场拖一条很长很淡的尾巴(光在更远处绕过来)。这里用两个高斯核近似:
+     *   d1=16px/a1=26% 近场 + d2=44px/a2=16% 远场, 两者相加。
+     * 同时去掉上一版的 contact 硬边 —— 紧贴窗口那一圈被强行加深, 视觉上等于给
+     * 窗口又描了一道暗边, 这是"看着假"最直接的来源。 */
+    int d1 = hs_s(16), a1 = 26;
+    int d2 = hs_s(44), a2 = 16;
+    int dmax = d2;
+    int off = hs_sy(14);          /* 下移, 制造"光在上方"的偏向 */
     int x0 = w->x;
     int x1 = w->x + w->width - 1;
     int y0 = w->y + off;
     int y1 = w->y + w->height - 1 + off;
-    int amax = 70;                /* 最深约 27% 黑 */
 
     int ybeg = y0 - dmax, yend = y1 + dmax;
     int xbeg = x0 - dmax, xend = x1 + dmax;
@@ -1851,8 +1858,16 @@ static void hs_window_shadow(const hs_window_t *w)
             if (dx > 0 && dy > 0) dist = (int)math64_isqrt((uint32_t)(dx * dx + dy * dy));
             else dist = dx ? dx : dy;
             if (dist >= dmax) continue;
-            int t = dmax - dist;
-            int a = (t * t) * amax / (dmax * dmax);
+            int a = 0;
+            if (dist < d1) {
+                long u = d1 - dist;
+                a += (int)(u * u * a1 / ((long)d1 * d1));
+            }
+            if (dist < d2) {
+                long u = d2 - dist;
+                a += (int)(u * u * a2 / ((long)d2 * d2));
+            }
+            if (a > 90) a = 90;
             if (a > 0) gfx64_blend_pixel(x, y, 0x000000, a);
         }
     }
