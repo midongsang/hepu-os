@@ -97,6 +97,31 @@ extern void pmm64_free_page(uint64_t addr);
 
 static process_t processes[MAX_PROCESSES];
 
+/* V0.58.3: 供 sys_ps 用的取值接口。
+ * syscall64_full.c 之前自己 typedef 了一份 process_t，字段顺序与这里的真实
+ * 结构不一致（真实结构里 name[32] 排在 process_context_t/stack/page_table
+ * 之后，偏移远大于调用方以为的 24），于是 ps 读到的 name 是别的字段的字节，
+ * mem_pages 也永远是 0。把取值收进本文件，调用方不必也不该复制结构定义。
+ * 返回 1 = 该槽有效，0 = 空槽跳过。 */
+int process64_get_ps_fields(int idx, int *pid, int *ppid, int *state, int *prio,
+                            uint64_t *mem_pages, char name[32])
+{
+    if (idx < 0 || idx >= MAX_PROCESSES) return 0;
+    if (processes[idx].state == 0) return 0;
+    if (pid) *pid = processes[idx].pid;
+    if (ppid) *ppid = processes[idx].parent_pid;
+    if (state) *state = processes[idx].state;
+    if (prio) *prio = processes[idx].priority;
+    if (mem_pages) *mem_pages = processes[idx].mem_pages;
+    if (name) {
+        int k = 0;
+        for (; k < 31 && processes[idx].name[k]; k++) name[k] = processes[idx].name[k];
+        for (; k < 32; k++) name[k] = 0;   /* 尾部补零, 不留上一条的残字 */
+        name[31] = 0;
+    }
+    return 1;
+}
+
 /* V0.20.62: 公开访问器（hepu ps 用） */
 process_t *process64_get_table(void) { return processes; }
 
@@ -309,7 +334,9 @@ int process64_create(const char *name, void (*entry)(void), int priority)
     processes[idx].parent_pid = current_pid;
     processes[idx].domain_id = domain64_env_to_id(processes[idx].env_type);
 
-    /* 复制名称 */
+    /* 复制名称。V0.58.3: 先清零再拷 —— 槽位复用时会残留上一条进程的名字尾巴,
+     * ps 里表现为 NAME 后面跟着乱码字节。 */
+    proc_memset(processes[idx].name, 0, 32);
     if (name) {
         int i = 0;
         while (name[i] && i < 31) {

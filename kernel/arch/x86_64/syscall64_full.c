@@ -826,21 +826,26 @@ struct hep_ps_entry {
 static int64_t sys_ps(struct hep_ps_entry *entries, int max) {
     extern int copy_to_user(void *dst, const void *src, size_t size);
     if (!entries || max <= 0) return -1;
-    typedef struct { int pid; int state; int priority; int cpu_id; uint64_t runtime; char name[32]; int env_type; int parent_pid; uint64_t mem_pages; } process_t;
-    extern process_t *process64_get_table(void);
-    process_t *pt = process64_get_table();
+    /* V0.58.3: 不再本地 typedef process_t。
+     * 旧代码照抄了一份结构，字段顺序与 process64_full.c 里的真实定义完全不同
+     * （真实结构里 name[32] 排在 process_context_t / stack / page_table 之后，
+     * 偏移远不止 24），于是 ps 读到的 NAME 是别的字段的字节、PAGES 永远是 0。
+     * 改为调用内核提供的取值接口，调用方不再接触结构布局。 */
+    extern int process64_get_ps_fields(int idx, int *pid, int *ppid, int *state,
+                                       int *prio, uint64_t *mem_pages, char name[32]);
     struct hep_ps_entry buf[8];
     int n = 0;
     for (int i = 0; i < 64 && n < 8 && n < max; i++) {
-        if (pt[i].state == 0) continue;
-        buf[n].pid = pt[i].pid;
-        buf[n].ppid = pt[i].parent_pid;
-        buf[n].state = pt[i].state;
-        buf[n].priority = pt[i].priority;
-        buf[n].mem_pages = pt[i].runtime;
-        for (int j = 0; j < 32; j++) buf[n].name[j] = pt[i].name[j];
-        buf[n].name[31] = 0;   /* V0.57.2: 强制终止符，源码 name 满 32 字节时
-                                * 用户态 strlen 会越过数组读到栈顶之外 → #PF */
+        int pid_, ppid_, state_, prio_, k;
+        uint64_t pages_;
+        char nm[32];
+        if (!process64_get_ps_fields(i, &pid_, &ppid_, &state_, &prio_, &pages_, nm)) continue;
+        buf[n].pid = pid_;
+        buf[n].ppid = ppid_;
+        buf[n].state = state_;
+        buf[n].priority = prio_;
+        buf[n].mem_pages = pages_;
+        for (k = 0; k < 32; k++) buf[n].name[k] = nm[k];
         n++;
     }
     copy_to_user(entries, buf, n * sizeof(struct hep_ps_entry));

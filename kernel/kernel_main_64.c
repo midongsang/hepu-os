@@ -1174,14 +1174,16 @@ void x86_64_kernel_main(void)
          * --------------------------------------------------------------- */
         {
             extern int user_process_exec(const char *path);
-            /* V0.58.3: ps 的入口缺陷已修（原来只有 main、_start 未定义，
-             * ld 把入口退化成段首 put_int 的地址）。修正后实测 entry=0x400000E0，
-             * 打印进程表并正常返回，早先记录的 "SYS_HEPU_PS 后跨栈页 #PF" 未再复现。
-             * 仍未放进 autorun：ps 的 NAME 列输出乱码（SYS_HEPU_PS 返回结构待查）。 */
+            /* V0.58.3: ps 已修好并放回 autorun。
+             * 修了三处：① 缺 _start 导致入口退化成段首 put_int 的地址；
+             * ② sys_ps 自己 typedef 的 process_t 与真实结构字段顺序不符，
+             *    NAME/PAGES 读到的是错位数据；③ 逐字符 write 让输出在串口上
+             *    与内核日志交错。现在实测输出 idle/kbeat/khouse/kstat 四行正常。 */
             static const char *autorun[] = {
                 "/bin/hello.elf",
                 "/bin/sec_test.elf",
                 "/bin/clone_test.elf",
+                "/bin/ps.elf",
             };
             vga_puts("[REG] user programs registered, starting autorun set...\n");
             for (unsigned i = 0; i < sizeof(autorun) / sizeof(autorun[0]); i++) {

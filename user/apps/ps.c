@@ -18,19 +18,26 @@ struct hep_ps_entry {
     char name[32];
 };
 
-/* 单字符必须用 write 直接发，不能喂给 puts：puts 内部 strlen 会一路读到底，
- * 单字符后面没有 \0 时 n 会变成巨大值 → write 输出巨石量 → 进程卡死
- * （实测被 watchdog 在 RIP=0x4000017D 抓到并强制终止）。 */
-static void put_ch(char c) { write(STDOUT_FILENO, &c, 1); }
-
-static void put_int(int v)
+/* V0.58.3: 行缓冲输出。
+ * 旧版逐字符 write(1,&c,1)：一行要发几十次 syscall，中途只要内核往串口插
+ * 一行日志，输出就变成 "0 0 RUN" 之后字符互相穿插、NAME 显示成乱码。
+ * 现在整行拼好再一次性写。 */
+static char g_buf[256];
+static int  g_len;
+static void out_ch(char c) { if (g_len < (int)sizeof(g_buf) - 1) g_buf[g_len++] = c; }
+static void out_str(const char *s) { while (*s) out_ch(*s++); }
+static void out_int(int v)
 {
     char b[16];
     int i = 0;
-    if (v < 0) { put_ch('-'); v = -v; }
-    if (v == 0) { put_ch('0'); return; }
+    if (v < 0) { out_ch('-'); v = -v; }
+    if (v == 0) { out_ch('0'); return; }
     while (v > 0 && i < 16) { b[i++] = (char)('0' + v % 10); v /= 10; }
-    while (i > 0) put_ch(b[--i]);
+    while (i > 0) out_ch(b[--i]);
+}
+static void out_flush(void)
+{
+    if (g_len > 0) { write(STDOUT_FILENO, g_buf, (size_t)g_len); g_len = 0; }
 }
 
 static const char *state_str(int s)
@@ -45,7 +52,11 @@ static const char *state_str(int s)
 
 int main(void)
 {
-    struct hep_ps_entry e[8];
+    /* V0.58.3: 必须放数据段（static），不能放栈上。
+     * 8 项 × 56 字节 = 448 字节，栈上一放就跨到用户栈第二页；copy_to_user
+     * 写到那一段会失败，用户这边读到的就是半截数据 + 垃圾 —— 表现正是
+     * "NAME 空/乱码、多出一行、PAGES 恒 0"。 */
+    static struct hep_ps_entry e[8];
     int n = (int)syscall2(SYS_HEPU_PS, (uint64_t)e, 8);
     if (n < 0) {
         puts("ps: syscall failed\n");
@@ -56,18 +67,20 @@ int main(void)
         return 0;
     }
 
-    puts("PID PPID STATE PRI PAGES NAME\n");
+    out_str("PID PPID STATE PRI PAGES NAME\n");
+    out_flush();
     for (int i = 0; i < n; i++) {
         char nm[33];
         for (int k = 0; k < 32; k++) nm[k] = e[i].name[k];
         nm[32] = 0;
 
-        put_int(e[i].pid); put_ch(' ');
-        put_int(e[i].ppid); put_ch(' ');
-        puts(state_str(e[i].state)); put_ch(' ');
-        put_int(e[i].priority); put_ch(' ');
-        put_int((int)e[i].mem_pages); put_ch(' ');
-        puts(nm); puts("\n");
+        out_int(e[i].pid); out_ch(' ');
+        out_int(e[i].ppid); out_ch(' ');
+        out_str(state_str(e[i].state)); out_ch(' ');
+        out_int(e[i].priority); out_ch(' ');
+        out_int((int)e[i].mem_pages); out_ch(' ');
+        out_str(nm); out_ch('\n');
+        out_flush();
     }
     return 0;
 }
