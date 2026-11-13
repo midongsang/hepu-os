@@ -1818,59 +1818,184 @@ static uint32_t hs_mix_color(uint32_t a, uint32_t b, int pct)
  *   - 因为是真的混合, 底下是什么颜色都自然变暗, 不再需要采样基色, 也就不存在偏色;
  *   - 四角用 math64_isqrt 取欧氏距离, 阴影跟着圆角走。
  * 光源假定在上方: 阴影矩形整体下移 6px, 所以上边只露 10px、下边 22px。 */
-static void hs_window_shadow(const hs_window_t *w)
+/* ---------- 阴影贴图 (V0.60.1) ----------
+ * 解析距离场只能生成"等距同心环": 角部和边上按同一个速率衰减, 而真阴影的形状是
+ * **遮挡体的卷积** —— 窗口的凸角漏光更多, 影子在角上拖得更长。这就是无论怎么调
+ * 半径/系数都觉得"假"的数学原因。
+ *
+ * 所以改成真的做卷积: 把窗口的实心圆角矩形当 mask, 做盒式模糊(中心极限定理: N 遍
+ * 盒式模糊逼近高斯), 得到 alpha 图, 再逐像素 blend。
+ *
+ * 而且按窗口**尺寸**缓存: mask 内容只依赖尺寸, 窗口移动不用重算, 只有改尺寸才重算。
+ * 模糊走分离式(水平一趟 + 垂直一趟), 复杂度 O(像素), 不是 gfx64_blur_region 的
+ * O(像素 × r²) —— 后者 800x640 + blur10 要 2 亿次像素读, 一次重绘就卡死桌面。
+ *
+ * 内存: (w+2pad) x (h+2pad) 字节 × 2(工作 + 临时), 900x700 的窗口约 1.6MB, 复用不释放。
+ */
+#define SH_BLUR_R     12    /* 单遍盒式模糊半径(缩放前); 3 遍 -> std ≈ r*sqrt(3) */
+#define SH_PASSES     3
+#define SH_STRENGTH   100   /* mask 255 -> alpha 100 */
+
+static uint8_t *sh_mask = 0;
+static uint8_t *sh_tmp = 0;
+static uint32_t sh_cap = 0;
+static int sh_mw = 0, sh_mh = 0;
+static int sh_kw = -1, sh_kh = -1;      /* 缓存 key: 窗口宽高 */
+
+/* 圆角矩形内点判定(矩形外一律 0) */
+static int sh_in_rounded(long px, long py, long r_x0, long r_y0, long r_x1, long r_y1, long rc)
+{
+    if (px < r_x0 || px > r_x1 || py < r_y0 || py > r_y1) return 0;
+    long cx = px, cy = py;
+    if (px < r_x0 + rc) cx = r_x0 + rc; else if (px > r_x1 - rc) cx = r_x1 - rc;
+    if (py < r_y0 + rc) cy = r_y0 + rc; else if (py > r_y1 - rc) cy = r_y1 - rc;
+    long dx = px - cx, dy = py - cy;
+    return (dx * dx + dy * dy) <= rc * rc;
+}
+
+/* 水平/垂直盒式模糊(分离式, 滑动窗口 O(像素)) */
+static void sh_box_h(const uint8_t *src, uint8_t *dst, int w, int h, int r)
+{
+    for (int y = 0; y < h; y++) {
+        const uint8_t *sr = src + (long)y * w;
+        uint8_t *dr = dst + (long)y * w;
+        long sum = 0, n = 0;
+        for (int i = 0; i <= r && i < w; i++) { sum += sr[i]; n++; }
+        for (int x = 0; x < w; x++) {
+            dr[x] = (uint8_t)(sum / n);
+            int add = x + r + 1, sub = x - r;
+            if (add < w) { sum += sr[add]; n++; }
+            if (sub >= 0) { sum -= sr[sub]; n--; }
+        }
+    }
+}
+
+static void sh_box_v(const uint8_t *src, uint8_t *dst, int w, int h, int r)
+{
+    for (int x = 0; x < w; x++) {
+        long sum = 0, n = 0;
+        for (int i = 0; i <= r && i < h; i++) { sum += src[(long)i * w + x]; n++; }
+        for (int y = 0; y < h; y++) {
+            dst[(long)y * w + x] = (uint8_t)(sum / n);
+            int add = y + r + 1, sub = y - r;
+            if (add < h) { sum += src[(long)add * w + x]; n++; }
+            if (sub >= 0) { sum -= src[(long)sub * w + x]; n--; }
+        }
+    }
+}
+
+/* 生成 mask: 返回 1 成功, 0 表示内存不够(调用方回退到解析式) */
+static int sh_build(int ww, int hh, int pad, int rc)
+{
+    extern void *kmalloc(uint64_t size);
+    extern void kfree(void *ptr);
+
+    int mw = ww + 2 * pad, mh = hh + 2 * pad;
+    if (mw <= 0 || mh <= 0 || mw > 2048 || mh > 1400) return 0;
+    uint32_t need = (uint32_t)mw * (uint32_t)mh;
+    if (need > sh_cap) {
+        if (sh_mask) kfree(sh_mask);
+        if (sh_tmp) kfree(sh_tmp);
+        sh_mask = (uint8_t *)kmalloc((uint64_t)need);
+        sh_tmp = (uint8_t *)kmalloc((uint64_t)need);
+        sh_cap = (sh_mask && sh_tmp) ? need : 0;
+        if (!sh_cap) return 0;
+    }
+    /* 实心圆角矩形当遮挡体 */
+    for (long y = 0; y < mh; y++) {
+        uint8_t *row = sh_mask + y * mw;
+        for (long x = 0; x < mw; x++) {
+            row[x] = sh_in_rounded(x, y, pad, pad, pad + ww - 1, pad + hh - 1, rc) ? 255 : 0;
+        }
+    }
+    int r = hs_s(SH_BLUR_R);
+    if (r < 1) r = 1;
+    for (int pass = 0; pass < SH_PASSES; pass++) {
+        sh_box_h(sh_mask, sh_tmp, mw, mh, r);
+        sh_box_v(sh_tmp, sh_mask, mw, mh, r);
+    }
+    sh_mw = mw; sh_mh = mh; sh_kw = ww; sh_kh = hh;
+    return 1;
+}
+
+/* 回退: 解析距离场(内存不够时用, 或者 mask 尺寸超限) */
+static void hs_window_shadow_analytic(const hs_window_t *w)
 {
     extern void gfx64_blend_pixel(int x, int y, uint32_t fg, int alpha);
     extern uint32_t math64_isqrt(uint32_t v);
     extern int gfx_width, gfx_height;
-
-    /* V0.60.0: 单一半径的衰减怎么调都"假" —— 半径小就显得硬、半径大就显得脏。
-     * 真阴影是**两个尺度叠加**的结果: 近场一圈密度较高(窗口压住桌面那一块),
-     * 远场拖一条很长很淡的尾巴(光在更远处绕过来)。这里用两个高斯核近似:
-     *   d1=16px/a1=26% 近场 + d2=44px/a2=16% 远场, 两者相加。
-     * 同时去掉上一版的 contact 硬边 —— 紧贴窗口那一圈被强行加深, 视觉上等于给
-     * 窗口又描了一道暗边, 这是"看着假"最直接的来源。 */
     int d1 = hs_s(16), a1 = 26;
     int d2 = hs_s(44), a2 = 16;
     int dmax = d2;
-    int off = hs_sy(14);          /* 下移, 制造"光在上方"的偏向 */
-    int x0 = w->x;
-    int x1 = w->x + w->width - 1;
-    int y0 = w->y + off;
-    int y1 = w->y + w->height - 1 + off;
-
-    int ybeg = y0 - dmax, yend = y1 + dmax;
-    int xbeg = x0 - dmax, xend = x1 + dmax;
+    int off = hs_sy(14);
+    int x0 = w->x, x1 = w->x + w->width - 1;
+    int y0 = w->y + off, y1 = w->y + w->height - 1 + off;
+    int ybeg = y0 - dmax, xbeg = x0 - dmax;
     if (ybeg < 0) ybeg = 0;
     if (xbeg < 0) xbeg = 0;
-    int ylim = (yend < gfx_height) ? yend : gfx_height - 1;
-    int xlim = (xend < gfx_width) ? xend : gfx_width - 1;
-
+    int ylim = (y1 + dmax < gfx_height) ? y1 + dmax : gfx_height - 1;
+    int xlim = (x1 + dmax < gfx_width) ? x1 + dmax : gfx_width - 1;
     for (int y = ybeg; y <= ylim; y++) {
         for (int x = xbeg; x <= xlim; x++) {
-            if (x >= x0 && x <= x1 && y >= y0 && y <= y1) continue;   /* 被窗口盖住 */
+            if (x >= x0 && x <= x1 && y >= y0 && y <= y1) continue;
             int dx = 0, dy = 0;
-            if (x < x0) dx = x0 - x;
-            else if (x > x1) dx = x - x1;
-            if (y < y0) dy = y0 - y;
-            else if (y > y1) dy = y - y1;
+            if (x < x0) dx = x0 - x; else if (x > x1) dx = x - x1;
+            if (y < y0) dy = y0 - y; else if (y > y1) dy = y - y1;
             int dist;
             if (dx > 0 && dy > 0) dist = (int)math64_isqrt((uint32_t)(dx * dx + dy * dy));
             else dist = dx ? dx : dy;
-            if (dist >= dmax) continue;
             int a = 0;
-            if (dist < d1) {
-                long u = d1 - dist;
-                a += (int)(u * u * a1 / ((long)d1 * d1));
-            }
-            if (dist < d2) {
-                long u = d2 - dist;
-                a += (int)(u * u * a2 / ((long)d2 * d2));
-            }
+            if (dist < d1) { long u = d1 - dist; a += (int)(u * u * a1 / ((long)d1 * d1)); }
+            if (dist < d2) { long u = d2 - dist; a += (int)(u * u * a2 / ((long)d2 * d2)); }
             if (a > 90) a = 90;
-            if (a > 0) gfx64_blend_pixel(x, y, 0x000000, a);
+            if (a > 0) gfx64_blend_pixel(x, y, 0x0A1620, a);
         }
     }
+}
+
+/* 单条边带的合成 */
+static inline void sh_blit_slice(const hs_window_t *w, int mx0, int my0,
+                                 int xb, int xe, int yb, int ye,
+                                 int pad, int rc)
+{
+    extern void gfx64_blend_pixel(int x, int y, uint32_t fg, int alpha);
+    extern int gfx_width, gfx_height;
+    for (int y = yb; y < ye; y++) {
+        int sy = my0 + y;
+        if (sy < 0 || sy >= gfx_height) continue;
+        const uint8_t *row = sh_mask + (long)y * sh_mw;
+        for (int x = xb; x < xe; x++) {
+            int sx = mx0 + x;
+            if (sx < 0 || sx >= gfx_width) continue;
+            if (sh_in_rounded(x, y, pad, pad, pad + w->width - 1, pad + w->height - 1, rc)) continue;
+            int a = (int)row[x] * SH_STRENGTH / 255;
+            if (a >= 3) gfx64_blend_pixel(sx, sy, 0x0A1620, a);
+        }
+    }
+}
+
+static void hs_window_shadow(const hs_window_t *w)
+{
+    if (w->width <= 0 || w->height <= 0) return;
+
+    int rc = hs_s(g_shell.ui.corner_radius);
+    int pad = hs_s(36) + 6;               /* 3 遍 r 的扩散范围(约 2.5σ)再留余量 */
+    int off = hs_sy(14);
+
+    if (sh_kw != w->width || sh_kh != w->height) {
+        if (!sh_build(w->width, w->height, pad, rc)) {
+            hs_window_shadow_analytic(w);   /* 内存不够, 退回解析式 */
+            return;
+        }
+    }
+    int mx0 = w->x - pad;
+    int my0 = w->y + off - pad;
+
+    /* 只走四条边带, 中间整块跳过 —— 那是窗口自己会盖住的区域, 算它纯属浪费 */
+    sh_blit_slice(w, mx0, my0, 0, sh_mw, 0, pad, pad, rc);                  /* 上 */
+    sh_blit_slice(w, mx0, my0, 0, sh_mw, sh_mh - pad, sh_mh, pad, rc);      /* 下 */
+    sh_blit_slice(w, mx0, my0, 0, pad, pad, sh_mh - pad, pad, rc);          /* 左 */
+    sh_blit_slice(w, mx0, my0, sh_mw - pad, sh_mw, pad, sh_mh - pad, pad, rc); /* 右 */
 }
 
 void hs_window_render_all(void)
