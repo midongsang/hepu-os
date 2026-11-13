@@ -551,6 +551,35 @@ process_t* process64_get_by_pid(int pid)
     return NULL;
 }
 
+/* V0.58.4: 调度器自旋锁。
+ * process64_schedule 会被时钟中断(smp_timer_tick)与普通上下文同时调用, SMP 下
+ * 两个核会并发改 ready_queue[]/current_pid/per_cpu_current_idx[] —— 原实现全程
+ * 无锁。这里补一把锁, 并在加锁时 cli: spinlock 本身不关中断, 若持锁时被本核
+ * 中断打断、而中断里又要同一把锁, 就会自死锁。
+ * 关键约束: 绝不能在持锁状态下 context_switch —— 切完是另一个线程在跑,
+ * 锁会永远留在上一个线程手里。所以切换点都是"先释放, 再切"。 */
+static spinlock_t g_sched_lock;
+static int g_sched_lock_ready = 0;
+
+static uint64_t sched_lock_acquire(void)
+{
+    uint64_t f;
+    __asm__ volatile("pushfq\n\tpopq %0" : "=r"(f) :: "memory");
+    __asm__ volatile("cli" ::: "memory");
+    if (!g_sched_lock_ready) {
+        spinlock_init(&g_sched_lock);
+        g_sched_lock_ready = 1;
+    }
+    spinlock_lock(&g_sched_lock);
+    return f;
+}
+
+static void sched_lock_release(uint64_t f)
+{
+    spinlock_unlock(&g_sched_lock);
+    if (f & 0x200ULL) __asm__ volatile("sti" ::: "memory");  /* 只恢复调用方原本的 IF */
+}
+
 /* 优先级调度器（支持per-CPU） */
 int process64_schedule(void)
 {
@@ -559,6 +588,8 @@ int process64_schedule(void)
     /* 获取当前CPU ID */
     extern uint32_t smp_get_current_cpu(void);
     uint32_t cur_cpu = smp_get_current_cpu();
+
+    uint64_t sched_iflags = sched_lock_acquire();
 
     scheduler_ticks++;
 
@@ -622,13 +653,16 @@ int process64_schedule(void)
         current_pid = processes[idx].pid;
         per_cpu_current_idx[cur_cpu] = idx;
 
-        /* 实际上下文切换 */
-        if (old) {
+        /* 实际上下文切换 —— 必须先释放调度锁并恢复调用方的 IF, 见函数头注释 */
+        {
             extern void context_switch_64(uint64_t *old_ctx, uint64_t *new_ctx);
-            context_switch_64((uint64_t *)&old->context, (uint64_t *)&processes[idx].context);
+            int ret_pid = processes[idx].pid;
+            sched_lock_release(sched_iflags);
+            if (old) {
+                context_switch_64((uint64_t *)&old->context, (uint64_t *)&processes[idx].context);
+            }
+            return ret_pid;
         }
-
-        return processes[idx].pid;
     }
 
     /* 如果当前CPU没有专属进程，选择任意就绪进程（工作窃取） */
@@ -652,15 +686,19 @@ int process64_schedule(void)
             current_pid = processes[idx].pid;
             per_cpu_current_idx[cur_cpu] = idx;
 
-            if (old) {
+            {
                 extern void context_switch_64(uint64_t *old_ctx, uint64_t *new_ctx);
-                context_switch_64((uint64_t *)&old->context, (uint64_t *)&processes[idx].context);
+                int ret_pid = processes[idx].pid;
+                sched_lock_release(sched_iflags);
+                if (old) {
+                    context_switch_64((uint64_t *)&old->context, (uint64_t *)&processes[idx].context);
+                }
+                return ret_pid;
             }
-
-            return processes[idx].pid;
         }
     }
 
+    sched_lock_release(sched_iflags);
     return -1;  /* 没有可运行的进程 */
 }
 
