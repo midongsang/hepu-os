@@ -4,6 +4,7 @@
  * ========================================================================== */
 
 #include <stdint.h>
+#include "spinlock.h"
 #include <stddef.h>
 
 #define TCP_MAX_CONNECTIONS 8
@@ -72,6 +73,14 @@ typedef struct {
 static tcp_connection_t tcp_conns[TCP_MAX_CONNECTIONS];
 static int tcp_initialized = 0;
 static uint32_t tcp_isn = 0x12345678;  /* 初始序列号 */
+
+/* SB-12: TCP 连接表锁（表级）。
+ * 网卡收包走中断上下文 → 锁必须能在中断态获取；对外 API 用 irqsave
+ * （普通上下文持锁时关中断，避免"拿着锁被本核收包中断再抢同一把锁"自死锁），
+ * tcp64_handle 本身已在中断里，用 plain lock/unlock。
+ * 锁粒度：先全表一把，后续可按连接细分。 */
+static spinlock_t g_tcp_lock;
+static volatile uint32_t g_tcp_lock_contend;   /* 诊断：等待次数 */
 
 extern void vga_puts(const char *s);
 extern int ip64_send(uint32_t dst_ip, uint8_t protocol, const uint8_t *data, int data_len);
@@ -167,6 +176,7 @@ static int tcp_send_packet(tcp_connection_t *conn, uint8_t flags,
 /* 初始化TCP */
 void tcp64_init(void)
 {
+    spinlock_init(&g_tcp_lock);
     for (int i = 0; i < TCP_MAX_CONNECTIONS; i++) {
         tcp_conns[i].used = 0;
         tcp_conns[i].state = TCP_CLOSED;
@@ -176,7 +186,7 @@ void tcp64_init(void)
 }
 
 /* 主动连接 */
-int tcp64_connect(uint32_t remote_ip, uint16_t remote_port, uint16_t local_port)
+static int tcp64_connect_inner(uint32_t remote_ip, uint16_t remote_port, uint16_t local_port)
 {
     if (!tcp_initialized) return -1;
 
@@ -187,7 +197,7 @@ int tcp64_connect(uint32_t remote_ip, uint16_t remote_port, uint16_t local_port)
             tcp_conns[i].remote_ip = remote_ip;
             tcp_conns[i].remote_port = remote_port;
             tcp_conns[i].local_port = local_port;
-            tcp_conns[i].seq_num = tcp_isn++;
+            tcp_conns[i].seq_num = __sync_fetch_and_add(&tcp_isn, 1);
             tcp_conns[i].ack_num = 0;
             tcp_conns[i].rx_len = 0;
             tcp_conns[i].rx_read = 0;
@@ -200,7 +210,7 @@ int tcp64_connect(uint32_t remote_ip, uint16_t remote_port, uint16_t local_port)
 }
 
 /* 监听端口 */
-int tcp64_listen(uint16_t port)
+static int tcp64_listen_inner(uint16_t port)
 {
     if (!tcp_initialized) return -1;
     for (int i = 0; i < TCP_MAX_CONNECTIONS; i++) {
@@ -217,7 +227,7 @@ int tcp64_listen(uint16_t port)
 }
 
 /* 发送数据 */
-int tcp64_send(int sock, const uint8_t *data, int length)
+static int tcp64_send_inner(int sock, const uint8_t *data, int length)
 {
     if (!tcp_initialized || sock < 0 || sock >= TCP_MAX_CONNECTIONS) return -1;
     if (!tcp_conns[sock].used || tcp_conns[sock].state != TCP_ESTABLISHED) return -1;
@@ -226,7 +236,7 @@ int tcp64_send(int sock, const uint8_t *data, int length)
 }
 
 /* 接收数据 */
-int tcp64_recv(int sock, uint8_t *buffer, int max_len)
+static int tcp64_recv_inner(int sock, uint8_t *buffer, int max_len)
 {
     if (!tcp_initialized || sock < 0 || sock >= TCP_MAX_CONNECTIONS) return -1;
     if (!tcp_conns[sock].used) return -1;
@@ -254,7 +264,7 @@ int tcp64_recv(int sock, uint8_t *buffer, int max_len)
 }
 
 /* 关闭连接 */
-int tcp64_close(int sock)
+static int tcp64_close_inner(int sock)
 {
     if (!tcp_initialized || sock < 0 || sock >= TCP_MAX_CONNECTIONS) return -1;
     if (!tcp_conns[sock].used) return -1;
@@ -288,7 +298,7 @@ static void tcp_process_ack(tcp_connection_t *conn, uint32_t ack)
 }
 
 /* 处理收到的TCP包 */
-void tcp64_handle(const uint8_t *packet, int length, uint32_t src_ip, uint32_t dst_ip)
+static void tcp64_handle_inner(const uint8_t *packet, int length, uint32_t src_ip, uint32_t dst_ip)
 {
     if (length < 20) return;
 
@@ -327,7 +337,7 @@ void tcp64_handle(const uint8_t *packet, int length, uint32_t src_ip, uint32_t d
                 conn->state = TCP_SYN_RCVD;
                 conn->remote_ip = src_ip;
                 conn->remote_port = src_port;
-                conn->seq_num = tcp_isn++;
+                conn->seq_num = __sync_fetch_and_add(&tcp_isn, 1);
                 conn->ack_num = seq + 1;
                 tcp_send_packet(conn, TCP_SYN | TCP_ACK, NULL, 0);
             }
@@ -432,4 +442,54 @@ void net64_tcp_timer(void) {
             tcp_conns[i].cwnd = 1;
         }
     }
+}
+
+/* SB-12: 对外入口统一持表锁。
+ * 收包路径（tcp64_handle）在中断上下文调用，此处用 plain lock ——
+ * 中断门已关中断，普通上下文一侧的 irqsave 保证它不会打断持锁代码。 */
+int tcp64_connect(uint32_t remote_ip, uint16_t remote_port, uint16_t local_port)
+{
+    uint64_t f = spinlock_lock_irqsave(&g_tcp_lock);
+    int r = tcp64_connect_inner(remote_ip, remote_port, local_port);
+    spinlock_unlock_irqrestore(&g_tcp_lock, f);
+    return r;
+}
+
+int tcp64_listen(uint16_t port)
+{
+    uint64_t f = spinlock_lock_irqsave(&g_tcp_lock);
+    int r = tcp64_listen_inner(port);
+    spinlock_unlock_irqrestore(&g_tcp_lock, f);
+    return r;
+}
+
+int tcp64_send(int sock, const uint8_t *data, int length)
+{
+    uint64_t f = spinlock_lock_irqsave(&g_tcp_lock);
+    int r = tcp64_send_inner(sock, data, length);
+    spinlock_unlock_irqrestore(&g_tcp_lock, f);
+    return r;
+}
+
+int tcp64_recv(int sock, uint8_t *buffer, int max_len)
+{
+    uint64_t f = spinlock_lock_irqsave(&g_tcp_lock);
+    int r = tcp64_recv_inner(sock, buffer, max_len);
+    spinlock_unlock_irqrestore(&g_tcp_lock, f);
+    return r;
+}
+
+int tcp64_close(int sock)
+{
+    uint64_t f = spinlock_lock_irqsave(&g_tcp_lock);
+    int r = tcp64_close_inner(sock);
+    spinlock_unlock_irqrestore(&g_tcp_lock, f);
+    return r;
+}
+
+void tcp64_handle(const uint8_t *packet, int length, uint32_t src_ip, uint32_t dst_ip)
+{
+    spinlock_lock(&g_tcp_lock);       /* 中断上下文：中断已关，plain lock */
+    tcp64_handle_inner(packet, length, src_ip, dst_ip);
+    spinlock_unlock(&g_tcp_lock);
 }

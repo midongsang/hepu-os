@@ -3,6 +3,7 @@
  * ========================================================================== */
 
 #include <stdint.h>
+#include "spinlock.h"
 #include <stddef.h>
 
 #define UDP_MAX_PORTS 16
@@ -28,6 +29,12 @@ typedef struct {
 
 static udp_socket_t udp_sockets[UDP_MAX_PORTS];
 static int udp_initialized = 0;
+
+/* SB-13: UDP 端口表锁（表级，irqsave）。
+ * 旧 bind 是「先查端口占用、再查空槽」两趟循环，两核同时 bind 同一个端口
+ * 都能过第一趟，随后各占一个槽 —— 端口重复绑定；收包路径还会往刚被
+ * close 的槽写数据。判断与置位必须在同一临界区。 */
+static spinlock_t g_udp_lock;
 
 extern void vga_puts(const char *s);
 extern int ip64_send(uint32_t dst_ip, uint8_t protocol, const uint8_t *data, int data_len);
@@ -70,6 +77,7 @@ static uint16_t udp_checksum(uint32_t src_ip, uint32_t dst_ip,
 /* 初始化UDP */
 void udp64_init(void)
 {
+    spinlock_init(&g_udp_lock);
     for (int i = 0; i < UDP_MAX_PORTS; i++) {
         udp_sockets[i].used = 0;
     }
@@ -82,18 +90,27 @@ int udp64_bind(uint16_t port)
 {
     if (!udp_initialized) return -1;
 
+    uint64_t f = spinlock_lock_irqsave(&g_udp_lock);
+    int out = -1;
+    /* 端口判重与占槽在同一个临界区：分两趟查的旧写法下，两核 bind 同一
+     * 端口都能过判重，随后各占一个槽，端口就重复绑定了。 */
+    int dup = 0;
     for (int i = 0; i < UDP_MAX_PORTS; i++) {
-        if (udp_sockets[i].used && udp_sockets[i].port == port) return -1;
+        if (udp_sockets[i].used && udp_sockets[i].port == port) { dup = 1; break; }
     }
-    for (int i = 0; i < UDP_MAX_PORTS; i++) {
-        if (!udp_sockets[i].used) {
-            udp_sockets[i].used = 1;
-            udp_sockets[i].port = port;
-            udp_sockets[i].length = 0;
-            return i;
+    if (!dup) {
+        for (int i = 0; i < UDP_MAX_PORTS; i++) {
+            if (!udp_sockets[i].used) {
+                udp_sockets[i].used = 1;
+                udp_sockets[i].port = port;
+                udp_sockets[i].length = 0;
+                out = i;
+                break;
+            }
         }
     }
-    return -1;
+    spinlock_unlock_irqrestore(&g_udp_lock, f);
+    return out;
 }
 
 /* 发送UDP数据报 */
@@ -127,8 +144,8 @@ int udp64_send(uint32_t dst_ip, uint16_t src_port, uint16_t dst_port,
 }
 
 /* 接收UDP数据 */
-int udp64_recv(int sock, uint8_t *buffer, int max_len,
-               uint32_t *src_ip, uint16_t *src_port)
+static int udp64_recv_inner(int sock, uint8_t *buffer, int max_len,
+                            uint32_t *src_ip, uint16_t *src_port)
 {
     if (!udp_initialized || sock < 0 || sock >= UDP_MAX_PORTS) return -1;
     if (!udp_sockets[sock].used) return -1;
@@ -147,7 +164,7 @@ int udp64_recv(int sock, uint8_t *buffer, int max_len,
 }
 
 /* 处理收到的UDP包 */
-void udp64_handle(const uint8_t *packet, int length, uint32_t src_ip, uint32_t dst_ip)
+static void udp64_handle_inner(const uint8_t *packet, int length, uint32_t src_ip, uint32_t dst_ip)
 {
     if (length < 8) return;
 
@@ -169,4 +186,22 @@ void udp64_handle(const uint8_t *packet, int length, uint32_t src_ip, uint32_t d
             return;
         }
     }
+}
+
+/* SB-13: 对外入口持表锁。recv 会清 length，与收包路径写缓冲互斥，
+ * 否则读方可能读到被新包覆盖一半的缓冲（撕裂）。 */
+int udp64_recv(int sock, uint8_t *buffer, int max_len,
+               uint32_t *src_ip, uint16_t *src_port)
+{
+    uint64_t f = spinlock_lock_irqsave(&g_udp_lock);
+    int r = udp64_recv_inner(sock, buffer, max_len, src_ip, src_port);
+    spinlock_unlock_irqrestore(&g_udp_lock, f);
+    return r;
+}
+
+void udp64_handle(const uint8_t *packet, int length, uint32_t src_ip, uint32_t dst_ip)
+{
+    spinlock_lock(&g_udp_lock);        /* 中断上下文：plain lock */
+    udp64_handle_inner(packet, length, src_ip, dst_ip);
+    spinlock_unlock(&g_udp_lock);
 }
