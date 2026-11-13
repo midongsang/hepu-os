@@ -15,16 +15,18 @@ supersedes: null
 > 如实说明**顺序偏离**；② 记录两条计划里没有、实测才发现的 SB-25 阻塞；
 > ③ 给出下一步的建议顺序与可测退出准则。
 
-## 一、对账：本轮到底落了哪几条
+## 一、对账：截至 0.58.8 落了哪几条
 
 | 条目 | 计划归属 | 本轮状态 | 说明 |
 |---|---|---|---|
 | **SB-23** 就绪队列并发 | 阶段 4 | **已完成（部分）** | 新增调度器自旋锁 `g_sched_lock`（irqsave 语义：`pushfq` 记 IF → `cli` → lock，解锁按原 IF 恢复）；`process64_schedule()` 的候选收集/加权选择/出队/计数更新全在锁内；**两处 `context_switch_64` 前释放锁**，不持锁跨切换 |
-| **SB-17** per-CPU 存储（一部分） | 阶段 3 | **已完成（仅当前进程 PID 一项）** | `current_pid` 全局单值 → `per_cpu_current_pid[16]`；`process64_get_current()` 回退分支、`process64_create` 的 `parent_pid`、`process64_get_current_pid()` 全部按核取。SB-17 的其余部分（per-CPU 内核栈槽、`MSR_KERNEL_GS_BASE`、`g_syscall_*_slot` 淘汰）**未动** |
+| **SB-17** per-CPU 栈槽 | 阶段 3 | **已完成（完整版，`53372b4`）** | 两阶段完成：先 `current_pid` → `per_cpu_current_pid[16]`；后续把 syscall 内核栈槽也 per-CPU 化 —— `percpu_data[16]`（`PERCPU_SIZE 64` 编译期断言）、`syscall64_init_for_cpu()`、`entry_64.S` 入口改 `movq %rsp,%gs:0x08` / `movq %gs:0x00,%rsp`、AP 写自己的 `MSR_KERNEL_GS_BASE`。**期间修掉一个 #DF**：`user_enter()` 只做 `iretq` 不带 swapgs，而它常在 syscall handler 上下文里被调用，会把 percpu 的 GS 直接带进用户态，首次 syscall 再 swapgs 换回 0 → `%gs:0x00` 读出 0 → 首条 `push` 踩空。修法是在 `user_enter()` 前按 `MSR_GS_BASE != 0` 补一次 swapgs，把 GS 协议固定下来 |
 | **新增：`running_on` 归属标记** | 计划外 | **已完成** | 计划里没有这一项。`process_t` 加 `volatile int running_on`，选进程时跳过被别核占着的、切换点做 `old→-1 / new→cur` 交接 |
 | **SB-01/02/03/09** | 阶段 1 + 阶段 2 分配器 | **已完成**（`b82f416`） | 新增 `atomic64.h`；`g_kernel_tick64`、`irq_count[]` 原子化；PMM 加 `g_pmm_lock` + 三个 `*_nolock` 内部版 + `spinlock_lock_irqsave`。30 轮观察 30/30 PASS |
 | **SB-18** 每核 TSS/RSP0 | 阶段 4 | **已完成**（§1.103） | `kernel_gdt64` 扩到 37 项、`kernel_tss64` 扩到 16 份；`tss64_init()` 多核化；`tss64_init()` 调用位次提到 `smp_init()` 之前（原来排在后面导致 AP `ltr` 撞空描述符 #GP）。20 轮 20/20 PASS |
-| SB-04..SB-08、SB-10..SB-16、SB-19..SB-22、SB-24、SB-25 | — | **未开始** | SB-22/23 之外的就绪队列部分未动；SB-25 的两个阻塞已在第三节记录 |
+| **SB-04/05/06/07/08** | 阶段 1 | **已完成**（`b2b6a6a`，§1.106） | 异常计数原子化；新增 `print_lock`（`vga_puts` 拆 nolock/加锁两层，panic 走无锁版）；堆统计读取在 `heap_lock` 内取快照；`ip_id_counter` 改原子；`fpu_save_area` 8 槽 → 16 槽、核 ID 去掉 `& 7`、越界停机。**阶段 1 至此全部收口** |
+| **SB-19** LAPIC 状态 per-CPU | 阶段 3 | **已完成**（`8f9619d`，§1.105） | `apic_id/version/initialized` 全局单值 → `apic_pcpu[16]`；`apic64_get_id()` 任何模式下直读本核 LAPIC ID（旧版 PIC 模式下**所有核都自称 CPU0**）；`apic64_enable_for_ap()` 只写本核槽。加 `apic_mapped` 保护修早期 #PF（`CR2=0xF0000020`）。AP 实测拿到 `lapic_id=1` |
+| SB-10..SB-16、SB-20、SB-21、SB-22、SB-24、SB-25 | — | **未开始** | 阶段 2 七条表锁全未动；SB-20（AP 启动协议）、SB-21（IPI 闭环）、SB-22（跨核 TLB flush）未动；SB-23 只剩「当前运行进程指针走 per-CPU」未落；SB-24 纯注释、SB-25 前置未齐 |
 
 ## 二、顺序偏离：先做了阶段 4 的 SB-23
 
