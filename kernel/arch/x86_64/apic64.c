@@ -520,7 +520,24 @@ static uint32_t g_apic_timer_hz = 0;
  * V0.54.12(R4): 早期版本用 PIT ch2 GATE2/OUT2 门控，QEMU 下该门控窗口与
  * 1193182Hz 假设不一致（实测窗口约 1.6 倍），校准高估 1.6 倍；改用 channel 0
  * 软件 tick 并对齐边界，中断保持使能（channel-0 中断不影响 LAPIC 自由计数）。 */
+static int apic64_calibrate_timer_inner(void);
+
+/* V0.58.4: 校准窗口靠 PIT tick 推进，而 PIT 中断只有在 IF=1 时才投递。
+ * 启动早期这份代码由 smp_init 调用，调用方可能仍处于 cli 状态 —— 此时
+ * 等待循环里的 pit64_get_ticks() 永远不动，必然超时失败，于是退回
+ * ICR=6250，tick 频率漂移数倍，用户态调度 tick 随之失效（表现为 clone 测试
+ * 偶发 child never ran）。这里显式开中断等完窗口，再恢复调用方原来的 IF。 */
 static int apic64_calibrate_timer(void)
+{
+    uint64_t iflags;
+    __asm__ volatile("pushfq\n\tpopq %0" : "=r"(iflags) :: "memory");
+    __asm__ volatile("sti" ::: "memory");
+    int rc = apic64_calibrate_timer_inner();
+    if (!(iflags & 0x200ULL)) __asm__ volatile("cli" ::: "memory");
+    return rc;
+}
+
+static int apic64_calibrate_timer_inner(void)
 {
     /* 1. LAPIC：一次性、最大计数、DCR=16（与最终周期配置一致）。
        LVT 置屏蔽位（bit16）：测量期间不投递中断，但 CCR 照常递减。 */
@@ -580,7 +597,15 @@ void apic64_init_timer(void)
        旧魔数假设 100MHz 总线，QEMU 实测约 400MHz 致 tick 漂移 4 倍，
        KVM/真机可漂移至 40kHz；BSP 校准结果由 AP 核复用。 */
     uint32_t icr;
-    if (g_apic_timer_hz == 0 && apic64_calibrate_timer() != 0) {
+    /* V0.58.4: 校准窗口靠 PIT tick 推进, 启动早期 PIT 投递本来就不稳定(见
+       calibrate 里的 INT-02 注释)。单次失败就退回 ICR=6250 代价太大 —— 那样
+       tick 频率会漂移数倍, 用户态调度 tick 随之失效。这里最多重试 3 次。 */
+    if (g_apic_timer_hz == 0) {
+        for (int _try = 0; _try < 3 && g_apic_timer_hz == 0; _try++) {
+            if (apic64_calibrate_timer() == 0) break;
+        }
+    }
+    if (g_apic_timer_hz == 0) {
         /* 校准失败回退：保守 ICR（对应 100MHz 总线假设），PIT 1kHz 仍在
            投递调度 tick，系统不致停摆；打印告警便于后续定位。
            注意：实测只改这个回退值并不能把校准失败的系统救回桌面（6250 与 62500

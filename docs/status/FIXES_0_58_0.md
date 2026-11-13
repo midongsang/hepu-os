@@ -579,3 +579,47 @@ PID PPID STATE PRI PAGES NAME
 - `ps.elf` 已正式放进 autorun（`kernel_main_64.c` 的列表），`entry=0x400000F0`；
 - 内核 829,576 B；`check_docs` warns=0 errors=0。
 
+### §1.98 clone 偶发 `child never ran` —— APIC timer 校准偶发失败
+
+**现象**。SEC-23 上次修好后一直是 20/20，本轮从 3+10 次回归开始出现
+约 1/10 的 `FAIL: child never ran`，且失败那次串口里**完全没有**
+`[UT] exit ticks2=...`（说明 `uthread_timer_tick` 从未走到多线程分支）。
+
+**定位过程（用诊断计数器一层层排除）**。加了 6 个计数后，失败样本给出：
+
+| 指标 | 成功样本 | 失败样本 |
+|---|---|---|
+| `uthread_timer_tick` 进入次数 `entry` | 0x1A 起稳步增长 | **0x0** |
+| APIC timer 中断总数 `k64` | ~9,000 | **~45,000** |
+| 其中 CPL=3 的次数 `apic_cpl3` | 0xDC | **0x0** |
+| 帧 CS 分布 `cs[k,u,o]` | 有 `u` | **u=0x0** |
+| 启动日志 | 无告警 | **`[APIC] WARN: timer calibration failed`** |
+
+结论：时钟中断一直在来（4.5 万次），但**全部落在内核态，用户态一次都没有**，
+于是用户线程轮转彻底失效，父线程自旋到超时 → `child never ran`。
+而 `[CLONE] ret_rflags=0x246`（IF=1）证明**不是用户态关中断**。
+
+**根因**。`apic64_calibrate_timer()` 的测量窗口靠 PIT tick 推进，而 PIT 中断
+只有在 IF=1 时才投递。这段代码由 `smp_init` 在启动早期调用，调用方可能仍
+处于 `cli` 状态 —— 等待循环里的 `pit64_get_ticks()` 永远不动，必然超时失败，
+于是回退 `ICR=6250`。那个值对应 100MHz 总线假设，QEMU 实测约 400MHz，
+tick 频率漂移数倍（4.5 万 vs 9 千正是这个比例），用户态调度 tick 随之失效。
+
+**修法**（两处，都只动 `apic64.c`）：
+
+1. `apic64_calibrate_timer` 拆成 wrapper + `_inner`：wrapper 先 `pushfq` 记下
+   调用方的 IF，`sti`，跑完窗口后按原状态恢复 `cli`。等待期间中断保持使能，
+   PIT tick 能推进。
+2. `apic64_init_timer` 里单次校准失败改为**最多重试 3 次**。校准窗口本身是
+   时序敏感的（PIT 投递在启动早期并不稳定），单次失败就退回 6250 代价太大。
+
+**验证**。修复前 10 次回归 9/10（失败样本 `calfail=2`、`entry=0`、
+`cs[k,u]=[0xF976,0]`）；修复后连续 **15 次启动 15/15 PASS**，
+`timer calibration failed` 出现 0 次，`FAIL=0`、`EXCEPTION=0` 全清。
+内核体积仍为 829,576 B。
+
+**证据等级说明**。因果链是"校准失败的那次启动 ⇔ clone 失败"（失败样本 100%
+带 `calfail`，成功样本 0 次），修复后两者同时消失。但"校准失败为何具体表现为
+用户态拿不到 APIC timer 中断"这一环没有用 gdb 逐指令证死 —— 这里如实标注，
+避免把推断写成定论。
+
