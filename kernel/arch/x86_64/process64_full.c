@@ -298,18 +298,44 @@ int process64_get_running_count(void)
     return count;
 }
 
-/* 添加到就绪队列 */
-static void add_to_ready_queue(int idx)
+/* SB-23: 队列访问分「已持锁」与「自取锁」两套入口。
+ * 调度器内部本来就在 sched_lock 里，直接调 _locked 版；create/唤醒这类
+ * 无锁上下文调公开版。刻意不依赖 spinlock_lock 的同核递归 —— 递归
+ * unlock 会把内层的 sti 提前执行，SB-14 已经在这上面栽过一次。 */
+static uint64_t sched_lock_acquire(void);
+static void sched_lock_release(uint64_t f);
+
+/* 假定调用方已持 sched_lock */
+static void add_to_ready_queue_locked(int idx)
 {
     int prio = processes[idx].priority;
     if (prio < 0 || prio >= PRIORITY_COUNT) prio = PRIORITY_NORMAL;
     if (ready_queue_count[prio] < MAX_PROCESSES) {
         ready_queue[prio][ready_queue_count[prio]++] = idx;
+        return;
+    }
+    /* 队列满：原来静默 return，进程留在 PROC_STATE_READY 却不在任何队列里，
+     * 再也选不到 —— 变成僵尸态。至少让它可观测。 */
+    {
+        extern void vga_puts(const char *);
+        extern void vga_put_hex(uint64_t);
+        vga_puts("[SCHED] ready queue full prio=");
+        vga_put_hex((uint64_t)prio);
+        vga_puts(" idx=");
+        vga_put_hex((uint64_t)idx);
+        vga_puts("\n");
     }
 }
 
-/* 从就绪队列移除 */
-static void remove_from_ready_queue(int idx)
+static void add_to_ready_queue(int idx)
+{
+    uint64_t f = sched_lock_acquire();
+    add_to_ready_queue_locked(idx);
+    sched_lock_release(f);
+}
+
+/* 假定调用方已持 sched_lock */
+static void remove_from_ready_queue_locked(int idx)
 {
     int prio = processes[idx].priority;
     if (prio < 0 || prio >= PRIORITY_COUNT) return;
@@ -322,6 +348,13 @@ static void remove_from_ready_queue(int idx)
             return;
         }
     }
+}
+
+static void remove_from_ready_queue(int idx)
+{
+    uint64_t f = sched_lock_acquire();
+    remove_from_ready_queue_locked(idx);
+    sched_lock_release(f);
 }
 
 /* 创建进程 */
@@ -591,18 +624,17 @@ process_t* process64_get_by_pid(int pid)
  * 中断打断、而中断里又要同一把锁, 就会自死锁。
  * 关键约束: 绝不能在持锁状态下 context_switch —— 切完是另一个线程在跑,
  * 锁会永远留在上一个线程手里。所以切换点都是"先释放, 再切"。 */
-static spinlock_t g_sched_lock;
-static int g_sched_lock_ready = 0;
+/* SB-23: 改为静态初始化。原来的懒初始化（if (!ready) spinlock_init()）
+ * 有两个核同时首次进入的可能：B 核的 spinlock_init 会把 A 核正持有的锁
+ * 清成 {lock=0, owner=0xFFFFFFFF}，第三个核随即直接进临界区。
+ * 启动期 BSP 与 AP 的定时器几乎同时开始 tick，这个窗口是真实存在的。 */
+static spinlock_t g_sched_lock = { 0u, 0xFFFFFFFFu, 0u };
 
 static uint64_t sched_lock_acquire(void)
 {
     uint64_t f;
     __asm__ volatile("pushfq\n\tpopq %0" : "=r"(f) :: "memory");
     __asm__ volatile("cli" ::: "memory");
-    if (!g_sched_lock_ready) {
-        spinlock_init(&g_sched_lock);
-        g_sched_lock_ready = 1;
-    }
     spinlock_lock(&g_sched_lock);
     return f;
 }
@@ -682,7 +714,7 @@ int process64_schedule(void)
         if (old && old->state == PROC_STATE_RUNNING) {
             old->state = PROC_STATE_READY;
             old->time_slice = old->default_slice;
-            add_to_ready_queue(old - processes);
+            add_to_ready_queue_locked(old - processes);
         }
 
         processes[idx].state = PROC_STATE_RUNNING;
@@ -726,7 +758,7 @@ int process64_schedule(void)
             if (old && old->state == PROC_STATE_RUNNING) {
                 old->state = PROC_STATE_READY;
                 old->time_slice = old->default_slice;
-                add_to_ready_queue(old - processes);
+                add_to_ready_queue_locked(old - processes);
             }
 
             processes[idx].state = PROC_STATE_RUNNING;
@@ -831,22 +863,35 @@ void process64_clear_resched(void)
 /* 进程阻塞 */
 int process64_block(int pid)
 {
+    /* SB-23: 「查状态 -> 改状态 -> 出队」整段持锁。原来三步分开，
+     * 另一个核在中间看到 READY 就把它选走，本核随后又把 RUNNING 进程
+     * 从队列里摘掉 —— 该进程凭空消失。 */
+    uint64_t f = sched_lock_acquire();
     process_t *proc = process64_get_by_pid(pid);
-    if (!proc || proc->state != PROC_STATE_READY) return -1;
+    if (!proc || proc->state != PROC_STATE_READY) {
+        sched_lock_release(f);
+        return -1;
+    }
 
     proc->state = PROC_STATE_BLOCKED;
-    remove_from_ready_queue(proc - processes);
+    remove_from_ready_queue_locked(proc - processes);
+    sched_lock_release(f);
     return 0;
 }
 
 /* 进程唤醒 */
 int process64_wakeup(int pid)
 {
+    uint64_t f = sched_lock_acquire();
     process_t *proc = process64_get_by_pid(pid);
-    if (!proc || proc->state != PROC_STATE_BLOCKED) return -1;
+    if (!proc || proc->state != PROC_STATE_BLOCKED) {
+        sched_lock_release(f);
+        return -1;
+    }
 
     proc->state = PROC_STATE_READY;
-    add_to_ready_queue(proc - processes);
+    add_to_ready_queue_locked(proc - processes);
+    sched_lock_release(f);
     return 0;
 }
 

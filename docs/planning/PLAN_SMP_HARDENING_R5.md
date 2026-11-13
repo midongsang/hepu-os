@@ -16,6 +16,13 @@ supersedes: null
 > **2026-11-13 阶段 2 完成**：SB-10（用户进程表）、SB-11（fd 表）、
 > SB-12（TCP）、SB-13（UDP）、SB-14（ext2）五条表锁已落地，均为「表级粗锁 +
 > irqsave / per-CPU 深度计数」，提交 6332e6d、7e0fe09、bd2c010、07bcec9。
+> **SB-23（调度队列锁）已完成**：`g_sched_lock` 改静态初始化（原懒初始化
+> 存在「B 核 init 把 A 核正持有的锁清零」的启动期竞态）；`add/remove_from_
+> ready_queue` 拆 `_locked` + 公开包装，调度器内部改调 `_locked` 版（不依赖
+> 同核递归，避开递归 unlock 提前 sti）；`process64_block/wakeup` 的「查状态→
+> 改状态→出队」整段持锁；队列满不再静默丢弃，改打 `[SCHED] ready queue full`。
+> AP 调度开关（`smp_timer_tick` 的 `&& 0`）按计划保持关闭。
+>
 > **SB-22（跨核 TLB shootdown）已完成**：新增 `vmm64_flush_tlb_others()`，
 > 在 vmm64 六处页表修改点（大页映射、常规映射、unmap、mprotect、COW 拆页）
 > 的本地 invlpg 之后接入，经 SB-21 的 `TLB_FLUSH` IPI 广播到在线核并汇聚应答；
