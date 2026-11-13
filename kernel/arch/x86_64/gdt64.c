@@ -4,6 +4,7 @@
  * ========================================================================== */
 
 #include <stdint.h>
+#include "smp.h"
 #include <stddef.h>
 
 /* GDT条目 */
@@ -48,15 +49,37 @@ typedef struct {
     uint16_t io_map_base;
 } __attribute__((packed)) tss64_t;
 
-/* GDT条目数量 */
-#define GDT_ENTRIES 7
+/* GDT条目数量
+ * V0.58.5 / SB-18: 原来只有 7 项、一份全局 TSS。AP 一旦跑用户态进程,
+ * 它的用户态中断会用 tss.rsp0 切栈 —— 而那是 BSP 的栈, 两核写同一份就踩栈。
+ * 现在给每个核一个 64 位 TSS 描述符(占 2 个槽), 索引从 5 开始:
+ *   核 i 的 TSS 选择子 = 0x28 + i*16
+ * 布局: [0]null [1]code [2]data [3]user_data [4]user_code [5..] TSS*MAX_CPUS */
+#define GDT_ENTRIES (5 + MAX_CPUS * 2)
 
 /* GDT表 */
 static gdt_entry64_t gdt64[GDT_ENTRIES] __attribute__((aligned(16)));
 static gdt_ptr_t gdt64_ptr;
 
-/* TSS */
-static tss64_t tss64 __attribute__((aligned(16)));
+/* 每个核独立的内核栈, 供该核 TSS 的 rsp0 使用。
+ * 16KB * 16 核 = 256KB, 全在 .bss 里, 不进镜像文件。
+ * BSP 仍用 kernel_stack_top 那一块(另有 64KB), 这里 0 号槽只是兜底。 */
+#define PER_CPU_KSTACK_SIZE 16384
+static uint8_t per_cpu_kstack[MAX_CPUS][PER_CPU_KSTACK_SIZE] __attribute__((aligned(16)));
+
+/* 核 i 的 TSS 选择子 */
+uint16_t gdt64_tss_selector_for_cpu(int cpu)
+{
+    if (cpu < 0 || cpu >= MAX_CPUS) cpu = 0;
+    return (uint16_t)(0x28 + cpu * 16);
+}
+
+/* 本核内核栈顶(供 AP 初始化填 rsp0 用) */
+uint64_t gdt64_kstack_top_for_cpu(int cpu)
+{
+    if (cpu < 0 || cpu >= MAX_CPUS) cpu = 0;
+    return (uint64_t)&per_cpu_kstack[cpu][PER_CPU_KSTACK_SIZE];
+}
 
 /* 内核栈 */
 extern uint8_t kernel_stack[];
@@ -79,19 +102,6 @@ static __attribute__((unused)) void gdt_set_entry(int index, uint32_t base, uint
     gdt64[index].entry.granularity = ((limit >> 16) & 0x0F) | gran;
     gdt64[index].entry.base_high = (base >> 24) & 0xFF;
     gdt64[index].base_high32 = 0;
-    gdt64[index].reserved = 0;
-}
-
-/* 设置TSS条目（64位系统段） */
-static void gdt_set_tss(int index, uint64_t base, uint32_t limit)
-{
-    gdt64[index].entry.limit_low = limit & 0xFFFF;
-    gdt64[index].entry.base_low = base & 0xFFFF;
-    gdt64[index].entry.base_mid = (base >> 16) & 0xFF;
-    gdt64[index].entry.access = 0x89;  /* Present, DPL=0, Type=9 (64位TSS可用) */
-    gdt64[index].entry.granularity = (limit >> 16) & 0x0F;
-    gdt64[index].entry.base_high = (base >> 24) & 0xFF;
-    gdt64[index].base_high32 = (base >> 32) & 0xFFFFFFFF;
     gdt64[index].reserved = 0;
 }
 
@@ -158,11 +168,10 @@ void gdt64_init(void)
     gdt64[4].base_high32 = 0x00000000;
     gdt64[4].reserved = 0;
 
-    /* 条目5-6: TSS (0x28) */
-    memset(&tss64, 0, sizeof(tss64));
-    tss64.rsp0 = (uint64_t)kernel_stack_top;
-    tss64.io_map_base = sizeof(tss64);
-    gdt_set_tss(5, (uint64_t)&tss64, sizeof(tss64) - 1);
+    /* 注意: 本函数的 gdt64[] 是死代码(从未被调用, BSP 实际用的是
+     * entry_64.S 里的 kernel_gdt64)。每核 TSS 与描述符由 tss64_init()
+     * 直接写进 kernel_gdt64/kernel_tss64, 不在这里重复一份。
+     * V0.58.5 / SB-18 */
 
     /* 设置GDT指针 */
     gdt64_ptr.limit = sizeof(gdt64) - 1;
@@ -194,9 +203,12 @@ void gdt64_init(void)
 
     vga_puts("[GDT64] GDT loaded and CS refreshed\n");
 
-    /* 加载TSS */
-    __asm__ volatile("ltr %%ax" : : "a"(0x28));
-    vga_puts("[GDT64] TSS loaded (0x28)\n");
+    /* 加载TSS (本核=0 号) */
+    uint16_t tss_sel = gdt64_tss_selector_for_cpu(0);
+    __asm__ volatile("ltr %%ax" : : "a"(tss_sel));
+    vga_puts("[GDT64] TSS loaded (0x");
+    vga_put_hex(tss_sel);
+    vga_puts(")\n");
 
     vga_puts("[OK] GDT initialized\n");
 }
@@ -204,13 +216,20 @@ void gdt64_init(void)
 /* 设置内核栈（更新TSS的RSP0） */
 void gdt64_set_kernel_stack(uint64_t stack)
 {
-    tss64.rsp0 = stack;
+    /* SB-18: 只改本核那份; 越界回落 0 号, 避免写坏邻核 TSS。
+     * 改的是 entry_64.S 里真正的 TSS 数组, 不是已废弃的 gdt64[] 那一份。 */
+    extern uint32_t smp_get_current_cpu(void);
+    extern uint8_t kernel_tss64[];
+    int cpu = (int)smp_get_current_cpu();
+    if (cpu < 0 || cpu >= MAX_CPUS) cpu = 0;
+    *(uint64_t *)&kernel_tss64[cpu * 104 + 4] = stack;
 }
 
-/* 获取TSS地址 */
 uint64_t gdt64_get_tss_addr(void)
 {
-    return (uint64_t)&tss64;
+    /* 返回真表(kernel_tss64)的 0 号那份 —— 唯一调用方只做地址打印 */
+    extern uint8_t kernel_tss64[];
+    return (uint64_t)&kernel_tss64[0];
 }
 
 /* 外部符号：汇编中定义的GDT和TSS */
@@ -220,54 +239,67 @@ extern uint8_t irq_stack_df_top[];
 extern uint8_t irq_stack_nmi_top[];
 extern uint8_t irq_stack_mc_top[];
 
-/* 初始化并加载TSS（在汇编入口加载GDT之后调用） */
+/* 初始化并加载TSS（在汇编入口加载GDT之后调用）
+ *
+ * V0.58.5 / SB-18: 由"一份全局 TSS"改为"每核一份"。
+ *
+ * 原来是全核共用 tss64, rsp0 指向 BSP 的 64KB 内核栈。AP 现在只在内核态
+ * 收中断(不切栈)所以还没出事, 但一旦 AP 上有用户态进程, 它的中断会用
+ * tss.rsp0 切栈 —— 两个核写同一份栈就踩。
+ *
+ * 现在: GDT 里每个核一个 TSS 描述符(核 i 的选择子 = 0x28 + i*16),
+ *       每核 rsp0 指向自己的 per_cpu_kstack 顶。
+ * 注意: kernel_gdt64 必须够长 —— 在 entry_64.S 里已扩到 37 项。
+ */
 void tss64_init(void)
 {
-    vga_puts("[TSS64] Initializing TSS...\n");
+    vga_puts("[TSS64] Initializing per-CPU TSS...\n");
 
     /* 先切换到kernel_gdt64（汇编入口用的是gdt_64，TSS条目为空） */
     extern uint16_t kernel_gdt64_ptr[];
     __asm__ volatile("lgdt %0" : : "m"(kernel_gdt64_ptr));
-    vga_puts("[TSS64] Switched to kernel_gdt64\n");
 
-    /* 清零TSS */
-    for (int i = 0; i < 104; i++) {
-        kernel_tss64[i] = 0;
+    for (int cpu = 0; cpu < MAX_CPUS; cpu++) {
+        uint8_t *tss = &kernel_tss64[cpu * 104];
+
+        for (int i = 0; i < 104; i++) tss[i] = 0;
+
+        /* RSP0: 核 0 沿用 BSP 那块 64KB 内核栈(已验证), 其余用各自 per-CPU 栈 */
+        *(uint64_t *)&tss[4] = (cpu == 0)
+            ? (uint64_t)kernel_stack_top
+            : (uint64_t)&per_cpu_kstack[cpu][PER_CPU_KSTACK_SIZE];
+
+        /* IST1-IST3: 双重故障 / NMI / 机器检查。
+         * 这三次是"无论当前在哪个栈上都已经不可信"的场合, 继续共用同一组
+         * 应急栈在多核下同样会撞, 但应急栈本身很小且触发概率极低 ——
+         * 先保持共用, 单独记录为后续项。 */
+        *(uint64_t *)&tss[36] = (uint64_t)&irq_stack_df_top;
+        *(uint64_t *)&tss[44] = (uint64_t)&irq_stack_nmi_top;
+        *(uint64_t *)&tss[52] = (uint64_t)&irq_stack_mc_top;
+
+        /* IO Map 基地址 = TSS 大小, 表示无位图 */
+        *(uint16_t *)&tss[102] = 104;
+
+        /* 写 GDT 描述符: 核 cpu 占 gdt64[5 + cpu*2] 与 [6 + cpu*2] */
+        uint64_t tss_base = (uint64_t)tss;
+        uint32_t tss_limit = 103;
+        int slot = 5 + cpu * 2;
+
+        kernel_gdt64[slot] =
+              (tss_base & 0xFFFFFF) << 16       /* base[23:0] */
+            | (tss_limit & 0xFFFF)              /* limit[15:0] */
+            | ((uint64_t)0x89 << 40)            /* P=1 DPL=0 Type=9 (可用64位TSS) */
+            | ((uint64_t)(tss_limit >> 16) << 48)
+            | (((tss_base >> 24) & 0xFF) << 56);
+
+        kernel_gdt64[slot + 1] = (tss_base >> 32) & 0xFFFFFFFF;
     }
 
-    /* 设置RSP0（内核栈） */
-    uint64_t *tss_rsp0 = (uint64_t *)&kernel_tss64[4];
-    *tss_rsp0 = (uint64_t)kernel_stack_top;  /* V0.13.43 修复: 指针值(栈顶) 而非变量地址 */
+    vga_puts("[TSS64] Per-CPU TSS descriptors set (");
+    vga_put_hex((uint64_t)MAX_CPUS);
+    vga_puts(" cores)\n");
 
-    /* 设置IST1-IST3（中断栈表） */
-    uint64_t *tss_ist1 = (uint64_t *)&kernel_tss64[36];
-    uint64_t *tss_ist2 = (uint64_t *)&kernel_tss64[44];
-    uint64_t *tss_ist3 = (uint64_t *)&kernel_tss64[52];
-    *tss_ist1 = (uint64_t)&irq_stack_df_top;    /* IST1: 双重故障 */
-    *tss_ist2 = (uint64_t)&irq_stack_nmi_top;   /* IST2: NMI */
-    *tss_ist3 = (uint64_t)&irq_stack_mc_top;    /* IST3: 机器检查 */
-
-    /* 设置IO Map基地址（TSS大小） */
-    uint16_t *io_map = (uint16_t *)&kernel_tss64[102];
-    *io_map = 104;
-
-    /* 设置GDT中的TSS描述符（条目5，选择器0x28） */
-    uint64_t tss_base = (uint64_t)&kernel_tss64[0];
-    uint32_t tss_limit = 103;  /* TSS大小-1 */
-
-    /* TSS描述符低8字节 */
-    kernel_gdt64[5] = (tss_base & 0xFFFFFF) << 16 |  /* base[23:0] */
-                      (tss_limit & 0xFFFF) |         /* limit[15:0] */
-                      ((uint64_t)0x89 << 40) |       /* access: Present, DPL=0, Type=9 (64位TSS可用) */
-                      ((uint64_t)(tss_limit >> 16) << 48) |  /* limit[19:16] */
-                      ((tss_base >> 24) & 0xFF) << 56;       /* base[31:24] */
-
-    /* TSS描述符高8字节 */
-    kernel_gdt64[6] = (tss_base >> 32) & 0xFFFFFFFF;  /* base[63:32] */
-
-    vga_puts("[TSS64] TSS descriptor set in GDT\n");
-
-    /* 加载TSS */
-    __asm__ volatile("ltr %%ax" : : "a"(0x28));
+    /* 加载本核(=核0)的 TSS */
+    __asm__ volatile("ltr %%ax" : : "a"((uint16_t)0x28));
     vga_puts("[OK] TSS loaded (0x28)\n");
 }

@@ -922,3 +922,106 @@ QEMU `-smp 2` 跑 30 轮：
 没有把这条降级路径拖慢（锁只包住位图扫描这一小段，且单核下无竞争）。
 
 结论：这一段可以往下走了。
+
+### §1.103 SB-18：TSS 数组化（每核一份 TSS / RSP0）
+
+计划里 SB-18 的写法是"把 TSS 数组化、每核一份 RSP0"。实施过程中**第一版
+方案走了弯路**，这里把弯路一起记下来，因为它顺手证明了一件更重要的事。
+
+#### 弯掉的路径（已全部回退）
+
+第一版改的是 `gdt64.c` 里的 `gdt64[]`：`GDT_ENTRIES` 从 5 改成 `5 + MAX_CPUS*2`，
+新增 `tss_table[MAX_CPUS]`、`gdt64_tss_selector_for_cpu()`、
+`gdt64_kstack_top_for_cpu()`，`ap_c_entry` 里改成 `gdt64_load_asm(gdt64_get_ptr_addr())`
+再 `ltr` 本核选择子。
+
+结果：**64 位内核启动即连续复位 7 次，串口连 `[TSS64]` 都没有。**
+用 gdb 直读内核变量 + 串口标记二分，查出两个事实：
+
+1. **`gdt64_init()` 从未被任何代码调用**。`kernel_main_64.c:33` 只有一行
+   `extern void gdt64_init(void);` 声明，全仓库没有调用点 —— 整张
+   `gdt64[]` / `gdt64_ptr` / `tss_table` 都是**死代码**。串口在 AP 上读到
+   `gdt64_ptr` 的原始内容，8 字节全是 `0`，`sgdt` 读回 `base=0 limit=0`，
+   一个反证就够了。
+2. **BSP/AP 真实在用的 GDT 是 `entry_64.S` 里的 `kernel_gdt64`（7 项）**，
+   真实填 TSS 并 `ltr 0x28` 的是 **`tss64_init()`**（`kernel_main_64.c:390`
+   调用它）。改死代码自然一点效果都没有。
+
+#### 正确路径（最终形态）
+
+- `entry_64.S`：`kernel_gdt64` 在原 7 项后加 `.fill 30, 8, 0`，共 **37 项**
+  （5 个基础段 + 16 核 × 2 槽）；`kernel_gdt64_ptr.limit` 用的是
+  `kernel_gdt64_ptr - kernel_gdt64 - 1`，自动跟着变，不用手改。
+  `kernel_tss64` 从 `.skip 104`（一份）改成 `.skip 1664`（104 × 16），
+  末尾 `.align 16` 并加 `kernel_tss64_end` 标签。
+- `tss64_init()` 重写成多核循环：每核一份 104 字节 TSS，**核 0 的 `rsp0`
+  沿用已验证的 `kernel_stack_top`（64 KB），核 1..15 用各自的
+  `per_cpu_kstack[cpu]` 顶（16 KB × 16 = 256 KB，全在 `.bss`，不进镜像）**；
+  写完 TSS 再把描述符写进 `kernel_gdt64[5+cpu*2]` 与 `[6+cpu*2]`
+  （`access=0x89`、`limit=103`）。核 i 的选择子 = `0x28 + i*16`。
+- `ap_c_entry`：仍按原路径 `gdt64_load_asm(kernel_gdt64_ptr)`，
+  然后 `ltr` **本核选择子**，并打一行串口
+  `[SB18] cpu=... tss_sel=... rsp0=... rsp_now=...`。
+
+#### 第二个坑：调用顺序
+
+改完仍然连续复位。用 `-d int,cpu_reset` 抓异常，**只有一条内核异常就收尾**：
+
+```
+v=0d  e=0038  cpl=0  IP=0008:000000000014552c
+v=08  e=0000  cpl=0  IP=0008:000000000014552c
+```
+
+`error code = 0x0038` 就是选择子 0x38；`objdump` 定位 `0x14552c` 正好是
+`ap_c_entry` 里的 `ltr %ax`。
+
+根因：**`tss64_init()` 原本排在 `smp_init()` 之后**。AP 在这个时间点已经
+跑起来了，它执行 `ltr 0x38` 时，GDT 里第 7 项还是全 0 的空描述符 → #GP
+→ 双重故障 → 复位。修复是把 `tss64_init()` 移到 `smp_init()` **之前**（先把
+每核 TSS 与描述符填好，再放 AP 出去）。
+
+#### 验证
+
+`-smp 2` 跑 20 轮：
+
+| 指标 | 结果 |
+|---|---|
+| PASS | **20 / 20** |
+| 启动次数 | 每轮 **1**（无一次复位） |
+| `desk` 到桌面 | 13~16 s |
+| `[SB18]` 串口行 | 每轮 1 条 |
+| `PASS: child ran` | 每轮 ≥ 1 |
+| `FAIL` / `EXCEPTION` | 0 / 0 |
+| `[SPINLOCK] ERROR` | 0 |
+| `timer calibration failed` | 3 / 20（15%，与基线一致） |
+
+串口实测那一行（每轮完全相同）：
+
+```
+[SB18] cpu=0x0000000000000001 tss_sel=0x0000000000000038
+       rsp0=0x00000000002021e0 rsp_now=0x000000000247e2a0
+```
+
+`tss_sel=0x38` = 核 1 自己的描述符；`rsp0=0x2021e0` 落在
+`per_cpu_kstack[1]` 那块 16 KB 的范围里，**与 BSP 的 `kernel_stack_top`
+不同** —— 这就是 SB-18 想要的"AP 用户态中断切到自己的栈"。
+
+#### 与计划的两处偏差（如实记录）
+
+1. **IST1/IST2/IST3 仍全核共用**（`irq_stack_df_top` / `irq_stack_nmi_top` /
+   `irq_stack_mc_top`）。这三次（双重故障 / NMI / 机器检查）发生时当前栈已
+   不可信，继续共用同一组应急栈在多核下同样会撞 —— **本轮不改，单独记为后续项**，
+   理由是先让主路径可验证、把变更面控制在最小。
+2. 删掉了 `gdt64.c` 里已确认从未被调用的配套：`tss_table[]`、`gdt_set_tss()`、
+   `gdt64_get_ptr_addr()`。`gdt64_init()` 本身仍保留（死代码，但暂不动，
+   避免一次改太多），只在其中加注释写明"每核 TSS 由 `tss64_init()` 直接写
+   `kernel_gdt64`/`kernel_tss64`"。`gdt64_set_kernel_stack()` 与
+   `gdt64_get_tss_addr()` 保留并改指向真表（当前无调用点）。
+
+内核 830,344 → **831,112 B**。
+
+#### 顺带纠正一份旧文档
+
+`PLAN_SMP_HARDENING_R5.md` 的 SB-18 条目假设"TSS 在 `gdt64.c` 里"。实测是
+反的：`gdt64.c` 那套是死代码，真表在汇编、真初始化在 `tss64_init()`。
+改 SB-18 之前必须先确认这一点，否则整轮改动都落在不会执行的分支上。

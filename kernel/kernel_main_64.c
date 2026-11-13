@@ -377,6 +377,13 @@ void x86_64_kernel_main(void)
     /* 初始化多处理器支持（SMP）。
        AP核启动后会在ap_c_entry中自旋等待BSP完成IDT初始化（g_apic_idt_ready），
        因此即使irq64_init在smp_init之后，AP核也不会在IDT无效时收到中断。 */
+    /* V0.58.5 / SB-18: TSS 必须在 SMP 启动之前就位。
+     * 原来 tss64_init() 排在 smp_init() 之后 —— AP 已经在跑, 它执行
+     * ltr 0x38 时 GDT 里的 TSS 描述符还是空的, 直接 #GP -> 双重故障。
+     * 这里提前: 先把每核 TSS 与描述符填好, 再启动 AP。 */
+    extern void tss64_init(void);
+    tss64_init();
+
     vga_puts("[INIT] SMP init...\n");
     extern int smp_init(void);
     int smp_r = smp_init();
@@ -385,9 +392,7 @@ void x86_64_kernel_main(void)
     vga_puts("[BOOT] step5 done (SMP)\n");
 
     /* GDT/TSS已在汇编入口处加载（entry_64.S） */
-    vga_puts("[INIT] Initializing 64-bit GDT/TSS...\n");
-    vga_puts("[OK] GDT loaded at entry (kernel GDT active)\n");
-    tss64_init();
+    vga_puts("[INIT] 64-bit GDT/TSS verified (per-CPU TSS set before SMP)\n");
 
     /* 初始化中断处理（IDT已在前面提前装好） */
     vga_puts("[INIT] 64-bit IDT ready (early install)\n");

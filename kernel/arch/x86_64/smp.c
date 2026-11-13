@@ -66,6 +66,56 @@ static uint32_t detect_cpu_count_cpuid(void)
 }
 
 /* AP C入口函数 */
+
+/* ---------------------------------------------------------------------------
+ * SB-18: AP 侧的本核串口输出
+ *
+ * 用独立实现而不是复用 lib64.c 的 serial_puts_local —— 那一个是 static,
+ * 而且它跟 vga 输出共用一个上层锁; AP 早期还在初始化阶段, 直接打端口最省事。
+ * ------------------------------------------------------------------------- */
+static inline uint8_t sb18_inb(uint16_t port)
+{
+    uint8_t v;
+    __asm__ volatile("inb %1, %0" : "=a"(v) : "Nd"(port));
+    return v;
+}
+
+static inline void sb18_outb(uint16_t port, uint8_t v)
+{
+    __asm__ volatile("outb %0, %1" : : "a"(v), "Nd"(port));
+}
+
+static void sb18_serial_putc(char c)
+{
+    while ((sb18_inb(0x3FD) & 0x20) == 0) { __asm__ volatile("pause"); }
+    sb18_outb(0x3F8, (uint8_t)c);
+}
+
+static void sb18_serial_puts(const char *str)
+{
+    while (*str) {
+        if (*str == '\n') sb18_serial_putc('\r');
+        sb18_serial_putc(*str++);
+    }
+}
+
+static void sb18_serial_hex(uint64_t v)
+{
+    sb18_serial_puts("0x");
+    for (int i = 60; i >= 0; i -= 4) {
+        int d = (int)((v >> i) & 0xF);
+        sb18_serial_putc((char)(d < 10 ? ('0' + d) : ('a' + d - 10)));
+    }
+}
+
+/* 读当前栈指针 */
+static inline uint64_t sb18_rsp(void)
+{
+    uint64_t r;
+    __asm__ volatile("movq %%rsp, %0" : "=r"(r));
+    return r;
+}
+
 void ap_c_entry(void)
 {
     /* 先设置标记，确认进入C入口 */
@@ -90,13 +140,37 @@ void ap_c_entry(void)
        表示本核已完成FPU/定时器相关初始化。 */
     ap_started_count++;
 
-    /* AP核必须切换回内核GDT：trampoline的ap_gdt中0x08是32位代码段，
-       而IDT所有中断门用selector 0x08，若AP保持ap_gdt，首个中断（定时器0x40）
-       经IDT跳转时会以0x08段进入长模式触发#GP(8)→#DF→triple fault。
-       切换后CS=0x08与BSP一致，中断正常。 */
-    extern char kernel_gdt64_ptr[];
-    extern void gdt64_load_asm(uint64_t gdt_ptr_addr);
-    gdt64_load_asm((uint64_t)kernel_gdt64_ptr);
+    /* (1) AP核必须切换回内核GDT: trampoline 的 ap_gdt 中 0x08 是32位代码段,
+     *     而 IDT 所有中断门用 selector 0x08, 若 AP 保持 ap_gdt, 首个中断
+     *     (定时器 0x40) 经 IDT 跳转时会以 0x08 段进入长模式触发 #GP(8)
+     *     → #DF → triple fault。切换后 CS=0x08 与 BSP 一致, 中断正常。
+     *
+     * (2) SB-18: 再加载本核自己的 TSS。
+     *     全核原本共用一份 kernel_tss64, rsp0 指向 BSP 的 64KB 内核栈。
+     *     AP 现在只在内核态收中断(不切栈)所以还没出事, 但一旦 AP 上有用户态
+     *     进程, 它的中断会用 tss.rsp0 切栈 —— 两个核写同一份栈就踩。
+     *     tss64_init() 已为每个核填好 TSS 与 GDT 描述符(核 i 选择子 = 0x28+i*16)。 */
+    {
+        extern uint16_t kernel_gdt64_ptr[];
+        extern void gdt64_load_asm(uint64_t gdt_ptr_addr);
+        extern uint16_t gdt64_tss_selector_for_cpu(int cpu);
+        extern uint64_t gdt64_kstack_top_for_cpu(int cpu);
+
+        gdt64_load_asm((uint64_t)kernel_gdt64_ptr);
+
+        uint16_t tss_sel = gdt64_tss_selector_for_cpu((int)cpu_id);
+        __asm__ volatile("ltr %%ax" : : "a"(tss_sel));
+
+        sb18_serial_puts("[SB18] cpu=");
+        sb18_serial_hex(cpu_id);
+        sb18_serial_puts(" tss_sel=");
+        sb18_serial_hex(tss_sel & 0xFFFF);
+        sb18_serial_puts(" rsp0=");
+        sb18_serial_hex(gdt64_kstack_top_for_cpu((int)cpu_id));
+        sb18_serial_puts(" rsp_now=");
+        sb18_serial_hex(sb18_rsp());
+        sb18_serial_puts("\n");
+    }
 
     /* 等待BSP完成IDT填充/加载（irq64_init 结束时置位） */
     while (!g_apic_idt_ready) {

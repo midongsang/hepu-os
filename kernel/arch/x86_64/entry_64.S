@@ -778,9 +778,13 @@ kernel_gdt64:
     .quad 0x0000F20000000000
     /* 4: 用户代码段 (0x20) - 64位代码段，DPL3 */
     .quad 0x0020FA0000000000
-    /* 5-6: TSS (0x28) - 在C代码中设置 */
+    /* 5-6: 核 0 的 TSS 描述符 (0x28) - 在 tss64_init() 中填充 */
     .quad 0
     .quad 0
+    /* 7-36: 其余 15 个核的 TSS 描述符 (核 i 的选择子 = 0x28 + i*16)
+     * V0.58.5 / SB-18: 每核一份 TSS, 让 AP 跑用户态时的中断切到自己的栈。
+     * 15 个核 * 2 槽 = 30 项, 加上前面 7 项共 37 项。 */
+    .fill 30, 8, 0
 
 .global kernel_gdt64_ptr
 kernel_gdt64_ptr:
@@ -794,8 +798,10 @@ kernel_gdt64_ptr:
 .align 16
 .global kernel_tss64
 kernel_tss64:
-    .skip 104  /* TSS大小：104字节（64位） */
-    .word 0    /* io_map_base */
+    /* V0.58.5 / SB-18: 每核一份, 共 MAX_CPUS(16) 份, 每份 104 字节 */
+    .skip 1664  /* 104 * 16 */
+.align 16
+kernel_tss64_end:
 
 /* ============================================================================
  * 中断栈（IST - Interrupt Stack Table）

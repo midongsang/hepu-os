@@ -22,7 +22,9 @@ supersedes: null
 | **SB-23** 就绪队列并发 | 阶段 4 | **已完成（部分）** | 新增调度器自旋锁 `g_sched_lock`（irqsave 语义：`pushfq` 记 IF → `cli` → lock，解锁按原 IF 恢复）；`process64_schedule()` 的候选收集/加权选择/出队/计数更新全在锁内；**两处 `context_switch_64` 前释放锁**，不持锁跨切换 |
 | **SB-17** per-CPU 存储（一部分） | 阶段 3 | **已完成（仅当前进程 PID 一项）** | `current_pid` 全局单值 → `per_cpu_current_pid[16]`；`process64_get_current()` 回退分支、`process64_create` 的 `parent_pid`、`process64_get_current_pid()` 全部按核取。SB-17 的其余部分（per-CPU 内核栈槽、`MSR_KERNEL_GS_BASE`、`g_syscall_*_slot` 淘汰）**未动** |
 | **新增：`running_on` 归属标记** | 计划外 | **已完成** | 计划里没有这一项。`process_t` 加 `volatile int running_on`，选进程时跳过被别核占着的、切换点做 `old→-1 / new→cur` 交接 |
-| SB-01..SB-22、SB-24、SB-25 | — | **未开始** | 尤其 SB-01（原子原语）、SB-02/03（计数原子化）、SB-09（PMM 加锁）全部未做 |
+| **SB-01/02/03/09** | 阶段 1 + 阶段 2 分配器 | **已完成**（`b82f416`） | 新增 `atomic64.h`；`g_kernel_tick64`、`irq_count[]` 原子化；PMM 加 `g_pmm_lock` + 三个 `*_nolock` 内部版 + `spinlock_lock_irqsave`。30 轮观察 30/30 PASS |
+| **SB-18** 每核 TSS/RSP0 | 阶段 4 | **已完成**（§1.103） | `kernel_gdt64` 扩到 37 项、`kernel_tss64` 扩到 16 份；`tss64_init()` 多核化；`tss64_init()` 调用位次提到 `smp_init()` 之前（原来排在后面导致 AP `ltr` 撞空描述符 #GP）。20 轮 20/20 PASS |
+| SB-04..SB-08、SB-10..SB-16、SB-19..SB-22、SB-24、SB-25 | — | **未开始** | SB-22/23 之外的就绪队列部分未动；SB-25 的两个阻塞已在第三节记录 |
 
 ## 二、顺序偏离：先做了阶段 4 的 SB-23
 
