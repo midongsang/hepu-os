@@ -41,6 +41,12 @@ typedef struct {
     int cpu_usage;    /* 百分比 */
     int mem_usage;    /* KB */
     int state;        /* 0=running, 1=sleeping, 2=zombie */
+    /* V0.59.5: 任务管理器要显示优先级/所在核/累计运行时间, 原来这三个字段在
+     * process64_stat_t 里有、到这一层被丢掉了, 界面上就只能显示 PID/NAME/CPU/MEM/STATE 五列。 */
+    int priority;
+    int core;
+    uint64_t runtime; /* 累计运行 tick */
+    int env_type;
 } hs_process_info_t;
 
 /* 进程监控 */

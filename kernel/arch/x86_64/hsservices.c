@@ -259,6 +259,10 @@ void hs_process_monitor_update(void)
         p->cpu_usage = tt ? (int)((uint64_t)procs[i].runtime * 100 / tt) : 0;
         p->mem_usage = procs[i].mem_pages * 4;
         p->state = (procs[i].state == 2) ? 0 : 1;
+        p->priority = procs[i].priority;
+        p->core = procs[i].cpu_id;
+        p->runtime = procs[i].runtime;
+        p->env_type = procs[i].env_type;
         g_proc.process_count++;
     }
 }

@@ -3751,17 +3751,26 @@ static void m_render(hs_window_t *w)
      * 随数值位数漂移, 看着就是"没对齐"。现在表头与数据行共用同一组列偏移。 */
     /* 列距按内容宽度定, 不用百分比: 520 宽的窗口按百分比摊开会让后面两列顶到右边界,
      * 窗口被别的面板遮住时直接看不见。NAME 最长 12 字符(~84px), CPU 最长 "100%"(~28px)。 */
+    /* V0.59.5: 加 PRIO / CORE / TIME 三列 —— 原来只有 PID/NAME/CPU/MEM/STATE,
+     * 优先级、进程落在哪颗核、累计跑了多久这三个数据 process64 里都有, 界面没带出来。 */
     int c_pid = cx;
     int c_name = cx + MC(38);
     int c_cpu = cx + MC(150);
-    int c_mem = cx + MC(202);
-    int c_state = cx + MC(250);
+    int c_mem = cx + MC(196);
+    int c_prio = cx + MC(232);
+    int c_core = cx + MC(268);
+    int c_time = cx + MC(302);
+    int c_state = cx + MC(352);
+    int m_table_top = cy;
     {
         uint32_t hc = g_shell.colors.text_secondary;
         m_text_c(fb, W, H, c_pid, cy, "PID", hc, MC(10));
         m_text_c(fb, W, H, c_name, cy, "NAME", hc, MC(10));
         m_text_c(fb, W, H, c_cpu, cy, "CPU", hc, MC(10));
         m_text_c(fb, W, H, c_mem, cy, "MEM", hc, MC(10));
+        m_text_c(fb, W, H, c_prio, cy, "PRIO", hc, MC(10));
+        m_text_c(fb, W, H, c_core, cy, "CORE", hc, MC(10));
+        m_text_c(fb, W, H, c_time, cy, "TIME", hc, MC(10));
         m_text_c(fb, W, H, c_state, cy, "STATE", hc, MC(10));
     }
     cy += MC(14);
@@ -3805,21 +3814,53 @@ static void m_render(hs_window_t *w)
             m_text_c(fb, W, H, c_cpu, cy, tmp2, col, MC(11));
 
             hs_itoa(procs[i].mem_usage, tmp2);
+            strcpy(tmp2 + hs_strlen(tmp2), "K");   /* V0.59.5: 补单位, 原来光一个数字 */
             m_text_c(fb, W, H, c_mem, cy, tmp2, col, MC(11));
+
+            /* V0.59.5: 优先级 / 所在核 / 累计运行时间 */
+            hs_itoa(procs[i].priority, tmp2);
+            m_text_c(fb, W, H, c_prio, cy, tmp2, col, MC(11));
+            hs_itoa(procs[i].core, tmp2);
+            m_text_c(fb, W, H, c_core, cy, tmp2, col, MC(11));
+            {
+                /* runtime 是累计 tick, 按 100Hz 折算: 一分钟以内显示秒, 以上显示分 */
+                uint64_t secs = procs[i].runtime / 100ULL;
+                if (secs < 60) {
+                    hs_uitoa64(secs, tmp2);
+                    strcpy(tmp2 + hs_strlen(tmp2), "s");
+                } else {
+                    hs_uitoa64(secs / 60ULL, tmp2);
+                    strcpy(tmp2 + hs_strlen(tmp2), "m");
+                }
+                m_text_c(fb, W, H, c_time, cy, tmp2, col, MC(11));
+            }
 
             /* V0.57.1: 内核线程标 "kthr" 而不是混在 "sys" 里 —— idle/kbeat 这类线程
              * 有的在轮转、有的是登记挂起(见 process64_create_suspended), 统一写 sys 会
              * 让人以为它们都在跑。 */
             const char *st = "kthr";
-            if (procs[i].pid == 0) st = "sys";
-            else if (procs[i].pid >= 100 && procs[i].state == 0) st = "RUN";
-            else if (procs[i].pid >= 100) st = "idle";
-            m_text_c(fb, W, H, c_state, cy, st, col, MC(11));
+            uint32_t scol = 0x4A9EEC;   /* 内核线程: 蓝 */
+            if (procs[i].pid == 0) { st = "sys"; scol = g_shell.colors.text_secondary; }
+            else if (procs[i].pid >= 100 && procs[i].state == 0) { st = "RUN"; scol = 0x52C41A; }
+            else if (procs[i].pid >= 100) { st = "idle"; scol = g_shell.colors.text_secondary; }
+            m_text_c(fb, W, H, c_state, cy, st, scol, MC(11));
 
             /* V0.59.4: 行分隔线 —— 没有它, 进程行只是一列列文字, 不像表格 */
             m_bar_c(cx, cy + MC(15), cw, 1,
                     hs_apps_mix(g_shell.colors.panel_bg, 0xFFFFFF, 9));
             cy += MC(17);
+        }
+
+        /* V0.59.5: 列竖线。只有横线时表格读起来还是"一段段的文字", 竖线把列切开。 */
+        {
+            int vb = cy - MC(2);
+            uint32_t vcol = hs_apps_mix(g_shell.colors.panel_bg, 0xFFFFFF, 18);
+            int vx[7] = { c_name - MC(6), c_cpu - MC(7), c_mem - MC(7),
+                          c_prio - MC(7), c_core - MC(7), c_time - MC(7), c_state - MC(8) };
+            for (int vi = 0; vi < 7; vi++) {
+                if (vb > m_table_top)
+                    m_bar_c(vx[vi], m_table_top, 1, vb - m_table_top, vcol);
+            }
         }
     }
 
@@ -3845,6 +3886,7 @@ static void m_render(hs_window_t *w)
             int pw2 = (int)font64_get_string_width(pb, MC(10));
             m_text_c(fb, W, H, cx + cw - pw2 - MC(12), cy, pb, g_shell.colors.text_secondary, MC(10));
         }
+        int d_table_top = cy;
         cy += MC(13);
         m_bar_c(cx, cy, cw, 1, g_shell.colors.border);
         cy += MC(4);
@@ -3859,6 +3901,10 @@ static void m_render(hs_window_t *w)
             m_bar_c(cx, cy + MC(15), cw, 1, hs_apps_mix(g_shell.colors.panel_bg, 0xFFFFFF, 9));
             cy += MC(17);
         }
+        /* V0.59.5: 设备表也切一条列竖线 */
+        if (cy - MC(2) > d_table_top)
+            m_bar_c(dc_state - MC(8), d_table_top, 1, cy - MC(2) - d_table_top,
+                    hs_apps_mix(g_shell.colors.panel_bg, 0xFFFFFF, 18));
     }
 
 

@@ -1789,3 +1789,57 @@ TX    0K   [曲线]
 - 设备页表格只有两列、右侧大片留白，列宽按内容定的，没有按窗口比例摊开；
 - 进程表仍然没有竖线（只加了行线），要不要列分隔线看观感；
 - 设备页的 `P`/`D` 之类字母快捷键没做（K 已被结束进程占用，暂用方向键）。
+
+---
+
+## 1.115 进程表列竖线 + PRIO/CORE/TIME 三列（0.59.5）
+
+### 用户要求
+
+"加竖线，丰富信息和状态。"
+
+### 两件事
+
+**一、表格化补完**：0.59.4 只加了行分隔线，列与列之间还是空的，读起来仍是"几段文字
+并排"。这次在 `PID | NAME | CPU | MEM | PRIO | CORE | TIME | STATE` 每两列之间补一条
+竖线（`hs_apps_mix(panel_bg, 0xFFFFFF, 18)`，12% 太淡看不出来）。竖线从表头画到最后
+一行，用 `m_table_top` / 当前 `cy` 定上下界；设备页 `DRIVER | STATE` 同样补一条。
+
+**二、丰富信息**：原表只有 PID/NAME/CPU/MEM/STATE 五列。`process64_stat_t` 里其实
+一直有 `priority`、`cpu_id`、`runtime` 三个字段，但 `hs_process_info_t` 这层把它们
+丢掉了 —— 界面自然显示不出来。这次：
+
+- `hsservices.h` 的 `hs_process_info_t` 补 `priority` / `core` / `runtime` / `env_type`；
+- `hs_process_monitor_update()` 从 `process64_snapshot()` 一并填过去；
+- 表里新增 `PRIO` / `CORE` / `TIME` 三列。`TIME` 是累计运行 tick 按 100Hz 折算，
+  一分钟内显示秒、以上显示分（截图里 idle 是 `5m`，其余内核线程 `0s`）；
+- `MEM` 列补单位 `K`（原来光一个数字，单位还是 KB/MB 混用的遗留问题的一部分）；
+- `STATE` 列按状态分色：`sys` 灰、`RUN` 绿、`kthr` 蓝、`idle` 灰。
+
+### 踩到的坑：窗口创建了但屏幕上没有
+
+改完第一次截图，任务管理器**完全不见**，只有 Settings。加打印才知道：
+`hs_window_create` 成功（780x570）、`visible=1`、`z_order=[0,1]` 里它在最上层、
+`rect=450,40` 正确 —— 什么都对，就是不显示。
+
+原因是**没人标脏**：`Z_ORDER` 和几何都对，但这一块区域没被标记为需要重绘，合成器
+一直贴的是旧像素（壁纸）。在 TEMP 注入块里补一句 `hpdesk_mark_dirty()` 才跳出来。
+
+这解释了之前偶发的"注入窗口要等别的窗口重绘才出现"。真实用户从 App Store 点开任务
+管理器不会有这个问题 —— 点击本身就会标脏；只有"启动即注入"这种没有交互的路径才暴露。
+属于既有隐患，记在这里，`hs_window_create` 之后是否应该统一标脏另议。
+
+### 验证
+
+- 3/3 轮 `desk=1 EXC=0 PASS=1 FAIL=0 SPINERR=0`，`TEMP-SHOT` / `TMDBG` 残留 0；
+- 截图两张：Processes 页（八列 + 七条列竖线 + 行线，`PRIO 2 / CORE 1`、`TIME 5m` 有数据）、
+  Devices 页（`DRIVER | STATE` 两列 + 竖线 + `PROC 4 DRV 9`）。
+
+截图入库 `docs/assets/taskmgr-grid-processes-0.59.5.png`、`taskmgr-grid-devices-0.59.5.png`。
+
+### 遗留
+
+- `idle`(PID 0) 的 CPU 仍显示 `100%`：它按 `runtime/总tick` 算，idle 确实占满时间，
+  但和顶部 `CPU 0%` 并排读起来刺眼，要不要改成 `--` 未定；
+- `TIME` 的 100Hz 折算取自 PIT 频率，若将来 tick 频率变更这里要同步；
+- 设备页列宽仍是按内容定的，右侧留白偏大。
