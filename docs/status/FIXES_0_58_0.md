@@ -525,6 +525,57 @@ ld: warning: cannot find entry symbol _start; defaulting to 0000000040000000
 - 3/3 连续启动：`PASS`、`FAIL=0`、`EXCEPTION=0`、`[REG] autorun done` 齐全。
 - 内核 829,192 B；`check_docs` warns=0 errors=0。
 
-**遗留**。ps 的 NAME 列输出乱码，`SYS_HEPU_PS` 返回的 `name[32]` 内容待查，
-因此 ps 仍未放回 autorun。
+**后续**。NAME 列乱码的问题在下一节（§1.97）定位并修好了。
+
+### §1.97 ps 进程表读数错位与输出交错；ps 正式进 autorun
+
+**症状**。`ps.elf` 输出 `0 0 RUN 0 0`（NAME 空）、`1 0 READY 0 0 ��`（NAME 乱码、
+PAGES 恒 0），还多出一行。
+
+**根因一（决定性的）**。`sys_ps()` 里自己写了一份 `typedef process_t`：
+
+```c
+typedef struct { int pid; int state; int priority; int cpu_id; uint64_t runtime;
+                 char name[32]; int env_type; int parent_pid; uint64_t mem_pages; } process_t;
+```
+
+这和 `process64_full.c` 里的真实 `process_t` **字段顺序完全不同** —— 真实结构里
+`name[32]` 排在 `process_context_t context`、`stack`、`page_table` 之后，偏移远
+不止 24。于是 NAME 读到的是别的字段的字节（乱码），`mem_pages` 也读错位置。
+
+修法：在 `process64_full.c` 里提供取值接口
+
+```c
+int process64_get_ps_fields(int idx, int *pid, int *ppid, int *state,
+                            int *prio, uint64_t *mem_pages, char name[32]);
+```
+
+`sys_ps()` 改为调用它，**不再复制结构定义** —— 调用方不该猜内核结构的内存布局。
+
+**根因二**。`buf[n].mem_pages = pt[i].runtime;` —— 把运行时间当内存页数。改回 `mem_pages`。
+
+**根因三**。ps 的 `put_ch` 是 `write(1, &c, 1)`，一行要发几十次 syscall；中途只要
+内核往串口插一行日志，字符就互相穿插。改为行缓冲，整行一次 `write`。
+
+**附带**。`process64_create` 复制 name 前先 `memset(0, 32)`，避免槽位复用时残留
+上一条进程的名字尾巴。
+
+**关于栈 vs 数据段**。排查中途一度怀疑 `struct hep_ps_entry e[8]`（448 字节）放栈上
+会跨到用户栈第二页、导致 `copy_to_user` 失败，于是改成 `static`。**改完输出没变**，
+说明那不是根因（真正根因是结构错位）。`static` 保留，但它不是必需条件 —— 这里如实
+记录，避免把错误结论写进文档。
+
+**验证**。实机输出（三次启动一致）：
+
+```
+PID PPID STATE PRI PAGES NAME
+0 0 RUN   0 0 idle
+1 0 READY 0 4 kbeat
+2 0 READY 2 4 khouse
+3 0 READY 3 4 kstat
+```
+
+- 3/3 启动：`PASS`、`FAIL=0`、`EXCEPTION=0`、`[REG] autorun done` 齐全；
+- `ps.elf` 已正式放进 autorun（`kernel_main_64.c` 的列表），`entry=0x400000F0`；
+- 内核 829,576 B；`check_docs` warns=0 errors=0。
 

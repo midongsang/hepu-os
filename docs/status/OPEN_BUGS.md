@@ -245,8 +245,10 @@ source_of_truth: kernel/arch/x86_64/
     `PID PPID STATE PRI PAGES NAME` 与进程行后正常返回，**未出现 #PF**
     （`kernel_main_64.c` 里"跨用户栈第二页必崩"的注释据此更新）；
   - 3/3 连续启动 `PASS`、`FAIL=0`、`EXCEPTION=0`、`[REG] autorun done` 均出现。
-- 遗留（另记，不属本项）：ps 的 NAME 列输出乱码，`SYS_HEPU_PS` 返回的
-  `struct hep_ps_entry.name` 内容待查；因此 ps 仍未放进 autorun。
+- 后续（V0.58.3 §1.97 已解决）：ps 的 NAME/PAGES 错位来自 `sys_ps()` 自写的
+  `typedef process_t` 与真实结构字段顺序不符；改由内核提供
+  `process64_get_ps_fields()` 取值后，实机输出 idle/kbeat/khouse/kstat 四行
+  正常（PAGES=4），ps 已正式进 autorun。
 
 ## SEC-23 clone 测试偶发 `child never ran` —— 已修复（V0.58.2）
 
