@@ -3507,135 +3507,126 @@ static void m_render(hs_window_t *w)
     extern int process64_get_count(void);
     extern int drv_get_count(void);
     uint64_t mt = 0, mu = 0, mf = 0;
-    /* V0.59.1: 这一块整体重排。
-     * 旧版是"上面几行文字(CPU: x%  MEM: x%  UP: xs) + 下面三条独立曲线, 曲线
-     * 旁边只挂个 CPU%/RX/TX 标签" —— 数字和图形分属两个视觉单元, 谁也解释不了谁:
-     * 曲线没有当前值, 数字旁边没有形状, 看起来就是"数字和曲线很割裂"。
-     *
-     * 现在每个指标是一行: 左边"名称 + 当前值"固定宽度, 右边紧跟它的曲线/占用条,
-     * 数值与图形同属一个单元。内存没有时间序列, 用占用条而不是曲线。
-     * 版本/规格/磁盘压成顶部一行, uptime 右对齐同行, 不再占一整行。 */
+    /* V0.59.0: 侧栏 Info 页并入这里。
+     * 版本 / 平台规格 / 磁盘占用原来只在侧栏那一页有，而任务管理器已经有
+     * CPU/MEM/UP 摘要和网络曲线 —— 同一组系统数据在侧栏单开一页维护两份，
+     * 既没有曲线也没有明细，信息量还不如这里。现在规格与磁盘并在这一行。 */
     {
         extern uint32_t smp_get_cpu_count(void);
         extern int ext2_get_usage_percent(void);
-        extern uint64_t pit64_get_ms(void);
-        char l1[160]; char t1[16];
-        strcpy(l1, "Hepu OS v0.58.0  |  ");
+        char l1[128]; char t1[16];
+        strcpy(l1, "Hepu OS v0.58.0  |  64-bit SMP  |  ");
         uint32_t nc = smp_get_cpu_count();
         hs_itoa((int)(nc ? nc : 1), t1); strcpy(l1 + hs_strlen(l1), t1);
         strcpy(l1 + hs_strlen(l1), (nc == 1) ? " core" : " cores");
+        strcpy(l1 + hs_strlen(l1), "  |  DSK ");
         int dp = ext2_get_usage_percent();
         if (dp >= 0) {
-            strcpy(l1 + hs_strlen(l1), "  |  DSK ");
             hs_itoa(dp, t1); strcpy(l1 + hs_strlen(l1), t1);
             strcpy(l1 + hs_strlen(l1), "%");
+        } else {
+            strcpy(l1 + hs_strlen(l1), "--");
         }
-        font64_draw_string(fb, W, H, cx, cy, l1, g_shell.colors.text_secondary, MC(10));
-        {
-            char ub[24];
-            strcpy(ub, "UP ");
-            hs_itoa((int)(pit64_get_ms() / 1000), t1);
-            strcpy(ub + hs_strlen(ub), t1);
-            strcpy(ub + hs_strlen(ub), "s");
-            font64_draw_string(fb, W, H,
-                               cx + cw - (int)font64_get_string_width(ub, MC(10)),
-                               cy, ub, g_shell.colors.text_secondary, MC(10));
+        font64_draw_string(fb, W, H, cx, cy, l1, g_shell.colors.text_secondary, MC(11));
+        cy += MC(16);
+    }
+
+    pmm64_get_stats(&mt, &mu, &mf);
+    char buf[96]; char tmp[16];
+    int pcnt = process64_get_count();
+    int dcount = drv_get_count();
+    strcpy(buf, "MEM: ");
+    hs_uitoa64(mu / 1024, tmp); strcpy(buf + hs_strlen(buf), tmp);
+    strcpy(buf + hs_strlen(buf), "/");
+    hs_uitoa64(mt / 1024, tmp); strcpy(buf + hs_strlen(buf), tmp);
+    strcpy(buf + hs_strlen(buf), " KB   PROC: ");
+    hs_itoa(pcnt, tmp); strcpy(buf + hs_strlen(buf), tmp);
+    strcpy(buf + hs_strlen(buf), "   DRV: ");
+    hs_itoa(dcount, tmp); strcpy(buf + hs_strlen(buf), tmp);
+    font64_draw_string(fb, W, H, cx, cy, buf, g_shell.colors.window_fg, MC(12));
+    cy += MC(18);
+
+    /* V0.56.2: 整机占用摘要(用户看这里, 不必读曲线) */
+    {
+        extern int process64_cpu_usage(void);   /* V0.58.3: 真采样(PIT tick - idle) */
+        extern int hs_process_get_mem_usage(void);
+        char sbuf[64];
+        strcpy(sbuf, "CPU: ");
+        hs_itoa(process64_cpu_usage(), tmp);
+        strcpy(sbuf + hs_strlen(sbuf), tmp);
+        strcpy(sbuf + hs_strlen(sbuf), "%    MEM: ");
+        hs_itoa(hs_process_get_mem_usage(), tmp);
+        strcpy(sbuf + hs_strlen(sbuf), tmp);
+        strcpy(sbuf + hs_strlen(sbuf), "%    UP: ");
+        /* V0.57.1: uptime 直接读 PIT 计数器。原来打算由 kstat 线程缓存后显示, 但 kstat
+         * 目前只能登记挂起(见 process64_create_suspended), 显示它的缓存值会恒为 0 ——
+         * 那就成了假数据, 所以这里不走缓存。 */
+        extern uint64_t pit64_get_ms(void);
+        hs_itoa((int)(pit64_get_ms() / 1000), tmp);
+        strcpy(sbuf + hs_strlen(sbuf), tmp);
+        strcpy(sbuf + hs_strlen(sbuf), "s");
+        font64_draw_string(fb, W, H, cx, cy, sbuf, g_shell.colors.accent, MC(12));
+        cy += MC(18);
+    }
+
+    /* V0.58.1: 用户线程表快照（clone 真线程）。
+     * 旧版任务管理器只画 process64 内核线程与用户进程, 用户态 uthread 完全不可见,
+     * 于是"clone 到底跑没跑"只能看串口。这里把 uthread 表的累计数与最近一次
+     * clone/exit 授受关系直接摊在界面上。 */
+    {
+        extern int uthread_get_stats(int *total, int *active, int *last_p, int *last_c);
+        extern void uthread_get_last_exit(int *from_tid, int *to_tid);
+        int tot = 0, act = 0, lp = 0, lc = 0, xf = 0, xt = 0;
+        uthread_get_stats(&tot, &act, &lp, &lc);
+        uthread_get_last_exit(&xf, &xt);
+        char tbuf[96];
+        strcpy(tbuf, "THREADS  total: ");
+        hs_itoa(tot, tmp); strcpy(tbuf + hs_strlen(tbuf), tmp);
+        strcpy(tbuf + hs_strlen(tbuf), "   active: ");
+        hs_itoa(act, tmp); strcpy(tbuf + hs_strlen(tbuf), tmp);
+        font64_draw_string(fb, W, H, cx, cy, tbuf, g_shell.colors.text_secondary, MC(11));
+        cy += MC(15);
+
+        char cbuf[96];
+        if (act > 0) {
+            strcpy(cbuf, "clone: tid ");
+            hs_itoa(lp, tmp); strcpy(cbuf + hs_strlen(cbuf), tmp);
+            strcpy(cbuf + hs_strlen(cbuf), " -> ");
+            hs_itoa(lc, tmp); strcpy(cbuf + hs_strlen(cbuf), tmp);
+            strcpy(cbuf + hs_strlen(cbuf), "  RUNNING (shared aspace)");
+            font64_draw_string(fb, W, H, cx, cy, cbuf, 0x52C41A, MC(11));
+        } else if (xf > 0) {
+            strcpy(cbuf, "thread_exit: tid ");
+            hs_itoa(xf, tmp); strcpy(cbuf + hs_strlen(cbuf), tmp);
+            if (xt > 0) {
+                strcpy(cbuf + hs_strlen(cbuf), " -> tid ");
+                hs_itoa(xt, tmp); strcpy(cbuf + hs_strlen(cbuf), tmp);
+            }
+            strcpy(cbuf + hs_strlen(cbuf), "  (handed off)");
+            font64_draw_string(fb, W, H, cx, cy, cbuf, g_shell.colors.text_secondary, MC(11));
+        } else {
+            strcpy(cbuf, "clone: none yet");
+            font64_draw_string(fb, W, H, cx, cy, cbuf, g_shell.colors.text_secondary, MC(11));
         }
         cy += MC(15);
     }
 
-    pmm64_get_stats(&mt, &mu, &mf);
-    {
-        extern int process64_cpu_usage(void);
-        extern int process64_get_count(void);
-        extern int drv_get_count(void);
-        extern void e1000_get_net_stats(uint64_t *tx, uint64_t *rx, uint32_t *txr, uint32_t *rxr);
-        int cpu = process64_cpu_usage();
-        uint64_t ntx = 0, nrx = 0; uint32_t ntxr = 0, nrxr = 0;
-        e1000_get_net_stats(&ntx, &nrx, &ntxr, &nrxr);
-        m_hist_push(m_cpu_hist, cpu);
-        m_hist_push(m_rx_hist, (int)(nrxr / 1024));
-        m_hist_push(m_tx_hist, (int)(ntxr / 1024));
+    /* 实时曲线: CPU + 网络 */
+    int cpu = process64_cpu_usage();     /* V0.58.3: 曲线也接真采样, 原来恒 0 是平线 */
+    uint64_t tx = 0, rx = 0; uint32_t txr = 0, rxr = 0;
+    e1000_get_net_stats(&tx, &rx, &txr, &rxr);
+    m_hist_push(m_cpu_hist, cpu);
+    m_hist_push(m_rx_hist, (int)(rxr / 1024));   /* KB/s */
+    m_hist_push(m_tx_hist, (int)(txr / 1024));
 
-        gfx64_fill_rect(cx, cy, cw, 1, g_shell.colors.border);
-        cy += MC(7);
-
-        /* 指示列: 名称 + 数值, 图形从 met_gx 起 */
-        int met_gx = cx + MC(112);
-        int met_gw = cw - MC(112);
-        if (met_gw < MC(40)) met_gw = MC(40);
-
-        char v[24]; char t2[16];
-
-        /* ---- CPU ---- */
-        font64_draw_string(fb, W, H, cx, cy, "CPU", g_shell.colors.text_secondary, MC(10));
-        hs_itoa(cpu, t2); strcpy(v, t2); strcpy(v + hs_strlen(v), "%");
-        font64_draw_string(fb, W, H, cx + MC(46), cy, v, 0x52C41A, MC(12));
-        gfx64_fill_rect(met_gx, cy, met_gw, MC(22),
-                        hs_apps_mix(g_shell.colors.panel_bg, 0xFFFFFF, 6));
-        m_draw_curve(fb, W, H, met_gx, cy, met_gw, MC(22), m_cpu_hist, 0x52C41A, MC(100));
-        cy += MC(28);
-
-        /* ---- MEM: 占用条, 不是曲线 ---- */
-        {
-            int mpct = (mt > 0) ? (int)((mu * 100) / mt) : 0;
-            uint64_t mb_used = mu / 1024ULL / 1024ULL;
-            uint64_t mb_tot = mt / 1024ULL / 1024ULL;
-            font64_draw_string(fb, W, H, cx, cy, "MEM", g_shell.colors.text_secondary, MC(10));
-            hs_itoa(mpct, t2); strcpy(v, t2); strcpy(v + hs_strlen(v), "%");
-            font64_draw_string(fb, W, H, cx + MC(46), cy, v, 0x4A9EEC, MC(12));
-            /* 条: 底框 + 已用。宽度按可用空间算, 右侧留给 "143 / 979 MB" */
-            char mbuf[32];
-            hs_uitoa64(mb_used, t2); strcpy(mbuf, t2);
-            strcpy(mbuf + hs_strlen(mbuf), " / ");
-            hs_uitoa64(mb_tot, t2); strcpy(mbuf + hs_strlen(mbuf), t2);
-            strcpy(mbuf + hs_strlen(mbuf), " MB");
-            int mtext_w = (int)font64_get_string_width(mbuf, MC(9)) + MC(8);
-            int barw = met_gw - mtext_w;
-            if (barw < MC(30)) barw = MC(30);
-            gfx64_fill_rect(met_gx, cy + MC(6), barw, MC(8), g_shell.colors.border);
-            int fillw = (barw * mpct) / 100;
-            if (fillw > 0) gfx64_fill_rect(met_gx, cy + MC(6), fillw, MC(8), 0x4A9EEC);
-            font64_draw_string(fb, W, H, met_gx + barw + MC(8), cy, mbuf,
-                               g_shell.colors.text_secondary, MC(9));
-        }
-        cy += MC(28);
-
-        /* ---- NET: RX 曲线为主, 两个速率都写在左侧 ---- */
-        font64_draw_string(fb, W, H, cx, cy, "NET", g_shell.colors.text_secondary, MC(10));
-        {
-            char nb[40];
-            strcpy(nb, "\xe2\x86\x93 ");   /* 不依赖箭头字形, 用 ASCII 更稳 */
-        }
-        {
-            char nb[48];
-            hs_itoa((int)(nrxr / 1024), t2);
-            strcpy(nb, "RX "); strcpy(nb + hs_strlen(nb), t2);
-            strcpy(nb + hs_strlen(nb), "K");
-            font64_draw_string(fb, W, H, cx + MC(34), cy, nb, 0x4A9EEC, MC(9));
-            hs_itoa((int)(ntxr / 1024), t2);
-            strcpy(nb, "TX "); strcpy(nb + hs_strlen(nb), t2);
-            strcpy(nb + hs_strlen(nb), "K");
-            font64_draw_string(fb, W, H,
-                               cx + MC(34) + (int)font64_get_string_width("RX 999K", MC(9)) + MC(8),
-                               cy, nb, 0xE0A44E, MC(9));
-        }
-        gfx64_fill_rect(met_gx, cy, met_gw, MC(22),
-                        hs_apps_mix(g_shell.colors.panel_bg, 0xFFFFFF, 6));
-        m_draw_curve(fb, W, H, met_gx, cy, met_gw, MC(22), m_rx_hist, 0x4A9EEC, MC(256));
-        cy += MC(30);
-
-        /* ---- 进程/驱动计数 ---- */
-        {
-            char cb[64];
-            strcpy(cb, "PROC ");
-            hs_itoa(process64_get_count(), t2); strcpy(cb + hs_strlen(cb), t2);
-            strcpy(cb + hs_strlen(cb), "   DRV ");
-            hs_itoa(drv_get_count(), t2); strcpy(cb + hs_strlen(cb), t2);
-            font64_draw_string(fb, W, H, cx, cy, cb, g_shell.colors.text_secondary, MC(9));
-            cy += MC(13);
-        }
-    }
+    int gh = MC(38), gw = cw - MC(80);
+    m_draw_curve(fb, W, H, cx, cy, gw, gh, m_cpu_hist, 0x52C41A, MC(100));
+    font64_draw_string(fb, W, H, cx + gw + MC(6), cy + MC(6), "CPU%", 0x52C41A, MC(10));
+    m_draw_curve(fb, W, H, cx, cy + gh + MC(4), gw, gh, m_rx_hist, 0x4A9EEC, MC(256));
+    font64_draw_string(fb, W, H, cx + gw + MC(6), cy + gh + MC(10), "RX", 0x4A9EEC, MC(10));
+    m_draw_curve(fb, W, H, cx, cy + MC(2) * (gh + MC(4)), gw, gh, m_tx_hist, 0xE0A44E, MC(256));
+    font64_draw_string(fb, W, H, cx + gw + MC(6), cy + MC(2) * (gh + MC(4)) + MC(10), "TX", 0xE0A44E, MC(10));
+    cy += MC(3) * gh + MC(12);
 
     /* 分隔线 */
     gfx64_fill_rect(cx, cy, cw, 1, g_shell.colors.border);
@@ -3696,16 +3687,9 @@ static void m_render(hs_window_t *w)
             nmbuf[nl] = 0;
             font64_draw_string(fb, W, H, c_name, cy, nmbuf, col, MC(11));
 
-            /* V0.59.1: idle(PID 0) 的 CPU 列过去显示 100% —— 那是"空闲线程占满
-             * 了没被别的进程用掉的 CPU 时间", 但在进程表里看着就像"CPU 被吃满",
-             * 与上面的 CPU 使用率数字直接矛盾。改成 "--" 表示不适用。 */
-            if (procs[i].pid == 0) {
-                font64_draw_string(fb, W, H, c_cpu, cy, "--", col, MC(11));
-            } else {
-                hs_itoa(procs[i].cpu_usage, tmp2);
-                strcpy(tmp2 + hs_strlen(tmp2), "%");
-                font64_draw_string(fb, W, H, c_cpu, cy, tmp2, col, MC(11));
-            }
+            hs_itoa(procs[i].cpu_usage, tmp2);
+            strcpy(tmp2 + hs_strlen(tmp2), "%");
+            font64_draw_string(fb, W, H, c_cpu, cy, tmp2, col, MC(11));
 
             hs_itoa(procs[i].mem_usage, tmp2);
             font64_draw_string(fb, W, H, c_mem, cy, tmp2, col, MC(11));
@@ -3758,7 +3742,6 @@ static void m_render(hs_window_t *w)
     /* V0.13.46: 结束进程提示条 (V0.56.2: 固定贴窗口底部, 不再跟随列表溢出) */
     cy = w->y + w->height - MC(16);
     if (m_kill_mode) {
-        char tmp[16];
         char kbuf[48];
         strcpy(kbuf, "End PID: ");
         hs_itoa(m_kill_pid, tmp);
