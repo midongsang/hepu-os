@@ -127,6 +127,7 @@ static uint32_t g_frame_no;
 
 /* 前向声明（定义在后面） */
 static int g_sidebar_tab;
+static int g_sidebar_collapsed;   /* 侧栏收起: 只留左边缘一条把手 */
 static int g_island_expanded;
 /* V0.55.0 P0: 灵动岛展开/收起缓动 (ease-out cubic, 0..100) */
 static int g_island_t = 0;        /* 当前进度: 0=收起 100=展开 */
@@ -3518,6 +3519,22 @@ static void hs_sidebar_render(void)
         if (max_sw > 0 && sw > max_sw) sw = max_sw;
     }
 
+    /* 收起态：只画贴左边缘的一条圆角把手（点它展开）。面板本身仍 enabled，
+     * 因此不需要动 panel_registry，也不用担心 F7 全隐与折叠两种状态打架。 */
+    if (g_sidebar_collapsed) {
+        void *fbc = gfx64_get_framebuffer();
+        int hw = hs_sx(16), hh = hs_sy(104);
+        int hx = sx, hy = sy + sh / 2 - hh / 2;
+        /* 把手固定用浅紫：强调色来自壁纸取色，深色壁纸下会被取成近黑，
+         * 混白也不够（实测仍只剩一道暗影），所以这里不走主题色。 */
+        gfx64_fill_rounded_rect(hx, hy, hw, hh, hs_s(7), 0xFFE7E3F6u);
+        gfx64_draw_rounded_rect(hx, hy, hw, hh, hs_s(7), 0xFFB9B2D6u);
+        font64_draw_string(fbc, g_shell.screen_width, g_shell.screen_height,
+                           hx + hs_sx(5), hy + hh / 2 - hs_sy(9), ">",
+                           0xFF2A2A33u, hs_s(15));
+        return;
+    }
+
     /* 渲染侧探针: 第 60 帧打一次(避开首帧 pct 尚未稳定的阶段)。
      * 首帧 [GEOM] 按配置算出 200% / 侧栏 819x1272 / 底 1472, 但截图里面板底边
      * 只到 y~1105 —— 说明渲染时的 pct 与该帧不同。这里把渲染函数自己的
@@ -3539,7 +3556,7 @@ static void hs_sidebar_render(void)
 
     /* 标签栏 */
     int tab_y = sy + hs_sy(12);
-    int tab_w = (sw - hs_sx(24)) / 2;
+    int tab_w = (sw - hs_sx(24) - hs_sx(28)) / 2;
     const char *tabs[] = {"Apps", "Weather"};
     for (int i = 0; i < 2; i++) {
         int tx = sx + hs_sx(12) + i * tab_w;
@@ -3572,6 +3589,21 @@ static void hs_sidebar_render(void)
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            tx + (tab_w - hs_sx(4) - hs_sx(32)) / 2, tab_y + hs_sy(7),
                            tabs[i], fg, hs_s(14));
+    }
+
+    /* 收起按钮：tab 行最右端一枚小方块「<」 */
+    {
+        int bw = hs_sx(20), bh = hs_sy(20);
+        int bx = sx + sw - hs_sx(26);
+        int byy = tab_y + hs_sy(4);
+        int hov = (g_shell.mouse_x >= bx && g_shell.mouse_x < bx + bw &&
+                   g_shell.mouse_y >= byy && g_shell.mouse_y < byy + bh);
+        gfx64_fill_rounded_rect(bx, byy, bw, bh, hs_s(6),
+                                (hov ? hs_mix_color(g_shell.colors.panel_bg, g_shell.colors.accent, 28)
+                                     : g_shell.colors.panel_bg) | 0xFF000000u);
+        font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                           bx + hs_sx(7), byy + hs_sy(2), "<",
+                           g_shell.colors.panel_fg, hs_s(13));
     }
 
     /* 内容区域 */
@@ -4481,9 +4513,36 @@ void hpdesk_handle_click(int x, int y)
     int sx = hs_sx(g_shell.ui.sidebar_x);
     int sy = hs_sy(g_shell.ui.sidebar_y);
     int sw = hs_sx(g_shell.ui.sidebar_width);
+    /* 侧栏收起/展开命中（必须先判，否则会落到下面的 tab 区域里） */
+    {
+        int shh = hs_sy(g_shell.ui.sidebar_height);
+        int sww = hs_sx(g_shell.ui.sidebar_width);
+        int max_sh = g_shell.screen_height - sy - hs_sy(16);
+        if (max_sh > 0 && shh > max_sh) shh = max_sh;
+        int max_sw = g_shell.screen_width * 2 / 5;
+        if (max_sw > 0 && sww > max_sw) sww = max_sw;
+        if (g_sidebar_collapsed) {
+            int hw = hs_sx(14), hh = hs_sy(96);
+            int hy = sy + shh / 2 - hh / 2;
+            if (x >= sx && x <= sx + hw && y >= hy && y <= hy + hh) {
+                g_sidebar_collapsed = 0;
+                hpdesk_mark_dirty();
+                return;
+            }
+        } else if (hs_panel_is_enabled("sidebar")) {
+            int bw = hs_sx(20), bh = hs_sy(20);
+            int bx = sx + sww - hs_sx(26);
+            int byy = sy + hs_sy(12) + hs_sy(4);
+            if (x >= bx && x <= bx + bw && y >= byy && y <= byy + bh) {
+                g_sidebar_collapsed = 1;
+                hpdesk_mark_dirty();
+                return;
+            }
+        }
+    }
     int tab_y = sy + hs_sy(12);
     int tab_h = hs_sy(28);
-    int tab_w = (sw - hs_sx(24)) / 2;
+    int tab_w = (sw - hs_sx(24) - hs_sx(28)) / 2;
     if (y >= tab_y && y <= tab_y + tab_h) {
         for (int i = 0; i < 2; i++) {
             int tx = sx + hs_sx(12) + i * tab_w;
