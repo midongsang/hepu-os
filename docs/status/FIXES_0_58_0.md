@@ -1386,3 +1386,53 @@ void     print_lock_release(uint64_t flags);
 
 实机数值 4% / 9% 与用户原始截图完全一致，说明数据源本来就对，只是展示方式重复。
 截图入库 `docs/assets/info-panel-0.58.9.png`。
+
+---
+
+## 1.109 侧栏去掉 Info 标签页，系统信息并入任务管理器（0.59.0）
+
+### 判断
+
+侧栏原本是 Info / Apps / Weather 三页。Info 页放的是 Uptime、进程数、线程数、
+Net RX/TX、Version、Kernel、CPU 核数、Memory、Disk。
+
+这些数据任务管理器里**本来就有位置**：CPU/MEM/UP 摘要、网络曲线（RX/TX 带
+标签）、进程表（PID/NAME/CPU%/MEM/STATE）、内核服务清单。侧栏那一页既没有曲线
+也没有明细，信息量明显更低，却要和任务管理器各维护一份 —— 同一组数据两处
+呈现，改一处就得记得改另一处。
+
+代码里其实早就写过同样的判断（V0.58.3 的注释：*"CPU/MEM/DSK 三条占用条移除此处
+—— 占用是任务管理器的职责, 两处同时呈现等于同一组数据画两遍"*），但那次只砍了
+三条进度条，没砍整个页面。这轮把整页并掉。
+
+### 落地
+
+**侧栏**（`hpdesk.c`）：
+
+- 标签栏 3 项 → 2 项：`{"Apps", "Weather"}`，宽度 `(sw - hs_sx(24)) / 2`；
+- 删除整个 `g_sidebar_tab == 0` 的 Info 内容块，以及三条进度条遗留的几何变量
+  （`s_bar_x` / `s_bar_w` / `s_pct_x`，早已无人使用）；
+- 索引语义整体前移：Apps `1 → 0`，Weather 保持 else 分支；
+  同步改了四处——标签绘制、点击命中、hit-test（`hpdesk_sidebar_tab_at()`）、
+  `hs_sidebar_max_scroll()` 的 tab 判断；
+- Tab 键循环 `% 3 → % 2`。
+
+**任务管理器**（`hs_apps.c`）：新增一行系统摘要，放在 `MEM/PROC/DRV` 行上面：
+
+```
+Hepu OS v0.58.0  |  64-bit SMP  |  2 cores  |  DSK 9%
+```
+
+版本、平台规格、磁盘占用这三项原本只有侧栏 Info 页有，现在补进任务管理器。
+网络速率不重复加——曲线旁已有 RX/TX 标签，再加一遍就是新造冗余。
+
+### 验证
+
+- 侧栏：只剩 `Apps` / `Weather` 两个标签，宽度按二等分，Apps 图标网格布局
+  未受影响；
+- 任务管理器：首行显示 `Hepu OS v0.58.0 | 64-bit SMP | 2 cores | DSK 9%`，
+  下面 MEM/PROC/DRV、CPU/MEM/UP、THREADS 各行位置不变；
+- 3/3 轮回归 `desk=1 EXC=0 PASS=1 FAIL=0 SPINERR=0`，`TEMP-` 标记残留检查为 0。
+
+截图入库：`docs/assets/sidebar-2tabs-0.59.0.png`（侧栏两标签）、
+`docs/assets/taskmgr-sysinfo-0.59.0.png`（任务管理器新摘要行）。

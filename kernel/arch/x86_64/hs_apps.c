@@ -3507,6 +3507,30 @@ static void m_render(hs_window_t *w)
     extern int process64_get_count(void);
     extern int drv_get_count(void);
     uint64_t mt = 0, mu = 0, mf = 0;
+    /* V0.59.0: 侧栏 Info 页并入这里。
+     * 版本 / 平台规格 / 磁盘占用原来只在侧栏那一页有，而任务管理器已经有
+     * CPU/MEM/UP 摘要和网络曲线 —— 同一组系统数据在侧栏单开一页维护两份，
+     * 既没有曲线也没有明细，信息量还不如这里。现在规格与磁盘并在这一行。 */
+    {
+        extern uint32_t smp_get_cpu_count(void);
+        extern int ext2_get_usage_percent(void);
+        char l1[128]; char t1[16];
+        strcpy(l1, "Hepu OS v0.58.0  |  64-bit SMP  |  ");
+        uint32_t nc = smp_get_cpu_count();
+        hs_itoa((int)(nc ? nc : 1), t1); strcpy(l1 + hs_strlen(l1), t1);
+        strcpy(l1 + hs_strlen(l1), (nc == 1) ? " core" : " cores");
+        strcpy(l1 + hs_strlen(l1), "  |  DSK ");
+        int dp = ext2_get_usage_percent();
+        if (dp >= 0) {
+            hs_itoa(dp, t1); strcpy(l1 + hs_strlen(l1), t1);
+            strcpy(l1 + hs_strlen(l1), "%");
+        } else {
+            strcpy(l1 + hs_strlen(l1), "--");
+        }
+        font64_draw_string(fb, W, H, cx, cy, l1, g_shell.colors.text_secondary, MC(11));
+        cy += MC(16);
+    }
+
     pmm64_get_stats(&mt, &mu, &mf);
     char buf[96]; char tmp[16];
     int pcnt = process64_get_count();

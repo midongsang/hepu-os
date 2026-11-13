@@ -3001,12 +3001,12 @@ static void hs_login_screen_render(void)
 static int hs_sidebar_max_scroll(int tab)
 {
     int content;
-    if (tab == 1) {
+    if (tab == 0) {
         /* Apps: 标题 35 + 行数*88 (行高对齐 Clavis cell 间距) */
         int rows = (g_shell.app_count + 2) / 3;
         content = 35 + rows * 88;
-    } else if (tab == 0) {
-        content = 35 + 28 + 28 + 40 + 24 + 20 + 20 + 20;  /* Info 固定行 */
+    } else if (tab == 1) {
+        content = 35 + 28 + 28 + 40 + 24 + 20 + 20 + 20;  /* Weather 固定行 */
     } else {
         content = 40 + 70 + 24 + 18 + 30 + 40;            /* Weather 固定行 */
     }
@@ -3104,9 +3104,9 @@ static void hs_sidebar_render(void)
 
     /* 标签栏 */
     int tab_y = sy + hs_sy(12);
-    int tab_w = (sw - hs_sx(24)) / 3;
-    const char *tabs[] = {"Info", "Apps", "Weather"};
-    for (int i = 0; i < 3; i++) {
+    int tab_w = (sw - hs_sx(24)) / 2;
+    const char *tabs[] = {"Apps", "Weather"};
+    for (int i = 0; i < 2; i++) {
         int tx = sx + hs_sx(12) + i * tab_w;
         /* V0.57.0: 悬停反馈 —— 未选中的标签在指针下轻微染上强调色 */
         int tab_hov = (g_shell.mouse_x >= tx && g_shell.mouse_x < tx + tab_w - hs_sx(4) &&
@@ -3142,145 +3142,13 @@ static void hs_sidebar_render(void)
     /* 内容区域 */
     int content_y = tab_y + hs_sy(40);
 
-    /* Info 页三条进度条的几何: 宽度必须按面板可用宽度算。
-     * 旧实现宽度写死 hs_sx(180), 200% 下需要 720px, 而外框被钳到 819px,
-     * 标签列 280 + 百分比列 208 之后已经没有 720 可用 -> 进度条冲出面板。 */
-    int s_bar_x = sx + hs_sx(70);
-    int s_bar_w = sw - hs_sx(70) - hs_sx(20) - hs_sx(52);
-    if (s_bar_w < hs_sx(30)) s_bar_w = hs_sx(30);
-    int s_pct_x = sx + sw - hs_sx(20) - hs_sx(26);
+    /* V0.59.0: 侧栏去掉 Info 标签页。
+     * 里面放的是 Uptime / 进程数 / 网络 / 版本 / 规格 / 内存 / 磁盘 ——
+     * 这组数据在任务管理器里本来就有位置（曲线、进程表、内核服务都在那儿），
+     * 在侧栏再单开一页等于同一组数据维护两份，而且侧栏版既没有曲线也没有明细。
+     * 这些行已整体搬到任务管理器顶部的系统摘要条。 */
     if (g_sidebar_tab == 0) {
-        /* 信息标签：状态摘要 + 硬件规格。
-         * V0.58.3: CPU/MEM/DSK 三条占用条移除此处 —— 占用是任务管理器的职责,
-         * 两处同时呈现等于同一组数据画两遍, 而且这里没有曲线、没有进程明细,
-         * 信息量远不如任务管理器。侧栏改为只放"一眼可见的运行状态"与"规格"。 */
-        extern void pmm64_get_stats(uint64_t *total, uint64_t *used, uint64_t *free);
-        extern int process64_count(void);
-        extern uint64_t pit64_get_ms(void);
-        extern void e1000_get_net_stats(uint64_t *tx, uint64_t *rx, uint32_t *txr, uint32_t *rxr);
-        extern int uthread_get_stats(int *total, int *active, int *last_parent, int *last_child);
-        extern uint32_t smp_get_cpu_count(void);
-        extern void hs_itoa(int v, char *out);
-
-        uint64_t tp = 0, up = 0, fp = 0;
-        pmm64_get_stats(&tp, &up, &fp);
-        uint64_t txb = 0, rxb = 0; uint32_t txr = 0, rxr = 0;
-        e1000_get_net_stats(&txb, &rxb, &txr, &rxr);
-        int ttot = 0, tact = 0, lp = 0, lc = 0;
-        uthread_get_stats(&ttot, &tact, &lp, &lc);
-
-        int s_vx = sx + sw - hs_sx(20);      /* 值列右边缘(右对齐) */
-        int lsz = hs_s(12);
-        char val[32]; char tmp2[16];
-
-        font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           sx + hs_sx(20), content_y, "System Info", g_shell.colors.panel_fg, hs_s(18));
-        content_y += hs_sy(34);
-
-#define SIDE_ROW(lbl, vs, vc) do { \
-            font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height, \
-                               sx + hs_sx(20), content_y, (lbl), g_shell.colors.panel_fg, lsz); \
-            font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height, \
-                               s_vx - (int)font64_get_string_width((vs), (uint16_t)lsz), \
-                               content_y, (vs), (vc), lsz); \
-        } while (0)
-
-        /* ---- 运行状态 ---- */
-        font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           sx + hs_sx(20), content_y, "STATUS", g_shell.colors.accent, hs_s(10));
-        content_y += hs_sy(24);
-
-        {   /* Uptime */
-            uint64_t ms = pit64_get_ms(); int sec = (int)(ms / 1000);
-            if (sec >= 3600) {
-                int hh = sec / 3600, mm = (sec % 3600) / 60;
-                hs_itoa(hh, val); strcpy(val + strlen(val), "h ");
-                hs_itoa(mm, tmp2); strcpy(val + strlen(val), tmp2);
-                strcpy(val + strlen(val), "m");
-            } else if (sec >= 60) {
-                int mm = sec / 60, ss = sec % 60;
-                hs_itoa(mm, val); strcpy(val + strlen(val), "m ");
-                hs_itoa(ss, tmp2); strcpy(val + strlen(val), tmp2);
-                strcpy(val + strlen(val), "s");
-            } else {
-                hs_itoa(sec, val); strcpy(val + strlen(val), "s");
-            }
-            SIDE_ROW("Uptime", val, g_shell.colors.panel_fg);
-        }
-        content_y += hs_sy(22);
-
-        {   /* Processes */
-            hs_itoa(process64_count(), val);
-            SIDE_ROW("Processes", val, g_shell.colors.panel_fg);
-        }
-        content_y += hs_sy(22);
-
-        {   /* Threads: active / total */
-            hs_itoa(tact, val);
-            strcpy(val + strlen(val), " / ");
-            hs_itoa(ttot, tmp2); strcpy(val + strlen(val), tmp2);
-            SIDE_ROW("Threads", val,
-                     (tact > 0) ? 0x52C41Au : g_shell.colors.panel_fg);
-        }
-        content_y += hs_sy(22);
-
-        {   /* Network RX / TX */
-            hs_itoa((int)rxr, val); strcpy(val + strlen(val), " KB/s");
-            SIDE_ROW("Net RX", val, g_shell.colors.panel_fg);
-        }
-        content_y += hs_sy(22);
-        {
-            hs_itoa((int)txr, val); strcpy(val + strlen(val), " KB/s");
-            SIDE_ROW("Net TX", val, g_shell.colors.panel_fg);
-        }
-        content_y += hs_sy(34);
-
-        /* ---- 规格 ---- */
-        font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           sx + hs_sx(20), content_y, "SYSTEM", g_shell.colors.accent, hs_s(10));
-        content_y += hs_sy(24);
-
-        /* 去冗余: 旧版这里是 "Kernel: 64-bit SMP" + "CPU: N cores" 两行,
-         * 说的是同一件事(平台规格), 合并成一行; Memory 行补上占用百分比 ——
-         * 老版那三根进度条(MEM 4%)虽然被去掉, 但"用了多少"这个信息不该丢。 */
-        SIDE_ROW("Version", "v0.58.0", g_shell.colors.accent);
-        content_y += hs_sy(22);
-        {
-            extern uint32_t smp_get_cpu_count(void);
-            uint32_t nc = smp_get_cpu_count();
-            hs_itoa((int)(nc ? nc : 1), val);
-            strcpy(val + strlen(val), (nc == 1) ? " core" : " cores");
-            char kb[40];
-            strcpy(kb, "64-bit SMP  ");
-            strcpy(kb + strlen(kb), val);
-            SIDE_ROW("Kernel", kb, g_shell.colors.panel_fg);
-        }
-        content_y += hs_sy(22);
-        {
-            hs_itoa((int)(tp / (1024ULL * 1024ULL)), val);
-            strcpy(val + strlen(val), " MB");
-            if (tp > 0) {
-                int pct = (int)((up * 100) / tp);
-                strcpy(val + strlen(val), "  ");
-                hs_itoa(pct, tmp2); strcpy(val + strlen(val), tmp2);
-                strcpy(val + strlen(val), "%");
-            }
-            SIDE_ROW("Memory", val, g_shell.colors.panel_fg);
-        }
-        content_y += hs_sy(22);
-        {
-            extern int ext2_get_usage_percent(void);
-            int dpct = ext2_get_usage_percent();
-            if (dpct >= 0) {
-                hs_itoa(dpct, val); strcpy(val + strlen(val), "%");
-            } else {
-                strcpy(val, "--");
-            }
-            SIDE_ROW("Disk", val, g_shell.colors.panel_fg);
-        }
-#undef SIDE_ROW
-    } else if (g_sidebar_tab == 1) {
-        /* 应用抽屉 (V0.55: 真实注册应用列表 + Clavis 式垂直滚动) */
+            /* 应用抽屉 (V0.55: 真实注册应用列表 + Clavis 式垂直滚动) */
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            sx + hs_sx(20), content_y, "Applications", g_shell.colors.panel_fg, hs_s(18));
         content_y += hs_sy(35);
@@ -4154,9 +4022,9 @@ void hpdesk_handle_click(int x, int y)
     int sw = hs_sx(g_shell.ui.sidebar_width);
     int tab_y = sy + hs_sy(12);
     int tab_h = hs_sy(28);
-    int tab_w = (sw - hs_sx(24)) / 3;
+    int tab_w = (sw - hs_sx(24)) / 2;
     if (y >= tab_y && y <= tab_y + tab_h) {
-        for (int i = 0; i < 3; i++) {
+        for (int i = 0; i < 2; i++) {
             int tx = sx + hs_sx(12) + i * tab_w;
             if (x >= tx && x <= tx + tab_w - hs_sx(4)) {
                 g_sidebar_tab = i;
@@ -4173,7 +4041,7 @@ void hpdesk_handle_click(int x, int y)
      * 之前该页只有渲染没有命中测试 —— 图标看得见, 点上去毫无反应,
      * 这是"鼠标点了没反应"的真实缺陷之一。坐标复用渲染所用的
      * hs_apps_cell_pos(), 避免两套公式漂移。 */
-    if (g_sidebar_tab == 1 && hs_panel_is_enabled("sidebar")) {
+    if (g_sidebar_tab == 0 && hs_panel_is_enabled("sidebar")) {
         for (int i = 0; i < g_shell.app_count; i++) {
             int ax = 0, ay = 0;
             if (!hs_apps_cell_pos(i, &ax, &ay)) continue;
@@ -4307,15 +4175,15 @@ static int hs_hover_id(int x, int y)
     int sw = hs_sx(g_shell.ui.sidebar_width), sh = hs_sy(g_shell.ui.sidebar_height);
     if (x < sx || x > sx + sw || y < sy || y > sy + sh) return -1;
 
-    int tab_y = sy + hs_sy(12), tab_h = hs_sy(28), tab_w = (sw - hs_sx(24)) / 3;
+    int tab_y = sy + hs_sy(12), tab_h = hs_sy(28), tab_w = (sw - hs_sx(24)) / 2;
     if (y >= tab_y && y <= tab_y + tab_h) {
-        for (int i = 0; i < 3; i++) {
+        for (int i = 0; i < 2; i++) {
             int tx = sx + hs_sx(12) + i * tab_w;
             if (x >= tx && x <= tx + tab_w - hs_sx(4)) return i;
         }
         return -1;
     }
-    if (g_sidebar_tab == 1) {
+    if (g_sidebar_tab == 0) {
         for (int i = 0; i < g_shell.app_count; i++) {
             int ax = 0, ay = 0;
             if (!hs_apps_cell_pos(i, &ax, &ay)) continue;
@@ -4967,7 +4835,7 @@ void hpdesk_handle_key(int key)
 
     /* Tab键切换侧边栏标签 */
     if (key == 0x0F || key == '\t') {
-        g_sidebar_tab = (g_sidebar_tab + 1) % 3;
+        g_sidebar_tab = (g_sidebar_tab + 1) % 2;
         g_sidebar_scroll = 0;   /* V0.55: 切页重置滚动 */
         return;
     }
