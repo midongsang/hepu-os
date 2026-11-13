@@ -5573,6 +5573,29 @@ int hpdesk_init(int width, int height)
 
     g_shell.initialized = 1;
 
+    /* V0.59.3: 启动即执行 /etc/hepushell/autostart.cmd（自动化取证通道） */
+    {
+        extern int ext2_64_read_file(const char *path, uint8_t *out, uint32_t max);
+        static char abuf[256];
+        int an = ext2_64_read_file("/etc/hepushell/autostart.cmd", (uint8_t *)abuf, 255);
+        if (an > 0) {
+            /* 支持多行: 一行一条命令, 方便一次取证多条 */
+            abuf[an] = 0;
+            for (int i = 0; i < an; i++) if (abuf[i] == '\r') abuf[i] = '\n';
+            int pos = 0;
+            while (pos < an) {
+                int q = pos;
+                while (q < an && abuf[q] != '\n') q++;
+                if (q < an) abuf[q] = 0;
+                if (abuf[pos]) {
+                    vga_puts("[Autostart] "); vga_puts(abuf + pos); vga_puts("\n");
+                    hs_terminal_run_line(abuf + pos);
+                }
+                pos = q + 1;
+            }
+        }
+    }
+
     vga_puts("[Hepu Desktop] Initialized (");
     char buf[8];
     itoa_hs(width, buf);

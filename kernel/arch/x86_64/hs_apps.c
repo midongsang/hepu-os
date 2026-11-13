@@ -131,6 +131,30 @@ static void t_put(const char *s)
     t_scroll = 0;
 }
 
+/* V0.59.3: shell 命令的输出是「多次 vga_puts 拼一行 + 整块多行文本」两种形态,
+ * 而 t_put 只接受整行 —— 直接喂进去会把一行拆成好几行、多行又叠成一行。
+ * 所以这里做行缓冲: 攒到 \n 才吐一行, 命令结束后 flush 残余。 */
+static char g_oline[TERM_MAX_LEN + 1];
+static int  g_olen = 0;
+
+static void t_out_flush(void)
+{
+    if (g_olen > 0) { g_oline[g_olen] = 0; t_put(g_oline); g_olen = 0; }
+}
+
+static void t_out_multi(const char *s)
+{
+    while (s && *s) {
+        if (*s == '\n' || *s == '\r') {
+            t_out_flush();
+            s++;
+            continue;
+        }
+        if (g_olen < TERM_MAX_LEN) g_oline[g_olen++] = *s;
+        s++;
+    }
+}
+
 static void t_exec(const char *line)
 {
     char cmd[64];
@@ -419,6 +443,25 @@ static void t_exec(const char *line)
               "devmode: wrong password");
         return;
     }
+    /* V0.59.3: 本表没覆盖到的命令转给 shell64 的完整命令表(ps/df/dmesg/ss/... 都在那边)。
+     * 输出经 shell_set_output 钩到 t_put, 所以显示直接落在终端窗口里。 */
+    {
+        extern int shell_has_command(const char *name);
+        extern void shell_execute(char *line);
+        extern void shell_set_output(void (*fn)(const char *));
+        if (shell_has_command(cmd)) {
+            static char lbuf[96];
+            int k = 0;
+            while (line[k] && k < 95) { lbuf[k] = line[k]; k++; }
+            lbuf[k] = 0;
+            shell_set_output(t_out_multi);
+            shell_execute(lbuf);
+            t_out_flush();
+            shell_set_output(0);
+            return;
+        }
+    }
+
     t_put("Unknown command. Type 'help' for list.");
 }
 
@@ -3979,6 +4022,17 @@ hs_window_t *hs_terminal_create(void)
         vga_puts("[HSAPPS] terminal create FAILED\n");
     }
     return t_win;
+}
+
+/* V0.59.3: 自动化取证通道 —— 启动时执行一条命令。
+ * 背景: QEMU -display none 下鼠标/键盘事件进不到系统里, CLI 改动没法交互验证;
+ * 有了这条通道, 构建完往 /etc/hepushell/autostart.cmd 写一行命令, 启动后
+ * 终端窗口里直接就是命令输出, 截图即证据。 */
+void hs_terminal_run_line(const char *line)
+{
+    if (!line || !line[0]) return;
+    hs_terminal_create();
+    t_exec(line);
 }
 
 hs_window_t *hs_files_create(void)

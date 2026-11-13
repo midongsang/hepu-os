@@ -5,6 +5,7 @@
 
 /* 应用窗口创建 */
 hs_window_t *hs_terminal_create(void);
+void hs_terminal_run_line(const char *line);
 hs_window_t *hs_files_create(void);
 hs_window_t *hs_taskmgr_create(void);
 hs_window_t *hs_editor_create(void);

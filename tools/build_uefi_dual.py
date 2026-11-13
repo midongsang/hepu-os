@@ -165,6 +165,28 @@ def create_fat32_esp(img):
 
     print("[FAT32] ESP分区创建完成")
 
+def _pack_rootfs(ext2_tmp):
+    """把 PROJECT/rootfs 下的目录树整体写进 ext2 分区。"""
+    rf = f"{PROJECT}/rootfs"
+    if not os.path.isdir(rf):
+        return
+    dirs, files = [], []
+    for root, dnames, fnames in os.walk(rf):
+        rel = os.path.relpath(root, rf).replace(os.sep, '/')
+        for d in dnames:
+            dirs.append('/' + (d if rel == '.' else rel + '/' + d))
+        for fn in fnames:
+            src = os.path.join(root, fn)
+            dst = '/' + (fn if rel == '.' else rel + '/' + fn)
+            files.append((src, dst))
+    for d in dirs:
+        subprocess.run(['debugfs', '-w', ext2_tmp, '-R', f'mkdir {d}'],
+                       capture_output=True)
+    for src, dst in files:
+        subprocess.run(['debugfs', '-w', ext2_tmp, '-R', f'write {src} {dst}'],
+                       capture_output=True)
+    print(f"  写入 rootfs 树: {len(files)} 文件 / {len(dirs)} 目录")
+
 def create_ext2_data(img):
     """创建ext2根分区"""
     print("[EXT2] 创建根分区...")
@@ -173,6 +195,12 @@ def create_ext2_data(img):
     subprocess.run(['mkfs.ext2', '-F', '-b', '4096', ext2_tmp,
                     str(DATA_SIZE // 4096)],
                    capture_output=True)
+
+    # V0.59.3: 打包 rootfs/ 树。
+    # 旧实现只写了字体/壁纸/光标, rootfs/ 目录从未进镜像 —— 于是
+    # /etc/hepushell/config.hsqml 一直「期望存在、实际缺失」, 配置读取永远落回
+    # 内核内嵌的兜底模板, 改镜像里的配置不生效的根因就在这里。
+    _pack_rootfs(ext2_tmp)
 
     # 写入字体文件
     font_path = f"{PROJECT}/kernel/fonts/DejaVuSans.ttf"

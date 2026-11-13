@@ -43,6 +43,19 @@ extern void term64_cmd_taskmgr(void);
 extern void term64_cmd_notes(int argc, char **argv);
 extern void term64_cmd_history(void);
 
+/* V0.59.3: 输出重定向。
+ * 桌面 Terminal 走 hs_apps 的 t_put, 文本模式 shell 走 vga_puts —— 两套输出。
+ * shell_execute 早就「导出给图形终端调用」, 但没人接, 于是终端里敲 dmesg 得到
+ * "Unknown command"。这里把 vga_puts 做成可重定向: 图形终端一旦注册 hook,
+ * 本文件里所有命令输出自动变成终端行, 不必逐条命令改写。
+ * shell_puts_local 在宏定义之前编译, 它调的是原始 vga_puts, 因此不会递归。 */
+static void (*g_shell_out)(const char *) = 0;
+void shell_set_output(void (*fn)(const char *)) { g_shell_out = fn; }
+static void shell_puts_local(const char *s) { vga_puts(s); }
+/* 用可变参数宏: 文件里有 vga_puts((char[]){a,b,0}) 这种复合字面量, 单参宏会被
+ * 里面的逗号拆成多实参而报错。 */
+#define vga_puts(...) (g_shell_out ? g_shell_out((const char *)(__VA_ARGS__)) : shell_puts_local(__VA_ARGS__))
+
 static void shell_memcpy(void *dst, const void *src, int n) {
     uint8_t *d = (uint8_t*)dst;
     const uint8_t *s = (const uint8_t*)src;
@@ -2322,7 +2335,7 @@ static void shell_cmd_vmstat(int argc, char **argv)
     shell_itoa((int)(tot / (1024u * 1024u)), num); vga_puts(num); vga_puts("        ");
     shell_itoa((int)(used / (1024u * 1024u)), num); vga_puts(num); vga_puts("      ");
     shell_itoa((int)(freem / (1024u * 1024u)), num); vga_puts(num); vga_puts("\n");
-    vga_puts("note: si/so/io 未统计 —— 本系统无 swap，块设备计数器未接入\n");
+    vga_puts("note: si/so/io not tracked (no swap, no blk counters)\n");
 }
 
 /* pstree: 按父子关系打印进程树 */
@@ -2416,7 +2429,7 @@ static void shell_cmd_kill(int argc, char **argv)
         vga_puts("kill: pid "); shell_itoa(pid, num); vga_puts(num);
         vga_puts(" terminated (sig "); shell_itoa(sig, num); vga_puts(num); vga_puts(")\n");
     } else if (rc == -2) {
-        vga_puts("kill: refused (idle 或当前进程不允许终止)\n");
+        vga_puts("kill: refused (idle or self)\n");
     } else {
         vga_puts("kill: no such process "); shell_itoa(pid, num); vga_puts(num); vga_puts("\n");
     }
@@ -2432,24 +2445,24 @@ static void shell_cmd_killall(int argc, char **argv)
     shell_itoa(n, num);
     vga_puts("killall: "); vga_puts(num); vga_puts(" process(es) named ");
     vga_puts(argv[1]); vga_puts(" terminated\n");
-    if (n == 0) vga_puts("  (当前进程不会被自己杀，改名后再试)\n");
+    if (n == 0) vga_puts("  (self is never killed)\n");
 }
 
 static void shell_cmd_renice(int argc, char **argv)
 {
     extern int process64_set_priority(int pid, int prio);
     extern int process64_get_priority(int pid);
-    if (argc < 3) { vga_puts("usage: renice <prio 0-4> <pid>   (0=idle 2=normal 4=realtime)\n"); return; }
+    if (argc < 3) { vga_puts("usage: renice <0-4> <pid>  (0=idle 2=normal 4=rt)\n"); return; }
     int prio = (int)shell_atol_local(argv[1]);
     int pid = (int)shell_atol_local(argv[2]);
     int old = process64_get_priority(pid);
     int rc = process64_set_priority(pid, prio);
     char num[16];
-    if (rc != 0) { vga_puts("renice: no such process 或 prio 超出 0-4\n"); return; }
+    if (rc != 0) { vga_puts("renice: no such pid, or prio out of 0-4\n"); return; }
     vga_puts("renice: pid "); shell_itoa(pid, num); vga_puts(num);
     vga_puts(" priority "); shell_itoa(old, num); vga_puts(num);
     vga_puts(" -> "); shell_itoa(process64_get_priority(pid), num); vga_puts(num);
-    vga_puts("（时间片同步重算）\n");
+    vga_puts(" (slice recomputed)\n");
 }
 
 static void shell_cmd_taskset(int argc, char **argv)
@@ -2473,8 +2486,8 @@ static void shell_cmd_taskset(int argc, char **argv)
     if (rc < 0) { vga_puts("taskset: no such process\n"); return; }
     vga_puts("taskset: pid "); shell_itoa(pid, num); vga_puts(num);
     vga_puts(" 亲和性 -> cpu "); shell_itoa(rc, num); vga_puts(num);
-    vga_puts("（共 "); shell_itoa((int)smp_get_cpu_count(), num); vga_puts(num); vga_puts(" 核）\n");
-    vga_puts("  注意: AP 调度尚未开放(SB-25)，绑到 AP 目前只记账、不迁移\n");
+    vga_puts(" of "); shell_itoa((int)smp_get_cpu_count(), num); vga_puts(num); vga_puts(" cpus)\n");
+    vga_puts("  note: AP sched not open yet (SB-25), pin is bookkeeping\n");
 }
 
 /* lsblk / blkid: MBR 分区表（partition64 只解析 MBR；GPT 盘会回报无签名） */
@@ -2494,9 +2507,9 @@ static void shell_cmd_lsblk(int argc, char **argv)
     for (int i = 0; i < 4; i++) { p[i].present = 0; p[i].type = 0; p[i].lba_start = 0; p[i].sectors = 0; p[i].fs_ext2 = 0; }
     int rc = partition64_scan(p);
     if (rc != 0) {
-        vga_puts("lsblk: partition table scan failed (rc=");
+        vga_puts("lsblk: partition scan failed (rc=");
         char num[16]; shell_itoa(rc, num); vga_puts(num);
-        vga_puts(")\n  -1 = 读盘失败, -2 = 无 MBR 签名（GPT 盘属正常）\n");
+        vga_puts(")  -1=read error, -2=no MBR sig (normal on GPT)\n");
         return;
     }
     vga_puts("NAME     START        SECTORS      SIZE(MB)  FS\n");
@@ -2510,9 +2523,11 @@ static void shell_cmd_lsblk(int argc, char **argv)
         vga_puts("      ");
         shell_itoa((int)(p[i].sectors / 2048u), num); vga_puts(num);
         vga_puts("        ");
-        vga_puts(p[i].fs_ext2 ? "ext2" : "unknown");
+        if (p[i].type == 0xEE) vga_puts("gpt-prot");      /* GPT 保护项, 不是真分区 */
+        else vga_puts(p[i].fs_ext2 ? "ext2" : "unknown");
         vga_puts("\n");
     }
+    vga_puts("(gpt-prot = MBR protective entry; GPT parts not listed)\n");
 }
 
 static void shell_cmd_blkid(int argc, char **argv)
@@ -2522,7 +2537,7 @@ static void shell_cmd_blkid(int argc, char **argv)
     sh_part_t p[4];
     for (int i = 0; i < 4; i++) { p[i].present = 0; p[i].type = 0; p[i].lba_start = 0; p[i].sectors = 0; p[i].fs_ext2 = 0; }
     int rc = partition64_scan(p);
-    if (rc != 0) { vga_puts("blkid: no MBR partition table\n  UUID 未接入（本系统不做 UUID 持久化）\n"); return; }
+    if (rc != 0) { vga_puts("blkid: no MBR table   UUID: not persisted by this OS\n"); return; }
     for (int i = 0; i < 4; i++) {
         if (!p[i].present) continue;
         vga_puts("hd0p"); char num[16]; shell_itoa(i + 1, num); vga_puts(num);
@@ -2547,8 +2562,8 @@ static void shell_cmd_timedatectl(int argc, char **argv)
     if (h < 10) vga_puts("0"); shell_itoa(h, num); vga_puts(num); vga_puts(":");
     if (mi < 10) vga_puts("0"); shell_itoa(mi, num); vga_puts(num); vga_puts(":");
     if (se < 10) vga_puts("0"); shell_itoa(se, num); vga_puts(num);
-    vga_puts("\n     Time zone: 由 OOBE 选择（尚未写入全局 tz 变量）\n");
-    vga_puts("  NTP synced: no（未实现 NTP 客户端，时间为 RTC 直读）\n");
+    vga_puts("\n     Time zone: from OOBE (no global tz var yet)\n");
+    vga_puts("  NTP synced: no (no NTP client; RTC direct read)\n");
 }
 
 static void shell_cmd_pci(int argc, char **argv)
@@ -3331,6 +3346,15 @@ int shell_get_command_names(char names[][16], int max)
         n++;
     }
     return n;
+}
+
+/* 命令是否在表里 —— 图形终端用它决定要不要转发 */
+int shell_has_command(const char *name)
+{
+    if (!name) return 0;
+    for (int i = 0; shell_commands[i].name; i++)
+        if (shell_strcmp((char *)name, shell_commands[i].name) == 0) return 1;
+    return 0;
 }
 
 void shell_execute(char *line)
