@@ -174,3 +174,9 @@ hpdesk_render()
 > 注意：从对话上传的素材常被 CDN 转成 WebP（文件头 `RIFF`），落盘前需确认真正的 PNG 签名 `89 50 4E 47`，否则解码器返回 -2。
 
 主机回归：`tools/host-tests/png_test.c` + 5 个夹具（RGBA / RGB / 调色板透明 / 灰度 8bit / 灰度 1bit），逐像素比对，已纳入 `run_host_tests.sh`。
+
+## 八、三层模型逐项对照（V0.59.3 核查）
+
+与「显示后端 / 合成器 / GUI 组件库」三层模型的逐项对齐（含缺项与证据行号），
+见 [GRAPHICS_STACK](GRAPHICS_STACK.md)。要点：现役是单进程一体化（该模型的方案 1），
+已到阶段 2 后期；缺 **Surface / 脏矩形 / DisplayBackend** 三个抽象。
