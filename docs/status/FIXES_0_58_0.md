@@ -623,3 +623,83 @@ tick 频率漂移数倍（4.5 万 vs 9 千正是这个比例），用户态调�
 用户态拿不到 APIC timer 中断"这一环没有用 gdb 逐指令证死 —— 这里如实标注，
 避免把推断写成定论。
 
+#### 后续复核（V0.58.4）—— 这条结论要修正
+
+§1.98 报的"连续 15 次 15/15"**样本量不够，不能作为闭环证据**。之后又跑了两批：
+
+| 批次 | 结果 | 失败样本 |
+|---|---|---|
+| 10 次（加调度器锁后） | 9/10 | run2 `desk=53s P=0 F=1 calfail=1` |
+| 20 次（回退 ICR 改 35000 后） | 19/20 | run4 `desk=57s P=0 F=1 calfail=2` |
+
+两次失败都恰好是带 `[APIC] WARN: timer calibration failed` 的那次启动 ——
+**因果方向是对的**（校准失败 ⇔ clone 失败），但**修复没有闭环**。
+
+进一步排除了两个假设：
+
+1. **IF 假设不完整**。wrapper 里已经 `pushfq` 记 IF、`sti` 跑窗口、完成后按原
+   状态恢复，失败仍会发生 —— 说明调用方未必处在 `cli`，或者 PIT 中断不来
+   另有原因。
+2. **频率假设不成立**。把回退 ICR 从 6250（≈5.6kHz）改成 35000（≈1kHz，
+   与校准成功的实测值同一量级），失败样本行为**完全不变**。既然"快 5 倍的
+   tick"和"正常 tick"两种回退档位都失败，那就不是频率问题 —— 而是**中断根本
+   没投递到用户态**（诊断数据 `apic_cpl3=0`、`cs[k,u]=[k,0]` 正是这个含义）。
+
+**当前定位**。失败启动里 PIT 与 APIC timer 两条路径在 CPL=3 的投递都是零，
+说明问题在中断控制器层的启动期配置，而不是某个 tick 的频率。下一个要查的
+方向是 `apic64_switch_to_apic_mode()` 配好的 IOAPIC 重定向表是否会被
+`smp_init` 中 AP 核的初始化覆盖或部分失效（未验证，属推断）。已登记
+`OPEN_BUGS.md` **OBS-01**（偶发约 5%，现象：启动慢到 53~57 秒 + clone FAIL）。
+
+### §1.99 SMP 阶段 A：调度器加锁
+
+**为什么要先加锁再开 AP 调度**。`process64_schedule()` 原实现全程无锁，而它
+会被两条路径同时调用：`smp_timer_tick()`（时钟中断上下文，AP 核上尤其）和
+普通上下文（`process64_yield()` 等）。SMP 下两个核并发执行它会同时改
+`ready_queue[]`、`ready_queue_count[]`、`current_pid`、`per_cpu_current_idx[]`，
+选出同一个进程、队列计数错乱都是必然。
+
+**两个不能踩的点**：
+
+1. **`spinlock_lock()` 本身不关中断**。持锁时若被本核中断打断、而中断处理里
+   又要同一把锁 → 自死锁。所以加锁前必须 `cli`，并把调用方原本的 IF 记下来，
+   解锁后**按原值恢复**而不是无脑 `sti`（IRQ 上下文里本来 IF=0，提前开中断
+   会在 EOI 之前放嵌套中断进来）。
+2. **绝不能持锁跨越 `context_switch_64()`**。切完是另一个线程在跑，锁会永远
+   留在上一个线程手里，下一个申请者直接卡死。所以两处切换点都改成
+   "取好 pid → 释放锁 → 再切"。
+
+**实现**（`process64_full.c`，新增 56 行）：
+
+```c
+static spinlock_t g_sched_lock;
+static int g_sched_lock_ready = 0;
+
+static uint64_t sched_lock_acquire(void)   /* pushfq -> 记 IF -> cli -> 懒初始化 -> lock */
+static void sched_lock_release(uint64_t f) /* unlock -> 仅当 f 的 bit9 置位才 sti */
+```
+
+`process64_schedule()` 开头 `uint64_t sched_iflags = sched_lock_acquire();`，
+两处 `context_switch_64` 前 `sched_lock_release(sched_iflags)` 并把返回值先存好，
+结尾 `return -1` 前也释放。
+
+**阶段 A 的边界**：**没有动 `smp.c:140` 的 `if (cpu_id != bsp_cpu_id && 0)`**，
+AP 核仍然不调度。这一步只验证"加锁本身不改变单核行为"，不与"双核并发"这个
+变量混在一起。
+
+**回归**（10 次，`-smp 2`，AP 调度仍关）：9/10 通过，其余 9 次
+`desk=15~16s P=1 EXC=0 ps=2`；唯一失败是那次的 §1.98/OBS-01 校准问题
+（`calfail=1`），不是加锁引入的 —— `[SPINLOCK] ERROR` 出现 0 次，
+`unlock` 的 owner 检查一次都没报错。
+
+**还没做的（阶段 B 的前置风险，先记下来）**：
+
+- `current_pid` 是**全局单值**，不是 per-CPU。`process64_get_current()` 在多核
+  下语义有偏，两核同时读会互相串。
+- 工作窃取分支允许 `cpu_id == 0 || == cur_cpu`，打开 AP 调度后两核可能选中
+  同一个 `cpu_id == 0` 的进程。虽然选中后该进程会从 `ready_queue` 移除、
+  `state` 置 `RUNNING`，另一核不会再选到它，但 `old` 重新入队后可能被另一核
+  抢走并并发切换 —— 需要给进程加 `running_on` 之类的归属标记。
+- `context_switch_64` 是"保存当前到 old、从 new 恢复"，跨核切换同一进程会
+  把栈指针写串，这条比前面两条更硬。
+

@@ -606,12 +606,18 @@ void apic64_init_timer(void)
         }
     }
     if (g_apic_timer_hz == 0) {
-        /* 校准失败回退：保守 ICR（对应 100MHz 总线假设），PIT 1kHz 仍在
-           投递调度 tick，系统不致停摆；打印告警便于后续定位。
-           注意：实测只改这个回退值并不能把校准失败的系统救回桌面（6250 与 62500
-           现象相同）—— 失败本身意味着此刻 PIT tick 不推进，不是频率快慢的问题。 */
-        vga_puts("[APIC] WARN: timer calibration failed, fallback ICR=6250\n");
-        icr = 6250;
+        /* V0.58.4: 校准失败回退值从 6250 改为 35000（同实测量级）。
+           6250 对应 100MHz 总线假设，QEMU 实测总线约 400MHz，回退后 tick
+           会快 5 倍多；校准成功时 ICR≈35192（tick_hz 35MHz / 1000Hz）。
+
+           重要：改这个值并没有修好校准失败的启动。已用 20 次回归验证，
+           失败样本行为完全不变（仍 calfail=2、clone FAIL）。这里只是把
+           回退档位调到与真实量级一致，避免再叠加一个额外的频率错误，
+           不代表问题闭环。真正的根因（PIT/APIC timer 中断在部分启动里
+           完全不投递、连用户态都收不到）尚未定位，见
+           FIXES_0_58_0.md §1.99。 */
+        vga_puts("[APIC] WARN: timer calibration failed, fallback ICR=35000\n");
+        icr = 35000;
     } else {
         icr = g_apic_timer_hz / 1000;  /* 目标 1kHz */
         if (icr < 100) icr = 100;       /* 下限保护 */
