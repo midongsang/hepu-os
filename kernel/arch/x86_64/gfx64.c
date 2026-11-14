@@ -342,6 +342,50 @@ void gfx64_blend_image(void *src, int sw, int sh, int dx, int dy, int opacity)
     }
 }
 
+/* V0.59.24: 只遍历源图的一个子矩形, 逐像素语义与 gfx64_blend_image 完全一致。
+ * 拖动时窗口/阴影整体平移 dx, 与上一帧重叠的那一大块在后台缓冲里已经是对的,
+ * 真正"新出现"的只有移动方向前沿那一条 dx 宽的窄带 —— 拿整块 blend_image 去刷
+ * 面积等于 (w+2pad)*(h+2pad) 的缓冲纯属浪费。用这个子矩形版本把遍历面积
+ * 降到 dx*(h+2pad), 两个数量级的差距。 */
+void gfx64_blend_image_sub(void *src, int sw, int sh, int sx, int sy,
+                           int w, int h, int dx, int dy, int opacity)
+{
+    if (!gfx_initialized || !src || sw <= 0 || sh <= 0 || gfx_bpp != 32) return;
+    if (opacity <= 0 || w <= 0 || h <= 0) return;
+    if (sx < 0 || sy < 0 || sx >= sw || sy >= sh) return;
+    if (w + sx > sw) w = sw - sx;
+    if (h + sy > sh) h = sh - sy;
+    uint8_t *dstb = gfx_target ? gfx_target : front_buffer;
+    uint32_t *s32 = (uint32_t *)src;
+    uint32_t *d32 = (uint32_t *)dstb;
+    int pitch32 = gfx_pitch / 4;
+    for (int j = 0; j < h; j++) {
+        int ty = dy + j;
+        if (ty < 0 || (uint32_t)ty >= gfx_height) continue;
+        if (g_clip_on && (ty < g_clip_y0 || ty >= g_clip_y1)) continue;
+        uint32_t *srow = s32 + (long)(sy + j) * sw + sx;
+        uint32_t *drow = d32 + ty * pitch32;
+        for (int i = 0; i < w; i++) {
+            int tx = dx + i;
+            if (tx < 0 || (uint32_t)tx >= gfx_width) continue;
+            if (g_clip_on && (tx < g_clip_x0 || tx >= g_clip_x1)) continue;
+            uint32_t s = srow[i];
+            int a = (int)((s >> 24) & 0xFF);
+            if (opacity < 255) a = a * opacity / 255;
+            if (a == 0) continue;
+            uint32_t fg = s & 0x00FFFFFFu;
+            uint32_t *p = drow + tx;
+            if (a >= 255) { *p = fg; continue; }
+            uint32_t bg = *p;
+            int keep = 255 - a;
+            int rr = (int)((fg & 0xFF) * a / 255 + (bg & 0xFF) * keep / 255);
+            int gg = (int)(((fg >> 8) & 0xFF) * a / 255 + ((bg >> 8) & 0xFF) * keep / 255);
+            int bb = (int)(((fg >> 16) & 0xFF) * a / 255 + ((bg >> 16) & 0xFF) * keep / 255);
+            *p = (bg & 0xFF000000u) | ((uint32_t)bb << 16) | ((uint32_t)gg << 8) | (uint32_t)rr;
+        }
+    }
+}
+
 /* 复制背景缓冲区域到帧缓冲（整行64位复制，分层渲染用） */
 void gfx64_blit_to(uint8_t *dstfb, uint8_t *bg, int x, int y, int w, int h)
 {

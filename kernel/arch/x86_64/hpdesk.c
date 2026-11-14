@@ -1961,7 +1961,33 @@ static uint32_t hs_mix_color(uint32_t a, uint32_t b, int pct)
  */
 #define SH_BLUR_R     24    /* 单遍盒式模糊半径(缩放前); 3 遍 -> std ≈ r*sqrt(3) */
 #define SH_PASSES     3
+/* V0.59.24 拖动位移拷贝: 记录上一次真正画到屏幕的窗口/阴影位置。
+ * 与当前帧同一窗口、同尺寸、同 y、x 只差 dx(<=64) 时, 与上一帧重叠的那一大块
+ * 在后台缓冲里已经是对的, 只需刷移动前沿那条 dx 宽窄带。 */
+static int g_shd_ok, g_shd_id, g_shd_x, g_shd_y, g_shd_w, g_shd_h;
+static int g_wn_ok, g_wn_id, g_wn_x, g_wn_y, g_wn_w, g_wn_h;
+static int g_band_blits;
 #define SH_STRENGTH   255   /* 3 遍盒式模糊把边缘削到约 1/4, 这里补回来 */
+
+/* V0.59.24 位移拷贝的安全前提: 拖动窗口不能被别的窗口压住/压到别人。
+ * 因为"与上一帧重叠的那一大块已经是对的"这条假设, 只在没有任何其他窗口会在这
+ * 块上重画时才成立 —— hs_window_render_all 每帧会把别的窗口也 blend 一遍,
+ * 下层窗口的像素会覆盖掉拖动窗口在重叠区的内容, 产生穿透。
+ * 这里用最简单的保守判据: 只要有一个可见窗口与拖动窗口(含阴影 pad)相交, 就不走
+ * 带路径。窗口数很少, 每帧几次矩形相交判断, 成本可忽略。 */
+static int hs_no_other_window_overlap(const hs_window_t *w, int pad)
+{
+    for (int i = 0; i < g_wm.window_count; i++) {
+        hs_window_t *o = &g_wm.windows[i];
+        if (o == w || !o->visible) continue;
+        int ax0 = w->x - pad, ay0 = w->y - pad;
+        int ax1 = w->x + w->width + pad, ay1 = w->y + w->height + pad;
+        int bx0 = o->x, by0 = o->y;
+        int bx1 = o->x + o->width, by1 = o->y + o->height;
+        if (ax0 < bx1 && bx0 < ax1 && ay0 < by1 && by0 < ay1) return 0;
+    }
+    return 1;
+}
 
 static uint8_t *sh_mask = 0;
 static uint8_t *sh_tmp = 0;
@@ -2219,7 +2245,31 @@ static void hs_window_shadow(const hs_window_t *w)
 
     sh_kpk = pk;
     uint64_t sb2 = hs_rdtsc();
-    gfx64_blend_image(sh_argb, sh_mw, sh_mh, mx0, my0, 255);
+    /* V0.59.24 位移拷贝: 拖动中同一窗口只横向移动且位移 <=64 时, 只刷移动前沿
+     * 那一条新出现的窄带 —— 阴影整体平移 dx, 与上一帧重叠的部分已经是对的。
+     * 阴影缓冲面积是 (w+2pad)*(h+2pad)(Settings 约 836x811), 而窄带只有
+     * dx*(h+2pad)(dx=10 时约 8K), 差两个数量级。 */
+    int s_band = 0, s_dx = 0;
+    if (g_dragging && g_shd_ok && g_shd_id == w->id &&
+        g_shd_w == w->width && g_shd_h == w->height && g_shd_y == w->y &&
+        hs_no_other_window_overlap(w, pad)) {
+        int d = w->x - g_shd_x;
+        int ad = d < 0 ? -d : d;
+        if (ad > 0 && ad <= 64 && ad <= sh_mw) { s_band = 1; s_dx = d; }
+    }
+    if (s_band) {
+        if (s_dx > 0)
+            gfx64_blend_image_sub(sh_argb, sh_mw, sh_mh, sh_mw - s_dx, 0,
+                                  s_dx, sh_mh, mx0 + sh_mw - s_dx, my0, 255);
+        else
+            gfx64_blend_image_sub(sh_argb, sh_mw, sh_mh, 0, 0,
+                                  -s_dx, sh_mh, mx0, my0, 255);
+        g_band_blits++;
+    } else {
+        gfx64_blend_image(sh_argb, sh_mw, sh_mh, mx0, my0, 255);
+    }
+    g_shd_ok = 1; g_shd_id = w->id; g_shd_x = w->x; g_shd_y = w->y;
+    g_shd_w = w->width; g_shd_h = w->height;
     uint64_t sb3 = hs_rdtsc();
     g_cyc_shadow_blit += sb3 - sb2;
     g_cyc_shadow += sb3 - sb2;
@@ -2276,6 +2326,8 @@ extern void gfx64_target_end(void);
 extern void gfx64_fill_round_rect_argb(void *buf, int bw, int bh, int x, int y, int w, int h,
                                         int r, uint32_t color, int corners);
 extern void gfx64_blend_image(void *src, int sw, int sh, int dx, int dy, int opacity);
+extern void gfx64_blend_image_sub(void *src, int sw, int sh, int sx, int sy,
+                              int w, int h, int dx, int dy, int opacity);
 extern void gfx64_clip_set(int x, int y, int w, int h);
 extern void gfx64_clip_disable(void);
 
@@ -2394,7 +2446,32 @@ void hs_window_render_all(void)
         if (tsurf && !w->content_dirty) {
             /* 内容没变: 直接贴上一帧的 surface, 跳过 memset + 全部绘制 */
             { uint64_t b0 = hs_rdtsc();
-              gfx64_blend_image(tsurf, w->width, w->height, w->x, w->y, 255);
+              /* V0.59.24 位移拷贝: 拖动中横向连续移动时, 窗口内容整体平移,
+               * 与上一帧重叠的部分已经在后台缓冲里, 只需刷前沿那条 dx 宽窄带
+               * (宽度 dx 而非整个 w, 高度 h 不变)。 */
+              int w_band = 0, w_dx = 0;
+              if (g_dragging && g_wn_ok && g_wn_id == w->id &&
+                  g_wn_w == w->width && g_wn_h == w->height && g_wn_y == w->y &&
+                  hs_no_other_window_overlap(w, 0)) {
+                  int d = w->x - g_wn_x;
+                  int ad = d < 0 ? -d : d;
+                  if (ad > 0 && ad <= 64 && ad <= w->width) { w_band = 1; w_dx = d; }
+              }
+              if (w_band) {
+                  if (w_dx > 0)
+                      gfx64_blend_image_sub(tsurf, w->width, w->height,
+                                            w->width - w_dx, 0, w_dx, w->height,
+                                            w->x + w->width - w_dx, w->y, 255);
+                  else
+                      gfx64_blend_image_sub(tsurf, w->width, w->height,
+                                            0, 0, -w_dx, w->height,
+                                            w->x, w->y, 255);
+                  g_band_blits++;
+              } else {
+                  gfx64_blend_image(tsurf, w->width, w->height, w->x, w->y, 255);
+              }
+              g_wn_ok = 1; g_wn_id = w->id; g_wn_x = w->x; g_wn_y = w->y;
+              g_wn_w = w->width; g_wn_h = w->height;
               g_cyc_blend += hs_rdtsc() - b0; }
             g_surf_reuse++;
             continue;
@@ -2555,6 +2632,9 @@ void hs_window_render_all(void)
             gfx64_target_end();
             { uint64_t b0 = hs_rdtsc();
               gfx64_blend_image(tsurf, w->width, w->height, w->x, w->y, 255);
+              /* 刚重画了整块 surface, 这一帧是整块贴上去的, 记录位置供下一帧做带 */
+              g_wn_ok = 1; g_wn_id = w->id; g_wn_x = w->x; g_wn_y = w->y;
+              g_wn_w = w->width; g_wn_h = w->height;
               g_cyc_blend += hs_rdtsc() - b0; }
             w->content_dirty = 0;
             g_surf_repaint++;
