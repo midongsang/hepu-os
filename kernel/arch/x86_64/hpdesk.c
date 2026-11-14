@@ -2280,6 +2280,10 @@ extern void gfx64_clip_set(int x, int y, int w, int h);
 extern void gfx64_clip_disable(void);
 
 static int g_surf_reuse, g_surf_repaint;
+/* V0.59.17: 当前帧是否走局部脏区路径(面板/控制中心/通知据此决定是否按矩形跳过) */
+static int g_in_partial_frame;
+/* V0.59.17: 当前帧是否走局部脏区路径(面板/控制中心/通知据此决定是否按矩形跳过) */
+static int g_in_partial_frame;
 static uint64_t g_t_drag_start;
 /* V0.59.13 分段计时: rdtsc 周期数, 定位瓶颈用 */
 static inline uint64_t hs_rdtsc(void)
@@ -3062,6 +3066,64 @@ int hs_panel_is_enabled(const char *name)
     return 0;
 }
 
+/* V0.59.17 面板包围盒: 局部脏区帧只重画与脏区相交的面板。
+ * 矩形一律取"比实际绘制区域略大"的保守值 —— 多画一像素只是浪费, 少画就是残影。 */
+static int hs_panel_bounds(int idx, int *ox, int *oy, int *ow, int *oh)
+{
+    int sw = g_shell.screen_width, sh = g_shell.screen_height;
+    switch (idx) {
+    case HS_PANEL_TOP_BAR:
+        *ox = 0; *oy = 0;
+        *ow = sw; *oh = hs_sy(8) + hs_sy(g_shell.ui.bar_height) + hs_sy(16);
+        return 1;
+    case HS_PANEL_DYNAMIC_ISLAND: {
+        int iw = hs_sx(g_shell.ui.island_width), ih = hs_sy(g_shell.ui.island_height);
+        *ox = (sw - iw) / 2 - hs_sx(8);
+        *oy = hs_sy(g_shell.ui.island_y) - hs_sy(8);
+        *ow = iw + hs_sx(16); *oh = ih + hs_sy(16);
+        return 1;
+    }
+    case HS_PANEL_DOCK: {
+        int dw = hs_sx(g_shell.ui.dock_width), dh = hs_sy(g_shell.ui.dock_height);
+        *ox = (sw - dw) / 2 - hs_sx(4);
+        *oy = sh - dh - hs_sy(40); if (*oy < 0) *oy = 0;
+        *ow = dw + hs_sx(8); *oh = sh - *oy;
+        return 1;
+    }
+    case HS_PANEL_DESKTOP_CLOCK: {
+        int cw = hs_sx(560), ch = hs_sy(200);
+        *ox = (sw - cw) / 2; *oy = (sh - ch) / 2 - hs_sy(40);
+        *ow = cw; *oh = ch + hs_sy(80);
+        return 1;
+    }
+    case HS_PANEL_WEATHER: {
+        int ww = hs_sx(g_shell.ui.weather_width), wh = hs_sy(g_shell.ui.weather_height);
+        *ox = sw - ww - hs_sx(70); *oy = hs_sy(150);
+        *ow = ww + hs_sx(80); *oh = wh + hs_sy(40);
+        return 1;
+    }
+    case HS_PANEL_SIDEBAR: {
+        *ox = hs_sx(g_shell.ui.sidebar_x) - hs_sx(8);
+        *oy = hs_sy(g_shell.ui.sidebar_y) - hs_sy(8);
+        *ow = hs_sx(g_shell.ui.sidebar_width) + hs_sx(16);
+        *oh = hs_sy(g_shell.ui.sidebar_height) + hs_sy(16);
+        if (*ox < 0) *ox = 0;
+        if (*oy < 0) *oy = 0;
+        return 1;
+    }
+    }
+    return 0;
+}
+
+/* 脏区(单矩形)与给定矩形是否相交; 任一无矩形返回 1(保守: 视为相交, 照画) */
+static int hs_dirty_intersects(int x, int y, int w, int h)
+{
+    if (g_dirty_x1 < 0) return 1;
+    if (x >= g_dirty_x1 || y >= g_dirty_y1) return 0;
+    if (x + w <= g_dirty_x0 || y + h <= g_dirty_y0) return 0;
+    return 1;
+}
+
 void hs_panel_render_all(void)
 {
     /* 按层级顺序渲染所有启用的面板（顶部面板优先，避免累积corruption）
@@ -3076,9 +3138,15 @@ void hs_panel_render_all(void)
     };
     for (int i = 0; i < 6; i++) {
         int idx = order[i];
-        if (g_shell.panel_registry[idx].enabled && g_shell.panel_registry[idx].render) {
-            g_shell.panel_registry[idx].render();
+        if (!g_shell.panel_registry[idx].enabled || !g_shell.panel_registry[idx].render) continue;
+        /* 局部脏区帧: 与脏区不相交的面板跳过(拖动窗口时顶栏/侧栏/Dock 通常都不相交) */
+        if (g_in_partial_frame) {
+            int px = 0, py = 0, pw = 0, ph = 0;
+            if (hs_panel_bounds(idx, &px, &py, &pw, &ph) &&
+                pw > 0 && ph > 0 && !hs_dirty_intersects(px, py, pw, ph))
+                continue;
         }
+        g_shell.panel_registry[idx].render();
     }
 }
 
@@ -5574,6 +5642,7 @@ static void hpdesk_render_inner(void)
         int dx_ = 0, dy_ = 0, dw_ = 0, dh_ = 0;
         if (!g_content_dirty && !animating && hs_dirty_rect(&dx_, &dy_, &dw_, &dh_)) {
             gfx64_set_target_back();
+            g_in_partial_frame = 1;
             g_ts1 = hs_rdtsc() - __rs0;
             hs_wallpaper_render_rect(dx_, dy_, dw_, dh_);
             g_ts2 = hs_rdtsc() - __rs0;
@@ -5581,9 +5650,17 @@ static void hpdesk_render_inner(void)
             g_ts3 = hs_rdtsc() - __rs0;
             hs_window_render_all();
             g_ts4 = hs_rdtsc() - __rs0;
-            if (g_shell.panel_registry[HS_PANEL_CONTROL_CENTER].enabled)
-                hs_control_center_render();
-            hs_notification_render();
+            if (g_shell.panel_registry[HS_PANEL_CONTROL_CENTER].enabled) {
+                int ccx = 0, ccy = 0, ccw = 0, cch = 0;
+                cc_geometry(&ccx, &ccy, &ccw, &cch);
+                if (hs_dirty_intersects(ccx, ccy, ccw, cch)) hs_control_center_render();
+            }
+            {
+                /* 通知在右上角, 保守取右半 + 顶部 200 逻辑像素 */
+                int nx = g_shell.screen_width / 2;
+                if (hs_dirty_intersects(nx, 0, g_shell.screen_width - nx, hs_sy(200)))
+                    hs_notification_render();
+            }
             g_ts5 = hs_rdtsc() - __rs0;
             gfx64_present_region(dx_, dy_, dw_, dh_);
             g_ts6 = hs_rdtsc() - __rs0;
@@ -5600,6 +5677,7 @@ static void hpdesk_render_inner(void)
             cursor64_draw(mx, my);
             g_last_mx = mx; g_last_my = my;
             hs_dirty_reset();
+            g_in_partial_frame = 0;
             g_dirty_frames++;
             return;
         }
