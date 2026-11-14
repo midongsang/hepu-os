@@ -198,78 +198,87 @@ syscall_entry_64:
  * ============================================================================ */
 .global fork_trampoline_64
 fork_trampoline_64:
-    /* 若 sys_fork 提供了克隆页表，先加载它（子进程独立地址空间） */
-    movq g_fork_child_pml4(%rip), %rax
+    /* R3-7: 从本核 per-CPU 的 %gs:0x10 取"当前进程自己的" fork 快照槽。
+     * 全局单份已经废弃 —— 两个父进程并发 fork 时那份会被互相覆盖，
+     * 子进程会恢复到别人的 rip/rsp。 */
+    movq %gs:0x10, %rax
     testq %rax, %rax
+    jz 9f
+    /* 0x00 = child_pml4（0 表示沿用当前 CR3） */
+    movq 0x00(%rax), %rdx
+    testq %rdx, %rdx
     jz 1f
-    movq %rax, %cr3
+    movq %rdx, %cr3
 1:
-    /* 恢复用户 GPR（子进程继承父进程 fork 时刻的寄存器快照）。
-     * 旧代码只恢复 rsp/rip/rflags 和 rax，callee-saved 寄存器（r12/r13/r14/
-     * r15/rbx/rbp 等）全是内核线程残留值 —— 用户把常量放在 r12 里做
-     * exit(7) 时，子进程实际调用的是 exit(0)。
-     * g_fork_parent_gprs 布局与父进程恢复路径一致：
-     * [0]=r15 [1]=r14 [2]=r13 [3]=r12 [4]=r11 [5]=r10 [6]=r9 [7]=r8
-     * [8]=rbp [9]=rdi [10]=rsi [11]=rdx [12]=rcx [13]=rbx [14]=rax
-     * 这里跳过 r11/rsp/rip/rax（它们由下面的专用槽单独设置）。 */
-    movq  g_fork_parent_gprs+0(%rip), %r15
-    movq  g_fork_parent_gprs+8(%rip), %r14
-    movq  g_fork_parent_gprs+16(%rip), %r13
-    movq  g_fork_parent_gprs+24(%rip), %r12
-    movq  g_fork_parent_gprs+40(%rip), %r10
-    movq  g_fork_parent_gprs+48(%rip), %r9
-    movq  g_fork_parent_gprs+56(%rip), %r8
-    movq  g_fork_parent_gprs+64(%rip), %rbp
-    movq  g_fork_parent_gprs+72(%rip), %rdi
-    movq  g_fork_parent_gprs+80(%rip), %rsi
-    movq  g_fork_parent_gprs+88(%rip), %rdx
-    movq  g_fork_parent_gprs+104(%rip), %rbx
-
-    /* 恢复用户栈（子进程专用快照槽） */
-    movq g_fork_child_rsp(%rip), %rsp
+    /* 0x50.. = parent_gprs[15]
+     * [0]r15 [1]r14 [2]r13 [3]r12 [4]r11 [5]r10 [6]r9 [7]r8
+     * [8]rbp [9]rdi [10]rsi [11]rdx [12]rcx [13]rbx [14]rax
+     * 跳过 r11/rsp/rip/rax（由专用槽单独设置） */
+    movq 0x50(%rax), %r15
+    movq 0x58(%rax), %r14
+    movq 0x60(%rax), %r13
+    movq 0x68(%rax), %r12
+    movq 0x78(%rax), %r10
+    movq 0x80(%rax), %r9
+    movq 0x88(%rax), %r8
+    movq 0x90(%rax), %rbp
+    movq 0x98(%rax), %rdi
+    movq 0xa0(%rax), %rsi
+    movq 0xa8(%rax), %rdx
+    movq 0xb8(%rax), %rbx
+    /* 0x10 = child_rsp */
+    movq 0x10(%rax), %rsp
     swapgs
-
-    /* 设置返回上下文（专用槽，非全局槽） */
-    movq g_fork_child_rip(%rip), %rcx
-    movq g_fork_child_rflags(%rip), %r11
-    xorq %rax, %rax  /* 子进程fork返回0 */
-
-    /* 返回用户态 */
+    /* 0x08 = child_rip,  0x18 = child_rflags */
+    movq 0x08(%rax), %rcx
+    movq 0x18(%rax), %r11
+    xorq %rax, %rax
     sysretq
+9:
+    /* 快照槽为空说明调度器没绑定，这时候 sysret 出去是跳野地址，宁可停机 */
+    cli
+    hlt
+    jmp 9b
 
 /* V0.33.10: 子进程 exit 后恢复父进程。
  * 父进程的内核栈上保存了全部GPR(和syscall_entry push的一样)。
  * 我们切到父内核栈, pop GPR, 设 rax=child_pid, sysret回父用户态。 */
 .global fork_return_to_parent
 fork_return_to_parent:
-    /* 加载父进程页表 */
-    movq g_fork_parent_cr3(%rip), %rax
+    movq %gs:0x10, %rax
     testq %rax, %rax
+    jz 9f
+    /* 0x20 = parent_cr3 */
+    movq 0x20(%rax), %rdx
+    testq %rdx, %rdx
     jz 1f
-    movq %rax, %cr3
+    movq %rdx, %cr3
 1:
-    /* 恢复父进程callee-saved GPR (从独立快照)
-     * gprs[0]=r15 [1]=r14 [2]=r13 [3]=r12 [4]=r11 [5]=r10
-     * [6]=r9 [7]=r8 [8]=rbp [9]=rdi [10]=rsi [11]=rdx [12]=rcx [13]=rbx [14]=rax */
-    movq  g_fork_parent_gprs+0(%rip), %r15
-    movq  g_fork_parent_gprs+8(%rip), %r14
-    movq  g_fork_parent_gprs+16(%rip), %r13
-    movq  g_fork_parent_gprs+24(%rip), %r12
-    movq  g_fork_parent_gprs+40(%rip), %r10
-    movq  g_fork_parent_gprs+48(%rip), %r9
-    movq  g_fork_parent_gprs+56(%rip), %r8
-    movq  g_fork_parent_gprs+64(%rip), %rbp
-    movq  g_fork_parent_gprs+72(%rip), %rdi
-    movq  g_fork_parent_gprs+80(%rip), %rsi
-    movq  g_fork_parent_gprs+88(%rip), %rdx
-    movq  g_fork_parent_gprs+104(%rip), %rbx
-    /* 恢复父用户栈 */
-    movq g_fork_parent_ustack(%rip), %rsp
+    /* 0x50.. = parent_gprs[15]，同上跳过 r11/rsp/rip/rax */
+    movq 0x50(%rax), %r15
+    movq 0x58(%rax), %r14
+    movq 0x60(%rax), %r13
+    movq 0x68(%rax), %r12
+    movq 0x78(%rax), %r10
+    movq 0x80(%rax), %r9
+    movq 0x88(%rax), %r8
+    movq 0x90(%rax), %rbp
+    movq 0x98(%rax), %rdi
+    movq 0xa0(%rax), %rsi
+    movq 0xa8(%rax), %rdx
+    movq 0xb8(%rax), %rbx
+    /* 0x38 = parent_ustack */
+    movq 0x38(%rax), %rsp
     swapgs
-    movq g_fork_parent_rip(%rip), %rcx
-    movq g_fork_parent_rflags(%rip), %r11
-    movq g_fork_parent_retval(%rip), %rax
+    /* 0x28 = parent_rip, 0x30 = parent_rflags, 0x40 = parent_retval */
+    movq 0x28(%rax), %rcx
+    movq 0x30(%rax), %r11
+    movq 0x40(%rax), %rax
     sysretq
+9:
+    cli
+    hlt
+    jmp 9b
 
 /* ============================================================================
  * 中断入口（通用）
@@ -582,11 +591,11 @@ g_syscall_ret_rflags:
 .global g_syscall_kernel_rsp
 g_syscall_kernel_rsp:
     .quad 0
-/* fork 子进程要加载的克隆页表 PML4 物理地址（sys_fork 设置）；0=沿用当前 CR3 */
+/* 历史符号（R3-7 后已无读取方，保留只为不破坏外部引用）。
+ * fork 上下文现在按进程存在 g_fork_snaps[] 里，由 %gs:0x10 指向。 */
 .global g_fork_child_pml4
 g_fork_child_pml4:
     .quad 0
-/* fork 子进程专用返回上下文（sys_fork 从父进程全局槽快照，避免被子进程调度时覆盖） */
 .global g_fork_child_rip
 g_fork_child_rip:
     .quad 0

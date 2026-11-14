@@ -33,7 +33,11 @@
 typedef struct {
     uint64_t kernel_stack;   /* GS:0x00 - 内核栈指针 */
     uint64_t user_stack;     /* GS:0x08 - 用户栈指针（保存用） */
-    uint64_t reserved[6];
+    /* R3-7: 本核当前进程的 fork 快照槽地址。fork_trampoline_64 /
+     * fork_return_to_parent 用 %gs:0x10 取它，从而按进程拿到属于自己的快照，
+     * 不再读全局单份。 */
+    uint64_t fork_snap;      /* GS:0x10 */
+    uint64_t reserved[5];
 } percpu_data_t;
 
 /* SB-17: per-CPU 存储。每个核一份, GS 段基址指向自己那份。
@@ -53,10 +57,18 @@ static int syscall_current_cpu(void)
     return smp_get_current_cpu();
 }
 
+/* 由调度器在切到某个进程时调用, 把该进程的 fork 快照槽挂到本核 per-CPU 槽 */
+void syscall64_set_fork_snap(uint64_t addr);
+
 /* 当前核的 percpu 结构 (GS 段基址就是它) */
 percpu_data_t *syscall64_pcpu(void)
 {
     return &percpu_data[syscall_current_cpu()];
+}
+
+void syscall64_set_fork_snap(uint64_t addr)
+{
+    syscall64_pcpu()->fork_snap = addr;
 }
 
 /* 当前核的栈槽地址。entry_64.S 走 %gs:0x00 / %gs:0x08, C 侧统一经这里取,

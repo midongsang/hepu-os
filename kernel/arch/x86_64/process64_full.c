@@ -603,6 +603,15 @@ int process64_create_suspended(const char *name, void (*entry)(void), int priori
     return pid;
 }
 
+/* 按 pid 找进程槽索引（-1 = 没找到） */
+int process64_index_of_pid(int pid)
+{
+    for (int i = 0; i < MAX_PROCESSES; i++) {
+        if (processes[i].pid == pid && processes[i].state != PROC_STATE_UNUSED) return i;
+    }
+    return -1;
+}
+
 /* 当前 CPU 上正在运行的进程槽索引（无有效值时 -1）。
  * sys_fork 用它给"父进程一份专属快照槽"，避免多进程并发 fork 互踩。 */
 int process64_current_index(void)
@@ -829,6 +838,8 @@ int process64_schedule(void)
         processes[idx].context_switches++;
         per_cpu_current_pid[cur_cpu] = processes[idx].pid;
         per_cpu_current_idx[cur_cpu] = idx;
+        { extern void syscall64_bind_fork_snap(int);
+          syscall64_bind_fork_snap(idx); }
         /* 归属交接: old 不再由本核执行, new 改由本核执行 */
         if (old) old->running_on = -1;
         processes[idx].running_on = (int)cur_cpu;
@@ -873,6 +884,8 @@ int process64_schedule(void)
             processes[idx].context_switches++;
             per_cpu_current_pid[cur_cpu] = processes[idx].pid;
             per_cpu_current_idx[cur_cpu] = idx;
+            { extern void syscall64_bind_fork_snap(int);
+              syscall64_bind_fork_snap(idx); }
             if (old) old->running_on = -1;
             processes[idx].running_on = (int)cur_cpu;
 
@@ -900,6 +913,8 @@ int process64_schedule(void)
             int ret_pid = ip->pid;
             ip->state = PROC_STATE_RUNNING;
             per_cpu_current_idx[cur_cpu] = idle_idx;
+            { extern void syscall64_bind_fork_snap(int);
+              syscall64_bind_fork_snap(idle_idx); }
             per_cpu_current_pid[cur_cpu] = ip->pid;
             if (old->state == PROC_STATE_RUNNING) old->state = PROC_STATE_READY;
             old->running_on = -1;

@@ -1812,6 +1812,40 @@ static int64_t sys_readdir(const char *path, char *outbuf, int outsz)
     return used;
 }
 
+/* R3-7: per-process fork 快照槽。
+ *
+ * 布局必须与 entry_64.S 的偏移严格一致（那份汇编按字面偏移取字段）:
+ *   0x00 child_pml4   0x08 child_rip    0x10 child_rsp   0x18 child_rflags
+ *   0x20 parent_cr3   0x28 parent_rip   0x30 parent_rflags  0x38 parent_ustack
+ *   0x40 parent_retval  0x48 parent_kstack  0x50 parent_gprs[15]  0xc8 busy
+ * 改这里必须同时改 entry_64.S 的偏移，_Static_assert 会拦住大小变化。
+ */
+typedef struct {
+    uint64_t child_pml4;        /* 0x00 */
+    uint64_t child_rip;         /* 0x08 */
+    uint64_t child_rsp;         /* 0x10 */
+    uint64_t child_rflags;      /* 0x18 */
+    uint64_t parent_cr3;        /* 0x20 */
+    uint64_t parent_rip;        /* 0x28 */
+    uint64_t parent_rflags;     /* 0x30 */
+    uint64_t parent_ustack;     /* 0x38 */
+    uint64_t parent_retval;     /* 0x40 */
+    uint64_t parent_kstack;     /* 0x48 */
+    uint64_t parent_gprs[15];   /* 0x50 .. 0xc0 */
+    uint64_t busy;              /* 0xc8 */
+} fork_snap_t;
+typedef char fork_snap_layout_check[(sizeof(fork_snap_t) == 208) ? 1 : -1];
+
+#define FORK_SNAP_SLOTS 32
+static fork_snap_t g_fork_snaps[FORK_SNAP_SLOTS];
+
+/* 调度器切到某进程时调用：把该进程的快照槽挂到本核 per-CPU 的 %gs:0x10 */
+void syscall64_bind_fork_snap(int proc_idx)
+{
+    if (proc_idx < 0 || proc_idx >= FORK_SNAP_SLOTS) proc_idx = 0;
+    syscall64_set_fork_snap((uint64_t)&g_fork_snaps[proc_idx]);
+}
+
 /* V0.33.8: fork 父进程返回上下文 (子进程exit后直接回父进程) */
 uint64_t g_fork_parent_rip = 0;
 uint64_t g_fork_parent_rsp = 0;
@@ -1838,14 +1872,17 @@ static void sys_exit(int code)
     print_syscall_number((int64_t)code);
     vga_puts("\n");
 
-    /* V0.33.10: 如果是 fork 子进程, 恢复父进程 */
-    extern uint64_t g_fork_child_pml4;
-    if (g_fork_child_pml4 && g_fork_parent_kstack) {
+    /* V0.33.10: 如果是 fork 子进程, 恢复父进程。
+     * R3-7: 用本进程自己的快照槽, 不再是全局单份。 */
+    extern int process64_current_index(void);
+    int _ci = process64_current_index();
+    fork_snap_t *_sn = (_ci >= 0 && _ci < FORK_SNAP_SLOTS) ? &g_fork_snaps[_ci] : (fork_snap_t *)0;
+    if (_sn && _sn->child_pml4 && _sn->parent_kstack) {
         vga_puts("[FORK] child exit, return to parent\n");
         /* V0.34.1: 记录子进程退出码到进程表 (zombie) */
         extern int process64_set_zombie(int code);
         process64_set_zombie(code);
-        g_fork_child_pml4 = 0;
+        _sn->child_pml4 = 0;
         extern void fork_return_to_parent(void);
         fork_return_to_parent();
     }
@@ -2067,29 +2104,20 @@ static int64_t sys_fork(void)
     /* 若当前是隔离模式 ELF 进程，克隆其用户地址空间作为子进程页表 */
     extern uint64_t uaspace_fork_copy(uint64_t parent_pml4);
     extern uint64_t user_process_current_pml4(void);
-    extern uint64_t g_fork_child_pml4;
-    g_fork_child_pml4 = 0;
+    uint64_t child_pml4_v = 0;
     uint64_t cur_pml4 = user_process_current_pml4();
     if (cur_pml4) {
         uint64_t child_pml4 = uaspace_fork_copy(cur_pml4);
         if (child_pml4) {
-            g_fork_child_pml4 = child_pml4;
+            child_pml4_v = child_pml4;
             vga_puts("[SYSCALL] fork: cloned user address space\n");
         }
     }
 
-    /* 快照父进程 syscall 返回上下文到子进程专用槽，
-     * 避免父进程后续 syscall 覆盖全局槽导致子进程回不到用户态 */
     extern uint64_t g_syscall_ret_rip;
     extern uint64_t g_syscall_ret_rflags;
     /* SB-17: 从本核的 per-CPU 槽取用户栈, 不再是全局单值 */
     extern uint64_t *syscall64_ustack_slot_ptr(void);
-    extern uint64_t g_fork_child_rip;
-    extern uint64_t g_fork_child_rsp;
-    extern uint64_t g_fork_child_rflags;
-    g_fork_child_rip = g_syscall_ret_rip;
-    g_fork_child_rsp = *syscall64_ustack_slot_ptr();
-    g_fork_child_rflags = g_syscall_ret_rflags;
 
     /* 创建子进程（使用fork_trampoline_64，子进程从syscall返回点继续执行） */
     extern void fork_trampoline_64(void);
@@ -2100,17 +2128,30 @@ static int64_t sys_fork(void)
         return -1;
     }
 
-    /* V0.33.10: 保存父进程完整内核上下文, 子进程exit后恢复父进程 */
+    /* V0.33.10 + R3-7: 把父进程完整上下文与子进程返回上下文写进 **子进程自己的槽**,
+     * 子进程 exit 后由 fork_return_to_parent 从同一槽恢复父进程。
+     * 两个不同父进程并发 fork 时互不干扰（同进程多线程并发 fork 仍受限，见文档 §7.2）。 */
     extern uint64_t g_syscall_kernel_rsp;
-    g_fork_parent_rip = g_syscall_ret_rip;
-    g_fork_parent_rflags = g_syscall_ret_rflags;
-    g_fork_parent_cr3 = cur_pml4;
-    g_fork_parent_kstack = g_syscall_kernel_rsp;
-    g_fork_parent_ustack = *syscall64_ustack_slot_ptr();
-    g_fork_parent_retval = (uint64_t)child_pid;
+    extern int process64_index_of_pid(int);
+    int cslot = process64_index_of_pid(child_pid);
+    if (cslot < 0 || cslot >= FORK_SNAP_SLOTS) {
+        vga_puts("[SYSCALL] fork() failed: bad child slot\n");
+        return -1;
+    }
+    fork_snap_t *sn = &g_fork_snaps[cslot];
+    sn->child_pml4   = child_pml4_v;
+    sn->child_rip    = g_syscall_ret_rip;
+    sn->child_rsp    = *syscall64_ustack_slot_ptr();
+    sn->child_rflags = g_syscall_ret_rflags;
+    sn->parent_cr3    = cur_pml4;
+    sn->parent_rip    = g_syscall_ret_rip;
+    sn->parent_rflags = g_syscall_ret_rflags;
+    sn->parent_kstack = g_syscall_kernel_rsp;
+    sn->parent_ustack = *syscall64_ustack_slot_ptr();
+    sn->parent_retval = (uint64_t)child_pid;
     /* 拷贝父进程GPR快照到独立缓冲 (子进程syscall会覆盖内核栈) */
     for (int i = 0; i < 15; i++)
-        g_fork_parent_gprs[i] = ((uint64_t *)g_syscall_kernel_rsp)[i];
+        sn->parent_gprs[i] = ((uint64_t *)g_syscall_kernel_rsp)[i];
 
     vga_puts("[SYSCALL] fork() created child pid: ");
     char buf[8];

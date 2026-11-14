@@ -366,18 +366,32 @@ QEMU 二进制：`tools/bin/qemu-system-x86_64`（7.2.0，未编 user 网络后�
 >   `copy_to_user` 移到锁外。低频路径，代价可忽略。
 > - ✅ **裸盘静态缓冲**：`sys_disk_read` / `sys_disk_write` 共用 `g_disk_lock` 串行化，
 >   两条路径都是 PID==0 闸后的特权路径，并发本就罕见。
-> - ⛔ **fork 父上下文单份**：**未清**。它不像上面两处能靠加锁解决 ——
->   快照是在 `fork_trampoline_64` / `fork_return_to_parent`（`entry_64.S`）里
->   直接按符号地址取用的，子进程首次被调度时跨上下文读取，锁保护不了。
->   正确做法是把快照槽指针随子进程携带（PCB 加字段，或 trampoline 从 PCB 取），
->   涉及用户态返回路径，必须与 SB-08 的多核实测一起单独验收。
->   因此 `HS_AP_SCHED_ENABLED` **继续保持 0**。
+> - ✅ **fork 父上下文单份**：**已清**。做法不是加锁（快照是在
+>   `fork_trampoline_64` / `fork_return_to_parent` 里跨上下文取用的，锁保护不了），
+>   而是**把快照槽指针随进程携带**：
+>   - per-CPU 结构（`syscall64_simple.c` 的 `percpu_data_t`）新增 `fork_snap` 字段，
+>     落在 `%gs:0x10`；结构总长仍为 64 字节，`percpu_size_check` 继续生效；
+>   - 快照槽改为 per 进程 `g_fork_snaps[32]`（`syscall64_full.c`，208 字节/槽，
+>     `_Static_assert` 锁定布局）；`sys_fork` 写进**子进程那一槽**，
+>     `sys_exit` 从**本进程那一槽**读；
+>   - 调度器切到某进程时调 `syscall64_bind_fork_snap(idx)`，把该槽挂到本核 `%gs:0x10`；
+>   - 两段汇编改为 `%gs:0x10` 取指针 + 字面偏移访问（偏移表写死在 `entry_64.S` 注释里，
+>     改结构必须同步改）。
+>   **已知限制**：同一进程的多线程并发 fork 仍会共用一槽（跨进程并发已互不干扰）。
+>   当前没有这样的调用点，DP 时再改成按线程槽。
 >
 > 顺带修掉一个既有隐患（不在 §7.1 清单里，但就是回归里 desk 偶发 0 的原因）：
 > `create_suspended` 原来"先 create(已入队)再摘队"，中间那个 tick 窗口里若 tick
 > 到来，BSP 会被切到一个不打算跑的常驻线程（优先级高于 idle），桌面主循环再也
 > 拿不回 CPU —— 实测停日志在 `Created process: khouse` 之后。已改为从源头不入队
 > （`g_create_no_enqueue`），窗口消失。
+
+**SB-08 多核浮点验收基线（2026-11-14）**：`-smp 12` 跑通，`desk=1 EXC=0 PASS=1
+FAIL=0 SPINERR=0`，日志确认 `CPU count: 0xC`、`per-CPU idle bound: 0xB`（11 AP +
+BSP 全部建了专属 idle）。这说明 12 核下 PID 表、idle 绑定、per-CPU 结构都没有越界。
+**但 FPU 保存区 8 槽 `& 7` 的踩踏要等 `HS_AP_SCHED_ENABLED=1` 之后才会真实发生**
+（AP 不调度就没有两个核同时用 FPU 的场景），所以真正的验收要放在开关打开后的
+第一轮：`-smp 12` + 两核同时跑浮点循环，看结果是否串。
 
 ### 7.2 已经在阶段 1 覆盖、但要核对是否真的覆盖到 AP 的
 
