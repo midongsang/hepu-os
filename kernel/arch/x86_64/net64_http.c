@@ -82,7 +82,10 @@ static int http_parse_url(const char *url, char *host, int host_max,
 }
 
 /* HTTP GET请求 */
-int http64_get(const char *url, uint8_t *response, int max_response)
+/* V0.59.14: GET 增加可指定等待时长。原实现固定 15s 上次包等待, 外网不可达时
+ * 桌面主循环会被整整堵住 15 秒(启动期天气请求就踩这个)。天气这类"拿不到就拉倒"
+ * 的请求传 3 秒即可, 驱动仓下载仍走默认 15 秒, 不会被截断。 */
+int http64_get_timeout(const char *url, uint8_t *response, int max_response, int timeout_s)
 {
     char host[128];
     char path[256];
@@ -157,7 +160,7 @@ int http64_get(const char *url, uint8_t *response, int max_response)
     extern uint64_t rtc64_get_timestamp(void);
     uint64_t t0 = rtc64_get_timestamp();
     int total = 0;
-    while (rtc64_get_timestamp() - t0 < 15) {
+    while (rtc64_get_timestamp() - t0 < (uint64_t)timeout_s) {
         net64_poll();
         int len = tcp64_recv(sock, response + total, max_response - total);
         if (len > 0) {
@@ -178,6 +181,11 @@ int http64_get(const char *url, uint8_t *response, int max_response)
     vga_puts(" bytes\n");
 
     return total;
+}
+
+int http64_get(const char *url, uint8_t *response, int max_response)
+{
+    return http64_get_timeout(url, response, max_response, 15);
 }
 
 /* HTTP POST请求 */

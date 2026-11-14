@@ -6968,7 +6968,9 @@ int hpdesk_fetch_weather(void)
     uint8_t body[1024];
     /* V0.56.1: 失败要能让调用方知道(此前失败静默 return, 桌面只在第 60 帧试一次,
      * 网络没就绪就永久没有天气) */
-    int rlen = http64_get(url, resp, sizeof(resp));
+    /* 天气是"拿不到就拉倒"的请求: 3 秒拿不到就放弃, 别把桌面主循环堵住 */
+    extern int http64_get_timeout(const char *url, uint8_t *response, int max_response, int timeout_s);
+    int rlen = http64_get_timeout(url, resp, sizeof(resp), 3);
     if (rlen < 0) return 0;
     int st = http64_get_status(resp);
     if (st < 200 || st >= 300) return 0;
