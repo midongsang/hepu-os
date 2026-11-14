@@ -88,6 +88,15 @@ int desktop64_init(void)
 }
 
 /* 桌面主循环：Hepu Desktop 事件循环（鼠标/键盘/渲染/点击） */
+/* V0.59.25 主循环分段计时(见 [PROF] 的残差拆解) */
+uint64_t g_cyc_net, g_cyc_dhcp, g_cyc_input, g_cyc_render_call, g_cyc_loop, g_loop_iters;
+static inline uint64_t desktop64_rdtsc(void)
+{
+    uint32_t a, d;
+    __asm__ volatile("rdtsc" : "=a"(a), "=d"(d));
+    return ((uint64_t)d << 32) | a;
+}
+
 void desktop64_run(void)
 {
     if (!desktop_initialized) {
@@ -182,14 +191,18 @@ void desktop64_run(void)
     while (1) {
         extern uint64_t pit64_get_ms(void);
         uint64_t now = pit64_get_ms();
+        /* V0.59.25: 主循环分段计时 —— [PROF] 里那个 33937/帧的"真残差"一直是个黑盒,
+         * 这里把它按轮拆成 网络/DHCP/输入/渲染 四段, 外加整轮总时长。
+         * 目的不是精确归因, 而是先排除"某一轮 poll 偶发阻塞"这种可能。 */
+        uint64_t __lp0 = desktop64_rdtsc();
 
         /* V0.13.9: 网络轮询 (网卡收发) */
         extern void net64_poll(void);
-        net64_poll();
+        { uint64_t __t = desktop64_rdtsc(); net64_poll(); g_cyc_net += desktop64_rdtsc() - __t; }
 
         /* V0.13.65: 自动 DHCP 联网 (启动后自动获取 IP, 不依赖 shell 命令) */
         extern int dhcp64_poll(void);
-        dhcp64_poll();
+        { uint64_t __t = desktop64_rdtsc(); dhcp64_poll(); g_cyc_dhcp += desktop64_rdtsc() - __t; }
 
         /* V0.13.9: 天气真实数据拉取 (60 帧≈8s 后一次, 阻塞 ~1-3s)
          * V0.56.1: 原来只试一次, 网络(DHCP/DNS)没就绪就永久空白。改为失败重试,
@@ -212,7 +225,7 @@ void desktop64_run(void)
             }
         }
 
-        hs_input_poll();
+        { uint64_t __t = desktop64_rdtsc(); hs_input_poll(); g_cyc_input += desktop64_rdtsc() - __t; }
 
         /* V0.13.51: 内存压力周期检查 (每~100帧: 低内存时回收块缓存) */
         static int mp_tick = 0;
@@ -237,7 +250,9 @@ void desktop64_run(void)
         /* 渲染：仅每 ~16ms(≈60fps) 一次，输入/网络仍每轮处理保证低延迟 */
         if (now - last_render_ms >= 16) {
             last_render_ms = now;
+            uint64_t __t = desktop64_rdtsc();
             hpdesk_render();
+            g_cyc_render_call += desktop64_rdtsc() - __t;
         }
 
         /* V0.13.7 P4: Hepu Desktop Dock/启动器图标点击的应用启动请求 */
@@ -252,6 +267,8 @@ void desktop64_run(void)
             }
         }
 
+        g_cyc_loop += desktop64_rdtsc() - __lp0;
+        g_loop_iters++;
         /* 让出 CPU 等下一次中断(PIT 1kHz 兜底), 避免忙等 100% 占用。
          * V0.58.2: 显式开中断再 hlt —— 若之前走过 cli 路径, 单纯 hlt 会永久挂起。
          * 注意这是防御性加固: 实测主循环仍会在十余轮后停止推进(见 OPEN_BUGS

@@ -1966,7 +1966,7 @@ static uint32_t hs_mix_color(uint32_t a, uint32_t b, int pct)
  * 在后台缓冲里已经是对的, 只需刷移动前沿那条 dx 宽窄带。 */
 static int g_shd_ok, g_shd_id, g_shd_x, g_shd_y, g_shd_w, g_shd_h;
 static int g_wn_ok, g_wn_id, g_wn_x, g_wn_y, g_wn_w, g_wn_h;
-static int g_band_blits;
+static int g_band_blits, g_band_reason;
 #define SH_STRENGTH   255   /* 3 遍盒式模糊把边缘削到约 1/4, 这里补回来 */
 
 /* V0.59.24 位移拷贝的安全前提: 拖动窗口不能被别的窗口压住/压到别人。
@@ -1975,6 +1975,50 @@ static int g_band_blits;
  * 下层窗口的像素会覆盖掉拖动窗口在重叠区的内容, 产生穿透。
  * 这里用最简单的保守判据: 只要有一个可见窗口与拖动窗口(含阴影 pad)相交, 就不走
  * 带路径。窗口数很少, 每帧几次矩形相交判断, 成本可忽略。 */
+static void cc_geometry(int *cx, int *cy, int *cw, int *ch);
+
+/* 位移拷贝的安全前提还有一条: 重叠区里"压在拖动窗口之上"的图元必须没变。
+ * 面板(顶栏/侧栏/Dock/时钟/岛/天气)是在窗口**之前**绘制的(见 prof5 的 ts3 段
+ * 早于 ts4), 所以它们在窗口之下, 不影响重叠区 —— 不必排除。
+ * 真正压在窗口之上、且每帧重新 blend 的只有控制中心和通知(都在 ts4 之后画),
+ * 它们若与拖动窗口相交, 重叠区就是它们的像素, 窗口移走后本该露出窗口内容却没露。
+ * 所以只排除这两块。 */
+/* 窗口本体与控制中心/通知卡的相交矩形(并集)。这两块是在窗口**之后**绘制的上层图元,
+ * 每帧都会把重叠区盖成它们的样子; 拖动窗口移走后, 那块本该露出窗口内容, 却因为
+ * 位移拷贝只刷前沿窄带而没有被重画 —— 所以要单独把这小块补画一次。 */
+static int hs_upper_overlap_rect(const hs_window_t *w, int *x0, int *y0, int *x1, int *y1)
+{
+    int has = 0, ux0 = 0, uy0 = 0, ux1 = 0, uy1 = 0;
+    int wx0 = w->x, wy0 = w->y, wx1 = w->x + w->width, wy1 = w->y + w->height;
+    if (g_shell.panel_registry[HS_PANEL_CONTROL_CENTER].enabled) {
+        int cx = 0, cy = 0, cw = 0, ch = 0;
+        cc_geometry(&cx, &cy, &cw, &ch);
+        int ix0 = wx0 > cx ? wx0 : cx, iy0 = wy0 > cy ? wy0 : cy;
+        int ix1 = wx1 < cx + cw ? wx1 : cx + cw;
+        int iy1 = wy1 < cy + ch ? wy1 : cy + ch;
+        if (ix1 > ix0 && iy1 > iy0) {
+            ux0 = ix0; uy0 = iy0; ux1 = ix1; uy1 = iy1; has = 1;
+        }
+    }
+    {
+        int nwd = hs_sx(460), nhd = hs_sy(300);
+        int nx = g_shell.screen_width - nwd;
+        int ix0 = wx0 > nx ? wx0 : nx, iy0 = wy0 > 0 ? wy0 : 0;
+        int ix1 = wx1 < nx + nwd ? wx1 : nx + nwd;
+        int iy1 = wy1 < nhd ? wy1 : nhd;
+        if (ix1 > ix0 && iy1 > iy0) {
+            if (has) {
+                if (ix0 < ux0) ux0 = ix0; if (iy0 < uy0) uy0 = iy0;
+                if (ix1 > ux1) ux1 = ix1; if (iy1 > uy1) uy1 = iy1;
+            } else { ux0 = ix0; uy0 = iy0; ux1 = ix1; uy1 = iy1; }
+            has = 1;
+        }
+    }
+    if (!has) return 0;
+    *x0 = ux0; *y0 = uy0; *x1 = ux1; *y1 = uy1;
+    return 1;
+}
+
 static int hs_no_other_window_overlap(const hs_window_t *w, int pad)
 {
     for (int i = 0; i < g_wm.window_count; i++) {
@@ -2250,13 +2294,23 @@ static void hs_window_shadow(const hs_window_t *w)
      * 阴影缓冲面积是 (w+2pad)*(h+2pad)(Settings 约 836x811), 而窄带只有
      * dx*(h+2pad)(dx=10 时约 8K), 差两个数量级。 */
     int s_band = 0, s_dx = 0;
-    if (g_dragging && g_shd_ok && g_shd_id == w->id &&
-        g_shd_w == w->width && g_shd_h == w->height && g_shd_y == w->y &&
-        hs_no_other_window_overlap(w, pad)) {
+    /* 诊断: 哪个条件把位移拷贝挡掉了(1=没在拖 2=无基线 3=换窗口 4=尺寸变
+     * 5=y 变了 6=与其它窗口/上层图元相交 7=没有位移 8=位移过大 9=通过) */
+    int s_reason = 9;
+    if (!g_dragging) s_reason = 1;
+    else if (!g_shd_ok) s_reason = 2;
+    else if (g_shd_id != w->id) s_reason = 3;
+    else if (g_shd_w != w->width || g_shd_h != w->height) s_reason = 4;
+    else if (g_shd_y != w->y) s_reason = 5;
+    else if (!hs_no_other_window_overlap(w, pad)) s_reason = 6;
+    else {
         int d = w->x - g_shd_x;
         int ad = d < 0 ? -d : d;
-        if (ad > 0 && ad <= 64 && ad <= sh_mw) { s_band = 1; s_dx = d; }
+        if (ad == 0) s_reason = 7;
+        else if (!(ad <= 64 && ad <= sh_mw)) s_reason = 8;
+        else { s_band = 1; s_dx = d; }
     }
+    g_band_reason = s_reason;
     if (s_band) {
         if (s_dx > 0)
             gfx64_blend_image_sub(sh_argb, sh_mw, sh_mh, sh_mw - s_dx, 0,
@@ -2467,6 +2521,27 @@ void hs_window_render_all(void)
                                             0, 0, -w_dx, w->height,
                                             w->x, w->y, 255);
                   g_band_blits++;
+                  /* 补画: 窗口本体与上层图元(控制中心/通知卡)相交的那一小块。
+                   * 那块在本帧之前显示的是上层图元, 窗口移走后若已离开图元范围, 就该
+                   * 露出窗口内容; 只刷前沿条的话这里会缺一块。交集通常只有几十像素宽,
+                   * 比整块 445K 像素便宜得多。 */
+                  int ox0 = 0, oy0 = 0, ox1 = 0, oy1 = 0;
+                  if (hs_upper_overlap_rect(w, &ox0, &oy0, &ox1, &oy1)) {
+                      int rx0 = w->x > g_wn_x ? w->x : g_wn_x;
+                      int rx1 = (w->x + w->width) < (g_wn_x + w->width)
+                                ? (w->x + w->width) : (g_wn_x + w->width);
+                      int bx0 = ox0 > rx0 ? ox0 : rx0;
+                      int bx1 = ox1 < rx1 ? ox1 : rx1;
+                      if (bx1 > bx0) {
+                          int by0 = oy0 > w->y ? oy0 : w->y;
+                          int by1 = oy1 < (w->y + w->height) ? oy1 : (w->y + w->height);
+                          if (by1 > by0)
+                              gfx64_blend_image_sub(tsurf, w->width, w->height,
+                                                    bx0 - w->x, by0 - w->y,
+                                                    bx1 - bx0, by1 - by0,
+                                                    bx0, by0, 255);
+                      }
+                  }
               } else {
                   gfx64_blend_image(tsurf, w->width, w->height, w->x, w->y, 255);
               }
@@ -5630,6 +5705,12 @@ void hs_drag_selftest(void)
         g_seg_lp = g_seg_pre; g_seg_lm = g_seg_mid; g_seg_lq = g_seg_post;
         g_t_drag_start = hs_rdtsc();
         g_partial_frames = 0; g_full_frames = 0; g_panel_skips = 0;
+        {
+            extern uint64_t g_cyc_net, g_cyc_dhcp, g_cyc_input;
+            extern uint64_t g_cyc_render_call, g_cyc_loop, g_loop_iters;
+            g_cyc_net = g_cyc_dhcp = g_cyc_input = 0;
+            g_cyc_render_call = g_cyc_loop = g_loop_iters = 0;
+        }
         vga_printf("[SELFTEST] drag begin win=%d from %d,%d\n", w->id, w->x, w->y);
                 break;
             }
@@ -5663,8 +5744,33 @@ void hs_drag_selftest(void)
         vga_printf("[PROF0] partial_frames=%d full_frames=%d panel_skips=%d (per partial frame skips=%d)\n",
                    g_partial_frames, g_full_frames, g_panel_skips,
                    g_partial_frames ? g_panel_skips / g_partial_frames : 0);
-        vga_printf("[PROF0] last_dirty x=%d y=%d w=%d h=%d\n",
-                   g_last_dirty[0], g_last_dirty[1], g_last_dirty[2], g_last_dirty[3]);
+        vga_printf("[PROF0] last_dirty x=%d y=%d w=%d h=%d band_blits=%d band_reason=%d\n",
+                   g_last_dirty[0], g_last_dirty[1], g_last_dirty[2], g_last_dirty[3],
+                   g_band_blits, g_band_reason);
+        {
+            extern void cc_geometry(int *cx, int *cy, int *cw, int *ch);
+            int cx = 0, cy = 0, cw = 0, ch = 0;
+            cc_geometry(&cx, &cy, &cw, &ch);
+            int nwd = hs_sx(460), nhd = hs_sy(300);
+            vga_printf("[PROF0] cc x=%d y=%d w=%d h=%d | notify x=%d y=%d %dx%d\n",
+                       cx, cy, cw, ch, g_shell.screen_width - nwd, 0, nwd, nhd);
+        }
+        {
+            /* V0.59.25: 把"真残差"按主循环分段拆开。这些计数从拖动开始清零,
+             * 覆盖 28 帧拖动期间的全部循环轮次。 */
+            extern uint64_t g_cyc_net, g_cyc_dhcp, g_cyc_input;
+            extern uint64_t g_cyc_render_call, g_cyc_loop, g_loop_iters;
+            if (g_loop_iters) {
+                uint64_t n = g_loop_iters;
+                vga_printf("[PROF7] loop_iters=%d loopK=%d netK=%d dhcpK=%d inK=%d renderK=%d\n",
+                           (int)n,
+                           (uint32_t)((g_cyc_loop / n) / 1000),
+                           (uint32_t)((g_cyc_net / n) / 1000),
+                           (uint32_t)((g_cyc_dhcp / n) / 1000),
+                           (uint32_t)((g_cyc_input / n) / 1000),
+                           (uint32_t)((g_cyc_render_call / n) / 1000));
+            }
+        }
         {
             uint32_t a1 = (uint32_t)((g_ts1) / 1000), a2 = (uint32_t)((g_ts2) / 1000);
             uint32_t a3 = (uint32_t)((g_ts3) / 1000), a4 = (uint32_t)((g_ts4) / 1000);
