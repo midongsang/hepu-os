@@ -3115,6 +3115,11 @@ static int hs_panel_bounds(int idx, int *ox, int *oy, int *ow, int *oh)
     return 0;
 }
 
+/* V0.59.18 面板层表面: 试过并回退。
+ * 面板绘制大量用 fb 指针直写(font64_draw_string(fb, screen_width, ...)), 绕过 gfx64 的
+ * 渲染目标机制。surface 模式下 gfx64 系列进了表面、字符却落在 back buffer, 画面被拆散
+ * (控制中心只剩右缘一条)。要隔离面板必须先统一绘制路径, 不在本轮做。 */
+
 /* 脏区(单矩形)与给定矩形是否相交; 任一无矩形返回 1(保守: 视为相交, 照画) */
 static int hs_dirty_intersects(int x, int y, int w, int h)
 {
@@ -3139,13 +3144,13 @@ void hs_panel_render_all(void)
     for (int i = 0; i < 6; i++) {
         int idx = order[i];
         if (!g_shell.panel_registry[idx].enabled || !g_shell.panel_registry[idx].render) continue;
-        /* 局部脏区帧: 与脏区不相交的面板跳过(拖动窗口时顶栏/侧栏/Dock 通常都不相交) */
-        if (g_in_partial_frame) {
-            int px = 0, py = 0, pw = 0, ph = 0;
-            if (hs_panel_bounds(idx, &px, &py, &pw, &ph) &&
-                pw > 0 && ph > 0 && !hs_dirty_intersects(px, py, pw, ph))
-                continue;
+        int px = 0, py = 0, pw = 0, ph = 0;
+        if (!hs_panel_bounds(idx, &px, &py, &pw, &ph) || pw <= 0 || ph <= 0) {
+            g_shell.panel_registry[idx].render();
+            continue;
         }
+        /* 面板绘制大量直写 fb, 不走 gfx64 目标机制, 无法隔离到离屏表面, 只能直绘 */
+        (void)px; (void)py; (void)pw; (void)ph;
         g_shell.panel_registry[idx].render();
     }
 }
@@ -5650,17 +5655,9 @@ static void hpdesk_render_inner(void)
             g_ts3 = hs_rdtsc() - __rs0;
             hs_window_render_all();
             g_ts4 = hs_rdtsc() - __rs0;
-            if (g_shell.panel_registry[HS_PANEL_CONTROL_CENTER].enabled) {
-                int ccx = 0, ccy = 0, ccw = 0, cch = 0;
-                cc_geometry(&ccx, &ccy, &ccw, &cch);
-                if (hs_dirty_intersects(ccx, ccy, ccw, cch)) hs_control_center_render();
-            }
-            {
-                /* 通知在右上角, 保守取右半 + 顶部 200 逻辑像素 */
-                int nx = g_shell.screen_width / 2;
-                if (hs_dirty_intersects(nx, 0, g_shell.screen_width - nx, hs_sy(200)))
-                    hs_notification_render();
-            }
+            if (g_shell.panel_registry[HS_PANEL_CONTROL_CENTER].enabled)
+                hs_control_center_render();
+            hs_notification_render();
             g_ts5 = hs_rdtsc() - __rs0;
             gfx64_present_region(dx_, dy_, dw_, dh_);
             g_ts6 = hs_rdtsc() - __rs0;
