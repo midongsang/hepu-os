@@ -171,6 +171,14 @@ static volatile int per_cpu_current_pid[16];  /* 16 = MAX_CPUS */
 /* helper 实现在 per_cpu_current_idx 之后 */
 static int next_pid = 1;
 static int process_initialized = 0;
+/* V0.60.x: "本次 create 不要入就绪队列" 的一次性开关。
+ *
+ * create_suspended 原来是"先 create(已入队), 再摘队"。中间有一个 tick 窗口:
+ * 新进程优先级若高于 idle(0), 那一刻 BSP 就会被切到它, 而它是不打算跑的常驻线程
+ * (无限循环不 yield), 桌面主循环再也拿不回 CPU —— 表现为启动停在
+ * "Created process: khouse" 之后。回归里 desk=0 的偶发就是它。
+ * 改成从源头不入队, 窗口消失。 */
+static int g_create_no_enqueue = 0;
 static uint64_t scheduler_ticks = 0;
 
 /* Per-CPU当前进程索引（每个CPU独立运行） */
@@ -485,8 +493,8 @@ int process64_create(const char *name, void (*entry)(void), int priority)
     processes[idx].context.r14 = 0;
     processes[idx].context.r15 = 0;
 
-    /* 添加到就绪队列 */
-    add_to_ready_queue(idx);
+    /* 添加到就绪队列 —— 挂起创建的线程从源头就不入队(见 g_create_no_enqueue) */
+    if (!g_create_no_enqueue) add_to_ready_queue(idx);
 
     vga_puts("[PROC64] Created process: ");
     vga_puts(processes[idx].name);
@@ -573,7 +581,9 @@ void kstat_entry(void)
  * 再启用。任务管理器按真实状态显示, 不假装它们在跑。 */
 int process64_create_suspended(const char *name, void (*entry)(void), int priority)
 {
+    g_create_no_enqueue = 1;
     int pid = process64_create(name, entry, priority);
+    g_create_no_enqueue = 0;
     if (pid <= 0) return pid;
     int idx = -1;
     for (int i = 0; i < MAX_PROCESSES; i++) {
@@ -591,6 +601,19 @@ int process64_create_suspended(const char *name, void (*entry)(void), int priori
         }
     }
     return pid;
+}
+
+/* 当前 CPU 上正在运行的进程槽索引（无有效值时 -1）。
+ * sys_fork 用它给"父进程一份专属快照槽"，避免多进程并发 fork 互踩。 */
+int process64_current_index(void)
+{
+    extern uint32_t smp_get_current_cpu(void);
+    if (!process_initialized) return -1;
+    uint32_t c = smp_get_current_cpu();
+    if (c >= 16) return -1;
+    int idx = per_cpu_current_idx[c];
+    if (idx < 0 || idx >= MAX_PROCESSES) return -1;
+    return idx;
 }
 
 /* 获取当前进程 */

@@ -360,6 +360,25 @@ QEMU 二进制：`tools/bin/qemu-system-x86_64`（7.2.0，未编 user 网络后�
 | **readdir 静态表** | syscall 不可重入 | `syscall64_full.c` `sys_readdir` 的 `static char names[64][256]`（16 KB BSS）+ `static uint8_t types[64]` | 两 CPU 同时列目录踩同一块 BSS：A 的条目被 B 覆盖，两边都可能拿到**别人目录的内容**。这是数据正确性问题，不只是性能 |
 | **裸盘读写静态缓冲** | 同上 | `syscall64_full.c` `sys_disk_read` / `sys_disk_write` 各一份 `static uint8_t kb[64*512]`（各 32 KB BSS） | 两 CPU 同时读写盘会互相覆盖缓冲。这两个是**特权路径**（PID==0 闸），后果是往错盘位写错数据 |
 
+> **2026-11-14 清理进度**
+> - ✅ **readdir 静态表**：`sys_readdir` 的 `names[64][256]` / `types[64]` 保留为 static，
+>   但整段（list_dir + 组装 kbuf）已用 `g_readdir_lock`（irqsave 自旋锁）串行化，
+>   `copy_to_user` 移到锁外。低频路径，代价可忽略。
+> - ✅ **裸盘静态缓冲**：`sys_disk_read` / `sys_disk_write` 共用 `g_disk_lock` 串行化，
+>   两条路径都是 PID==0 闸后的特权路径，并发本就罕见。
+> - ⛔ **fork 父上下文单份**：**未清**。它不像上面两处能靠加锁解决 ——
+>   快照是在 `fork_trampoline_64` / `fork_return_to_parent`（`entry_64.S`）里
+>   直接按符号地址取用的，子进程首次被调度时跨上下文读取，锁保护不了。
+>   正确做法是把快照槽指针随子进程携带（PCB 加字段，或 trampoline 从 PCB 取），
+>   涉及用户态返回路径，必须与 SB-08 的多核实测一起单独验收。
+>   因此 `HS_AP_SCHED_ENABLED` **继续保持 0**。
+>
+> 顺带修掉一个既有隐患（不在 §7.1 清单里，但就是回归里 desk 偶发 0 的原因）：
+> `create_suspended` 原来"先 create(已入队)再摘队"，中间那个 tick 窗口里若 tick
+> 到来，BSP 会被切到一个不打算跑的常驻线程（优先级高于 idle），桌面主循环再也
+> 拿不回 CPU —— 实测停日志在 `Created process: khouse` 之后。已改为从源头不入队
+> （`g_create_no_enqueue`），窗口消失。
+
 ### 7.2 已经在阶段 1 覆盖、但要核对是否真的覆盖到 AP 的
 
 - **SB-08（FPU 保存区）**：8 个槽 + `& 7` 下标，与 `MAX_CPUS=16` 不匹配。这一条本来就在

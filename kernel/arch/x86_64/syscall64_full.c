@@ -251,6 +251,11 @@ static inline int fd_table_index(void)
  * 的 open/close 一起堵住，且 copy_to_user 缺页会带着锁进异常路径）。 */
 static spinlock_t g_fd_lock;
 static spinlock_t g_pipe_lock;
+/* R3-3 / R3-7: 这两条路径原来靠"syscall 不会重入"的单核假设，缓冲是文件级 static。
+ * 多核下两个 CPU 同时进来会互相覆盖（readdir 会拿到别人目录的内容，
+ * 裸盘读写会往错盘位写）。都是低频路径，直接串行化，代价可忽略。 */
+static spinlock_t g_readdir_lock;
+static spinlock_t g_disk_lock;
 static volatile int g_fd_lock_holder = -1;   /* 诊断：持锁时的 fd 表下标 */
 
 /* 进程退出/被终止时清空该槽位的 fd 表（由 user_process_release 调用） */
@@ -1782,9 +1787,10 @@ static int64_t sys_readdir(const char *path, char *outbuf, int outsz)
     if (outsz <= 2) return -1;
     static char names[64][256];
     static uint8_t types[64];
-    int n = ext2_64_list_dir_entries(kernel_path, names, types, 64);
-    if (n < 0) return -1;
     char kbuf[2048];
+    uint64_t rdf = spinlock_lock_irqsave(&g_readdir_lock);
+    int n = ext2_64_list_dir_entries(kernel_path, names, types, 64);
+    if (n < 0) { spinlock_unlock_irqrestore(&g_readdir_lock, rdf); return -1; }
     int used = 0;
     for (int i = 0; i < n; i++) {
         int l = 0; while (names[i][l]) l++;
@@ -1800,7 +1806,8 @@ static int64_t sys_readdir(const char *path, char *outbuf, int outsz)
     }
     /* R3-2: 旧代码 used > outsz 时截断后照报长度, 调用方以为拿全了。
      * 用户缓冲装不下就必须失败, 让调用方换更大的缓冲或分批读。 */
-    if (used > outsz) return -1;
+    if (used > outsz) { spinlock_unlock_irqrestore(&g_readdir_lock, rdf); return -1; }
+    spinlock_unlock_irqrestore(&g_readdir_lock, rdf);
     if (copy_to_user(outbuf, kbuf, (size_t)used) != 0) return -1;
     return used;
 }
@@ -2797,9 +2804,15 @@ static int64_t sys_disk_read(uint64_t lba, void *user_buf, uint64_t count, int d
     static uint8_t kb[64 * 512];   /* 最多64扇区=32KB */
     extern int ide64_read_sectors(uint32_t lba, uint8_t count, uint8_t *buffer);
     extern void ide64_set_drive(int drive);
+    uint64_t dkf = spinlock_lock_irqsave(&g_disk_lock);
     ide64_set_drive(drive ? 1 : 0);
-    if (ide64_read_sectors((uint32_t)lba, (uint8_t)count, kb) != 0) return -1;
-    if (copy_to_user(user_buf, kb, (size_t)(count * 512)) != 0) return -1;
+    if (ide64_read_sectors((uint32_t)lba, (uint8_t)count, kb) != 0) {
+        spinlock_unlock_irqrestore(&g_disk_lock, dkf); return -1;
+    }
+    if (copy_to_user(user_buf, kb, (size_t)(count * 512)) != 0) {
+        spinlock_unlock_irqrestore(&g_disk_lock, dkf); return -1;
+    }
+    spinlock_unlock_irqrestore(&g_disk_lock, dkf);
     return (int64_t)(count * 512);
 }
 
@@ -2810,11 +2823,17 @@ static int64_t sys_disk_write(uint64_t lba, void *user_buf, uint64_t count, int 
     if (user_process_get_current_pid() != 0) return -1;
     if (count < 1 || count > 64 || lba > 0xFFFFFFFFULL - count) return -1;  /* lba 会被截断为32位 */
     static uint8_t kb[64 * 512];
-    if (copy_from_user(kb, user_buf, (size_t)(count * 512)) != 0) return -1;
     extern int ide64_write_sectors(uint32_t lba, uint8_t count, const uint8_t *buffer);
     extern void ide64_set_drive(int drive);
+    uint64_t dkf = spinlock_lock_irqsave(&g_disk_lock);
+    if (copy_from_user(kb, user_buf, (size_t)(count * 512)) != 0) {
+        spinlock_unlock_irqrestore(&g_disk_lock, dkf); return -1;
+    }
     ide64_set_drive(drive ? 1 : 0);
-    if (ide64_write_sectors((uint32_t)lba, (uint8_t)count, kb) != 0) return -1;
+    if (ide64_write_sectors((uint32_t)lba, (uint8_t)count, kb) != 0) {
+        spinlock_unlock_irqrestore(&g_disk_lock, dkf); return -1;
+    }
+    spinlock_unlock_irqrestore(&g_disk_lock, dkf);
     return (int64_t)(count * 512);
 }
 
