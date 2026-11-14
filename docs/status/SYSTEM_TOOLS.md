@@ -121,9 +121,24 @@
 
 文件默认留空 —— 空文件不执行任何命令，只在需要取证时写进去。
 
-## 取证通道补充（V0.59.4 实测）
+## 取证通道现状（V0.59.20 修订）
 
-HMP `mouse_move dx dy`（**相对位移**）在本环境可用：`socat`/python 连 monitor socket 发
-`mouse_move 40 6` 即可推动光标，桌面 `g_shell.mouse_x/y` 真实更新（实测 x=592 y=396）。
-之前失败的是 QMP 的**绝对坐标**事件（`-device usb-mouse` 不吃 abs），不是相对位移。
-`screendump` + `mouse_move` 组合足以取证"光标/悬停/局部刷新"类改动。
+**输入注入：不可靠，不要用它做验收。**
+
+V0.59.4 曾把 HMP `mouse_move dx dy`（相对位移）记为可用（python 连 monitor socket 发
+`mouse_move 40 6`，实测桌面 `g_shell.mouse_x/y` 更新到 x=592 y=396）。**后续多轮实测
+推翻了这条**：
+
+- QMP **绝对坐标不可用**：`-device usb-mouse` 不吃 abs 事件。
+- 换 `usb-tablet` 后 abs 生效，但**坐标换算错**，实测点到了 Weather 卡片而不是目标位置。
+- HMP `mouse_move` 的相对位移同样不可靠 —— 光标确实动了，但落点与时序都不受控，
+  无法用它构造"按下-拖动-释放"这类确定性手势。
+- HMP `mouse_button 1/0` 存在且被接受，但没有可靠的定位手段配合，等于不可用。
+
+**因此可靠的取证只剩三条**：
+
+1. **内核注入自测**（`hs_drag_selftest()` 这类 `#if 0` 保留的代码），配合 rdtsc 探针打印；
+2. **`screendump` + 原始 PPM 逐像素扫描**（1920×1080，不要用 1280×720 缩略图目测 3px 级偏差）；
+3. **`autostart.cmd` 起终端跑命令**（一次性统计，不依赖帧号与启动时序）。
+
+取证结束后必须清空 `rootfs/etc/hepushell/autostart.cmd`。
