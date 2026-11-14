@@ -1067,7 +1067,10 @@ static int g_wp_is_jpeg = 0;
 static int hs_wp_load(int idx)
 {
     extern int ext2_64_read_file(const char *path, uint8_t *buffer, uint32_t max_size);
-    static uint8_t wp_raw[262144];
+    /* V0.59.27: 1MB —— 512x288 的壁纸放大到 1080p 会糊, 用户放进来的写实图
+     * 需要更高分辨率(1024x576 约 530KB), 原 256KB 缓冲读不全。BSS 静态数组,
+     * 不计入 1MB 内核体积上限。 */
+    static uint8_t wp_raw[1048576];
     if (idx < 0 || idx >= WP_IMG_COUNT) return 0;
     if (g_wp_loaded == idx && g_wp_png.rgba) return 1;
 
