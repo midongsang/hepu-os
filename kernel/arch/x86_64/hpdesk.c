@@ -1087,6 +1087,27 @@ static void hs_wallpaper_render(void)
 }
 
 /* matugen 式取色: 采样网格 6x4 (边距 12.5%), 取饱和度最高的像素为源色 */
+/* P0: 只把壁纸的某块矩形重铺到当前渲染目标(拖动等局部刷新用) */
+static void hs_wallpaper_render_rect(int x, int y, int w, int h)
+{
+    int sw = g_shell.screen_width, sh = g_shell.screen_height;
+    /* 非 PNG 壁纸(渐变/纯色)或缓存尺寸不符时退回整屏: 正确性优先 */
+    if (!hs_wallpaper_png() || !g_wp_cache || g_wp_cache_w != sw || g_wp_cache_h != sh) {
+        hs_wallpaper_render();
+        return;
+    }
+    uint32_t *fb = (uint32_t *)gfx64_get_framebuffer();
+    if (!fb || !w || !h) return;
+    int x0 = x < 0 ? 0 : x, y0 = y < 0 ? 0 : y;
+    int x1 = x + w > sw ? sw : x + w, y1 = y + h > sh ? sh : y + h;
+    for (int j = y0; j < y1; j++) {
+        uint32_t *dst = fb + (uint64_t)j * sw + x0;
+        const uint32_t *src = g_wp_cache + (uint64_t)j * sw + x0;
+        int n = x1 - x0;
+        for (int i = 0; i < n; i++) dst[i] = src[i];
+    }
+}
+
 static void hs_wallpaper_sample_theme(void)
 {
     int w = g_shell.screen_width, h = g_shell.screen_height;
@@ -2198,6 +2219,46 @@ static void hs_window_shadow(const hs_window_t *w)
     sh_blit_slice(w, mx0, my0, ox1, sh_mw, oy, ob, pad, rc, off);                  /* 右 */
 }
 
+/* ===== P0 脏区框架 (V0.59.5) =====
+ * 拖动这类局部变化不该重铺整屏壁纸(每帧 8MB 拷贝)也不该整帧提交。
+ * 这里累积一个脏矩形(并集), 局部路径只重铺这块壁纸、重画可能压在上面的面板与窗口,
+ * present 也只提交这块。单矩形并集对"拖一个窗口"足够(两块本来就相邻)。 */
+static int g_dirty_x0 = 0, g_dirty_y0 = 0, g_dirty_x1 = -1, g_dirty_y1 = -1;
+static uint32_t g_dirty_frames = 0;
+
+static void hs_dirty_add(int x, int y, int w, int h)
+{
+    if (w <= 0 || h <= 0) return;
+    if (g_dirty_x1 < 0) { g_dirty_x0 = x; g_dirty_y0 = y; g_dirty_x1 = x + w; g_dirty_y1 = y + h; return; }
+    if (x < g_dirty_x0) g_dirty_x0 = x;
+    if (y < g_dirty_y0) g_dirty_y0 = y;
+    if (x + w > g_dirty_x1) g_dirty_x1 = x + w;
+    if (y + h > g_dirty_y1) g_dirty_y1 = y + h;
+}
+
+static int hs_dirty_rect(int *x, int *y, int *w, int *h)
+{
+    if (g_dirty_x1 < 0) return 0;
+    int x0 = g_dirty_x0 < 0 ? 0 : g_dirty_x0;
+    int y0 = g_dirty_y0 < 0 ? 0 : g_dirty_y0;
+    int x1 = g_dirty_x1 > g_shell.screen_width ? g_shell.screen_width : g_dirty_x1;
+    int y1 = g_dirty_y1 > g_shell.screen_height ? g_shell.screen_height : g_dirty_y1;
+    if (x1 <= x0 || y1 <= y0) return 0;
+    *x = x0; *y = y0; *w = x1 - x0; *h = y1 - y0;
+    return 1;
+}
+
+static void hs_dirty_reset(void) { g_dirty_x1 = -1; }
+
+/* 该矩形是否与脏区相交; 脏区为空时返回 1(保守: 全画) */
+static int hs_dirty_hits(int x, int y, int w, int h)
+{
+    if (g_dirty_x1 < 0) return 1;
+    if (x + w <= g_dirty_x0 || x >= g_dirty_x1) return 0;
+    if (y + h <= g_dirty_y0 || y >= g_dirty_y1) return 0;
+    return 1;
+}
+
 void hs_window_render_all(void)
 {
     /* 按z_order从底到顶渲染 */
@@ -2209,6 +2270,14 @@ void hs_window_render_all(void)
 
         /* 面板窗口不渲染（由面板系统渲染） */
         if (w->type == HS_WINDOW_PANEL) continue;
+
+        /* P0 脏区: 局部刷新时, 与脏区不相交的窗口整窗跳过(含文字栅格, 比绘图更贵)。
+         * 外扩 hs_s(96) 覆盖投影(3*R+6, R=24)与圆角外扩, 宁可多画不漏画。 */
+        if (g_dirty_x1 >= 0) {
+            int pad = hs_s(96);
+            if (!hs_dirty_hits(w->x - pad, w->y - pad, w->width + pad * 2, w->height + pad * 2))
+                continue;
+        }
 
         /* Clavis 动效: 新窗口 ≈200ms (12帧) cubic-out 滑入 */
         int save_x = w->x, save_y = w->y;
@@ -5120,6 +5189,49 @@ static void hs_present_with_cursor(int mx, int my)
     cursor64_draw(mx, my);
 }
 
+/* 拖动自测(V0.59.5 验证脏区局部路径用)。默认关闭; 需要复验时把 0 改成 1:
+ * 启动第45帧自动拖第一个浮动窗口 28 帧, 串口打印 dirty_region_frames。 */
+#if 0
+extern void hs_window_drag_start(int x, int y);
+extern void hs_window_drag_move(int x, int y);
+extern void hs_window_drag_end(void);
+static int g_st_on = 0, g_st_step = 0, g_st_sx = 0, g_st_sy = 0;
+void hs_drag_selftest(void)
+{
+    if (g_frame_no < 45) return;
+    if (g_st_step >= 90) return;
+    if (!g_st_on) {
+        vga_printf("[ST] fno=%d wc=%d zc=%d\n", (int)g_frame_no, g_wm.window_count, g_wm.z_count);
+        for (int i = 0; i < g_wm.window_count && i < 8; i++)
+            vga_printf("[ST]  w%d type=%d vis=%d st=%d at %d,%d %dx%d\n", i,
+                       (int)g_wm.windows[i].type, g_wm.windows[i].visible,
+                       (int)g_wm.windows[i].state, g_wm.windows[i].x, g_wm.windows[i].y,
+                       g_wm.windows[i].width, g_wm.windows[i].height);
+        for (int i = 0; i < g_wm.window_count; i++) {
+            hs_window_t *w = &g_wm.windows[i];
+            if (w->visible && w->type == HS_WINDOW_FLOATING &&
+                w->state != HS_WINDOW_STATE_MAXIMIZED) {
+                g_st_on = 1;
+                g_st_sx = w->x + 60;
+                g_st_sy = w->y + 16;
+                hs_window_drag_start(g_st_sx, g_st_sy);
+                vga_printf("[SELFTEST] drag begin win=%d from %d,%d\n", w->id, w->x, w->y);
+                break;
+            }
+        }
+        return;
+    }
+    g_st_step++;
+    if (g_st_step <= 28) {
+        g_st_sx += 10;
+        hs_window_drag_move(g_st_sx, g_st_sy);
+    } else if (g_st_step == 29) {
+        hs_window_drag_end();
+        vga_printf("[SELFTEST] drag end, dirty_region_frames=%d\n", (int)g_dirty_frames);
+    }
+}
+#endif
+
 void hpdesk_render(void)
 {
     {
@@ -5176,13 +5288,24 @@ void hpdesk_render(void)
     if ((g_frame_no % 30) == 0) g_content_dirty = 1;
 
     /* 完全静止: 不重绘、不提交、不画光标 */
-    if (!g_content_dirty && !animating && !mouse_moved) {
+#if 0   /* 必须在跳帧判断之前 —— 静止桌面每帧 return, 放后面则永远轮不到它产生第一个脏区 */
+    {
+        extern void hs_drag_selftest(void);
+        hs_drag_selftest();
+    }
+#endif
+
+    /* 有脏矩形时不能跳帧(否则局部路径永远轮不到) */
+    if (!g_content_dirty && !animating && !mouse_moved && g_dirty_x1 < 0) {
         g_skip_frames++;
         if (g_redraw_frames + g_skip_frames >= 1800) {
             vga_printf("[P0] frames: redraw=%d skip=%d skip_pct=%d\n",
                        (int)g_redraw_frames, (int)g_skip_frames,
                        (int)(g_skip_frames * 100 / (g_redraw_frames + g_skip_frames + 1)));
             vga_printf("[P0] cursor-only frames=%d\n", (int)g_cursor_frames);
+            vga_printf("[P0] dirty-region frames=%d\n", (int)g_dirty_frames);
+            g_dirty_frames = 0;
+
             g_cursor_frames = 0;
             g_redraw_frames = g_skip_frames = 0;
         }
@@ -5221,6 +5344,39 @@ void hpdesk_render(void)
         return;
     }
     g_redraw_frames++;
+
+    /* P0 脏区局部路径: 无内容变化、无动画, 但有脏矩形(典型=拖动窗口) ——
+     * 只重铺脏区壁纸 + 重画面板/窗口(与脏区不相交的窗口内部会跳过), present 只提脏区。
+     * 前提是脏区外的后台缓冲与前台一致(上一次提交是全量或同样只提脏区, 保持成立)。 */
+    {
+        int dx_ = 0, dy_ = 0, dw_ = 0, dh_ = 0;
+        if (!g_content_dirty && !animating && hs_dirty_rect(&dx_, &dy_, &dw_, &dh_)) {
+            gfx64_set_target_back();
+            hs_wallpaper_render_rect(dx_, dy_, dw_, dh_);
+            hs_panel_render_all();
+            hs_window_render_all();
+            if (g_shell.panel_registry[HS_PANEL_CONTROL_CENTER].enabled)
+                hs_control_center_render();
+            hs_notification_render();
+            gfx64_present_region(dx_, dy_, dw_, dh_);
+            gfx64_set_target_front();
+            hs_cursor_init_once();
+            {
+                extern void cursor64_set_kind(int kind);
+                extern void cursor64_set_theme(int t);
+                extern void cursor64_set_scale(int pct);
+                cursor64_set_theme(g_shell.ui.cursor_theme);
+                cursor64_set_scale(g_ui_scale_pct);
+                cursor64_set_kind(hs_cursor_kind_at(mx, my));
+            }
+            cursor64_draw(mx, my);
+            g_last_mx = mx; g_last_my = my;
+            hs_dirty_reset();
+            g_dirty_frames++;
+            return;
+        }
+    }
+    hs_dirty_reset();   /* 走全量路径时脏区已被整屏覆盖, 清掉避免累积 */
 
     if (g_content_dirty || animating) {
     hs_png_selfcheck();
@@ -6450,6 +6606,14 @@ void hs_window_drag_move(int x, int y)
     if (new_y + g_drag_window->height > g_shell.screen_height - HS_PANEL_HEIGHT)
         new_y = g_shell.screen_height - HS_PANEL_HEIGHT - g_drag_window->height;
 
+    if (new_x != g_drag_window->x || new_y != g_drag_window->y) {
+        /* P0 脏区: 旧位置 ∪ 新位置, 两处都要重铺(旧处恢复壁纸, 新处画窗口) */
+        int pad = hs_s(96);
+        hs_dirty_add(g_drag_window->x - pad, g_drag_window->y - pad,
+                     g_drag_window->width + pad * 2, g_drag_window->height + pad * 2);
+        hs_dirty_add(new_x - pad, new_y - pad,
+                     g_drag_window->width + pad * 2, g_drag_window->height + pad * 2);
+    }
     g_drag_window->x = new_x;
     g_drag_window->y = new_y;
 }
