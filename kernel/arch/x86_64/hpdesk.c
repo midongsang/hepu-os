@@ -3505,19 +3505,21 @@ void hs_panel_render_all(void)
 static void hs_dynamic_island_render(void)
 {
     int island_w = hs_sx(g_shell.ui.island_width);
-    /* V0.59.30: 折叠态胶囊高度 = 顶栏高度, 两者等高(用户明确要求)。
-     * 原来取 island_height(28) 而顶栏是 bar_height(40), 差 12 逻辑像素 ——
-     * 视觉上胶囊嵌在顶栏里, 上下都留缝。现在单一来源: 折叠态一律跟顶栏走,
-     * island_height 只作为展开动画的旧参考保留。 */
-    int island_h = hs_sy(g_shell.ui.bar_height);
+    /* V0.59.31: 胶囊内嵌于顶栏, 上下各留 3 逻辑像素(inset)。
+     * 旧版 1280x720 实测: 顶栏 9..42(高 34), 胶囊 12..39(高 28) —— 上留 3、
+     * 下留 3, 视觉上"刚刚好"。改成等高(0 缝)后胶囊把顶栏撑满, 两圈边框
+     * 叠在一起, 反而变差, 所以回到内嵌口径。 */
+    int bar_h = hs_sy(g_shell.ui.bar_height);
+    int inset = hs_sy(3);
+    int island_h = bar_h - inset * 2;
+    if (island_h < hs_sy(8)) island_h = hs_sy(8);
     int island_x = (g_shell.screen_width - island_w) / 2;
     /* V0.59.29: 胶囊垂直居中于顶栏。原来 y 直接取 config 的 island_y(12),
      * 实测胶囊 12..52 / 顶栏 12..70 —— 贴上沿, 下面空 18px, 偏上 9px。
      * 居中口径: bar_top + (bar_h - island_h)/2; 展开时 island_h 超过 bar_h,
      * 钳到 bar_top 让它往下长, 而不是上下同时超出。 */
     int bar_top = hs_sy(8);
-    int bar_h = hs_sy(g_shell.ui.bar_height);
-    int island_y = bar_top + (bar_h - island_h) / 2;
+    int island_y = bar_top + inset;
     if (island_y < bar_top) island_y = bar_top;
     {
         int max_h = g_shell.screen_height - island_y - hs_sy(8);
@@ -3527,19 +3529,19 @@ static void hs_dynamic_island_render(void)
     {
         /* P0: 展开/收起尺寸连续插值(缓动), 不再是瞬跳 */
         int e = hs_ease_out_cubic(g_island_t);
-        int ww = hs_sx(g_shell.ui.island_width), hh = hs_sy(g_shell.ui.bar_height);
+        int ww = hs_sx(g_shell.ui.island_width), hh = bar_h - inset * 2;
         int tw = hs_sx(360), th = hs_sy(120);
         island_w = ww + (tw - ww) * e / 100;
         island_h = hh + (th - hh) * e / 100;
         island_x = (g_shell.screen_width - island_w) / 2;
-        /* 高度变了, y 跟着重算, 保证动画过程中也始终居中 */
+        /* 高度变了, y 跟着重算, 保证动画过程中也保持内嵌居中 */
         island_y = bar_top + (bar_h - island_h) / 2;
         if (island_y < bar_top) island_y = bar_top;
     }
 
-    gfx64_fill_rounded_rect(island_x, island_y, island_w, island_h, hs_s(18),
+    gfx64_fill_rounded_rect(island_x, island_y, island_w, island_h, hs_s(15),
                             g_shell.colors.titlebar_bg);
-    gfx64_draw_rounded_rect(island_x, island_y, island_w, island_h, hs_s(18),
+    gfx64_draw_rounded_rect(island_x, island_y, island_w, island_h, hs_s(15),
                             g_shell.colors.border);
 
     uint8_t h = rtc64_get_hours();
