@@ -4403,6 +4403,8 @@ static void hs_sidebar_render(void)
 
 /* 右侧控制中心（对照 Clavis ControlCenterWindow 的导航栏 + 分页结构） */
 static int g_cc_page = 0;
+/* 控制中心默认收起, 由顶栏右上角齿轮切换 */
+static int g_cc_open = 0;
 
 #define CC_RAIL_W 104        /* 导航栏宽度 */
 #define CC_PAD    16         /* 内容区内边距 */
@@ -4473,24 +4475,92 @@ static void cc_geometry(int *cx, int *cy, int *cw, int *ch)
 }
 
 /* 开关卡片：开启态用强调色填充，关闭态用次要表面 */
+/* 粗线段: 用 fill_rect 采样绘制。
+ * 不用 gfx64_draw_line_aa —— 实测它在面板层表面上下文里画不出像素,
+ * WiFi 两个弧完全缺失, 只剩中间那个点。 */
+static void cc_seg(int x0, int y0, int x1, int y1, uint32_t c, int t)
+{
+    int dx = x1 - x0, dy = y1 - y0;
+    int ax = dx < 0 ? -dx : dx, ay = dy < 0 ? -dy : dy;
+    int n = ax > ay ? ax : ay;
+    if (n < 1) n = 1;
+    for (int i = 0; i <= n; i++)
+        gfx64_fill_rect(x0 + dx * i / n - t / 2, y0 + dy * i / n - t / 2, t, t, c);
+}
+
+/* 控制中心开关图标(简笔手绘, 不依赖位图资源):
+ * 0 WiFi  1 BT  2 Air  3 DND  4 Loc  5 Torch */
+static void cc_icon_draw(int kind, int cx, int cy, int r, uint32_t fg, uint32_t bg)
+{
+    int t = hs_s(3);
+    switch (kind) {
+    case 0: /* WiFi: 底部圆点 + 两道上凸折线 */
+        gfx64_fill_circle(cx, cy + r / 2, t, fg);
+        /* 内层弧(更平缓, 避免看起来像屋顶) */
+        cc_seg(cx - r * 3 / 5, cy + r / 3, cx, cy - r / 8, fg, t);
+        cc_seg(cx, cy - r / 8, cx + r * 3 / 5, cy + r / 3, fg, t);
+        /* 外层弧 */
+        cc_seg(cx - r, cy + r / 3, cx, cy - r * 2 / 5, fg, t);
+        cc_seg(cx, cy - r * 2 / 5, cx + r, cy + r / 3, fg, t);
+        break;
+    case 1: /* Bluetooth: 中竖线 + 右侧菱形折线(经典 ᛒ 形) */
+        cc_seg(cx, cy - r, cx, cy + r, fg, t);
+        cc_seg(cx, cy - r, cx + r / 2, cy - r / 2, fg, t);
+        cc_seg(cx + r / 2, cy - r / 2, cx, cy, fg, t);
+        cc_seg(cx, cy, cx + r / 2, cy + r / 2, fg, t);
+        cc_seg(cx + r / 2, cy + r / 2, cx, cy + r, fg, t);
+        break;
+    case 2: /* Air: 三条长短横线 */
+        gfx64_fill_rect(cx - r, cy - r * 2 / 3, r * 2, t, fg);
+        gfx64_fill_rect(cx - r * 3 / 4, cy, r * 3 / 2, t, fg);
+        gfx64_fill_rect(cx - r / 2, cy + r * 2 / 3, r, t, fg);
+        break;
+    case 3: /* DND: 月牙 */
+        gfx64_fill_circle(cx, cy, r, fg);
+        gfx64_fill_circle(cx + r / 2, cy - r / 3, r, bg);
+        break;
+    case 4: /* Loc: 定位针 */
+        gfx64_fill_circle(cx, cy - r / 3, r * 2 / 3, fg);
+        gfx64_fill_circle(cx, cy - r / 3, r / 3, bg);
+        {
+            int xs[3] = {cx - r * 2 / 3, cx + r * 2 / 3, cx};
+            int ys[3] = {cy, cy, cy + r};
+            gfx64_fill_polygon(xs, ys, 3, fg);
+        }
+        break;
+    case 5: /* Torch: 机身 + 光束 */
+        gfx64_fill_rect(cx - r / 2, cy - r / 2, r, r, fg);
+        {
+            int xs[4] = {cx - r * 3 / 4, cx + r * 3 / 4, cx + r / 2, cx - r / 2};
+            int ys[4] = {cy - r, cy - r, cy - r / 2, cy - r / 2};
+            gfx64_fill_polygon(xs, ys, 4, fg);
+        }
+        break;
+    default:
+        break;
+    }
+}
+
+/* 方形开关卡片: 图标居中, 名称在下 */
 static void cc_toggle_card(void *fb, int x, int y, int w, int h,
-                           int on, const char *label, const char *sub)
+                           int on, const char *label, int icon_kind)
 {
     uint32_t bg = on ? g_shell.colors.accent : g_shell.colors.titlebar_bg;
     uint32_t fg = on ? hs_on_accent() : g_shell.colors.panel_fg;
-    uint32_t fg2 = on ? hs_on_accent() : g_shell.colors.text_secondary;
-    gfx64_fill_rounded_rect(x, y, w, h, hs_s(10), bg);
-    if (!on) gfx64_draw_rounded_rect(x, y, w, h, hs_s(10), g_shell.colors.border);
-    int cw = hs_s(7), fs = hs_s(13);
-    int lx = x + (w - (int)strlen(label) * cw) / 2;
-    if (lx < x + hs_sx(6)) lx = x + hs_sx(6);
+    gfx64_fill_rounded_rect(x, y, w, h, hs_s(12), bg);
+    if (!on) gfx64_draw_rounded_rect(x, y, w, h, hs_s(12), g_shell.colors.border);
+
+    int r = hs_s(18);
+    int icx = x + w / 2;
+    int icy = y + h / 2 - hs_sy(12);
+    cc_icon_draw(icon_kind, icx, icy, r, fg, bg);
+
+    int cw = hs_s(9), fs = hs_s(13);
+    int tw_ = (int)strlen(label) * cw;
+    int lx = x + (w - tw_) / 2;
+    if (lx < x + hs_sx(4)) lx = x + hs_sx(4);
     font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                       lx, y + hs_sy(14), label, fg, fs);
-    int cw2 = hs_s(5), fs2 = hs_s(11);
-    int sx2 = x + (w - (int)strlen(sub) * cw2) / 2;
-    if (sx2 < x + hs_sx(6)) sx2 = x + hs_sx(6);
-    font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                       sx2, y + hs_sy(36), sub, fg2, fs2);
+                       lx, y + h - hs_sy(30), label, fg, fs);
 }
 
 /* 滑块卡片：标题 + 百分比 + 轨道 */
@@ -4544,6 +4614,7 @@ static uint32_t hs_dim(uint32_t c, int k)
 
 static void hs_control_center_render(void)
 {
+    if (!g_cc_open) return;
     int cx, cy, cw, ch;
     cc_geometry(&cx, &cy, &cw, &ch);
 
@@ -4586,13 +4657,15 @@ static void hs_control_center_render(void)
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            rx, cy + hs_sy(18), "Quick Controls",
                            g_shell.colors.panel_fg, hs_s(16));
-        int card_w = (rw - hs_sx(8)) / 2;
-        int card_h = hs_sy(60);
+        /* 3 列 2 行正方形: 图标 + 名称, 不再是六个文字长条 */
+        int gap = hs_sx(10);
+        int card_w = (rw - 2 * gap) / 3;
+        int card_h = card_w;
         for (int i = 0; i < 6; i++) {
-            int tx = rx + (i % 2) * (card_w + hs_sx(8));
-            int ty = cy + hs_sy(48) + (i / 2) * (card_h + hs_sy(8));
+            int tx = rx + (i % 3) * (card_w + gap);
+            int ty = cy + hs_sy(48) + (i / 3) * (card_h + gap);
             cc_toggle_card(fb, tx, ty, card_w, card_h, g_shell.cc.toggles[i],
-                           toggles[i], g_shell.cc.toggles[i] ? "On" : "Off");
+                           toggles[i], i);
         }
         cc_slider_card(fb, rx, cy + hs_sy(258), rw, hs_sy(58), "Volume",
                        g_shell.cc.volume);
@@ -4631,13 +4704,10 @@ static void hs_control_center_render(void)
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            rx, cy + hs_sy(276), note,
                            g_shell.colors.text_secondary, hs_s(11));
-        cc_toggle_card(fb, rx, cy + hs_sy(300), rw, hs_sy(60),
-                       g_shell.cc.toggles[3], "DND",
-                       g_shell.cc.toggles[3] ? "Do Not Disturb on"
-                                             : "Do Not Disturb off");
-        cc_toggle_card(fb, rx, cy + hs_sy(368), rw, hs_sy(60),
-                       g_shell.cc.toggles[5], "Torch",
-                       g_shell.cc.toggles[5] ? "Light on" : "Light off");
+        cc_toggle_card(fb, rx, cy + hs_sy(300), hs_sy(80), hs_sy(80),
+                       g_shell.cc.toggles[3], "DND", 3);
+        cc_toggle_card(fb, rx + hs_sy(90), cy + hs_sy(300), hs_sy(80), hs_sy(80),
+                       g_shell.cc.toggles[5], "Torch", 5);
     }
 }
 
@@ -4673,13 +4743,14 @@ static int hs_control_center_handle_click(int x, int y)
 
     int rx = cx + rail_w + pad;
     int rw = cw - rail_w - pad * 2;
-    int card_w = (rw - hs_sx(8)) / 2;
+    int gap = hs_sx(10);
+    int card_w = (rw - 2 * gap) / 3;
 
     if (g_cc_page == 0) {
         for (int i = 0; i < 6; i++) {
-            int tx = rx + (i % 2) * (card_w + hs_sx(8));
-            int ty = cy + hs_sy(48) + (i / 2) * (hs_sy(60) + hs_sy(8));
-            if (x >= tx && x <= tx + card_w && y >= ty && y <= ty + hs_sy(60)) {
+            int tx = rx + (i % 3) * (card_w + gap);
+            int ty = cy + hs_sy(48) + (i / 3) * (card_w + gap);
+            if (x >= tx && x <= tx + card_w && y >= ty && y <= ty + card_w) {
                 g_shell.cc.toggles[i] = !g_shell.cc.toggles[i];
                 return 1;
             }
@@ -5432,6 +5503,23 @@ void hpdesk_mouse_down(int x, int y)
         extern int hs_oobe_active(void);
         if (hs_oobe_active()) return;
     }
+    /* 顶栏右上角齿轮 = 控制中心开关。齿轮是从右数第二个图标(power 最右)。
+     * 命中区必须跟 hs_top_bar_render 里同一套几何算, 否则缩放后点不中。 */
+    {
+        int margin = hs_sx(10);
+        int icon_size = hs_s(24);
+        int power_x = g_shell.screen_width - margin - hs_sx(14) - icon_size;
+        int gear_x = power_x - hs_sx(6) - icon_size;
+        int bar_top = hs_sy(8);
+        int bar_h = hs_sy(g_shell.ui.bar_height);
+        int gear_y = bar_top + (bar_h - icon_size) / 2;
+        if (x >= gear_x && x <= gear_x + icon_size &&
+            y >= gear_y && y <= gear_y + icon_size) {
+            g_cc_open = !g_cc_open;
+            g_content_dirty = 1;
+            return;
+        }
+    }
     /* Files 列表项拖拽: 必须命中最顶层窗口是 Files, 否则被压住的窗口会"隔空"接管 */
     {
         extern hs_window_t *hs_window_at(int x, int y);
@@ -6055,7 +6143,7 @@ static void hpdesk_render_inner(void)
             g_ts3 = hs_rdtsc() - __rs0;
             hs_window_render_all();
             g_ts4 = hs_rdtsc() - __rs0;
-            if (g_shell.panel_registry[HS_PANEL_CONTROL_CENTER].enabled) {
+            if (g_shell.panel_registry[HS_PANEL_CONTROL_CENTER].enabled && g_cc_open) {
                 int ccx = 0, ccy = 0, ccw = 0, cch = 0;
                 cc_geometry(&ccx, &ccy, &ccw, &cch);
                 hs_layer_draw(&g_ly_cc, ccx, ccy, ccw, cch, hs_control_center_render,
@@ -6135,7 +6223,7 @@ static void hpdesk_render_inner(void)
 
     hs_window_render_all();
     /* 控制中心绘制在窗口之上，避免被最大化窗口遮挡 */
-    if (g_shell.panel_registry[HS_PANEL_CONTROL_CENTER].enabled) {
+    if (g_shell.panel_registry[HS_PANEL_CONTROL_CENTER].enabled && g_cc_open) {
         uint64_t cc0 = hs_rdtsc();
         hs_control_center_render();
         g_cyc_cc += hs_rdtsc() - cc0;
