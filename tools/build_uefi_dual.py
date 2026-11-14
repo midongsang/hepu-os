@@ -219,12 +219,18 @@ def create_ext2_data(img):
         for d in ('/usr', '/usr/share', '/usr/share/wallpapers'):
             subprocess.run(['debugfs', '-w', ext2_tmp, '-R', f'mkdir {d}'],
                            capture_output=True)
-        subprocess.run(['debugfs', '-w', ext2_tmp,
-                        '-R', f'write {wp} /usr/share/wallpapers/wallpaper.png'],
-                       capture_output=True)
-        subprocess.run(['debugfs', '-w', ext2_tmp,
-                        '-R', f'write {wp} /wallpaper.png'], capture_output=True)
-        print("  写入 /usr/share/wallpapers/wallpaper.png + /wallpaper.png")
+        # V0.59.26: 内置多张壁纸, 桌面 Settings 里可循环切换
+        targets = [('/usr/share/wallpapers/wallpaper.png', wp),
+                   ('/usr/share/wallpapers/wallpaper-1.png',
+                    f"{PROJECT}/assets/samples/wallpaper-1.png"),
+                   ('/usr/share/wallpapers/wallpaper-2.png',
+                    f"{PROJECT}/assets/samples/wallpaper-2.png"),
+                   ('/wallpaper.png', wp)]
+        for dst, src in targets:
+            if os.path.exists(src):
+                subprocess.run(['debugfs', '-w', ext2_tmp, '-R', f'write {src} {dst}'],
+                               capture_output=True)
+        print("  写入 /usr/share/wallpapers/wallpaper{,-1,-2}.png + /wallpaper.png")
 
     # 光标: hpdesk 读 /usr/share/cursors/default.xcur (cursor64.c 解析 Xcursor)
     # 旧脚本完全没有打包 assets/cursors, 导致运行时 ext2_64_read_file 失败、

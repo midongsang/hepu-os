@@ -184,9 +184,9 @@ static int g_sidebar_scroll = 0;
 /* V0.56: 程序化壁纸 (对齐 Clavis Wallpaper 切换 + matugen 壁纸取色)
  * 0=Classic 纯色(默认, 保回归稳定) 1=Dusk 紫橙落日 2=Ocean 青蓝渐变;
  * 切换到非 Classic 后下一帧壁纸绘制完成即采样网格提取源色并应用主题 */
-static int g_wallpaper_style = 0;
+/* V0.59.26: 壁纸选择统一到 g_wp_sel(定义在壁纸加载区), 旧的 g_wallpaper_style 已移除 */
 static int g_wallpaper_dirty = 0;
-static const char *g_wallpaper_names[] = {"Classic", "Dusk", "Ocean"};
+#define WP_IMG_COUNT 3
 
 /* V0.55.0: 桌面背景色预设色板 + 持久化 (Settings/Appearance 页与右键面板共用) */
 static int g_color_panel_visible = 0;
@@ -231,6 +231,83 @@ static void hs_save_bg_color(uint32_t c)
                 ext2_64_write_file("/etc/hepushell/config.hsqml", (uint8_t *)buf, (uint32_t)n);
             }
             break;
+        }
+    }
+}
+
+/* V0.59.26: 壁纸选择持久化。config.hsqml 里写一行 wallpaper: N (0-5)。
+ * 读不到就回 0(默认沿用现在这张 PNG)。 */
+static int hs_wp_read_cfg(void)
+{
+    extern int ext2_64_read_file(const char *path, uint8_t *buffer, uint32_t max_size);
+    static char buf[1024];
+    int n = ext2_64_read_file("/etc/hepushell/config.hsqml", (uint8_t *)buf, 1023);
+    if (n <= 0) return 0;
+    buf[n] = 0;
+    for (int i = 0; i + 9 < n; i++) {
+        if (buf[i]=='w'&&buf[i+1]=='a'&&buf[i+2]=='l'&&buf[i+3]=='l'&&
+            buf[i+4]=='p'&&buf[i+5]=='a'&&buf[i+6]=='p'&&buf[i+7]=='e'&&
+            buf[i+8]=='r'&&buf[i+9]==':') {
+            int j = i + 10;
+            while (j < n && (buf[j] == ' ' || buf[j] == '\t')) j++;
+            int v = 0, got = 0;
+            while (j < n && buf[j] >= '0' && buf[j] <= '9') { v = v * 10 + (buf[j]-'0'); j++; got = 1; }
+            if (got) return (v >= 0 && v <= WP_IMG_COUNT + 2) ? v : 0;
+            return 0;
+        }
+    }
+    return 0;
+}
+
+static void hs_wp_save_cfg(int sel)
+{
+    extern int ext2_64_read_file(const char *path, uint8_t *buffer, uint32_t max_size);
+    extern int ext2_64_write_file(const char *path, const uint8_t *data, uint32_t size);
+    static char buf[4096];
+    int n = ext2_64_read_file("/etc/hepushell/config.hsqml", (uint8_t *)buf, 4095);
+    if (n <= 0) return;
+    buf[n] = 0;
+    char digit = (char)('0' + sel);
+    for (int i = 0; i + 9 < n; i++) {
+        if (buf[i]=='w'&&buf[i+1]=='a'&&buf[i+2]=='l'&&buf[i+3]=='l'&&
+            buf[i+4]=='p'&&buf[i+5]=='a'&&buf[i+6]=='p'&&buf[i+7]=='e'&&
+            buf[i+8]=='r'&&buf[i+9]==':') {
+            int j = i + 10;
+            while (j < n && (buf[j] == ' ' || buf[j] == '\t')) j++;
+            if (j < n && buf[j] >= '0' && buf[j] <= '9') buf[j] = digit;
+            else if (j < n && buf[j] == '\n') {
+                buf[j] = digit;   /* 空值: 直接补上 */
+            }
+            ext2_64_write_file("/etc/hepushell/config.hsqml", (uint8_t *)buf, (uint32_t)n);
+            return;
+        }
+    }
+    /* 没有 wallpaper 行: 在 background 行后面插一行。
+     * 第一版只改"已存在的行", 而默认配置里根本没有这一行, 切换壁纸悄悄不落盘;
+     * 第二版插入时把长度算错, 直接吃掉了下一行的 "panel_bg: ..." —— 现在用
+     * memmove 搬一次, 插入定长 18 字节, 不再逐字节错位拼接。 */
+    for (int i = 0; i + 12 < n; i++) {
+        if (buf[i]=='b'&&buf[i+1]=='a'&&buf[i+2]=='c'&&buf[i+3]=='k'&&
+            buf[i+4]=='g'&&buf[i+5]=='r'&&buf[i+6]=='o'&&buf[i+7]=='u'&&
+            buf[i+8]=='n'&&buf[i+9]=='d'&&buf[i+10]==':') {
+            int j = i;
+            while (j < n && buf[j] != '\n') j++;      /* j 指向该行行尾 */
+            if (j >= n || n + 19 >= 4095) return;
+            /* 插在行尾之后: "\n    wallpaper: N" 共 18 字节 */
+            char ins[19];
+            ins[0] = '\n';
+            ins[1] = ' '; ins[2] = ' '; ins[3] = ' '; ins[4] = ' ';
+            ins[5] = 'w'; ins[6] = 'a'; ins[7] = 'l'; ins[8] = 'l';
+            ins[9] = 'p'; ins[10] = 'a'; ins[11] = 'p'; ins[12] = 'e';
+            ins[13] = 'r'; ins[14] = ':'; ins[15] = ' '; ins[16] = digit;
+            ins[17] = '\n'; ins[18] = 0;
+            int L = 18;
+            for (int k = n; k > j; k--) buf[k + L] = buf[k];
+            for (int k = 0; k < L; k++) buf[j + 1 + k] = ins[k];
+            n += L;
+            buf[n] = 0;
+            ext2_64_write_file("/etc/hepushell/config.hsqml", (uint8_t *)buf, (uint32_t)n);
+            return;
         }
     }
 }
@@ -971,43 +1048,58 @@ static void hs_wallpaper_vgradient(uint32_t c1, uint32_t c2)
     }
 }
 
-/* V0.55.0 P0: PNG 壁纸 — /usr/share/wallpapers/wallpaper.png 存在则优先使用(解一次缓存) */
+/* V0.59.26: 壁纸选择 —— 0..2 是内置图片, 3=Dusk 渐变, 4=Ocean 渐变, 5=纯色(色板)。
+ * 默认 0 = 现在这张 PNG。用户可在 Settings/Appearance 的 Wallpaper 行循环切换,
+ * 也可以直接点 Desktop 色板, 那就等价于切到纯色模式。 */
+static const char *g_wp_files[3] = {
+    "/usr/share/wallpapers/wallpaper.png",
+    "/usr/share/wallpapers/wallpaper-1.png",
+    "/usr/share/wallpapers/wallpaper-2.png",
+};
+static int g_wp_sel = 0;
+static int g_wp_loaded = -1;      /* 当前已解码成功的图片索引, -1 表示没有 */
+
 static png64_image_t g_wp_png;
 static jpeg64_image_t g_wp_jpg;
-static int g_wp_tried = 0;
 static int g_wp_is_jpeg = 0;
 
-/* V0.57.0 B组: 壁纸先找 PNG, 没有再找 JPG(stb_image)。两者统一成
- * g_wp_px/w/h 供渲染 —— 原来只支持 PNG, 用户放一张 .jpg 进去就是纯色背景。 */
-static int hs_wallpaper_png(void)
+/* 按索引解码一张内置壁纸。切图时先释放上一张, 避免反复切换把内存吃光。 */
+static int hs_wp_load(int idx)
 {
-    if (g_wp_tried) {
-        return (g_wp_png.rgba || g_wp_jpg.rgba) ? 1 : 0;
-    }
-    g_wp_tried = 1;
     extern int ext2_64_read_file(const char *path, uint8_t *buffer, uint32_t max_size);
     static uint8_t wp_raw[262144];
+    if (idx < 0 || idx >= WP_IMG_COUNT) return 0;
+    if (g_wp_loaded == idx && g_wp_png.rgba) return 1;
 
-    int n = ext2_64_read_file("/usr/share/wallpapers/wallpaper.png", wp_raw, sizeof(wp_raw));
+    if (g_wp_png.rgba) { png64_free(&g_wp_png); }
+    if (g_wp_jpg.rgba) { jpeg64_free(&g_wp_jpg); }
+    g_wp_is_jpeg = 0;
+
+    int n = ext2_64_read_file(g_wp_files[idx], wp_raw, sizeof(wp_raw));
     if (n > 8 && png64_decode(wp_raw, n, &g_wp_png) == 0 && g_wp_png.rgba) {
-        vga_printf("[PNG64] ok read=%d %dx%d px0=(%d,%d,%d) pxC=(%d,%d,%d)\n", n,
-                   (int)g_wp_png.width, (int)g_wp_png.height,
-                   g_wp_png.rgba[0], g_wp_png.rgba[1], g_wp_png.rgba[2],
-                   g_wp_png.rgba[((g_wp_png.height/2)*g_wp_png.width + g_wp_png.width/2)*4],
-                   g_wp_png.rgba[((g_wp_png.height/2)*g_wp_png.width + g_wp_png.width/2)*4+1],
-                   g_wp_png.rgba[((g_wp_png.height/2)*g_wp_png.width + g_wp_png.width/2)*4+2]);
+        g_wp_loaded = idx;
+        vga_printf("[PNG64] wallpaper %d ok read=%d %dx%d\n", idx, n,
+                   (int)g_wp_png.width, (int)g_wp_png.height);
         return 1;
     }
-    /* 回退: 平铺根目录。多级路径读取在部分镜像布局下取不到文件, 留一条短路。 */
-    n = ext2_64_read_file("/wallpaper.png", wp_raw, sizeof(wp_raw));
-    if (n > 8 && png64_decode(wp_raw, n, &g_wp_png) == 0 && g_wp_png.rgba) return 1;
-
-    n = ext2_64_read_file("/usr/share/wallpapers/wallpaper.jpg", wp_raw, sizeof(wp_raw));
-    if (n > 8 && jpeg64_decode(wp_raw, n, &g_wp_jpg) == 0 && g_wp_jpg.rgba) {
-        g_wp_is_jpeg = 1;
-        return 1;
-    }
+    g_wp_loaded = -1;
     return 0;
+}
+
+static int hs_wallpaper_png(void)
+{
+    if (g_wp_sel < 0 || g_wp_sel >= WP_IMG_COUNT) return 0;
+    return hs_wp_load(g_wp_sel);
+}
+
+static const char *hs_wp_sel_name(void)
+{
+    if (g_wp_sel == 0) return "Wallpaper 1";
+    if (g_wp_sel == 1) return "Wallpaper 2";
+    if (g_wp_sel == 2) return "Wallpaper 3";
+    if (g_wp_sel == 3) return "Dusk";
+    if (g_wp_sel == 4) return "Ocean";
+    return "Solid";
 }
 
 /* 壁纸预缩放缓存: 512x288 放大到 2048x1536 需要 300 万次「除法+alpha 混合」,
@@ -1075,11 +1167,11 @@ static void hs_wallpaper_render(void)
         }
         return;
     }
-    if (g_wallpaper_style == 1) {
+    if (g_wp_sel == 3) {
         /* Dusk: 紫→橙渐变天空 + 径向渐变落日 */
         hs_wallpaper_vgradient(0x2B1B3D, 0xE8834A);
         gfx64_fill_circle_gradient(w / 2, h * 3 / 4, hs_s(120), 0xFFD680, 0xE85D4A);
-    } else if (g_wallpaper_style == 2) {
+    } else if (g_wp_sel == 4) {
         /* Ocean: 青→蓝渐变 */
         hs_wallpaper_vgradient(0x0B3B4F, 0x123E7C);
     } else {
@@ -1136,15 +1228,21 @@ static void hs_wallpaper_sample_theme(void)
 
 static void hs_wallpaper_cycle(void)
 {
-    g_wallpaper_style = (g_wallpaper_style + 1) % 3;
-    if (g_wallpaper_style == 0) {
-        /* 回 Classic: 恢复默认色板, 无需采样 */
-        hpdesk_set_theme(g_shell.theme);
-        g_shell.theme_source = 0xD0BCFF;
-    } else {
-        g_wallpaper_dirty = 1;      /* 下一帧壁纸绘制完成后采样 */
+    /* 循环: 图0 -> 图1 -> 图2 -> Dusk -> Ocean -> 纯色 -> 图0
+     * 图片加载失败就跳过, 不让用户点到一个空白桌面。 */
+    int total = WP_IMG_COUNT + 3;
+    for (int step = 1; step <= total; step++) {
+        int sel = (g_wp_sel + step) % total;
+        if (sel < WP_IMG_COUNT && !hs_wp_load(sel)) continue;
+        g_wp_sel = sel;
+        break;
     }
-    vga_printf("[WALLPAPER] style=%s\n", g_wallpaper_names[g_wallpaper_style]);
+    /* 换了图, 整屏缓存必须作废, 下一次全量重绘会重建 */
+    if (g_wp_cache) { kfree(g_wp_cache); g_wp_cache = 0; g_wp_cache_w = g_wp_cache_h = 0; }
+    if (g_wp_sel >= WP_IMG_COUNT && g_wp_png.rgba) { png64_free(&g_wp_png); g_wp_loaded = -1; }
+    g_content_dirty = 1;
+    hs_wp_save_cfg(g_wp_sel);
+    vga_printf("[WALLPAPER] sel=%d\n", g_wp_sel);
 }
 
 /* ============================================================================
@@ -2832,7 +2930,7 @@ static void hs_settings_window_render(hs_window_t *w)
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            rx, ry, "Wallpaper:", g_shell.colors.panel_fg, SETK(12));
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           rx + SETK(84), ry, g_wallpaper_names[g_wallpaper_style],
+                           rx + SETK(84), ry, hs_wp_sel_name(),
                            g_shell.colors.accent, SETK(12));
         /* V0.55.0: 桌面背景色 3x3 色板 (点击应用并写回 config.hsqml) */
         ry += SETK(24);
@@ -4679,8 +4777,9 @@ static int hs_color_panel_handle_click(int x, int y)
         int cy = py + 56 + (i / 3) * 92;
         if (x >= cx && x <= cx + 80 && y >= cy && y <= cy + 80) {
             g_shell.colors.bg = g_color_presets[i];
-            g_wallpaper_style = 0;      /* 纯色桌面 */
+            g_wp_sel = 5;               /* 纯色桌面(色板) */
             hs_save_bg_color(g_color_presets[i]);
+            g_content_dirty = 1;  /* 同上: 强制全量重绘 */
             g_color_panel_visible = 0;
             return 1;
         }
@@ -5052,8 +5151,11 @@ void hpdesk_handle_click(int x, int y)
                     int by = w->y + 208 + (i / 3) * 22;
                     if (x >= bx && x <= bx + 16 && y >= by && y <= by + 16) {
                         g_shell.colors.bg = g_color_presets[i];
-                        g_wallpaper_style = 0;
+                        g_wp_sel = 5;
                         hs_save_bg_color(g_color_presets[i]);
+                        /* 必须强制全量重绘: 局部路径只重铺脏区壁纸, 屏幕其余部分会留着
+                         * 旧底色, 表现为"设置里选了 A 桌面还是 B"或出现色块接缝。 */
+                        g_content_dirty = 1;
                         vga_puts("[SETTINGS] desktop color applied\n");
                         return;
                     }
@@ -6258,6 +6360,7 @@ void hpdesk_handle_key(int key)
 
 int hpdesk_init(int width, int height)
 {
+    g_wp_sel = hs_wp_read_cfg();
     spinlock_init(&g_wm_lock);
     g_shell.canary_start = 0xDEADBEEF;
     g_shell.canary_end = 0xCAFEBABE;
