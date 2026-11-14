@@ -3091,15 +3091,30 @@ static int hs_panel_bounds(int idx, int *ox, int *oy, int *ow, int *oh)
         return 1;
     }
     case HS_PANEL_DESKTOP_CLOCK: {
-        int cw = hs_sx(560), ch = hs_sy(200);
-        *ox = (sw - cw) / 2; *oy = (sh - ch) / 2 - hs_sy(40);
-        *ow = cw; *oh = ch + hs_sy(80);
+        /* 时钟按 ui.clock_x/clock_y 定位(逻辑坐标), 字号可达 clock_font_size。
+         * 宽度取到天气卡左缘, 高度按最大字号留足。 */
+        int cx = hs_sx(g_shell.ui.clock_x);
+        int cy = hs_sy(g_shell.ui.clock_y);
+        int wx = sw - hs_sx(g_shell.ui.weather_margin_right) - hs_sx(380);
+        if (cx > wx) cx = wx;
+        if (cx < hs_sx(20)) cx = hs_sx(20);
+        int cw = sw - cx;
+        int ch = hs_sy(300) + hs_sy(g_shell.ui.clock_font_size) * 2;
+        *ox = cx - hs_sx(12); if (*ox < 0) *ox = 0;
+        *oy = cy - hs_sy(20); if (*oy < 0) *oy = 0;
+        *ow = cw; *oh = ch;
+        if (*oy + *oh > sh) *oh = sh - *oy;
         return 1;
     }
     case HS_PANEL_WEATHER: {
+        /* 实测桌面天气卡在右下角(不是右上), 见 docs 里 V0.59.19 的截图 */
         int ww = hs_sx(g_shell.ui.weather_width), wh = hs_sy(g_shell.ui.weather_height);
-        *ox = sw - ww - hs_sx(70); *oy = hs_sy(150);
-        *ow = ww + hs_sx(80); *oh = wh + hs_sy(40);
+        *ox = sw - ww - hs_sx(g_shell.ui.weather_margin_right) - hs_sx(24);
+        *oy = sh - wh - hs_sy(140);
+        *ow = ww + hs_sx(48); *oh = wh + hs_sy(160);
+        if (*ox < 0) *ox = 0;
+        if (*oy < 0) *oy = 0;
+        if (*oy + *oh > sh) *oh = sh - *oy;
         return 1;
     }
     case HS_PANEL_SIDEBAR: {
@@ -3115,10 +3130,36 @@ static int hs_panel_bounds(int idx, int *ox, int *oy, int *ow, int *oh)
     return 0;
 }
 
-/* V0.59.18 面板层表面: 试过并回退。
- * 面板绘制大量用 fb 指针直写(font64_draw_string(fb, screen_width, ...)), 绕过 gfx64 的
- * 渲染目标机制。surface 模式下 gfx64 系列进了表面、字符却落在 back buffer, 画面被拆散
- * (控制中心只剩右缘一条)。要隔离面板必须先统一绘制路径, 不在本轮做。 */
+/* V0.59.18 面板层表面(单层试验: 先只做控制中心, 验证隔离机制本身是否成立) */
+typedef struct { void *surf; int w, h, x, y; int valid; } hs_layer_t;
+static hs_layer_t g_ly_cc, g_ly_notify;
+static hs_layer_t g_ly_tb, g_ly_island, g_ly_dock, g_ly_clock, g_ly_sidebar;
+
+static void *hs_layer_ensure(hs_layer_t *L, int x, int y, int w, int h)
+{
+    if (w <= 0 || h <= 0) return 0;
+    if (L->surf && L->w == w && L->h == h && L->x == x && L->y == y) return L->surf;
+    if (L->surf) { kfree(L->surf); L->surf = 0; }
+    void *p = kmalloc((uint64_t)w * h * 4);
+    if (!p) { L->w = L->h = 0; L->valid = 0; return 0; }
+    L->surf = p; L->w = w; L->h = h; L->x = x; L->y = y; L->valid = 0;
+    return p;
+}
+
+static void hs_layer_draw(hs_layer_t *L, int x, int y, int w, int h,
+                         void (*fn)(void), int need_draw)
+{
+    void *s = hs_layer_ensure(L, x, y, w, h);
+    if (!s) { if (fn) fn(); return; }
+    if (need_draw) {
+        memset(s, 0, (size_t)w * h * 4);
+        gfx64_target_begin(s, w, h, x, y);
+        fn();
+        gfx64_target_end();
+        L->valid = 1;
+    }
+    gfx64_blend_image(s, w, h, x, y, 255);
+}
 
 /* 脏区(单矩形)与给定矩形是否相交; 任一无矩形返回 1(保守: 视为相交, 照画) */
 static int hs_dirty_intersects(int x, int y, int w, int h)
@@ -3149,9 +3190,19 @@ void hs_panel_render_all(void)
             g_shell.panel_registry[idx].render();
             continue;
         }
-        /* 面板绘制大量直写 fb, 不走 gfx64 目标机制, 无法隔离到离屏表面, 只能直绘 */
-        (void)px; (void)py; (void)pw; (void)ph;
-        g_shell.panel_registry[idx].render();
+        hs_layer_t *L = 0;
+        switch (idx) {
+        case HS_PANEL_TOP_BAR:        L = &g_ly_tb; break;
+        case HS_PANEL_DYNAMIC_ISLAND: L = &g_ly_island; break;
+        case HS_PANEL_DOCK:           L = &g_ly_dock; break;
+        case HS_PANEL_DESKTOP_CLOCK:  L = &g_ly_clock; break;
+        case HS_PANEL_SIDEBAR:        L = &g_ly_sidebar; break;
+        /* 天气卡定位字段(weather_width/margin_right)与实际绘制区域对不上, 纳入层会裁边,
+         * 收益仅 0.6%, 保持直绘。 */
+        }
+        if (L) hs_layer_draw(L, px, py, pw, ph, g_shell.panel_registry[idx].render,
+                             !(g_in_partial_frame && L->valid));
+        else   g_shell.panel_registry[idx].render();
     }
 }
 
@@ -5655,9 +5706,17 @@ static void hpdesk_render_inner(void)
             g_ts3 = hs_rdtsc() - __rs0;
             hs_window_render_all();
             g_ts4 = hs_rdtsc() - __rs0;
-            if (g_shell.panel_registry[HS_PANEL_CONTROL_CENTER].enabled)
-                hs_control_center_render();
-            hs_notification_render();
+            if (g_shell.panel_registry[HS_PANEL_CONTROL_CENTER].enabled) {
+                int ccx = 0, ccy = 0, ccw = 0, cch = 0;
+                cc_geometry(&ccx, &ccy, &ccw, &cch);
+                hs_layer_draw(&g_ly_cc, ccx, ccy, ccw, cch, hs_control_center_render,
+                              !(g_in_partial_frame && g_ly_cc.valid));
+            }
+            {
+                int nw = hs_sx(460), nh = hs_sy(300);
+                hs_layer_draw(&g_ly_notify, g_shell.screen_width - nw, 0, nw, nh,
+                              hs_notification_render, !(g_in_partial_frame && g_ly_notify.valid));
+            }
             g_ts5 = hs_rdtsc() - __rs0;
             gfx64_present_region(dx_, dy_, dw_, dh_);
             g_ts6 = hs_rdtsc() - __rs0;
