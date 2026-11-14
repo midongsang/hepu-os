@@ -2294,6 +2294,16 @@ void hs_window_render_all(void)
             }
         }
 
+        /* Surface 雏形: 拖动中的窗口已有内容快照 —— 画完投影直接贴回, 不再重画
+         * 内容(文字栅格是拖动帧里最贵的一段)。快照矩形四角是"抓取那一刻的背景",
+         * 贴到新位置后四角有极小块旧背景, 壁纸同色系渐变下不可辨。 */
+        if (g_dragging && g_drag_window == w && w->surface) {
+            if (w->type == HS_WINDOW_FLOATING && w->state != HS_WINDOW_STATE_MAXIMIZED)
+                hs_window_shadow(w);
+            gfx64_back_restore(w->surface, w->x, w->y, w->width, w->height);
+            continue;
+        }
+
         /* V0.57.0: 投影(仅浮动窗口, 最大化/面板不画) */
         if (w->type == HS_WINDOW_FLOATING && w->state != HS_WINDOW_STATE_MAXIMIZED) {
             hs_window_shadow(w);
@@ -6631,6 +6641,43 @@ void hs_layout_single(void)
  * P2: 窗口拖动
  * ========================================================================== */
 
+/* Surface 雏形: 抓窗口内容快照(拖动用)。尺寸变了就重建; 分配失败返回,
+ * 调用方(render_all)会退回到"每帧重画"的老路径, 不会因为缺内存画不出窗口。 */
+extern void *kmalloc(uint64_t size);
+extern void kfree(void *ptr);
+extern int gfx64_back_snapshot(void *dst, int x, int y, int w, int h);
+extern int gfx64_back_restore(void *src, int x, int y, int w, int h);
+
+static void hs_window_surface_grab(hs_window_t *win)
+{
+    int w = win->width, h = win->height;
+    if (w <= 0 || h <= 0) return;
+    if (win->surface && (win->surface_w != w || win->surface_h != h)) {
+        kfree(win->surface);
+        win->surface = 0;
+    }
+    if (!win->surface) {
+        win->surface = kmalloc((uint64_t)w * h * 4);
+        if (!win->surface) { win->surface_w = win->surface_h = 0; return; }
+        win->surface_w = w;
+        win->surface_h = h;
+    }
+    /* 快照必须在窗口"已经画好那一帧"之后抓。drag_start 发生在输入处理里,
+     * 此时后台缓冲保存的正是上一帧完整画面。 */
+    if (!gfx64_back_snapshot(win->surface, win->x, win->y, w, h)) {
+        kfree(win->surface);
+        win->surface = 0;
+        win->surface_w = win->surface_h = 0;
+    }
+}
+
+static void hs_window_surface_release(hs_window_t *win)
+{
+    if (win->surface) kfree(win->surface);
+    win->surface = 0;
+    win->surface_w = win->surface_h = 0;
+}
+
 void hs_window_drag_start(int x, int y)
 {
     hs_window_t *win = hs_window_at(x, y);
@@ -6642,6 +6689,7 @@ void hs_window_drag_start(int x, int y)
     g_drag_offset_y = y - win->y;
     g_dragging = 1;
     hs_window_focus(win);
+    hs_window_surface_grab(win);   /* Surface 雏形: 拖动期间只贴不重画 */
 }
 
 void hs_window_drag_move(int x, int y)
@@ -6673,6 +6721,7 @@ void hs_window_drag_move(int x, int y)
 
 void hs_window_drag_end(void)
 {
+    if (g_drag_window) hs_window_surface_release(g_drag_window);
     g_dragging = 0;
     g_drag_window = NULL;
 }

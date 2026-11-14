@@ -91,6 +91,53 @@ void gfx64_present(void)
 }
 
 
+/* Surface 雏形: 从后台缓冲抓一块矩形到调用方缓冲(窗口拖动快照),
+ * 以及把这块快照贴回后台缓冲。目标始终是后台缓冲 —— 前台只在 present 时更新。 */
+int gfx64_back_snapshot(void *dst, int x, int y, int w, int h)
+{
+    if (!back_buffer || !dst || w <= 0 || h <= 0) return 0;
+    if (gfx_bpp != 32) return 0;
+    int pitch32 = gfx_pitch / 4;
+    int x0 = x, y0 = y, x1 = x + w, y1 = y + h;
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if ((uint32_t)x1 > gfx_width) x1 = (int)gfx_width;
+    if ((uint32_t)y1 > gfx_height) y1 = (int)gfx_height;
+    if (x0 >= x1 || y0 >= y1) return 0;
+    uint32_t *src = (uint32_t *)back_buffer;
+    uint32_t *out = (uint32_t *)dst;
+    for (int j = y0; j < y1; j++) {
+        uint32_t *srow = src + j * pitch32 + x0;
+        uint32_t *drow = out + (j - y) * w + (x0 - x);
+        for (int i = 0; i < x1 - x0; i++) drow[i] = srow[i];
+    }
+    return 1;
+}
+
+int gfx64_back_restore(void *src, int x, int y, int w, int h)
+{
+    if (!back_buffer || !src || w <= 0 || h <= 0) return 0;
+    if (gfx_bpp != 32) return 0;
+    uint64_t gfx_f = spinlock_lock_irqsave(&g_gfx_lock);
+    int pitch32 = gfx_pitch / 4;
+    int x0 = x, y0 = y, x1 = x + w, y1 = y + h;
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if ((uint32_t)x1 > gfx_width) x1 = (int)gfx_width;
+    if ((uint32_t)y1 > gfx_height) y1 = (int)gfx_height;
+    uint32_t *dst = (uint32_t *)back_buffer;
+    uint32_t *in = (uint32_t *)src;
+    if (x0 < x1 && y0 < y1) {
+        for (int j = y0; j < y1; j++) {
+            uint32_t *drow = dst + j * pitch32 + x0;
+            uint32_t *srow = in + (j - y) * w + (x0 - x);
+            for (int i = 0; i < x1 - x0; i++) drow[i] = srow[i];
+        }
+    }
+    spinlock_unlock_irqrestore(&g_gfx_lock, gfx_f);
+    return 1;
+}
+
 /* P0 脏区: 只把后台缓冲的一块矩形提交到前台。
  * 光标每移动一次原实现都会整帧重绘 + 整帧 8MB 拷贝, 实际只为了搬一个 64x64 的光标;
  * 这里给光标合成提供"只拷两块"的路径。加锁与 gfx64_present 一致, 避免和整帧提交互斥。 */

@@ -76,6 +76,38 @@ Surface 是三次模型里最"地基"的一项，Wayland/X11/Windows 都是这�
 paint 回调只拿到最终矩形。实测 5 项落在 234/282/330/378/426（间距 48 = 28+gap 4），
 与旧实现逐像素一致；改间距只需改一处。
 
+### 4. Surface —— 第一步已落地（拖动快照，V0.59.7）
+
+完整 Surface（每窗口常驻离屏缓冲 + 绘制目标隔离 + 裁剪）的代价先说清：
+`gfx64` 的写像素路径**不统一** —— `fill_rect`(333)、`blit_to`(95)、`blit_background`(147)、
+`put_pixel`(299)、`fill_rounded_rect`、`draw_rounded_rect`、`blur_region` 等十几个函数
+各自 `uint8_t *dst = gfx_target ? gfx_target : front_buffer;` 之后直接写指针。
+要做「窗口本地坐标 (0,0) + origin 偏移 + clip」，这十几处都要加变换与裁剪，
+而且 `font64_draw_string(fb,w,h,...)` 还单独持有 fb 指针。改动面 15-20 处、验证面覆盖所有界面。
+
+所以先取能吃到真实收益的切口：**拖动期间的内容快照**。拖动时窗口内容不变，
+而"重画窗口内容（尤其文字栅格）"正是拖动帧里最贵的一段。
+
+落地：
+- `gfx64_back_snapshot/back_restore`（gfx64.c :96/:117）：从后台缓冲抓一块矩形到调用方缓冲，再贴回。
+- `hs_window_t` 新增 `surface/surface_w/surface_h`（hpdesk.h :219）：只在拖动期间存在，结束即释放；
+  分配失败为 0，自动退回"每帧重画"的老路径。
+- `hs_window_drag_start()` 末尾抓快照（此时后台缓冲保存的是上一帧完整画面），
+  `hs_window_drag_end()` 释放。
+- `hs_window_render_all()`：`g_dragging && g_drag_window == w && w->surface` 时
+  画完投影直接 `gfx64_back_restore` 并 `continue`，**跳过内容重画**。
+
+实测（拖动自测 28 帧，窗口 615,180 → 895,180）：`dirty_region_frames=27`，
+窗口内容（5 项导航、色板、全部文字）完整贴回，无残影。回归 1/1，内核 915296 B。
+
+**已知副作用**：快照矩形四角是"抓取那一刻的背景"，贴到新位置后四角有极小块旧背景。
+壁纸是同色系渐变，实测不可辨；若要彻底干净，需给快照加圆角 alpha 遮罩（未做）。
+
+**仍缺**（这才是完整 Surface）：
+1. 绘制目标隔离 —— 窗口内容直接画进自己的 buffer，而不是先画屏幕再抓；
+2. 裁剪 —— clip 到窗口矩形（现在靠各绘制函数自觉不出界）；
+3. 常驻 surface + 合成 —— 现在只有拖动期间有快照，静止窗口仍每帧重画。
+
 **仍缺**：控件树事件分发（现在点击仍由 hpdesk 的输入处理按坐标判定）、
 控件级脏区上报。这两项要与 Surface 一起做，否则脏区无法从控件流到合成器。
 
