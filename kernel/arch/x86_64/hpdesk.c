@@ -443,7 +443,7 @@ static const char *default_config =
 "    dock_margin_bottom: 12\n"
 "    dock_icon_size: 44\n"
 "    corner_radius: 12\n"
-"    sidebar_collapsed: 0\n"
+"    sidebar_collapsed: 1\n"
 "    font_small: 12\n"
 "    font_normal: 14\n"
 "    font_large: 18\n"
@@ -540,7 +540,7 @@ static void load_ui_from_config(hsqml_node_t *ui)
     g_shell.ui.dock_margin_bottom = hsqml_get_number(ui, "dock_margin_bottom", 12);
     g_shell.ui.dock_icon_size = hsqml_get_number(ui, "dock_icon_size", 44);
     g_shell.ui.corner_radius = hsqml_get_number(ui, "corner_radius", 12);
-    g_sidebar_collapsed = hsqml_get_number(ui, "sidebar_collapsed", 0);
+    g_sidebar_collapsed = hsqml_get_number(ui, "sidebar_collapsed", 1);
     g_shell.ui.font_small = hsqml_get_number(ui, "font_small", 12);
     g_shell.ui.font_normal = hsqml_get_number(ui, "font_normal", 14);
     g_shell.ui.font_large = hsqml_get_number(ui, "font_large", 18);
@@ -3281,6 +3281,7 @@ static void hs_dock_render(void);
 static void hs_sidebar_render(void);
 static void hs_control_center_render(void);
 void hs_cc_shadow_paint(void);
+void hs_sh_paint(int slot, int x, int y, int w, int h, int rc, int div);
 static void hs_desktop_clock_render(void);
 static void hs_weather_widget_render(void);
 static void hs_dynamic_island_render(void);
@@ -3468,6 +3469,31 @@ void hs_panel_render_all(void)
         if (!hs_panel_bounds(idx, &px, &py, &pw, &ph) || pw <= 0 || ph <= 0) {
             g_shell.panel_registry[idx].render();
             continue;
+        }
+        /* 浮层阴影(与窗口同一套模糊): 侧边栏 / 时钟胶囊 / 天气卡。
+         * 必须在这里(层合成之前)贴到主 fb, 不能进 render 回调 —— 那里是 surface。 */
+        if (idx == HS_PANEL_SIDEBAR) {
+            if (!g_sidebar_collapsed)
+                hs_sh_paint(1, hs_sx(g_shell.ui.sidebar_x), hs_sy(g_shell.ui.sidebar_y),
+                            hs_sx(g_shell.ui.sidebar_width), hs_sy(g_shell.ui.sidebar_height),
+                            hs_s(14), 24);
+        } else if (idx == HS_PANEL_DYNAMIC_ISLAND) {
+            /* 与 hs_dynamic_island_render 同一套几何: 居中于顶栏, 展开时连续插值 */
+            int iw = hs_sx(g_shell.ui.island_width), ih = hs_sy(g_shell.ui.island_height);
+            int e = hs_ease_out_cubic(g_island_t);
+            int tw = hs_sx(360), th = hs_sy(120);
+            iw = hs_sx(g_shell.ui.island_width) + (tw - hs_sx(g_shell.ui.island_width)) * e / 100;
+            ih = hs_sy(g_shell.ui.island_height) + (th - hs_sy(g_shell.ui.island_height)) * e / 100;
+            int ix = (g_shell.screen_width - iw) / 2;
+            int bar_top = hs_sy(8), bar_h = hs_sy(g_shell.ui.bar_height);
+            int iy = bar_top + (bar_h - ih) / 2;
+            if (iy < bar_top) iy = bar_top;
+            hs_sh_paint(2, ix, iy, iw, ih, hs_s(15), 40);
+        } else if (idx == HS_PANEL_WEATHER) {
+            int wx = g_shell.screen_width - hs_sx(g_shell.ui.weather_margin_right);
+            int wy = g_shell.screen_height - hs_sy(g_shell.ui.weather_margin_bottom);
+            hs_sh_paint(3, wx, wy, hs_sx(g_shell.ui.weather_width),
+                        hs_sy(g_shell.ui.weather_height), hs_s(g_shell.ui.corner_radius), 22);
         }
         /* V0.59.23 实测: "面板与脏区不相交就跳过" 依然无效, 回退了。
          * 26 个局部帧 × 6 个面板 = 156 次机会, 只有 4 次命中; panelK 34533 -> 35422,
@@ -4635,15 +4661,21 @@ static uint32_t hs_dim(uint32_t c, int k)
  *    在回调里调它会把阴影画到错误的坐标。
  * 2) 缓存独立于窗口那份。两边尺寸不同, 共用会每帧互相顶掉 key、反复重建,
  *    重建是 O(mw*mh*passes), 比贴图贵两个数量级。 */
-static uint32_t *ccsh_argb = 0;
-static uint8_t *ccsh_mask = 0;
-static uint8_t *ccsh_tmp = 0;
-static uint32_t ccsh_cap = 0;
-static uint32_t ccsh_argb_cap = 0;
-static int ccsh_mw = 0, ccsh_mh = 0;
-static int ccsh_kw = -1, ccsh_kh = -1, ccsh_kpk = 0;
+typedef struct {
+    uint32_t *argb;
+    uint8_t *mask;
+    uint8_t *tmp;
+    uint32_t cap;
+    uint32_t acap;
+    int mw, mh;
+    int kw, kh, kpk;
+} hs_shc_t;
 
-static int ccsh_build(int ww, int hh, int pad, int rc, int r, int off)
+#define HS_SHC_N 4
+/* 0=控制中心 1=侧边栏 2=时钟胶囊 3=天气卡 */
+static hs_shc_t g_shc[HS_SHC_N];
+
+static int hs_shc_build(hs_shc_t *c, int ww, int hh, int pad, int rc, int r, int off)
 {
     extern void *kmalloc(uint64_t size);
     extern void kfree(void *ptr);
@@ -4652,34 +4684,34 @@ static int ccsh_build(int ww, int hh, int pad, int rc, int r, int off)
     if (mw <= 0 || mh <= 0 || mw > 2048 || mh > 1400) return 0;
     uint32_t need = (uint32_t)mw * (uint32_t)mh;
     uint32_t need4 = need * 4;
-    if (need > ccsh_cap) {
-        if (ccsh_mask) kfree(ccsh_mask);
-        if (ccsh_tmp) kfree(ccsh_tmp);
-        ccsh_mask = (uint8_t *)kmalloc((uint64_t)need);
-        ccsh_tmp = (uint8_t *)kmalloc((uint64_t)need);
-        ccsh_cap = (ccsh_mask && ccsh_tmp) ? need : 0;
-        if (!ccsh_cap) return 0;
+    if (need > c->cap) {
+        if (c->mask) kfree(c->mask);
+        if (c->tmp) kfree(c->tmp);
+        c->mask = (uint8_t *)kmalloc((uint64_t)need);
+        c->tmp = (uint8_t *)kmalloc((uint64_t)need);
+        c->cap = (c->mask && c->tmp) ? need : 0;
+        if (!c->cap) return 0;
     }
-    if (need4 > ccsh_argb_cap) {
-        if (ccsh_argb) kfree(ccsh_argb);
-        ccsh_argb = (uint32_t *)kmalloc((uint64_t)need4);
-        ccsh_argb_cap = ccsh_argb ? need4 : 0;
-        if (!ccsh_argb) return 0;
+    if (need4 > c->acap) {
+        if (c->argb) kfree(c->argb);
+        c->argb = (uint32_t *)kmalloc((uint64_t)need4);
+        c->acap = c->argb ? need4 : 0;
+        if (!c->argb) return 0;
     }
     for (long y = 0; y < mh; y++) {
-        uint8_t *row = ccsh_mask + y * mw;
+        uint8_t *row = c->mask + y * mw;
         for (long x = 0; x < mw; x++)
             row[x] = sh_in_rounded(x, y, pad, pad + off,
                                    pad + ww - 1, pad + off + hh - 1, rc) ? 255 : 0;
     }
     if (r < 1) r = 1;
     for (int pass = 0; pass < SH_PASSES; pass++) {
-        sh_box_h(ccsh_mask, ccsh_tmp, mw, mh, r);
-        sh_box_v(ccsh_tmp, ccsh_mask, mw, mh, r);
+        sh_box_h(c->mask, c->tmp, mw, mh, r);
+        sh_box_v(c->tmp, c->mask, mw, mh, r);
     }
     for (long y = 0; y < mh; y++) {
-        const uint8_t *row = ccsh_mask + y * mw;
-        uint32_t *arow = ccsh_argb + y * mw;
+        const uint8_t *row = c->mask + y * mw;
+        uint32_t *arow = c->argb + y * mw;
         for (long x = 0; x < mw; x++) {
             if (sh_in_rounded(x, y, pad, pad + off,
                               pad + ww - 1, pad + off + hh - 1, rc))
@@ -4688,8 +4720,29 @@ static int ccsh_build(int ww, int hh, int pad, int rc, int r, int off)
                 arow[x] = (uint32_t)row[x] << 24;
         }
     }
-    ccsh_mw = mw; ccsh_mh = mh; ccsh_kw = ww; ccsh_kh = hh;
+    c->mw = mw; c->mh = mh; c->kw = ww; c->kh = hh;
     return 1;
+}
+
+/* 给矩形 (x,y,w,h) 贴一块缓存的模糊阴影。div = 短边/模糊半径。
+ * 同一槽位尺寸不变就一直命中缓存, 每帧只做一次 blend_image。 */
+void hs_sh_paint(int slot, int x, int y, int w, int h, int rc, int div)
+{
+    if (slot < 0 || slot >= HS_SHC_N) return;
+    if (w <= 0 || h <= 0) return;
+    int mn = w < h ? w : h;
+    int r = mn / div;
+    if (r < 10) r = 10;
+    if (r > 34) r = 34;
+    int off = 4;                  /* 轻微下移, 四边仍有近场暗部 */
+    int pad = 3 * r + 6;
+    int pk = ((rc * 4096 + pad) * 4096 + r) * 512 + off;
+    hs_shc_t *c = &g_shc[slot];
+    if (c->kw != w || c->kh != h || c->kpk != pk) {
+        if (!hs_shc_build(c, w, h, pad, rc, r, off)) return;
+        c->kpk = pk;
+    }
+    gfx64_blend_image(c->argb, c->mw, c->mh, x - pad, y - pad, 255);
 }
 
 void hs_cc_shadow_paint(void)
@@ -4697,21 +4750,7 @@ void hs_cc_shadow_paint(void)
     if (!g_cc_open) return;
     int cx, cy, cw, ch;
     cc_geometry(&cx, &cy, &cw, &ch);
-    int mn = cw < ch ? cw : ch;
-    int rc = hs_s(12);
-    /* 模糊半径按短边取, 比窗口那边保守一点(1/30 而非 1/18): 控制中心是浮层,
-     * 阴影太散会糊住右侧的壁纸细节。 */
-    int r = mn / 30;
-    if (r < 12) r = 12;
-    if (r > 30) r = 30;
-    int off = 4;                  /* 轻微下移, 只有 4px, 四边仍都有近场暗部 */
-    int pad = 3 * r + 6;
-    int pk = ((rc * 4096 + pad) * 4096 + r) * 512 + off;
-    if (ccsh_kw != cw || ccsh_kh != ch || ccsh_kpk != pk) {
-        if (!ccsh_build(cw, ch, pad, rc, r, off)) return;
-        ccsh_kpk = pk;
-    }
-    gfx64_blend_image(ccsh_argb, ccsh_mw, ccsh_mh, cx - pad, cy - pad, 255);
+    hs_sh_paint(0, cx, cy, cw, ch, hs_s(12), 30);
 }
 
 static void hs_control_center_render(void)

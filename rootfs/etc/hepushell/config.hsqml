@@ -26,7 +26,7 @@ UI {
     sidebar_y: 50
     sidebar_width: 280
     sidebar_height: 500
-    sidebar_collapsed: 0
+    sidebar_collapsed: 1
     cc_margin_right: 384
     cc_y: 108
     cc_width: 360
