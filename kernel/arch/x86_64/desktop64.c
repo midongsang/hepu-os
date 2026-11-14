@@ -103,6 +103,12 @@ void desktop64_run(void)
 {
     /* 进主循环前把 owner 身份钉住: 此后只有这个上下文能直接改桌面状态 */
     hpdesk_claim_owner();
+    /* §5-2 第 2 步: z-order / 焦点准入守卫自检(创建/聚焦/销毁一个屏外探针窗口),
+     * 在 owner 已认领、主循环未开始的这一刻跑 —— 和 display_backend 等价自检同一位置。 */
+    {
+        extern int hpdesk_owner_guard_selftest(void);
+        hpdesk_owner_guard_selftest();
+    }
     if (!desktop_initialized) {
         if (desktop64_init() != 0) {
             vga_puts("[DESKTOP64] Failed to initialize desktop\n");

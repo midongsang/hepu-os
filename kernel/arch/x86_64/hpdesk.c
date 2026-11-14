@@ -1605,6 +1605,98 @@ void hpdesk_toggle_launcher(void)
  * 窗口管理
  * ========================================================================== */
 
+/* ============================================================================
+ * §5-2 桌面状态 owner (第 2 步: z-order / 焦点)
+ *
+ * 第 1 步只把"脏矩形"收回 owner: 非 owner 只能置 g_desk_req_dirty, 由主循环消费。
+ * 但 z_order[] 与 focus_window 同样是"多步簿记" —— 置顶要先把 id 从 z_order 里
+ * 摘掉再追加(重排), 焦点要先清所有窗口的 focus 位再置一个。这些都不是单字原子,
+ * 两个核同时改会留下重复 id / 两个 focus=1, 而 g_wm_lock 只保证"不撕裂",
+ * 不保证"谁有权改"。所以这一层补的不是锁, 是**准入**。
+ *
+ * 判据: 非 owner 试图改 z-order/焦点时, 串口立刻出现
+ *   [DESKOWN] reject <what> from slot=0xN
+ * 并且该次调用被拒绝(状态不变)。owner 上下文调用一律放行。
+ * 启动期(owner 尚未认领)放行 —— 那时还没进主循环, 不可能有第二个核在改。
+ * ========================================================================== */
+static int g_desk_owner_slot = -1;
+static volatile uint32_t g_owner_guard_pass = 0;
+static volatile uint32_t g_owner_guard_reject = 0;
+
+void hpdesk_claim_owner(void)
+{
+    if (g_desk_owner_slot >= 0) return;
+    extern int process64_current_index(void);
+    extern void vga_put_hex(uint64_t v);
+    g_desk_owner_slot = process64_current_index();
+    vga_puts("[DESKOWN] owner slot=");
+    vga_put_hex((uint64_t)(g_desk_owner_slot < 0 ? 0 : g_desk_owner_slot));
+    vga_puts(" (dirty+zorder+focus armed)\n");
+}
+
+int hpdesk_is_owner(void)
+{
+    extern int process64_current_index(void);
+    if (g_desk_owner_slot < 0) return 0;
+    return process64_current_index() == g_desk_owner_slot;
+}
+
+/* 窗口层级 / 焦点类入口的准入检查。返回 1 = 允许, 0 = 拒绝。 */
+int hpdesk_owner_guard(const char *what)
+{
+    if (g_desk_owner_slot < 0) return 1;      /* 启动期: 未认领, 放行 */
+    if (hpdesk_is_owner()) {
+        __atomic_add_fetch(&g_owner_guard_pass, 1, __ATOMIC_RELAXED);
+        return 1;
+    }
+    uint32_t n = __atomic_add_fetch(&g_owner_guard_reject, 1, __ATOMIC_RELAXED);
+    if (n == 1) {
+        extern int process64_current_index(void);
+        extern void vga_put_hex(uint64_t v);
+        vga_puts("[DESKOWN] reject ");
+        vga_puts(what);
+        vga_puts(" from slot=");
+        vga_put_hex((uint64_t)(uint32_t)process64_current_index());
+        vga_puts("\n");
+    }
+    return 0;
+}
+
+uint32_t hpdesk_owner_guard_stats(uint32_t *rejects)
+{
+    if (rejects) *rejects = __atomic_load_n(&g_owner_guard_reject, __ATOMIC_RELAXED);
+    return __atomic_load_n(&g_owner_guard_pass, __ATOMIC_RELAXED);
+}
+
+/* §5-2 第 2 步自检: 在 owner 上下文里真的走一遍 create -> focus -> destroy,
+ * 而不是只计数 —— 启动时桌面上本来没有窗口, 光看 pass 恒为 0 证明不了接线。
+ * 窗口放在屏外、1x1、立刻销毁, 不进可见状态也不留槽位。
+ * 判据: pass >= 2 且 reject == 0。 */
+int hpdesk_owner_guard_selftest(void)
+{
+    extern void vga_put_hex(uint64_t v);
+    /* 1) owner 上下文里直探一次: 必须放行(pass +1)。
+     * 2) 顺带试一次真实 create(窗口放屏外 1x1), 但**不参与判定** ——
+     *    启动早期窗口系统可能还没就绪(实测这里返回 0), 那是另一个议题,
+     *    不该让准入守卫的自检跟着失败。成功后立刻销毁, 不留槽位。 */
+    int ok = hpdesk_owner_guard("selftest");
+    hs_window_t *w = hs_window_create(HS_WINDOW_FLOATING, "owner-probe", -64, -64, 1, 1);
+    int created = 0;
+    if (w) { created = 1; hs_window_destroy(w); }
+    uint32_t rej = 0;
+    uint32_t pass = hpdesk_owner_guard_stats(&rej);
+    vga_puts("[DESKOWN] zorder/focus selftest ");
+    vga_puts((ok && pass >= 1 && rej == 0) ? "PASS" : "BAD");
+    vga_puts(" pass=");
+    vga_put_hex((uint64_t)pass);
+    vga_puts(" reject=");
+    vga_put_hex((uint64_t)rej);
+    vga_puts(" create_probe=");
+    vga_put_hex((uint64_t)created);
+    vga_puts("\n");
+    return (ok && pass >= 1 && rej == 0) ? 0 : -1;
+}
+
 /* 全局窗口管理器 */
 static hs_window_manager_t g_wm;
 
@@ -1759,6 +1851,7 @@ hs_window_t *hs_window_create_inner(hs_window_type_t type, const char *title,
 hs_window_t *hs_window_create(hs_window_type_t type, const char *title,
                               int x, int y, int w, int h)
 {
+    if (!hpdesk_owner_guard("create")) return 0;
     uint64_t wf = wm_lock();
     hs_window_t *r = hs_window_create_inner(type, title, x, y, w, h);
     wm_unlock(wf);
@@ -1786,6 +1879,7 @@ static void hs_window_recycle(int id)
 void hs_window_destroy(hs_window_t *win)
 {
     if (!win || win->id < 0) return;
+    if (!hpdesk_owner_guard("destroy")) return;
     hs_window_recycle(win->id);
 }
 
@@ -1793,6 +1887,7 @@ void hs_window_destroy(hs_window_t *win)
 void hs_window_focus(hs_window_t *win)
 {
     if (!win) return;
+    if (!hpdesk_owner_guard("focus")) return;
     for (int i = 0; i < g_wm.window_count; i++) {
         g_wm.windows[i].focus = 0;
     }
@@ -1805,10 +1900,16 @@ void hs_window_focus(hs_window_t *win)
 void hs_window_show(hs_window_t *win)
 {
     if (!win) return;
+    if (!hpdesk_owner_guard("show")) return;
     win->visible = 1;
     hs_window_focus(win);
 }
-void hs_window_hide(hs_window_t *win) { if (win) win->visible = 0; }
+void hs_window_hide(hs_window_t *win)
+{
+    if (!win) return;
+    if (!hpdesk_owner_guard("hide")) return;
+    win->visible = 0;
+}
 
 /* 最大化/还原 */
 void hs_window_maximize(hs_window_t *win)
@@ -1859,6 +1960,7 @@ void hs_window_toggle_maximize(hs_window_t *win)
 void hs_window_raise_inner(hs_window_t *win)
 {
     if (!win) return;
+    if (!hpdesk_owner_guard("raise_inner")) return;
     /* 从z_order移除并添加到顶部 */
     int new_z = 0;
     for (int i = 0; i < g_wm.z_count; i++) {
@@ -1881,6 +1983,7 @@ void hs_window_raise(hs_window_t *win)
 void hs_window_lower_inner(hs_window_t *win)
 {
     if (!win) return;
+    if (!hpdesk_owner_guard("lower_inner")) return;
     int new_z = 1;
     int saved = win->id;
     for (int i = 0; i < g_wm.z_count; i++) {
@@ -3276,6 +3379,7 @@ static void hs_settings_window_render(hs_window_t *w)
 void hpdesk_switch_workspace(int ws)
 {
     if (ws < 0 || ws >= HS_MAX_WORKSPACES) return;
+    if (!hpdesk_owner_guard("workspace")) return;
     g_shell.current_workspace = ws;
     hs_window_tile();
 }
@@ -5821,26 +5925,8 @@ hs_window_t *hs_wm_windows(int *count)
  * 窗口的 content_dirty 同理。所以非 owner 只置一个请求位, owner 每帧取走执行。
  * 判据: 串口能看到 deferred 请求被 owner 消费的次数。 */
 extern void vga_put_hex(uint64_t v);
-static int g_desk_owner_slot = -1;
 static volatile uint32_t g_desk_req_dirty = 0;
 static volatile uint32_t g_desk_ext_requests = 0;
-
-void hpdesk_claim_owner(void)
-{
-    if (g_desk_owner_slot >= 0) return;
-    extern int process64_current_index(void);
-    g_desk_owner_slot = process64_current_index();
-    vga_puts("[DESKOWN] owner slot=");
-    vga_put_hex((uint64_t)(g_desk_owner_slot < 0 ? 0 : g_desk_owner_slot));
-    vga_puts("\n");
-}
-
-int hpdesk_is_owner(void)
-{
-    extern int process64_current_index(void);
-    if (g_desk_owner_slot < 0) return 0;
-    return process64_current_index() == g_desk_owner_slot;
-}
 
 /* 真正改桌面状态的那一步, 只允许 owner 上下文执行 */
 static void desk_apply_dirty(void)

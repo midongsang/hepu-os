@@ -107,7 +107,21 @@
 - **2026-11-14 起**：§5-2 的脏矩形 owner 已落地，`khouse`/`kstat` 可以跨核跑
   （非 owner 只提请求，owner 消费）。所以"会碰桌面状态的线程不许跨核"这条
   现在收窄为"**不许绕过 owner 直接改桌面状态**"。
-- 仍未收 owner 的：z-order 与焦点（`g_wm_lock` 只保护簿记，不限制调用者）。
-  在它们收 owner 之前，仍然不要让第三方线程直接调窗口管理入口。
+- **2026-11-15 起**：z-order 与焦点也收 owner 了，但收的方式和脏矩形不同 ——
+  这里加的**不是队列，是准入**。原因：置顶（先摘后追）和焦点（先清后置）都是
+  多步簿记，跨核提交一个"请求位"无法表达"从哪个位置置顶"，反而会算出错的 z 序；
+  而现在的调用者只有桌面主循环一个，加队列等于给一个不存在的竞争修一条路。
+  所以落地的是 `hpdesk_owner_guard(what)`：
+  - owner 上下文 → 放行并计数；
+  - 非 owner → **拒绝执行**，串口打一次 `[DESKOWN] reject <what> from slot=0xN`；
+  - 启动期（owner 未认领）→ 放行（那时还没进主循环，不可能有第二个核在改）。
+  接在 `hs_window_create / destroy / focus / show / hide / raise_inner / lower_inner`
+  与 `hpdesk_switch_workspace` 九个入口上。
+- 证据：`[DESKOWN] zorder/focus selftest PASS pass=0x2 reject=0x0`（启动进主循环前
+  跑一次，pass 非 0 才说明守卫真的被入口走到，不是接了没走）；
+  冷启动 3/3、`-smp 12` 1/1，全部 `desk=1 EXC=0 PASS=1 SPINERR=0`。
+- 已知缺口：自检里那次"屏外 1x1 探针窗口"的 create 在启动早期返回 0
+  （`create_probe=0x0`），说明窗口系统在 `desktop64_run()` 入口这一刻还没完全就绪。
+  它不影响准入守卫（守卫已由 pass 计数证明接线），但登记为待查项。
 - `SB-08`（FPU 保存区 8 槽 vs 16 核）仍未实测，需要真实双核浮点负载 —— 现在
   `kstat` 已能跨核跑，可作为下一轮的试验载体。
