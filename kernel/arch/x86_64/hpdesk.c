@@ -3280,6 +3280,7 @@ static void hs_top_bar_render(void);
 static void hs_dock_render(void);
 static void hs_sidebar_render(void);
 static void hs_control_center_render(void);
+void hs_cc_shadow_paint(void);
 static void hs_desktop_clock_render(void);
 static void hs_weather_widget_render(void);
 static void hs_dynamic_island_render(void);
@@ -4625,6 +4626,94 @@ static uint32_t hs_dim(uint32_t c, int k)
     return (uint32_t)(0xFF000000u | ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b);
 }
 
+/* ===== 控制中心阴影: 与窗口阴影同一套做法 =====
+ * 窗口那边是"预渲染整块 ARGB(黑底+掩膜 alpha), 每帧一次 blend_image",
+ * 这里照搬: 遮挡体 = 圆角矩形, box blur 出掩膜, 环带写 alpha, 内部透明。
+ * 两点必须注意:
+ * 1) 必须画在层合成之前(直接写主 fb)。层的 render 回调跑在 surface 上下文里,
+ *    gfx64_blend_image 认的是 gfx_target/front_buffer, 不认 surface,
+ *    在回调里调它会把阴影画到错误的坐标。
+ * 2) 缓存独立于窗口那份。两边尺寸不同, 共用会每帧互相顶掉 key、反复重建,
+ *    重建是 O(mw*mh*passes), 比贴图贵两个数量级。 */
+static uint32_t *ccsh_argb = 0;
+static uint8_t *ccsh_mask = 0;
+static uint8_t *ccsh_tmp = 0;
+static uint32_t ccsh_cap = 0;
+static uint32_t ccsh_argb_cap = 0;
+static int ccsh_mw = 0, ccsh_mh = 0;
+static int ccsh_kw = -1, ccsh_kh = -1, ccsh_kpk = 0;
+
+static int ccsh_build(int ww, int hh, int pad, int rc, int r, int off)
+{
+    extern void *kmalloc(uint64_t size);
+    extern void kfree(void *ptr);
+
+    int mw = ww + 2 * pad, mh = hh + 2 * pad + off;
+    if (mw <= 0 || mh <= 0 || mw > 2048 || mh > 1400) return 0;
+    uint32_t need = (uint32_t)mw * (uint32_t)mh;
+    uint32_t need4 = need * 4;
+    if (need > ccsh_cap) {
+        if (ccsh_mask) kfree(ccsh_mask);
+        if (ccsh_tmp) kfree(ccsh_tmp);
+        ccsh_mask = (uint8_t *)kmalloc((uint64_t)need);
+        ccsh_tmp = (uint8_t *)kmalloc((uint64_t)need);
+        ccsh_cap = (ccsh_mask && ccsh_tmp) ? need : 0;
+        if (!ccsh_cap) return 0;
+    }
+    if (need4 > ccsh_argb_cap) {
+        if (ccsh_argb) kfree(ccsh_argb);
+        ccsh_argb = (uint32_t *)kmalloc((uint64_t)need4);
+        ccsh_argb_cap = ccsh_argb ? need4 : 0;
+        if (!ccsh_argb) return 0;
+    }
+    for (long y = 0; y < mh; y++) {
+        uint8_t *row = ccsh_mask + y * mw;
+        for (long x = 0; x < mw; x++)
+            row[x] = sh_in_rounded(x, y, pad, pad + off,
+                                   pad + ww - 1, pad + off + hh - 1, rc) ? 255 : 0;
+    }
+    if (r < 1) r = 1;
+    for (int pass = 0; pass < SH_PASSES; pass++) {
+        sh_box_h(ccsh_mask, ccsh_tmp, mw, mh, r);
+        sh_box_v(ccsh_tmp, ccsh_mask, mw, mh, r);
+    }
+    for (long y = 0; y < mh; y++) {
+        const uint8_t *row = ccsh_mask + y * mw;
+        uint32_t *arow = ccsh_argb + y * mw;
+        for (long x = 0; x < mw; x++) {
+            if (sh_in_rounded(x, y, pad, pad + off,
+                              pad + ww - 1, pad + off + hh - 1, rc))
+                arow[x] = 0;
+            else
+                arow[x] = (uint32_t)row[x] << 24;
+        }
+    }
+    ccsh_mw = mw; ccsh_mh = mh; ccsh_kw = ww; ccsh_kh = hh;
+    return 1;
+}
+
+void hs_cc_shadow_paint(void)
+{
+    if (!g_cc_open) return;
+    int cx, cy, cw, ch;
+    cc_geometry(&cx, &cy, &cw, &ch);
+    int mn = cw < ch ? cw : ch;
+    int rc = hs_s(12);
+    /* 模糊半径按短边取, 比窗口那边保守一点(1/30 而非 1/18): 控制中心是浮层,
+     * 阴影太散会糊住右侧的壁纸细节。 */
+    int r = mn / 30;
+    if (r < 12) r = 12;
+    if (r > 30) r = 30;
+    int off = 4;                  /* 轻微下移, 只有 4px, 四边仍都有近场暗部 */
+    int pad = 3 * r + 6;
+    int pk = ((rc * 4096 + pad) * 4096 + r) * 512 + off;
+    if (ccsh_kw != cw || ccsh_kh != ch || ccsh_kpk != pk) {
+        if (!ccsh_build(cw, ch, pad, rc, r, off)) return;
+        ccsh_kpk = pk;
+    }
+    gfx64_blend_image(ccsh_argb, ccsh_mw, ccsh_mh, cx - pad, cy - pad, 255);
+}
+
 static void hs_control_center_render(void)
 {
     if (!g_cc_open) return;
@@ -4637,10 +4726,8 @@ static void hs_control_center_render(void)
     /* 同心微扩散替代原来的"右下偏移暗块": 旧做法偏移 +6/+8 且压到 22%,
      * 在浅色壁纸上是一条生硬的深色厚边。改为零偏移、每级 2px 外扩,
      * 亮度逐级加深, 视觉上是柔和的边缘渐变而不是投影块。 */
-    /* 只留一圈 2px 细阴影(下沿多 1px 表示受光方向), 颜色比面板暗 88%,
-     * 浅色主题下是一条干净的黑边而不是白晕; 面板本体 + border 负责分层。 */
-    gfx64_fill_rounded_rect(cx - hs_s(2), cy - hs_s(1), cw + hs_s(4), ch + hs_s(3),
-                            hs_s(14), hs_dim(g_shell.colors.window_bg, 12));
+    /* 阴影由 hs_cc_shadow_paint() 在层合成前画到主 fb(和窗口阴影同一套模糊),
+     * 这里不再自己叠暗边, 只保留面板本体 + border。 */
     gfx64_fill_rounded_rect(cx, cy, cw, ch, hs_s(12), g_shell.colors.window_bg);
     gfx64_draw_rounded_rect(cx, cy, cw, ch, hs_s(12), g_shell.colors.border);
 
@@ -6165,6 +6252,7 @@ static void hpdesk_render_inner(void)
             if (g_shell.panel_registry[HS_PANEL_CONTROL_CENTER].enabled && g_cc_open) {
                 int ccx = 0, ccy = 0, ccw = 0, cch = 0;
                 cc_geometry(&ccx, &ccy, &ccw, &cch);
+                hs_cc_shadow_paint();   /* 阴影先落到主 fb, 随后这层把它盖住中间 */
                 hs_layer_draw(&g_ly_cc, ccx, ccy, ccw, cch, hs_control_center_render,
                               !(g_in_partial_frame && g_ly_cc.valid));
             }
@@ -6244,6 +6332,7 @@ static void hpdesk_render_inner(void)
     /* 控制中心绘制在窗口之上，避免被最大化窗口遮挡 */
     if (g_shell.panel_registry[HS_PANEL_CONTROL_CENTER].enabled && g_cc_open) {
         uint64_t cc0 = hs_rdtsc();
+        hs_cc_shadow_paint();       /* 全量帧直绘: 阴影先贴, 面板本体随后盖上 */
         hs_control_center_render();
         g_cyc_cc += hs_rdtsc() - cc0;
     }
