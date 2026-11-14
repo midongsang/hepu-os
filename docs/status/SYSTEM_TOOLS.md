@@ -96,7 +96,7 @@
 
 1. ~~kill / killall / renice / taskset~~ 已完成（v0.59.3）。剩 `nice <prio> <cmd>` 的启动前设优先级，等有 spawn 命令后再说。
 2. **ip / ping**：`ip addr`、`ip route` 走现有网卡与路由表；ping 需要 ICMP 发送，可与 e1000 驱动共用。
-3. **sha256sum**：零成本，`auth64_sha256` 已导出。
+3. ~~sha256sum~~ 已完成（V0.59.21）：`auth64_sha256` 已导出，终端命令走 4KB 分块流式读取。
 4. **chmod / chown**：inode 权限位已在，缺 shell 解析。
 5. **objdump / readelf**：把 elf64 的节表解析暴露成命令。
 
