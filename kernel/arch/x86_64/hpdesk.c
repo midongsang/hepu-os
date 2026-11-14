@@ -4,6 +4,7 @@
  * V0.10.160
  * ========================================================================== */
 
+#include "hs_ui.h"
 #include "hpdesk.h"
 #include "spinlock.h"
 #include "hs_icons_data.h"   /* V0.57.0: 系统图标位图集(32x32 1bit) */
@@ -2443,21 +2444,73 @@ void hs_window_render_all(void)
 static int hs_set_k(hs_window_t *w, int v) { return hs_win_k(w, 460, v); }
 #define SETK(v) hs_set_k(w, (v))
 
+/* V0.59.6 试点: 左侧导航改用布局容器(hs_ui)。
+ * 原来 5 个按钮的位置是 cy + i * SETK(32), 间距 32 这个常数直接写在循环里;
+ * 现在容器管排列与间距, paint 回调只拿到"已经算好的矩形", 自己不再加偏移。
+ * 视觉结果与旧实现逐像素一致(28 + gap 4 = 32), 但改间距只需改一处。
+ * 事件命中仍走原逻辑(g_settings_page 由 hpdesk 输入处理设置), 本步不动。 */
+static hs_window_t *g_nav_win = 0;
+static hs_ui_box_t *g_nav_root = 0;
+static hs_ui_box_t *g_nav_items = 0;
+static int g_nav_count = 0;
+
+static void hs_settings_nav_paint(hs_ui_box_t *b);
+static void hs_settings_nav_ensure(int count);
+static void hs_settings_nav_layout(int cx, int cy, int w_px, int item_h, int gap);
+
+static hs_ui_box_t g_nav_root_storage;
+static hs_ui_box_t g_nav_item_storage[8];
+static int g_nav_ready = 0;
+
+static void hs_settings_nav_paint(hs_ui_box_t *b)
+{
+    hs_window_t *w = g_nav_win;    /* SETK 宏需要名为 w 的局部变量 */
+    void *fb = gfx64_get_framebuffer();
+    static const char *menu[5] = {"Appearance", "Panels", "System", "About", "Display"};
+    int page = b->tag;
+    if (page < 0 || page > 4) return;
+    uint32_t bg = (page == g_settings_page) ? g_shell.colors.accent : g_shell.colors.panel_bg;
+    uint32_t fg = (page == g_settings_page) ? hs_on_accent() : g_shell.colors.panel_fg;
+    gfx64_fill_rounded_rect(b->x, b->y, b->w, b->h, SETK(6), bg);
+    font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                       b->x + SETK(10), b->y + SETK(7), menu[page], fg, SETK(13));
+}
+
+static void hs_settings_nav_ensure(int count)
+{
+    if (count > 8) count = 8;
+    hs_ui_init_box(&g_nav_root_storage, HS_UI_COL, 0, 0);
+    for (int i = 0; i < count; i++) {
+        hs_ui_init_box(&g_nav_item_storage[i], HS_UI_COL, 0, 0);
+        g_nav_item_storage[i].tag = i;
+        g_nav_item_storage[i].paint = hs_settings_nav_paint;
+        hs_ui_add(&g_nav_root_storage, &g_nav_item_storage[i]);
+    }
+    g_nav_root = &g_nav_root_storage;
+    g_nav_items = g_nav_item_storage;
+    g_nav_count = count;
+    g_nav_ready = 1;
+}
+
+static void hs_settings_nav_layout(int cx, int cy, int w_px, int item_h, int gap)
+{
+    if (!g_nav_root || g_nav_count <= 0) return;
+    g_nav_root->gap = gap;
+    for (int i = 0; i < g_nav_count; i++) g_nav_items[i].fixed_h = item_h;
+    hs_ui_layout(g_nav_root, cx, cy, w_px,
+                 g_nav_count * item_h + (g_nav_count - 1) * gap);
+}
+
 static void hs_settings_window_render(hs_window_t *w)
 {
     void *fb = gfx64_get_framebuffer();
     int cx = w->x + SETK(16);
     int cy = w->y + SETK(36);  /* 跳过标题栏 */
 
-    /* 左侧菜单 */
-    const char *menu[] = {"Appearance", "Panels", "System", "About", "Display"};
-    for (int i = 0; i < 5; i++) {
-        uint32_t bg = (i == g_settings_page) ? g_shell.colors.accent : g_shell.colors.panel_bg;
-        uint32_t fg = (i == g_settings_page) ? hs_on_accent() : g_shell.colors.panel_fg;
-        gfx64_fill_rounded_rect(cx, cy + i * SETK(32), SETK(120), SETK(28), SETK(6), bg);
-        font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           cx + SETK(10), cy + i * SETK(32) + SETK(7), menu[i], fg, SETK(13));
-    }
+    /* 左侧菜单 —— 由布局容器排列(hs_ui), 这里只给根矩形与尺寸参数 */
+    g_nav_win = w;
+    hs_settings_nav_ensure(5);
+    hs_settings_nav_layout(cx, cy, SETK(120), SETK(28), SETK(4));
 
     /* 右侧内容 */
     int rx = cx + SETK(140);

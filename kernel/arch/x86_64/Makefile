@@ -145,6 +145,7 @@ C_SOURCES = \
     $(ARCH_DIR)/hpdesk.c \
     $(ARCH_DIR)/icons_win_data.c \
     $(ARCH_DIR)/hsqml.c \
+    $(ARCH_DIR)/hs_ui.c \
     $(ARCH_DIR)/hsipc.c \
     $(ARCH_DIR)/hsservices.c \
     $(ARCH_DIR)/hsextras.c \
