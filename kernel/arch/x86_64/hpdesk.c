@@ -5559,9 +5559,17 @@ void hs_drag_selftest(void)
         uint32_t rendK   = (uint32_t)((g_cyc_render_all / nf) / 1000);
         uint32_t blendK  = (uint32_t)((g_cyc_blend / nf) / 1000);
         uint32_t presK   = (uint32_t)((gfx64_prof_present / nf) / 1000);
-        uint32_t otherK  = (frameK > rendK + presK) ? (frameK - rendK - presK) : 0;
-        vga_printf("[PROF] drag %d frames: frameK=%d renderAllK=%d blendK=%d presentK=%d otherK=%d\n",
-                   nf, frameK, rendK, blendK, presK, otherK);
+        /* V0.59.22: 旧式 otherK = frameK - rendK - presK 是错的 —— 它把壁纸/面板/
+         * 控制中心/通知这些「不在 renderAll 区间内」的段全算进了"其它", 于是
+         * 102K 的 otherK 里约 71% 其实是面板与壁纸绘制, 看起来像不明开销。
+         * 也不能用 PROF2 的累加器(g_cyc_wall 等)去扣: 那是"blit 阶段"口径,
+         * 与 PROF5 的 ts 时间段口径差一个量级(g_cyc_wall 1811 vs PROF5 wallK 19073)。
+         * 正确做法: 用 PROF5 时间戳链的总和 g_ts6 作为"已测部分",
+         * otherK 才是真正没被任何段覆盖的残差(循环轮询/调度/时间戳间隙)。 */
+        uint32_t segK    = (uint32_t)(g_ts6 / 1000);
+        uint32_t otherK  = (frameK > segK) ? (frameK - segK) : 0;
+        vga_printf("[PROF] drag %d frames: frameK=%d renderAllK=%d blendK=%d presentK=%d segK=%d otherK=%d\n",
+                   nf, frameK, rendK, blendK, presK, segK, otherK);
         {
             uint32_t a1 = (uint32_t)((g_ts1) / 1000), a2 = (uint32_t)((g_ts2) / 1000);
             uint32_t a3 = (uint32_t)((g_ts3) / 1000), a4 = (uint32_t)((g_ts4) / 1000);
