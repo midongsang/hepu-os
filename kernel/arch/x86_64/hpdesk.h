@@ -213,11 +213,15 @@ typedef struct hs_window {
     /* 拖动状态 */
     int dragging;
     int drag_offset_x, drag_offset_y;
-    /* Surface 雏形(V0.59.7): 拖动期间用的窗口内容快照(窗口矩形内像素, w*h*4)。
-     * 拖动时窗口内容不变, 每帧重画(尤其文字栅格)纯属浪费; 有快照就只 blit。
-     * 只在拖动期间存在, 拖动结束释放。分配失败时为 0, 自动退回重画路径。 */
+    /* 窗口 surface(V0.59.11): 常驻 ARGB 画布(w*h*4), 内容画在这里再合成到屏幕。
+     * 分配失败时为 0, 渲染退回直接画屏幕的老路径。 */
     void *surface;
     int surface_w, surface_h;
+    /* V0.59.12 窗口级脏标记: 内容没变就只贴上一帧的 surface, 不重画。
+     * 置脏来源: 创建/尺寸变化/标题变化/hpdesk_mark_dirty()/鼠标相对窗口位置变化。
+     * 拖动时鼠标相对窗口不动, 所以拖动帧能命中"免重画" —— 这是 Surface 的收益点。 */
+    int content_dirty;
+    int hover_rel_x, hover_rel_y, hover_inside;
     /* 内容渲染回调 */
     void (*render)(struct hs_window *win);
 } hs_window_t;

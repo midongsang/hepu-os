@@ -1580,6 +1580,11 @@ hs_window_t *hs_window_create_inner(hs_window_type_t type, const char *title,
     win->id = slot;
     win->type = type;
     win->state = HS_WINDOW_STATE_NORMAL;
+    win->surface = 0;
+    win->surface_w = win->surface_h = 0;
+    win->content_dirty = 1;
+    win->hover_rel_x = win->hover_rel_y = -1;
+    win->hover_inside = 0;
 
     /* 复制标题 */
     int i = 0;
@@ -2274,6 +2279,8 @@ extern void gfx64_blend_image(void *src, int sw, int sh, int dx, int dy, int opa
 extern void gfx64_clip_set(int x, int y, int w, int h);
 extern void gfx64_clip_disable(void);
 
+static int g_surf_reuse, g_surf_repaint;
+
 static void *hs_window_surface_ensure(hs_window_t *w)
 {
     int ww = w->width, hh = w->height;
@@ -2339,7 +2346,23 @@ void hs_window_render_all(void)
             wrc = hs_window_corner_radius(w);
         /* V0.59.11: 内容画进窗口自己的 ARGB surface, 帧末再合成到屏幕。
          * 底色用"带 alpha 的圆角"写入 —— 圆角外必须真透明, 合成时才透出壁纸。 */
+        /* V0.59.12: 鼠标相对窗口的位置变了才可能改变窗口外观(hover 高亮),
+         * 绝对位置变化不算 —— 拖动时两者相同, 这类帧可以直接复用 surface。 */
+        {
+            int rx = g_shell.mouse_x - w->x, ry = g_shell.mouse_y - w->y;
+            int inside = (rx >= 0 && rx < w->width && ry >= 0 && ry < w->height);
+            if (rx != w->hover_rel_x || ry != w->hover_rel_y) w->content_dirty = 1;
+            if (inside != w->hover_inside) w->content_dirty = 1;
+            w->hover_rel_x = rx; w->hover_rel_y = ry; w->hover_inside = inside;
+        }
+
         void *tsurf = hs_window_surface_ensure(w);
+        if (tsurf && !w->content_dirty) {
+            /* 内容没变: 直接贴上一帧的 surface, 跳过 memset + 全部绘制 */
+            gfx64_blend_image(tsurf, w->width, w->height, w->x, w->y, 255);
+            g_surf_reuse++;
+            continue;
+        }
         if (tsurf) {
             memset(tsurf, 0, (size_t)w->width * w->height * 4);
             gfx64_fill_round_rect_argb(tsurf, w->width, w->height, 0, 0,
@@ -2483,6 +2506,8 @@ void hs_window_render_all(void)
         if (tsurf) {
             gfx64_target_end();
             gfx64_blend_image(tsurf, w->width, w->height, w->x, w->y, 255);
+            w->content_dirty = 0;
+            g_surf_repaint++;
         }
 
         /* 还原动画临时偏移, 保证命中测试用持久坐标 */
@@ -5067,7 +5092,22 @@ static uint32_t g_cursor_frames = 0;   /* P0: 只刷光标的帧数(未整帧重
 /* P0 演示: 启动时灵动岛展开->收回一次, 展示缓动 */
 static int g_welcome_frame = -1;
 
-void hpdesk_mark_dirty(void) { g_content_dirty = 1; }
+/* 供 hpdesk_mark_dirty 遍历窗口用 */
+hs_window_t *hs_wm_windows(int *count)
+{
+    if (count) *count = g_wm.window_count;
+    return g_wm.windows;
+}
+
+void hpdesk_mark_dirty(void)
+{
+    g_content_dirty = 1;
+    /* 全局"有东西变了"无法定位到具体窗口, 保守起见把所有窗口标脏。 */
+    extern hs_window_t *hs_wm_windows(int *count);
+    int n = 0;
+    hs_window_t *ws = hs_wm_windows(&n);
+    for (int i = 0; i < n; i++) ws[i].content_dirty = 1;
+}
 
 /* V0.55.0 P0: PNG 解码链路自检 (ext2 读取 -> pmm 分配 -> inflate -> 反滤波)
  * 首次渲染时跑一次, 串口打印尺寸与首像素, 供无人值守验证使用 */
@@ -5333,7 +5373,8 @@ void hs_drag_selftest(void)
         hs_window_drag_move(g_st_sx, g_st_sy);
     } else if (g_st_step == 29) {
         hs_window_drag_end();
-        vga_printf("[SELFTEST] drag end, dirty_region_frames=%d\n", (int)g_dirty_frames);
+        vga_printf("[SELFTEST] drag end, dirty_region_frames=%d surface_reuse=%d surface_repaint=%d\n",
+                   (int)g_dirty_frames, g_surf_reuse, g_surf_repaint);
     }
 }
 #endif
