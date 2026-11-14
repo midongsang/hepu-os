@@ -2439,7 +2439,11 @@ void hs_window_render_all(void)
 
         /* 自定义渲染回调 */
         if (w->render) {
+            /* V0.59.8: 窗口内容统一裁剪到窗口矩形。终端/列表这类"内容比窗口高"的
+             * 界面以前会画到窗口外(覆盖下面的壁纸/别的窗口), 现在被裁在这里。 */
+            gfx64_clip_set(w->x, w->y, w->width, w->height);
             w->render(w);
+            gfx64_clip_disable();
         }
 
         /* 还原动画临时偏移, 保证命中测试用持久坐标 */
@@ -6646,6 +6650,8 @@ void hs_layout_single(void)
 extern void *kmalloc(uint64_t size);
 extern void kfree(void *ptr);
 extern int gfx64_back_snapshot(void *dst, int x, int y, int w, int h);
+extern void gfx64_clip_set(int x, int y, int w, int h);
+extern void gfx64_clip_disable(void);
 extern int gfx64_back_restore(void *src, int x, int y, int w, int h);
 
 static void hs_window_surface_grab(hs_window_t *win)

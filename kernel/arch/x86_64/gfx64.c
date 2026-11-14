@@ -36,6 +36,25 @@ static int back_buf_alloc_ok = 0;
 static uint8_t *front_buffer = (uint8_t *)0;
 static uint8_t *gfx_target = (uint8_t *)0;   /* 当前渲染目标（默认=帧缓冲） */
 
+/* 裁剪矩形(V0.59.8): 屏幕坐标, 左闭右开。g_clip_on=0 表示不裁。
+ * 只作用在四个叶子函数(put_pixel/get_pixel/fill_rect/blend_pixel)上 ——
+ * 圆角、线、圆、TTF 文字最终都落到这几个入口, 所以上层不必各自处理。
+ * 这是"渲染原语统一"的第一步: 裁剪有了统一来源, 后面接 Surface 才有地方挂。 */
+static int g_clip_on = 0;
+static int g_clip_x0 = 0, g_clip_y0 = 0, g_clip_x1 = 0, g_clip_y1 = 0;
+
+void gfx64_clip_set(int x, int y, int w, int h)
+{
+    g_clip_x0 = x + (w > 0 ? 0 : 0);
+    g_clip_y0 = y;
+    g_clip_x1 = x + (w > 0 ? w : 0);
+    g_clip_y1 = y + (h > 0 ? h : 0);
+    g_clip_on = 1;
+}
+
+void gfx64_clip_disable(void) { g_clip_on = 0; }
+int gfx64_clip_active(void) { return g_clip_on; }
+
 /* SB-15: 帧提交锁。
  * 当前只有 BSP 桌面主循环一个写者，并发窗口尚未打开（AP 只跑 idle）。
  * 这把锁是为 SB-25「放开 AP 调度」预埋：一旦有第二个绘制者，
@@ -359,6 +378,7 @@ void gfx64_put_pixel(int x, int y, uint32_t color)
 {
     if (!gfx_initialized) return;
     if (x < 0 || y < 0 || (uint32_t)x >= gfx_width || (uint32_t)y >= gfx_height) return;
+    if (g_clip_on && (x < g_clip_x0 || y < g_clip_y0 || x >= g_clip_x1 || y >= g_clip_y1)) return;
     uint8_t *dst = gfx_target ? gfx_target : front_buffer;
 
     if (gfx_bpp == 32) {
@@ -377,6 +397,7 @@ uint32_t gfx64_get_pixel(int x, int y)
 {
     if (!gfx_initialized) return 0;
     if (x < 0 || y < 0 || (uint32_t)x >= gfx_width || (uint32_t)y >= gfx_height) return 0;
+    if (g_clip_on && (x < g_clip_x0 || y < g_clip_y0 || x >= g_clip_x1 || y >= g_clip_y1)) return 0;
     uint8_t *dst = gfx_target ? gfx_target : front_buffer;
     if (gfx_bpp == 32) {
         uint32_t *p = (uint32_t *)(dst + y * gfx_pitch + x * 4);
@@ -398,6 +419,12 @@ void gfx64_fill_rect(int x, int y, int w, int h, uint32_t color)
     if (y0 < 0) y0 = 0;
     if ((uint32_t)x1 > gfx_width) x1 = (int)gfx_width;
     if ((uint32_t)y1 > gfx_height) y1 = (int)gfx_height;
+    if (g_clip_on) {
+        if (x0 < g_clip_x0) x0 = g_clip_x0;
+        if (y0 < g_clip_y0) y0 = g_clip_y0;
+        if (x1 > g_clip_x1) x1 = g_clip_x1;
+        if (y1 > g_clip_y1) y1 = g_clip_y1;
+    }
     if (x0 >= x1 || y0 >= y1) return;
     uint8_t *dst = gfx_target ? gfx_target : front_buffer;
 
@@ -1010,6 +1037,7 @@ int gfx64_init(void)
 /* ---------- 像素 alpha 混合（source-over） ---------- */
 void gfx64_blend_pixel(int x, int y, uint32_t fg, int alpha)
 {
+    if (g_clip_on && (x < g_clip_x0 || y < g_clip_y0 || x >= g_clip_x1 || y >= g_clip_y1)) return;
     if (!gfx_initialized) return;
     if (x < 0 || y < 0 || (uint32_t)x >= gfx_width || (uint32_t)y >= gfx_height) return;
     if (alpha <= 0) return;

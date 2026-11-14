@@ -129,6 +129,10 @@ static void t_put(const char *s)
         s += len;
     }
     t_scroll = 0;
+    /* V0.59.9: 终端内容变了必须置脏。以前只有拖动/状态刷新会置脏, 输出整屏日志后
+     * 桌面处在"无脏区 -> 跳帧"状态, 画面一直停在旧帧(表现为终端窗口一片空白)。 */
+    extern void hpdesk_mark_dirty(void);
+    hpdesk_mark_dirty();
 }
 
 /* V0.59.3: shell 命令的输出是「多次 vga_puts 拼一行 + 整块多行文本」两种形态,
