@@ -1070,7 +1070,7 @@ static int hs_wp_load(int idx)
     /* V0.59.27: 1MB —— 512x288 的壁纸放大到 1080p 会糊, 用户放进来的写实图
      * 需要更高分辨率(1024x576 约 530KB), 原 256KB 缓冲读不全。BSS 静态数组,
      * 不计入 1MB 内核体积上限。 */
-    static uint8_t wp_raw[1048576];
+    static uint8_t wp_raw[2097152];
     if (idx < 0 || idx >= WP_IMG_COUNT) return 0;
     if (g_wp_loaded == idx && g_wp_png.rgba) return 1;
 
@@ -3416,8 +3416,8 @@ static void *hs_layer_ensure(hs_layer_t *L, int x, int y, int w, int h)
     return p;
 }
 
-static void hs_layer_draw(hs_layer_t *L, int x, int y, int w, int h,
-                         void (*fn)(void), int need_draw)
+static void hs_layer_draw_a(hs_layer_t *L, int x, int y, int w, int h,
+                           void (*fn)(void), int need_draw, int opacity)
 {
     void *s = hs_layer_ensure(L, x, y, w, h);
     if (!s) { if (fn) fn(); return; }
@@ -3428,7 +3428,15 @@ static void hs_layer_draw(hs_layer_t *L, int x, int y, int w, int h,
         gfx64_target_end();
         L->valid = 1;
     }
-    gfx64_blend_image(s, w, h, x, y, 255);
+    /* V0.59.28: 整层不透明度 —— 顶栏用它做成半透明, 让壁纸从后面透出来。
+     * 表面本身是 memset 0(全透明) 再画的, 所以合成时逐像素 alpha 是干净的。 */
+    gfx64_blend_image(s, w, h, x, y, opacity);
+}
+
+static void hs_layer_draw(hs_layer_t *L, int x, int y, int w, int h,
+                         void (*fn)(void), int need_draw)
+{
+    hs_layer_draw_a(L, x, y, w, h, fn, need_draw, 255);
 }
 
 /* 脏区(单矩形)与给定矩形是否相交; 任一无矩形返回 1(保守: 视为相交, 照画) */
@@ -3477,8 +3485,12 @@ void hs_panel_render_all(void)
         /* 天气卡定位字段(weather_width/margin_right)与实际绘制区域对不上, 纳入层会裁边,
          * 收益仅 0.6%, 保持直绘。 */
         }
-        if (L) hs_layer_draw(L, px, py, pw, ph, g_shell.panel_registry[idx].render,
-                             !(g_in_partial_frame && L->valid));
+        if (L) {
+            /* 顶栏半透明(88%), 其余面板保持不透明 */
+            int op = (idx == HS_PANEL_TOP_BAR) ? 224 : 255;
+            hs_layer_draw_a(L, px, py, pw, ph, g_shell.panel_registry[idx].render,
+                            !(g_in_partial_frame && L->valid), op);
+        }
         else   g_shell.panel_registry[idx].render();
     }
 }
