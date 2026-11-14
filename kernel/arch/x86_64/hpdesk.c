@@ -2282,8 +2282,10 @@ extern void gfx64_clip_disable(void);
 static int g_surf_reuse, g_surf_repaint;
 /* V0.59.17: 当前帧是否走局部脏区路径(面板/控制中心/通知据此决定是否按矩形跳过) */
 static int g_in_partial_frame;
-/* V0.59.17: 当前帧是否走局部脏区路径(面板/控制中心/通知据此决定是否按矩形跳过) */
-static int g_in_partial_frame;
+/* V0.59.23 诊断: 拖动期间走了多少次局部帧/全量帧, 面板被跳过多少次。
+ * 面板段那 21.6% 到底是"每帧全量重画"还是"整块 blend", 由这两个计数决定。 */
+static int g_partial_frames, g_full_frames, g_panel_skips;
+static int g_last_dirty[4];
 static uint64_t g_t_drag_start;
 /* V0.59.13 分段计时: rdtsc 周期数, 定位瓶颈用 */
 static inline uint64_t hs_rdtsc(void)
@@ -3202,6 +3204,13 @@ void hs_panel_render_all(void)
             g_shell.panel_registry[idx].render();
             continue;
         }
+        /* V0.59.23 实测: "面板与脏区不相交就跳过" 依然无效, 回退了。
+         * 26 个局部帧 × 6 个面板 = 156 次机会, 只有 4 次命中; panelK 34533 -> 35422,
+         * 没有下降。原因不在面板而在脏区本身: 拖动时脏区是"旧位置 ∪ 新位置 + pad",
+         * 实测 x=308 y=36 w=1421 h=1044 —— 覆盖 77% 屏幕, 顶栏/Dock/侧栏几乎必然相交。
+         * 这条负结果解释了 V0.59.13 当年"77809→77505 无效"的实测, 两轮独立数据一致:
+         * 在这条拖动路径上做矩形相交判断没有收益, 别再试第三次。
+         * 面板 21.6% 的真实构成是"六个面板表面各一块整块 blend", 要从 blend 原语下手。 */
         hs_layer_t *L = 0;
         switch (idx) {
         case HS_PANEL_TOP_BAR:        L = &g_ly_tb; break;
@@ -5540,6 +5549,7 @@ void hs_drag_selftest(void)
         gfx64_prof_present = 0;
         g_seg_lp = g_seg_pre; g_seg_lm = g_seg_mid; g_seg_lq = g_seg_post;
         g_t_drag_start = hs_rdtsc();
+        g_partial_frames = 0; g_full_frames = 0; g_panel_skips = 0;
         vga_printf("[SELFTEST] drag begin win=%d from %d,%d\n", w->id, w->x, w->y);
                 break;
             }
@@ -5570,6 +5580,11 @@ void hs_drag_selftest(void)
         uint32_t otherK  = (frameK > segK) ? (frameK - segK) : 0;
         vga_printf("[PROF] drag %d frames: frameK=%d renderAllK=%d blendK=%d presentK=%d segK=%d otherK=%d\n",
                    nf, frameK, rendK, blendK, presK, segK, otherK);
+        vga_printf("[PROF0] partial_frames=%d full_frames=%d panel_skips=%d (per partial frame skips=%d)\n",
+                   g_partial_frames, g_full_frames, g_panel_skips,
+                   g_partial_frames ? g_panel_skips / g_partial_frames : 0);
+        vga_printf("[PROF0] last_dirty x=%d y=%d w=%d h=%d\n",
+                   g_last_dirty[0], g_last_dirty[1], g_last_dirty[2], g_last_dirty[3]);
         {
             uint32_t a1 = (uint32_t)((g_ts1) / 1000), a2 = (uint32_t)((g_ts2) / 1000);
             uint32_t a3 = (uint32_t)((g_ts3) / 1000), a4 = (uint32_t)((g_ts4) / 1000);
@@ -5723,7 +5738,8 @@ static void hpdesk_render_inner(void)
         int dx_ = 0, dy_ = 0, dw_ = 0, dh_ = 0;
         if (!g_content_dirty && !animating && hs_dirty_rect(&dx_, &dy_, &dw_, &dh_)) {
             gfx64_set_target_back();
-            g_in_partial_frame = 1;
+            g_in_partial_frame = 1; g_partial_frames++;
+            g_last_dirty[0] = dx_; g_last_dirty[1] = dy_; g_last_dirty[2] = dw_; g_last_dirty[3] = dh_;
             g_ts1 = hs_rdtsc() - __rs0;
             hs_wallpaper_render_rect(dx_, dy_, dw_, dh_);
             g_ts2 = hs_rdtsc() - __rs0;
@@ -5766,6 +5782,7 @@ static void hpdesk_render_inner(void)
     hs_dirty_reset();   /* 走全量路径时脏区已被整屏覆盖, 清掉避免累积 */
 
     if (g_content_dirty || animating) {
+    g_full_frames++;
     hs_png_selfcheck();
     gfx64_set_target_back();
 

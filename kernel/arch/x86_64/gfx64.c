@@ -317,6 +317,10 @@ void gfx64_blend_image(void *src, int sw, int sh, int dx, int dy, int opacity)
         if (g_clip_on && (ty < g_clip_y0 || ty >= g_clip_y1)) continue;
         uint32_t *srow = s32 + j * sw;
         uint32_t *drow = d32 + ty * pitch32;
+        /* V0.59.23 已否决: 曾在这里加过"整行 alpha 全 255 就逐字拷贝"的快速路径。
+         * 实测 blendK 12629 -> 6930(有效), 但 panelK 34273 -> 47423(反而 +38%), 整帧
+         * 158722 -> 175260。原因是面板表面底色不是整行不透明, 探测那一遍白读;
+         * 只有窗口表面命中了快速路径, 收益抵不过面板的探测开销。已回退。 */
         for (int i = 0; i < sw; i++) {
             int tx = dx + i;
             if (tx < 0 || (uint32_t)tx >= gfx_width) continue;
