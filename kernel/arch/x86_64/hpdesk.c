@@ -4634,10 +4634,13 @@ static void hs_control_center_render(void)
     /* 浮层层次: QC 会压住天气卡(设计稿里两者纵向本就叠 60 逻辑像素),
      * 之前两块同色卡片叠在一起像"画错了"。这里加两层阶梯暗边做投影,
      * 让被压住的组件自然退到后面 —— 不改任何几何, 只改观感。 */
-    gfx64_fill_rounded_rect(cx - hs_s(1), cy + hs_s(6), cw + hs_s(5), ch + hs_s(8),
-                            hs_s(15), hs_dim(g_shell.colors.window_bg, 22));
-    gfx64_fill_rounded_rect(cx, cy + hs_s(3), cw + hs_s(2), ch + hs_s(4),
-                            hs_s(13), hs_dim(g_shell.colors.window_bg, 48));
+    /* 同心微扩散替代原来的"右下偏移暗块": 旧做法偏移 +6/+8 且压到 22%,
+     * 在浅色壁纸上是一条生硬的深色厚边。改为零偏移、每级 2px 外扩,
+     * 亮度逐级加深, 视觉上是柔和的边缘渐变而不是投影块。 */
+    /* 只留一圈 2px 细阴影(下沿多 1px 表示受光方向), 颜色比面板暗 88%,
+     * 浅色主题下是一条干净的黑边而不是白晕; 面板本体 + border 负责分层。 */
+    gfx64_fill_rounded_rect(cx - hs_s(2), cy - hs_s(1), cw + hs_s(4), ch + hs_s(3),
+                            hs_s(14), hs_dim(g_shell.colors.window_bg, 12));
     gfx64_fill_rounded_rect(cx, cy, cw, ch, hs_s(12), g_shell.colors.window_bg);
     gfx64_draw_rounded_rect(cx, cy, cw, ch, hs_s(12), g_shell.colors.border);
 
@@ -4649,9 +4652,9 @@ static void hs_control_center_render(void)
     const char *nav[] = {"Quick", "Devices", "Audio"};
     for (int i = 0; i < 3; i++) {
         int nx = cx + hs_sx(8);
-        int ny = cy + hs_sy(14) + i * hs_sy(46);
+        int ny = cy + hs_sy(10) + i * hs_sy(42);
         int nw = rail_w - hs_sx(16);
-        int nh = hs_sy(38);
+        int nh = hs_sy(34);
         uint32_t bg = (i == g_cc_page) ? g_shell.colors.accent : g_shell.colors.window_bg;
         uint32_t fg = (i == g_cc_page) ? hs_on_accent() : g_shell.colors.panel_fg;
         if (i != g_cc_page)
@@ -4668,31 +4671,34 @@ static void hs_control_center_render(void)
 
     if (g_cc_page == 0) {
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           rx, cy + hs_sy(18), "Quick Controls",
-                           g_shell.colors.panel_fg, hs_s(16));
-        /* 3 列 2 行正方形: 图标 + 名称, 不再是六个文字长条 */
-        int gap = hs_sx(10);
+                           rx, cy + hs_sy(12), "Quick Controls",
+                           g_shell.colors.panel_fg, hs_s(15));
+        /* 3 列 2 行正方形: 图标 + 名称, 不再是六个文字长条。
+         * 间距 10->8、标题 y 18->12、卡片区 48->38, 滑块紧接卡片底部往下排,
+         * 面板高度随内容收(390), 不再留一大片空白。 */
+        int gap = hs_sx(8);
         int card_w = (rw - 2 * gap) / 3;
         int card_h = card_w;
+        int cards_y = cy + hs_sy(38);
         for (int i = 0; i < 6; i++) {
             int tx = rx + (i % 3) * (card_w + gap);
-            int ty = cy + hs_sy(48) + (i / 3) * (card_h + gap);
+            int ty = cards_y + (i / 3) * (card_h + gap);
             cc_toggle_card(fb, tx, ty, card_w, card_h, g_shell.cc.toggles[i],
                            toggles[i], i);
         }
-        cc_slider_card(fb, rx, cy + hs_sy(258), rw, hs_sy(58), "Volume",
-                       g_shell.cc.volume);
-        cc_slider_card(fb, rx, cy + hs_sy(322), rw, hs_sy(58), "Brightness",
+        int sl_y = cards_y + 2 * card_h + gap + hs_sy(6);
+        cc_slider_card(fb, rx, sl_y, rw, hs_sy(52), "Volume", g_shell.cc.volume);
+        cc_slider_card(fb, rx, sl_y + hs_sy(58), rw, hs_sy(52), "Brightness",
                        g_shell.cc.brightness);
     } else if (g_cc_page == 1) {
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            rx, cy + hs_sy(18), "Devices",
                            g_shell.colors.panel_fg, hs_s(16));
         for (int i = 0; i < 6; i++) {
-            int ry = cy + hs_sy(48) + i * hs_sy(54);
-            gfx64_fill_rounded_rect(rx, ry, rw, hs_sy(48), hs_s(10),
+            int ry = cy + hs_sy(38) + i * hs_sy(50);
+            gfx64_fill_rounded_rect(rx, ry, rw, hs_sy(44), hs_s(10),
                                     g_shell.colors.titlebar_bg);
-            gfx64_draw_rounded_rect(rx, ry, rw, hs_sy(48), hs_s(10),
+            gfx64_draw_rounded_rect(rx, ry, rw, hs_sy(44), hs_s(10),
                                     g_shell.colors.border);
             font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                                rx + hs_sx(14), ry + hs_sy(16), toggles[i],

@@ -30,7 +30,7 @@ UI {
     cc_margin_right: 384
     cc_y: 108
     cc_width: 360
-    cc_height: 440
+    cc_height: 390
     bar_height: 32
     island_width: 120
     island_height: 28
