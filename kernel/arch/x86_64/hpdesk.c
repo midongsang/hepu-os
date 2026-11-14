@@ -3487,9 +3487,7 @@ void hs_panel_render_all(void)
         }
         if (L) {
             /* 顶栏半透明(88%), 其余面板保持不透明 */
-            /* 回退: 顶栏恢复完全不透明(255)。半透明 224 在浅色主题下把壁纸色
-             * 混进米色底, 顶栏发灰, 观感明显变差; 没有模糊能力时半透明不可取。*/
-            int op = 255;
+            int op = (idx == HS_PANEL_TOP_BAR) ? 224 : 255;
             hs_layer_draw_a(L, px, py, pw, ph, g_shell.panel_registry[idx].render,
                             !(g_in_partial_frame && L->valid), op);
         }
@@ -3505,21 +3503,15 @@ void hs_panel_render_all(void)
 static void hs_dynamic_island_render(void)
 {
     int island_w = hs_sx(g_shell.ui.island_width);
-    /* V0.59.31: 胶囊内嵌于顶栏, 上下各留 3 逻辑像素(inset)。
-     * 旧版 1280x720 实测: 顶栏 9..42(高 34), 胶囊 12..39(高 28) —— 上留 3、
-     * 下留 3, 视觉上"刚刚好"。改成等高(0 缝)后胶囊把顶栏撑满, 两圈边框
-     * 叠在一起, 反而变差, 所以回到内嵌口径。 */
-    int bar_h = hs_sy(g_shell.ui.bar_height);
-    int inset = hs_sy(3);
-    int island_h = bar_h - inset * 2;
-    if (island_h < hs_sy(8)) island_h = hs_sy(8);
+    int island_h = hs_sy(g_shell.ui.island_height);
     int island_x = (g_shell.screen_width - island_w) / 2;
     /* V0.59.29: 胶囊垂直居中于顶栏。原来 y 直接取 config 的 island_y(12),
      * 实测胶囊 12..52 / 顶栏 12..70 —— 贴上沿, 下面空 18px, 偏上 9px。
      * 居中口径: bar_top + (bar_h - island_h)/2; 展开时 island_h 超过 bar_h,
      * 钳到 bar_top 让它往下长, 而不是上下同时超出。 */
     int bar_top = hs_sy(8);
-    int island_y = bar_top + inset;
+    int bar_h = hs_sy(g_shell.ui.bar_height);
+    int island_y = bar_top + (bar_h - island_h) / 2;
     if (island_y < bar_top) island_y = bar_top;
     {
         int max_h = g_shell.screen_height - island_y - hs_sy(8);
@@ -3529,12 +3521,12 @@ static void hs_dynamic_island_render(void)
     {
         /* P0: 展开/收起尺寸连续插值(缓动), 不再是瞬跳 */
         int e = hs_ease_out_cubic(g_island_t);
-        int ww = hs_sx(g_shell.ui.island_width), hh = bar_h - inset * 2;
+        int ww = hs_sx(g_shell.ui.island_width), hh = hs_sy(g_shell.ui.island_height);
         int tw = hs_sx(360), th = hs_sy(120);
         island_w = ww + (tw - ww) * e / 100;
         island_h = hh + (th - hh) * e / 100;
         island_x = (g_shell.screen_width - island_w) / 2;
-        /* 高度变了, y 跟着重算, 保证动画过程中也保持内嵌居中 */
+        /* 高度变了, y 跟着重算, 保证动画过程中也始终居中 */
         island_y = bar_top + (bar_h - island_h) / 2;
         if (island_y < bar_top) island_y = bar_top;
     }
