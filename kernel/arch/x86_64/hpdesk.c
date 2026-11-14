@@ -3487,7 +3487,9 @@ void hs_panel_render_all(void)
         }
         if (L) {
             /* 顶栏半透明(88%), 其余面板保持不透明 */
-            int op = (idx == HS_PANEL_TOP_BAR) ? 224 : 255;
+            /* 回退: 顶栏恢复完全不透明(255)。半透明 224 在浅色主题下把壁纸色
+             * 混进米色底, 顶栏发灰, 观感明显变差; 没有模糊能力时半透明不可取。*/
+            int op = 255;
             hs_layer_draw_a(L, px, py, pw, ph, g_shell.panel_registry[idx].render,
                             !(g_in_partial_frame && L->valid), op);
         }
