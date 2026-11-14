@@ -2886,6 +2886,28 @@ static void hs_settings_nav_layout(int cx, int cy, int w_px, int item_h, int gap
                  g_nav_count * item_h + (g_nav_count - 1) * gap);
 }
 
+/* 控件命中自检: 每个菜单项的中心点必须命中自己, 根矩形之外必须不命中。
+ * 这是把"点击判定"从手算下标换成 hs_ui_hit 之后唯一能自动验的判据 ——
+ * 鼠标注入在 QEMU 里不可靠, 但命中逻辑本身可以在这里验死。 */
+static void hs_settings_nav_hit_selftest(void)
+{
+    extern void vga_puts(const char *);
+    extern void vga_put_hex(uint64_t);
+    if (!g_nav_root || !g_nav_items || g_nav_count <= 0) return;
+    int bad = 0;
+    for (int i = 0; i < g_nav_count; i++) {
+        hs_ui_box_t *it = &g_nav_items[i];
+        if (hs_ui_hit(g_nav_root, it->x + it->w / 2, it->y + it->h / 2) != it) bad++;
+        if (hs_ui_hit(g_nav_root, it->x + 1, it->y + it->h - 2) != it) bad++;
+    }
+    if (hs_ui_hit(g_nav_root, g_nav_root->x - 1, g_nav_root->y) != 0) bad++;
+    if (hs_ui_hit(g_nav_root, g_nav_root->x + g_nav_root->w + 2, g_nav_root->y) != 0) bad++;
+    vga_puts("[HSUI] nav hit selftest ");
+    vga_puts(bad ? "FAIL bad=" : "PASS items=");
+    vga_put_hex((uint64_t)(bad ? bad : g_nav_count));
+    vga_puts("\n");
+}
+
 static void hs_settings_window_render(hs_window_t *w)
 {
     void *fb = gfx64_get_framebuffer();
@@ -2896,6 +2918,7 @@ static void hs_settings_window_render(hs_window_t *w)
     g_nav_win = w;
     hs_settings_nav_ensure(5);
     hs_settings_nav_layout(cx, cy, SETK(120), SETK(28), SETK(4));
+    { static int hit_tested = 0; if (!hit_tested) { hit_tested = 1; hs_settings_nav_hit_selftest(); } }
 
     /* 右侧内容 */
     int rx = cx + SETK(140);
@@ -5194,11 +5217,15 @@ void hpdesk_handle_click(int x, int y)
         }
         /* 设置窗口左侧菜单点击 */
         if (w == top_win && w->render == hs_settings_window_render && w->visible) {
-            int menu_x = w->x + hs_set_k(w, 16);
-            int menu_y = w->y + hs_set_k(w, 36);
-            if (x >= menu_x && x <= menu_x + hs_set_k(w, 120) && y >= menu_y) {
-                int item = (y - menu_y) / hs_set_k(w, 32);
-                if (item >= 0 && item < 5) {
+            /* 第三层试点: 点击走控件命中, 不再手算子项下标。
+             * 原来这里是 (y - menu_y)/SETK(32) + 宽度判断 —— 命中区与绘制区来自
+             * 两套算法, 改间距就得两处同步。现在命中与绘制共用同一棵 hs_ui 树。 */
+            if (g_nav_root) {
+                hs_settings_nav_layout(w->x + hs_set_k(w, 16), w->y + hs_set_k(w, 36),
+                                       hs_set_k(w, 120), hs_set_k(w, 28), hs_set_k(w, 4));
+                hs_ui_box_t *hit_item = hs_ui_hit(g_nav_root, x, y);
+                int item = (hit_item && hit_item != g_nav_root) ? hit_item->tag : -1;
+                if (item >= 0 && item < g_nav_count) {
                     g_settings_page = item;
                     /* V0.13.39: System tab 内可点击操作 (语言切换 / 驱动刷新) */
                     if (item == 2 && g_settings_page == 2) {
