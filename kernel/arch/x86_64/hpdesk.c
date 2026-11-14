@@ -2280,6 +2280,17 @@ extern void gfx64_clip_set(int x, int y, int w, int h);
 extern void gfx64_clip_disable(void);
 
 static int g_surf_reuse, g_surf_repaint;
+static uint64_t g_t_drag_start;
+/* V0.59.13 分段计时: rdtsc 周期数, 定位瓶颈用 */
+static inline uint64_t hs_rdtsc(void)
+{
+    uint32_t a, d;
+    __asm__ volatile("rdtsc" : "=a"(a), "=d"(d));
+    return ((uint64_t)d << 32) | a;
+}
+static uint64_t g_cyc_render_all, g_cyc_blend, g_cyc_panel;
+static int g_prof_frames;
+extern uint64_t gfx64_prof_present;
 
 static void *hs_window_surface_ensure(hs_window_t *w)
 {
@@ -2298,6 +2309,7 @@ static void *hs_window_surface_ensure(hs_window_t *w)
 
 void hs_window_render_all(void)
 {
+    uint64_t __ra0 = hs_rdtsc();
     /* 按z_order从底到顶渲染 */
     for (int zi = 0; zi < g_wm.z_count; zi++) {
         int id = g_wm.z_order[zi];
@@ -2359,7 +2371,9 @@ void hs_window_render_all(void)
         void *tsurf = hs_window_surface_ensure(w);
         if (tsurf && !w->content_dirty) {
             /* 内容没变: 直接贴上一帧的 surface, 跳过 memset + 全部绘制 */
-            gfx64_blend_image(tsurf, w->width, w->height, w->x, w->y, 255);
+            { uint64_t b0 = hs_rdtsc();
+              gfx64_blend_image(tsurf, w->width, w->height, w->x, w->y, 255);
+              g_cyc_blend += hs_rdtsc() - b0; }
             g_surf_reuse++;
             continue;
         }
@@ -2505,7 +2519,9 @@ void hs_window_render_all(void)
         /* 合成: surface 贴到屏幕。整体 opacity 255, 透明度由每像素 alpha 决定 */
         if (tsurf) {
             gfx64_target_end();
-            gfx64_blend_image(tsurf, w->width, w->height, w->x, w->y, 255);
+            { uint64_t b0 = hs_rdtsc();
+              gfx64_blend_image(tsurf, w->width, w->height, w->x, w->y, 255);
+              g_cyc_blend += hs_rdtsc() - b0; }
             w->content_dirty = 0;
             g_surf_repaint++;
         }
@@ -2514,6 +2530,7 @@ void hs_window_render_all(void)
         w->x = save_x;
         w->y = save_y;
     }
+    g_cyc_render_all += hs_rdtsc() - __ra0;
 }
 
 /* 设置窗口渲染回调 */
@@ -5361,7 +5378,9 @@ void hs_drag_selftest(void)
                 g_st_sx = w->x + 60;
                 g_st_sy = w->y + 16;
                 hs_window_drag_start(g_st_sx, g_st_sy);
-                vga_printf("[SELFTEST] drag begin win=%d from %d,%d\n", w->id, w->x, w->y);
+                g_cyc_render_all = g_cyc_blend = 0; gfx64_prof_present = 0;
+        g_t_drag_start = hs_rdtsc();
+        vga_printf("[SELFTEST] drag begin win=%d from %d,%d\n", w->id, w->x, w->y);
                 break;
             }
         }
@@ -5373,13 +5392,25 @@ void hs_drag_selftest(void)
         hs_window_drag_move(g_st_sx, g_st_sy);
     } else if (g_st_step == 29) {
         hs_window_drag_end();
-        vga_printf("[SELFTEST] drag end, dirty_region_frames=%d surface_reuse=%d surface_repaint=%d\n",
+        {
+        uint64_t span = hs_rdtsc() - g_t_drag_start;
+        int nf = 28;
+        uint32_t frameK  = (uint32_t)((span / nf) / 1000);
+        uint32_t rendK   = (uint32_t)((g_cyc_render_all / nf) / 1000);
+        uint32_t blendK  = (uint32_t)((g_cyc_blend / nf) / 1000);
+        uint32_t presK   = (uint32_t)((gfx64_prof_present / nf) / 1000);
+        uint32_t otherK  = (frameK > rendK + presK) ? (frameK - rendK - presK) : 0;
+        vga_printf("[PROF] drag %d frames: frameK=%d renderAllK=%d blendK=%d presentK=%d otherK=%d\n",
+                   nf, frameK, rendK, blendK, presK, otherK);
+        g_cyc_render_all = g_cyc_blend = 0; gfx64_prof_present = 0;
+    }
+    vga_printf("[SELFTEST] drag end, dirty_region_frames=%d surface_reuse=%d surface_repaint=%d\n",
                    (int)g_dirty_frames, g_surf_reuse, g_surf_repaint);
     }
 }
 #endif
 
-void hpdesk_render(void)
+static void hpdesk_render_inner(void)
 {
     {
     }
@@ -5642,6 +5673,17 @@ void hpdesk_render(void)
     g_last_mx = mx;
     g_last_my = my;
 }
+
+/* V0.59.13 分段计时包装: 整帧 / render_all / blend / present 各自 cycles。
+ * 每 60 帧打印一次(单位: 千周期), 用于定位到底哪一段在吃时间。 */
+void hpdesk_render(void)
+{
+    uint64_t t0 = hs_rdtsc();
+    hpdesk_render_inner();
+    g_cyc_panel += hs_rdtsc() - t0;
+    g_prof_frames++;
+}
+
 
 /* ============================================================================
  * 键盘处理

@@ -186,9 +186,30 @@ dirty_region_frames=27 surface_reuse=16 surface_repaint=38
 这说明瓶颈**不在窗口内容绘制**。省掉绘制之后仍然慢，增量只能来自每窗口那次
 整窗 blend（445K 像素 × 每帧）+ 脏区 present 到 VGA MMIO。
 
-**结论如实记**：窗口级脏标记这一步把"重画"这件事做对了，但没有解决性能问题。
-下一步不该继续往这个方向堆，而应该**先给渲染链加分段计时**（render_all / blend /
-present 各自占比），拿到数据再决定优化哪一段 —— 否则又是在猜。
+**结论如实记**：窗口级标记把"重画"这件事做对了，但没有解决性能问题。
+
+### 9. 分段计时基础设施（V0.59.13，代码已就位，数据未取到）
+
+渲染链里埋了 rdtsc 计时累加器：
+
+| 累加器 | 位置 | 含义 |
+|---|---|---|
+| `g_cyc_panel` | `hpdesk_render()` 包装 | 整帧 |
+| `g_cyc_render_all` | `hs_window_render_all()` 首尾 | 窗口渲染段 |
+| `g_cyc_blend` | 两处 `gfx64_blend_image` | surface 合成段 |
+| `gfx64_prof_present` | `gfx64_present` / `present_region` | 上屏段 |
+
+`hpdesk_render()` 拆成 `hpdesk_render_inner()` + 计时包装，后续任何优化都能直接看增量。
+
+**数据没取到，原因如实记**：QEMU 里桌面的主循环会被同步 HTTP 请求（Weather/驱动仓）
+阻塞十几秒，渲染调用到 45 帧（拖动自测的触发点）的时间完全不可控 —— 试了 8s / 12s /
+20s / 22s / 30s / 40s 都没有稳定到达。每帧打印更是把串口写爆，反而拖慢主循环。
+
+**所以现在不能拿帧率换算"渲染耗时"** —— 之前"拖动 28 帧从 <10s 变成 >25s"的对比里，
+帧率本身就被主循环阻塞污染了，这个 2 倍的结论**不可靠**。
+
+下次取证要换方法：走 `rootfs/etc/hepushell/autostart.cmd` 起终端 + 内核注入自测，
+或者先把 Weather 的同步请求改成异步/超时更短，再测。
 
 **仍缺**（这才是完整 Surface）
 

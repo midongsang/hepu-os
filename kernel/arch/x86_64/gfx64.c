@@ -36,6 +36,15 @@ static int back_buf_alloc_ok = 0;
 static uint8_t *front_buffer = (uint8_t *)0;
 static uint8_t *gfx_target = (uint8_t *)0;   /* 当前渲染目标（默认=帧缓冲） */
 
+/* V0.59.13 分段计时: rdtsc 取周期数, 只用于定位瓶颈, 不影响渲染逻辑 */
+static inline uint64_t gfx_rdtsc(void)
+{
+    uint32_t a, d;
+    __asm__ volatile("rdtsc" : "=a"(a), "=d"(d));
+    return ((uint64_t)d << 32) | a;
+}
+uint64_t gfx64_prof_present;      /* present + present_region 累计 cycles */
+
 /* 裁剪矩形(V0.59.8): 屏幕坐标, 左闭右开。g_clip_on=0 表示不裁。
  * 只作用在四个叶子函数(put_pixel/get_pixel/fill_rect/blend_pixel)上 ——
  * 圆角、线、圆、TTF 文字最终都落到这几个入口, 所以上层不必各自处理。
@@ -149,7 +158,9 @@ void gfx64_present(void)
     if (!gfx_initialized) return;
     if (!back_buffer) return;
     uint64_t gfx_f = spinlock_lock_irqsave(&g_gfx_lock);
+    uint64_t t0 = gfx_rdtsc();
     gfx64_blit_to(front_buffer, back_buffer, 0, 0, (int)gfx_width, (int)gfx_height);
+    gfx64_prof_present += gfx_rdtsc() - t0;
     spinlock_unlock_irqrestore(&g_gfx_lock, gfx_f);
 }
 
@@ -209,7 +220,9 @@ void gfx64_present_region(int x, int y, int w, int h)
     if (!gfx_initialized || !back_buffer) return;
     if (w <= 0 || h <= 0) return;
     uint64_t gfx_f = spinlock_lock_irqsave(&g_gfx_lock);
+    uint64_t t0 = gfx_rdtsc();
     gfx64_blit_to(front_buffer, back_buffer, x, y, w, h);
+    gfx64_prof_present += gfx_rdtsc() - t0;
     spinlock_unlock_irqrestore(&g_gfx_lock, gfx_f);
 }
 
