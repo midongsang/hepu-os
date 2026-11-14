@@ -341,7 +341,7 @@ static void hs_save_sidebar_collapsed(int v)
 
 /* 右键菜单: 由 g_ctx(见下) 统一承载, 旧的 g_context_menu_* 那套已下线 */
 /* V0.13.39: 通知位置配置 (0=右上 1=左上 2=右下 3=左下) */
-static int g_notif_pos = 0;
+static int g_notif_pos = 2;   /* 0=右上 1=左上 2=右下 3=左下; 默认右下 */
 
 /* 窗口拖拽状态（定义在后面） */
 /* 右键菜单状态(定义提前: hpdesk_handle_click 在渲染函数之前就要用到) */
@@ -4444,7 +4444,9 @@ static void cc_geometry(int *cx, int *cy, int *cw, int *ch)
     *cw = w;
     *ch = h;
     if (*cx < 0) *cx = 0;
-    *cy = hs_sy(g_shell.ui.cc_y);
+    /* 纵向对齐顶栏: 上沿 = 顶栏下沿 + 同一间距, 不再读固定 cc_y(96)。
+     * 原来 QC 顶在 y=195 而顶栏底 64, 中间空 131, 像两套互不相关的布局。 */
+    *cy = hs_sy(8) + hs_sy(g_shell.ui.bar_height) + hs_sy(8);
     /* 先压高度再兜底挪位置: 面板变高后若把 cy 往上推, 会盖住右上通知卡 */
     if (*cy + h > g_shell.screen_height) {
         h = g_shell.screen_height - *cy - hs_sy(8);
@@ -4461,8 +4463,9 @@ static void cc_geometry(int *cx, int *cy, int *cw, int *ch)
         for (int i = 0; i < g_shell.notifications.count; i++)
             if (g_shell.notifications.notifications[i].visible) nvis++;
         if (nvis > 3) nvis = 3;
-        int right_side = (g_notif_pos == 0 || g_notif_pos == 2);
-        if (right_side && nvis > 0) {
+        /* 只有右上通知(0)会和 QC 顶部抢位置; 右下(2)通知在屏幕底部, 不影响 */
+        int top_side = (g_notif_pos == 0);
+        if (top_side && nvis > 0) {
             int nb = hs_sy(g_shell.ui.bar_height) + hs_sy(8) +
                      nvis * (hs_sy(64) + hs_sy(10));
             if (*cy < nb + hs_sy(8)) *cy = nb + hs_sy(8);
@@ -4550,10 +4553,20 @@ static void cc_toggle_card(void *fb, int x, int y, int w, int h,
     gfx64_fill_rounded_rect(x, y, w, h, hs_s(12), bg);
     if (!on) gfx64_draw_rounded_rect(x, y, w, h, hs_s(12), g_shell.colors.border);
 
-    int r = hs_s(18);
     int icx = x + w / 2;
     int icy = y + h / 2 - hs_sy(12);
-    cc_icon_draw(icon_kind, icx, icy, r, fg, bg);
+    {
+        /* 图标全部取系统现成位图(hs_icons_data.h 里那套 32x32 单色图标),
+         * 不再手绘 —— 手绘的 BT 像字母、Torch 像杯子, 和顶栏那套图标风格不统一。 */
+        const uint32_t *bm = hs_ico_wifi;      /* 0 WiFi */
+        if (icon_kind == 1) bm = hs_ico_share;      /* BT */
+        else if (icon_kind == 2) bm = hs_ico_cast;  /* Air */
+        else if (icon_kind == 3) bm = hs_ico_hour_empty; /* DND */
+        else if (icon_kind == 4) bm = hs_ico_aim;   /* Loc */
+        else if (icon_kind == 5) bm = hs_ico_bolt;  /* Torch */
+        int isz = hs_s(26);
+        hs_icon_bmp(icx - isz / 2, icy - isz / 2, isz, fg, bm);
+    }
 
     int cw = hs_s(9), fs = hs_s(13);
     int tw_ = (int)strlen(label) * cw;
@@ -6566,7 +6579,7 @@ int hpdesk_init(int width, int height)
     hs_notification_init();
     {
         extern int reg64_get_int(const char *key, int def);
-        g_notif_pos = reg64_get_int("sys.notif.pos", 0) & 3;
+        g_notif_pos = reg64_get_int("sys.notif.pos", 2) & 3;
     }
 
     /* 初始化媒体和系统状态 */
@@ -6808,6 +6821,9 @@ void hs_notification_init(void)
 
 int hs_notification_send(const char *title, const char *body, int urgency, int timeout)
 {
+    /* 停留时长统一 6 秒(用户让定)。原来各处传 4000/5000/7000 混着用,
+     * 同一条系统提示在不同来源下停留时间不一样。 */
+    timeout = 6000;
     if (g_shell.notifications.count >= HS_MAX_NOTIFICATIONS) {
         /* 移除最旧的通知 */
         g_shell.notifications.notifications[0].visible = 0;

@@ -31,7 +31,7 @@ UI {
     cc_y: 108
     cc_width: 360
     cc_height: 440
-    bar_height: 36
+    bar_height: 32
     island_width: 120
     island_height: 28
     island_y: 6
