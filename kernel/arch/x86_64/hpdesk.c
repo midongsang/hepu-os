@@ -3505,18 +3505,17 @@ static void hs_dynamic_island_render(void)
     int island_w = hs_sx(g_shell.ui.island_width);
     int island_h = hs_sy(g_shell.ui.island_height);
     int island_x = (g_shell.screen_width - island_w) / 2;
-    int island_y = hs_sy(g_shell.ui.island_y);
-
+    /* V0.59.29: 胶囊垂直居中于顶栏。原来 y 直接取 config 的 island_y(12),
+     * 实测胶囊 12..52 / 顶栏 12..70 —— 贴上沿, 下面空 18px, 偏上 9px。
+     * 居中口径: bar_top + (bar_h - island_h)/2; 展开时 island_h 超过 bar_h,
+     * 钳到 bar_top 让它往下长, 而不是上下同时超出。 */
+    int bar_top = hs_sy(8);
+    int bar_h = hs_sy(g_shell.ui.bar_height);
+    int island_y = bar_top + (bar_h - island_h) / 2;
+    if (island_y < bar_top) island_y = bar_top;
     {
-        /* 岛必须落在状态栏之下、屏幕之内: 高倍缩放下旧实现 island_y + 展开高度
-         * 会与状态栏胶囊重叠, 时间上半被裁。 */
-        int bar_top = hs_sy(8);
-        int bar_h = hs_sy(g_shell.ui.bar_height);
-        if (island_y < bar_top) island_y = bar_top;
         int max_h = g_shell.screen_height - island_y - hs_sy(8);
         if (max_h > 0 && island_h > max_h) island_h = max_h;
-        else if (max_h <= 0) island_h = hs_sy(g_shell.ui.island_height);
-        (void)bar_h;
     }
 
     {
@@ -3527,6 +3526,9 @@ static void hs_dynamic_island_render(void)
         island_w = ww + (tw - ww) * e / 100;
         island_h = hh + (th - hh) * e / 100;
         island_x = (g_shell.screen_width - island_w) / 2;
+        /* 高度变了, y 跟着重算, 保证动画过程中也始终居中 */
+        island_y = bar_top + (bar_h - island_h) / 2;
+        if (island_y < bar_top) island_y = bar_top;
     }
 
     gfx64_fill_rounded_rect(island_x, island_y, island_w, island_h, hs_s(15),
