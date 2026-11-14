@@ -159,6 +159,17 @@ static void t_out_multi(const char *s)
     }
 }
 
+/* V0.59.21: 终端输出同时落一份到串口。
+ * 桌面终端的命令输出经 shell_set_output 只进 t_lines 缓冲, 窗口渲染一旦异常就
+ * 完全不可见(autostart 无人值守取证即如此)。这里加串口旁路, 让 antost 类
+ * 场景可以直接从 ser_*.log 抓到命令输出, 不依赖像素。 */
+static void t_out_multi_tap(const char *s)
+{
+    extern void serial_puts_raw(const char *);
+    serial_puts_raw(s);
+    t_out_multi(s);
+}
+
 static void t_exec(const char *line)
 {
     char cmd[64];
@@ -510,7 +521,7 @@ static void t_exec(const char *line)
             int k = 0;
             while (line[k] && k < 95) { lbuf[k] = line[k]; k++; }
             lbuf[k] = 0;
-            shell_set_output(t_out_multi);
+            shell_set_output(t_out_multi_tap);
             shell_execute(lbuf);
             t_out_flush();
             shell_set_output(0);

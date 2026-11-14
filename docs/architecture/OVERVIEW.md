@@ -267,7 +267,7 @@ supersedes: null
 | 系统设置 | ✅ 可用 | 语言/驱动/通知位置/注册表/文件关联 接线 |
 | 终端 | ✅ 可用 | 命令补全、历史、内核命令集（drv/usb/reg/ps/ifconfig） |
 | 计算器 | ⚠️ 占位 | Dock 渲染但未实现 |
-| 编辑器 | ✅ 可用 | 轻量代码编辑器：16KB 平铺缓冲区/行号/光标/方向键/Ctrl+S 保存（`hs_apps.c:2050/2242/2280`，启动入口 `hepushell.c:4792`） |
+| 编辑器 | ✅ 可用 | 轻量代码编辑器：16KB 平铺缓冲区/行号/光标/方向键/Ctrl+S 保存（`hs_apps.c` 的 `hs_editor_create()` / `hs_editor_open_file()`；旧文档曾写 `hs_apps.c:2050/2242/2280` 与 `hepushell.c` 第 4792 行，该文件已不存在、行号亦全部漂移，故改记符号名） |
 | 浏览器 | ❌ 占位 | 提示 "App content rebuilding" |
 | 笔记 | ❌ 占位 | 提示 "App content rebuilding" |
 

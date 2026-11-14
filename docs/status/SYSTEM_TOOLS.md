@@ -24,8 +24,8 @@
 | vmstat | 有（v0.59.3 新增） | 进程数 / 运行数 / 内存三项；swap 与块设备计数器未接入 |
 | pstree | 有（v0.59.3 新增） | 按 parent_pid 递归，最多 8 层 |
 | free | 有 | 物理页统计 |
-| kill / killall | 有（v0.59.3 新增） | `process64_kill_pid` / `process64_kill_by_name`：标 SIGKILL + 置 ZOMBIE，资源交给 waitpid 回收；idle 与当前进程拒绝 |
-| nice / renice | 有（v0.59.3 新增） | `process64_set_priority` 现在同步重算 default_slice（旧实现只改 prio 不改片长，renice 假生效） |
+| kill / killall | 有（v0.59.3 新增） | `process64_kill_pid` / `process64_kill_by_name`：标 SIGKILL + 置 ZOMBIE，资源交给 waitpid 回收；idle 与当前进程拒绝。**v0.59.21 已在真机实跑**（见下「取证通道现状」） |
+| nice / renice | 有（v0.59.3 新增） | `process64_set_priority` 现在同步重算 default_slice（旧实现只改 prio 不改片长，renice 假生效）。**v0.59.21 已在真机实跑**，`renice 2 1` 实测 `priority 0 -> 2` |
 | taskset | 有（v0.59.3 新增，受限） | `process64_set_affinity` 改 cpu_id；**AP 调度未开放（SB-25），绑到 AP 只记账不迁移**，命令里会明说 |
 
 ## 三、存储与文件系统
@@ -135,10 +135,47 @@ V0.59.4 曾把 HMP `mouse_move dx dy`（相对位移）记为可用（python 连
   无法用它构造"按下-拖动-释放"这类确定性手势。
 - HMP `mouse_button 1/0` 存在且被接受，但没有可靠的定位手段配合，等于不可用。
 
-**因此可靠的取证只剩三条**：
+**因此可靠的取证只剩四条**：
 
 1. **内核注入自测**（`hs_drag_selftest()` 这类 `#if 0` 保留的代码），配合 rdtsc 探针打印；
 2. **`screendump` + 原始 PPM 逐像素扫描**（1920×1080，不要用 1280×720 缩略图目测 3px 级偏差）；
-3. **`autostart.cmd` 起终端跑命令**（一次性统计，不依赖帧号与启动时序）。
+3. **`autostart.cmd` 起终端跑命令 + 截图**（一次性统计，不依赖帧号与启动时序；前提是窗口渲染正常）；
+4. **`autostart.cmd` + 串口旁路**（V0.59.21 新增）—— 唯一一条「既能执行命令、又能直接拿到文本」的通道，见下。
+
+### 串口旁路：为什么 autostart 必须配这个
+
+桌面终端的命令输出走 `shell_set_output(t_out_multi)`，**只进 `t_lines` 行缓冲，不进 `vga_puts`，
+因此也不进 COM1**。串口上只看得到 `[Autostart] xxx` 那一行「我要执行什么」，看不到「执行结果是什么」。
+一旦窗口内容没画出来（见下「构建产物陷阱」），这条取证链就彻底断掉 —— 这正是本轮 `kill`/`renice`
+长期「有实现、未实跑」的原因。
+
+修法（v0.59.21）：`hs_apps.c` 把转发给 shell64 时的输出钩子从 `t_out_multi` 换成
+`t_out_multi_tap`，它在写终端缓冲的同时调 `serial_puts_raw()`（`lib64.c` 新增，只写 COM1、不上屏、
+走同一把 print_lock）。于是命令结果直接落进 `ser_*.log`，可以 `grep`，完全不依赖像素。
+
+实测（`autostart.cmd` 六行，串口原文）：
+
+```
+[Autostart] ps
+[Autostart] kill 999           -> kill: no such process 999
+[Autostart] kill 0             -> kill: refused (idle or self)
+[Autostart] killall nosuchproc -> killall: 0 process(es) named nosuchproc terminated
+                                  (self is never killed)
+[Autostart] renice 5 0         -> renice: no such pid, or prio out of 0-4
+[Autostart] renice 2 1         -> renice: pid 1 priority 0 -> 2 (slice recomputed)
+```
+
+截图存 `docs/assets/process-tools-terminal.jpg`。覆盖到的分支：杀不存在的进程、杀 idle 的拒绝路径、
+按名杀 0 个命中、prio 越界拒绝、以及一次真实成功的优先级改写。**未覆盖**：真正杀掉一个站点进程、
+`killall` 命中 ≥1 的情形 —— 需要在同一段 autostart 里先拉起一个用户程序再杀。
+
+### 构建产物陷阱（本轮踩到，务必先 make）
+
+`build_uefi_dual.py` 打包的是**现存的** `build_x86_64/hepu-kernel64.bin`，它不会自动重编内核。
+本轮用一份 13:03 的旧二进制打包，结果桌面窗口（Terminal / Settings）内容全部空白、只剩标题栏和底色，
+一度被误判成「autostart 破坏渲染」。重新 `make -C kernel/arch/x86_64 -j4` 后同一份 autostart 完全正常。
+
+**纪律**：任何「改了源码就起 QEMU 看现象」之前，先 `make` 并核对 `ls -l build_x86_64/hepu-kernel64.bin`
+的时间戳；否则看到的可能是上一次的二进制，结论会指向错误的方向。
 
 取证结束后必须清空 `rootfs/etc/hepushell/autostart.cmd`。

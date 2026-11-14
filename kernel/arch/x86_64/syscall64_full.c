@@ -1788,14 +1788,19 @@ static int64_t sys_readdir(const char *path, char *outbuf, int outsz)
     int used = 0;
     for (int i = 0; i < n; i++) {
         int l = 0; while (names[i][l]) l++;
-        int need = l + 2;
-        if (used + need >= (int)sizeof(kbuf)) break;
+        /* R3-1: 每项实际写 l+3 字节 —— name(l) + 结尾 0 + type(1) + 结尾 0。
+         * 旧代码写 need = l+2 配条件 used + need >= sizeof(kbuf), 两个错刚好抵消,
+         * 通过检查时 used+l+3 恰好不超 2048。这里改成按真实长度判断, 不再靠抵消。 */
+        int need = l + 3;
+        if (used + need > (int)sizeof(kbuf)) break;
         for (int j = 0; j < l; j++) kbuf[used++] = names[i][j];
         kbuf[used++] = 0;
         kbuf[used++] = types[i] ? 'd' : 'f';
         kbuf[used++] = 0;
     }
-    if (used > outsz) used = outsz;
+    /* R3-2: 旧代码 used > outsz 时截断后照报长度, 调用方以为拿全了。
+     * 用户缓冲装不下就必须失败, 让调用方换更大的缓冲或分批读。 */
+    if (used > outsz) return -1;
     if (copy_to_user(outbuf, kbuf, (size_t)used) != 0) return -1;
     return used;
 }

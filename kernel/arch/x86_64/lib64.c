@@ -253,6 +253,19 @@ void vga_puts(const char *str)
     spinlock_unlock_irqrestore(&print_lock, f);
 }
 
+/* V0.59.21: 只写串口、不上屏的对外入口。
+ * 用途: 桌面终端的命令输出被 shell_set_output 重定向进 t_lines 缓冲,
+ * 不进 vga_puts -> 串口也拿不到; 一旦窗口渲染出问题, 输出就彻底不可见
+ * (autostart 无人值守取证就是这么失效的)。这里给一条独立的串口旁路,
+ * 让终端输出同时落一份到 ser_*.log, 不依赖任何渲染路径。 */
+void serial_puts_raw(const char *str)
+{
+    if (!str) return;
+    uint64_t f = spinlock_lock_irqsave(&print_lock);
+    serial_puts_local(str);
+    spinlock_unlock_irqrestore(&print_lock, f);
+}
+
 /* 输出16进制数（64位） */
 void vga_put_hex(uint64_t val)
 {
