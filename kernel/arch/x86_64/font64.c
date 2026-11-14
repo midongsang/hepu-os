@@ -120,6 +120,22 @@ static font_cache_entry_t* font_cache_get(uint32_t codepoint, uint8_t scale,
 void font64_draw_char(void *framebuffer, int fb_width, int fb_height,
                       int x, int y, char c, uint32_t color, uint16_t size)
 {
+    /* V0.59.11: 处于窗口 surface 渲染上下文时, 忽略调用方传的屏幕 framebuffer,
+     * 改写 surface 缓冲 + 自身宽高, 并把屏幕坐标平移进缓冲。调用点无需改动。 */
+    extern int gfx64_in_surface(void);
+    extern void *gfx64_surface_buffer(void);
+    extern int gfx64_surface_pitch(void);
+    extern int gfx64_surface_height(void);
+    extern int gfx64_surface_origin_x(void);
+    extern int gfx64_surface_origin_y(void);
+    if (gfx64_in_surface()) {
+        x -= gfx64_surface_origin_x();
+        y -= gfx64_surface_origin_y();
+        framebuffer = gfx64_surface_buffer();
+        fb_width = gfx64_surface_pitch();
+        fb_height = gfx64_surface_height();
+    }
+
     if (!framebuffer || x < 0 || y < 0) return;
     if ((uint8_t)c >= 128) c = '?';
 

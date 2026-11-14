@@ -2260,6 +2260,35 @@ static int hs_dirty_hits(int x, int y, int w, int h)
     return 1;
 }
 
+/* 窗口 surface(V0.59.11): 每个窗口一块常驻 ARGB 缓冲(0xAARRGGBB)。
+ * 内容先画进这块, 再由合成器 gfx64_blend_image 贴到屏幕。圆角外是"真透明"
+ * (alpha=0), 合成时透出壁纸 —— 不再是"贴一块背景补角"。
+ * 分配失败返回 0, 调用方退回直接画屏幕的老路径。 */
+extern void *kmalloc(uint64_t size);
+extern void kfree(void *ptr);
+extern void gfx64_target_begin(void *buf, int w, int h, int ox, int oy);
+extern void gfx64_target_end(void);
+extern void gfx64_fill_round_rect_argb(void *buf, int bw, int bh, int x, int y, int w, int h,
+                                        int r, uint32_t color, int corners);
+extern void gfx64_blend_image(void *src, int sw, int sh, int dx, int dy, int opacity);
+extern void gfx64_clip_set(int x, int y, int w, int h);
+extern void gfx64_clip_disable(void);
+
+static void *hs_window_surface_ensure(hs_window_t *w)
+{
+    int ww = w->width, hh = w->height;
+    if (ww <= 0 || hh <= 0) return 0;
+    if (w->surface && w->surface_w == ww && w->surface_h == hh) return w->surface;
+    if (w->surface) { kfree(w->surface); w->surface = 0; }
+    void *p = kmalloc((uint64_t)ww * hh * 4);
+    if (!p) { w->surface_w = w->surface_h = 0; return 0; }
+    memset(p, 0, (size_t)ww * hh * 4);
+    w->surface = p;
+    w->surface_w = ww;
+    w->surface_h = hh;
+    return p;
+}
+
 void hs_window_render_all(void)
 {
     /* 按z_order从底到顶渲染 */
@@ -2294,16 +2323,6 @@ void hs_window_render_all(void)
             }
         }
 
-        /* Surface 雏形: 拖动中的窗口已有内容快照 —— 画完投影直接贴回, 不再重画
-         * 内容(文字栅格是拖动帧里最贵的一段)。快照矩形四角是"抓取那一刻的背景",
-         * 贴到新位置后四角有极小块旧背景, 壁纸同色系渐变下不可辨。 */
-        if (g_dragging && g_drag_window == w && w->surface) {
-            if (w->type == HS_WINDOW_FLOATING && w->state != HS_WINDOW_STATE_MAXIMIZED)
-                hs_window_shadow(w);
-            gfx64_back_restore(w->surface, w->x, w->y, w->width, w->height);
-            continue;
-        }
-
         /* V0.57.0: 投影(仅浮动窗口, 最大化/面板不画) */
         if (w->type == HS_WINDOW_FLOATING && w->state != HS_WINDOW_STATE_MAXIMIZED) {
             hs_window_shadow(w);
@@ -2318,10 +2337,17 @@ void hs_window_render_all(void)
         int wrc = 0;
         if (w->type == HS_WINDOW_FLOATING && w->state != HS_WINDOW_STATE_MAXIMIZED)
             wrc = hs_window_corner_radius(w);
-        if (wrc > 0) {
-            gfx64_fill_round_rect_aa(w->x, w->y, w->width, w->height, wrc, w->bg_color);
+        /* V0.59.11: 内容画进窗口自己的 ARGB surface, 帧末再合成到屏幕。
+         * 底色用"带 alpha 的圆角"写入 —— 圆角外必须真透明, 合成时才透出壁纸。 */
+        void *tsurf = hs_window_surface_ensure(w);
+        if (tsurf) {
+            memset(tsurf, 0, (size_t)w->width * w->height * 4);
+            gfx64_fill_round_rect_argb(tsurf, w->width, w->height, 0, 0,
+                                       w->width, w->height, wrc, w->bg_color, 15);
+            gfx64_target_begin(tsurf, w->width, w->height, w->x, w->y);
         } else {
-            gfx64_fill_rect(w->x, w->y, w->width, w->height, w->bg_color);
+            if (wrc > 0) gfx64_fill_round_rect_aa(w->x, w->y, w->width, w->height, wrc, w->bg_color);
+            else gfx64_fill_rect(w->x, w->y, w->width, w->height, w->bg_color);
         }
 
         /* 标题栏（浮动窗口） */
@@ -2332,11 +2358,18 @@ void hs_window_render_all(void)
             /* OBS-03: 标题栏顶部两角跟随窗口圆角，底部两角保持直角（贴内容区） */
             if (wrc > 0) {
                 int trc = wrc < th ? wrc : th;
-                gfx64_fill_round_rect_aa(w->x, w->y, w->width, th, trc,
-                                         g_shell.colors.titlebar_bg);
-                if (th > trc)
-                    gfx64_fill_rect(w->x, w->y + trc, w->width, th - trc,
-                                    g_shell.colors.titlebar_bg);
+                if (tsurf) {
+                    /* 只圆顶部两角(1|2=3), 底部贴内容区保持直角 */
+                    gfx64_fill_round_rect_argb(tsurf, w->width, w->height, 0, 0,
+                                               w->width, th, trc,
+                                               g_shell.colors.titlebar_bg, 3);
+                } else {
+                    gfx64_fill_round_rect_aa(w->x, w->y, w->width, th, trc,
+                                             g_shell.colors.titlebar_bg);
+                    if (th > trc)
+                        gfx64_fill_rect(w->x, w->y + trc, w->width, th - trc,
+                                        g_shell.colors.titlebar_bg);
+                }
             } else {
                 gfx64_fill_rect(w->x, w->y, w->width, th,
                                 g_shell.colors.titlebar_bg);
@@ -2444,6 +2477,12 @@ void hs_window_render_all(void)
             gfx64_clip_set(w->x, w->y, w->width, w->height);
             w->render(w);
             gfx64_clip_disable();
+        }
+
+        /* 合成: surface 贴到屏幕。整体 opacity 255, 透明度由每像素 alpha 决定 */
+        if (tsurf) {
+            gfx64_target_end();
+            gfx64_blend_image(tsurf, w->width, w->height, w->x, w->y, 255);
         }
 
         /* 还原动画临时偏移, 保证命中测试用持久坐标 */
@@ -6645,45 +6684,6 @@ void hs_layout_single(void)
  * P2: 窗口拖动
  * ========================================================================== */
 
-/* Surface 雏形: 抓窗口内容快照(拖动用)。尺寸变了就重建; 分配失败返回,
- * 调用方(render_all)会退回到"每帧重画"的老路径, 不会因为缺内存画不出窗口。 */
-extern void *kmalloc(uint64_t size);
-extern void kfree(void *ptr);
-extern int gfx64_back_snapshot(void *dst, int x, int y, int w, int h);
-extern void gfx64_clip_set(int x, int y, int w, int h);
-extern void gfx64_clip_disable(void);
-extern int gfx64_back_restore(void *src, int x, int y, int w, int h);
-
-static void hs_window_surface_grab(hs_window_t *win)
-{
-    int w = win->width, h = win->height;
-    if (w <= 0 || h <= 0) return;
-    if (win->surface && (win->surface_w != w || win->surface_h != h)) {
-        kfree(win->surface);
-        win->surface = 0;
-    }
-    if (!win->surface) {
-        win->surface = kmalloc((uint64_t)w * h * 4);
-        if (!win->surface) { win->surface_w = win->surface_h = 0; return; }
-        win->surface_w = w;
-        win->surface_h = h;
-    }
-    /* 快照必须在窗口"已经画好那一帧"之后抓。drag_start 发生在输入处理里,
-     * 此时后台缓冲保存的正是上一帧完整画面。 */
-    if (!gfx64_back_snapshot(win->surface, win->x, win->y, w, h)) {
-        kfree(win->surface);
-        win->surface = 0;
-        win->surface_w = win->surface_h = 0;
-    }
-}
-
-static void hs_window_surface_release(hs_window_t *win)
-{
-    if (win->surface) kfree(win->surface);
-    win->surface = 0;
-    win->surface_w = win->surface_h = 0;
-}
-
 void hs_window_drag_start(int x, int y)
 {
     hs_window_t *win = hs_window_at(x, y);
@@ -6695,7 +6695,6 @@ void hs_window_drag_start(int x, int y)
     g_drag_offset_y = y - win->y;
     g_dragging = 1;
     hs_window_focus(win);
-    hs_window_surface_grab(win);   /* Surface 雏形: 拖动期间只贴不重画 */
 }
 
 void hs_window_drag_move(int x, int y)
@@ -6727,7 +6726,6 @@ void hs_window_drag_move(int x, int y)
 
 void hs_window_drag_end(void)
 {
-    if (g_drag_window) hs_window_surface_release(g_drag_window);
     g_dragging = 0;
     g_drag_window = NULL;
 }

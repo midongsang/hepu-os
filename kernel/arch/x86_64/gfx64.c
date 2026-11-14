@@ -53,6 +53,50 @@ void gfx64_clip_set(int x, int y, int w, int h)
 }
 
 void gfx64_clip_disable(void) { g_clip_on = 0; }
+
+/* 渲染目标上下文(V0.59.11): 允许把绘制落到调用方缓冲(窗口 surface)上。
+ * 三个概念分开:
+ *   target   —— 画到哪块内存(默认 gfx_target/front, 有了 rt 就是 rt 缓冲)
+ *   origin   —— 坐标系平移: 上层仍用屏幕坐标, 写入时减 (ox,oy) 落进缓冲
+ *   pitch    —— rt 缓冲的行跨度 = 自身宽度(与屏幕 pitch 不同, 必须单独取)
+ * clip 保持屏幕坐标语义, 所以在四个叶子函数里先裁再平移。
+ * 只在 put_pixel/get_pixel/fill_rect/blend_pixel 上生效 —— 窗口内容全部经由它们。 */
+static uint8_t *g_rt_buf = 0;
+static int g_rt_w = 0, g_rt_h = 0;
+static int g_rt_ox = 0, g_rt_oy = 0;
+
+void gfx64_target_begin(void *buf, int w, int h, int ox, int oy)
+{
+    g_rt_buf = (uint8_t *)buf;
+    g_rt_w = w;
+    g_rt_h = h;
+    g_rt_ox = ox;
+    g_rt_oy = oy;
+}
+
+void gfx64_target_end(void)
+{
+    g_rt_buf = 0;
+    g_rt_ox = g_rt_oy = 0;
+}
+
+int gfx64_in_surface(void) { return g_rt_buf != 0; }
+void *gfx64_surface_buffer(void) { return g_rt_buf; }
+int gfx64_surface_pitch(void) { return g_rt_w; }
+int gfx64_surface_height(void) { return g_rt_h; }
+int gfx64_surface_origin_x(void) { return g_rt_ox; }
+int gfx64_surface_origin_y(void) { return g_rt_oy; }
+
+static uint8_t *gfx64_cur_buf(void)
+{
+    if (g_rt_buf) return g_rt_buf;
+    return gfx_target ? gfx_target : front_buffer;
+}
+static int gfx64_cur_pitch32(void)
+{
+    return g_rt_buf ? g_rt_w : (int)(gfx_pitch / 4);
+}
+
 int gfx64_clip_active(void) { return g_clip_on; }
 
 /* SB-15: 帧提交锁。
@@ -167,6 +211,75 @@ void gfx64_present_region(int x, int y, int w, int h)
     uint64_t gfx_f = spinlock_lock_irqsave(&g_gfx_lock);
     gfx64_blit_to(front_buffer, back_buffer, x, y, w, h);
     spinlock_unlock_irqrestore(&g_gfx_lock, gfx_f);
+}
+
+/* 把圆角矩形直接写进 ARGB 缓冲(每像素 0xAARRGGBB), 边缘像素 alpha = coverage,
+ * 圆角外保持 0(全透明)。corners 位掩码: 1=左上 2=右上 4=左下 8=右下, 0=四角直角。
+ *
+ * 为什么不能用 gfx64_fill_round_rect_aa: 那版是把圆角边缘与"目标缓冲的已有内容"
+ * 混色。目标是透明 surface 时, 已有内容是 0(黑), 混出来就是灰边。这里改成直接
+ * 写 coverage alpha, 由合成器去决定透过多少背景 —— 这是 Surface 的正确语义。 */
+void gfx64_fill_round_rect_argb(void *buf, int bw, int bh,
+                                int x, int y, int w, int h, int r,
+                                uint32_t color, int corners)
+{
+    if (!buf || bw <= 0 || bh <= 0 || w <= 0 || h <= 0) return;
+    if (r < 0) r = 0;
+    if (r > w / 2) r = w / 2;
+    if (r > h / 2) r = h / 2;
+    uint32_t *b32 = (uint32_t *)buf;
+    uint32_t solid = 0xFF000000u | (color & 0x00FFFFFFu);
+
+    /* 主体(含直角边) */
+    for (int j = 0; j < h; j++) {
+        int ty = y + j;
+        if (ty < 0 || ty >= bh) continue;
+        for (int i = 0; i < w; i++) {
+            int tx = x + i;
+            if (tx < 0 || tx >= bw) continue;
+            b32[ty * bw + tx] = solid;
+        }
+    }
+    if (r == 0 || corners == 0) return;
+
+    int r2 = r * r;
+    int r2o = (r <= 6) ? (r + 3) * (r + 3) : (r + 2) * (r + 2);
+    int r2i = (r > 2) ? (r - 2) * (r - 2) : 0;
+    int ak = (r <= 6) ? 96 : 128;
+
+    int cxs[4] = { x + r,         x + w - 1 - r, x + r,         x + w - 1 - r };
+    int cys[4] = { y + r,         y + r,         y + h - 1 - r, y + h - 1 - r };
+    int sx[4]  = { -r - 2,        0,              -r - 2,        0 };
+    int ex[4]  = { 0,             r + 2,          0,             r + 2 };
+    int sy[4]  = { -r - 2,        -r - 2,         0,             0 };
+    int ey[4]  = { 0,             0,             r + 2,         r + 2 };
+
+    for (int c = 0; c < 4; c++) {
+        if (!(corners & (1 << c))) continue;
+        /* 先清成透明, 再按 coverage 写 —— 主体那遍已经把这块填满了 */
+        for (int dy = sy[c]; dy <= ey[c]; dy++) {
+            for (int dx = sx[c]; dx <= ex[c]; dx++) {
+                int px = cxs[c] + dx, py = cys[c] + dy;
+                if (px < 0 || py < 0 || px >= bw || py >= bh) continue;
+                b32[py * bw + px] = 0;
+            }
+        }
+        for (int dy = sy[c]; dy <= ey[c]; dy++) {
+            for (int dx = sx[c]; dx <= ex[c]; dx++) {
+                int d2 = dx * dx + dy * dy;
+                if (d2 > r2o) continue;
+                int px = cxs[c] + dx, py = cys[c] + dy;
+                if (px < 0 || py < 0 || px >= bw || py >= bh) continue;
+                if (d2 <= r2i) { b32[py * bw + px] = solid; continue; }
+                uint32_t dist = math64_isqrt((uint32_t)d2);
+                int delta = (int)dist - r;
+                int alpha = 255 - (delta < 0 ? -delta : delta) * ak;
+                if (alpha <= 0) continue;
+                if (alpha > 255) alpha = 255;
+                b32[py * bw + px] = ((uint32_t)alpha << 24) | (color & 0x00FFFFFFu);
+            }
+        }
+    }
 }
 
 /* ARGB 图像合成(V0.59.10): 把 32bpp ARGB 源图(src, sw x sh)以 (dx,dy) 为左上角
@@ -420,8 +533,18 @@ void gfx64_set_mode(int width, int height, int pitch, int bpp, uint8_t *fb)
 void gfx64_put_pixel(int x, int y, uint32_t color)
 {
     if (!gfx_initialized) return;
-    if (x < 0 || y < 0 || (uint32_t)x >= gfx_width || (uint32_t)y >= gfx_height) return;
     if (g_clip_on && (x < g_clip_x0 || y < g_clip_y0 || x >= g_clip_x1 || y >= g_clip_y1)) return;
+    if (g_rt_buf) {
+        x -= g_rt_ox;
+        y -= g_rt_oy;
+        if (x < 0 || y < 0 || x >= g_rt_w || y >= g_rt_h) return;
+        /* surface 内一律写不透明(alpha=255): 透明只由"圆角外的空白"承担,
+         * 这里若把高字节留 0, 合成时整块会被当透明而消失。 */
+        if (gfx_bpp == 32)
+            ((uint32_t *)g_rt_buf)[y * gfx64_cur_pitch32() + x] = 0xFF000000u | (color & 0x00FFFFFFu);
+        return;
+    }
+    if (x < 0 || y < 0 || (uint32_t)x >= gfx_width || (uint32_t)y >= gfx_height) return;
     uint8_t *dst = gfx_target ? gfx_target : front_buffer;
 
     if (gfx_bpp == 32) {
@@ -439,8 +562,14 @@ void gfx64_put_pixel(int x, int y, uint32_t color)
 uint32_t gfx64_get_pixel(int x, int y)
 {
     if (!gfx_initialized) return 0;
-    if (x < 0 || y < 0 || (uint32_t)x >= gfx_width || (uint32_t)y >= gfx_height) return 0;
     if (g_clip_on && (x < g_clip_x0 || y < g_clip_y0 || x >= g_clip_x1 || y >= g_clip_y1)) return 0;
+    if (g_rt_buf) {
+        x -= g_rt_ox;
+        y -= g_rt_oy;
+        if (x < 0 || y < 0 || x >= g_rt_w || y >= g_rt_h) return 0;
+        return ((uint32_t *)g_rt_buf)[y * gfx64_cur_pitch32() + x];
+    }
+    if (x < 0 || y < 0 || (uint32_t)x >= gfx_width || (uint32_t)y >= gfx_height) return 0;
     uint8_t *dst = gfx_target ? gfx_target : front_buffer;
     if (gfx_bpp == 32) {
         uint32_t *p = (uint32_t *)(dst + y * gfx_pitch + x * 4);
@@ -469,6 +598,25 @@ void gfx64_fill_rect(int x, int y, int w, int h, uint32_t color)
         if (y1 > g_clip_y1) y1 = g_clip_y1;
     }
     if (x0 >= x1 || y0 >= y1) return;
+    if (g_rt_buf) {
+        /* 平移到缓冲坐标并夹进缓冲边界 */
+        x0 -= g_rt_ox; x1 -= g_rt_ox;
+        y0 -= g_rt_oy; y1 -= g_rt_oy;
+        if (x0 < 0) x0 = 0;
+        if (y0 < 0) y0 = 0;
+        if (x1 > g_rt_w) x1 = g_rt_w;
+        if (y1 > g_rt_h) y1 = g_rt_h;
+        if (x0 >= x1 || y0 >= y1) return;
+        uint32_t *base = (uint32_t *)g_rt_buf;
+        int pitch32 = gfx64_cur_pitch32();
+        uint32_t solid = 0xFF000000u | (color & 0x00FFFFFFu);
+        for (int j = y0; j < y1; j++) {
+            uint32_t *row = base + j * pitch32 + x0;
+            uint32_t *end = row + (x1 - x0);
+            while (row < end) *row++ = solid;
+        }
+        return;
+    }
     uint8_t *dst = gfx_target ? gfx_target : front_buffer;
 
     if (gfx_bpp == 32) {
@@ -1080,10 +1228,28 @@ int gfx64_init(void)
 /* ---------- 像素 alpha 混合（source-over） ---------- */
 void gfx64_blend_pixel(int x, int y, uint32_t fg, int alpha)
 {
-    if (g_clip_on && (x < g_clip_x0 || y < g_clip_y0 || x >= g_clip_x1 || y >= g_clip_y1)) return;
     if (!gfx_initialized) return;
-    if (x < 0 || y < 0 || (uint32_t)x >= gfx_width || (uint32_t)y >= gfx_height) return;
+    if (g_clip_on && (x < g_clip_x0 || y < g_clip_y0 || x >= g_clip_x1 || y >= g_clip_y1)) return;
     if (alpha <= 0) return;
+
+    /* surface 模式: 自己在缓冲内读写。注意不能再调 put_pixel —— 那会重复减 origin。 */
+    if (g_rt_buf) {
+        x -= g_rt_ox;
+        y -= g_rt_oy;
+        if (x < 0 || y < 0 || x >= g_rt_w || y >= g_rt_h) return;
+        uint32_t *p = (uint32_t *)g_rt_buf + y * gfx64_cur_pitch32() + x;
+        if (alpha >= 255) { *p = 0xFF000000u | (fg & 0x00FFFFFFu); return; }
+        uint32_t bg = *p;
+        int fa = alpha;
+        int ba = 255 - alpha;
+        uint8_t r = (uint8_t)((((fg >> 16) & 0xFF) * fa + ((bg >> 16) & 0xFF) * ba) >> 8);
+        uint8_t g = (uint8_t)((((fg >> 8) & 0xFF) * fa + ((bg >> 8) & 0xFF) * ba) >> 8);
+        uint8_t b = (uint8_t)(((fg & 0xFF) * fa + (bg & 0xFF) * ba) >> 8);
+        *p = 0xFF000000u | ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
+        return;
+    }
+
+    if (x < 0 || y < 0 || (uint32_t)x >= gfx_width || (uint32_t)y >= gfx_height) return;
     if (alpha >= 255) { gfx64_put_pixel(x, y, fg); return; }
 
     uint32_t bg = gfx64_get_pixel(x, y);

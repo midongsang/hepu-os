@@ -138,6 +138,36 @@ paint 回调只拿到最终矩形。实测 5 项落在 234/282/330/378/426（间
 `246*127/255 = 122`、`238*127/255 = 118` 逐通道吻合。视觉见 `docs/assets/alpha-blend.jpg`
 （粉红块不是纯红，半透明感正确）。
 
+### 7. 窗口 surface —— 已落地（V0.59.11）
+
+三块改动合起来，窗口第一次真正"画进自己的画布再合成"：
+
+1. **gfx64 渲染目标上下文**（`gfx64_target_begin(buf,w,h,ox,oy)` / `gfx64_target_end()`）：
+   目标指针 + origin 平移 + 自身 pitch。上层仍用屏幕绝对坐标，写入时减 origin 落进缓冲。
+   只作用在四个叶子函数（put_pixel/get_pixel/fill_rect/blend_pixel），所以窗口内容
+   （圆角、线、圆、图标、AA 文字）全部自动跟随，调用点一行没改。
+2. **font64 适配**：`draw_char` 入口检测 surface 模式，忽略调用方传的屏幕 framebuffer，
+   改指向 surface + 平移坐标。`draw_string` 与所有调用点零改动。
+3. **窗口底色**用新 `gfx64_fill_round_rect_argb()` 写入：边缘像素写 **coverage alpha**
+   而不是与背景混色 —— 圆角外是真透明（alpha=0），合成时透出壁纸。
+   旧 `fill_round_rect_aa` 是把边缘与目标已有内容混色，目标是透明 buffer 时会混出灰边，
+   所以这一路必须换掉。
+
+合成：`gfx64_blend_image(surface, w, h, win->x, win->y, 255)`，透明度由每像素 alpha 决定。
+
+**踩到的两个坑（都已修）**：
+- `blend_pixel`/`put_pixel` 在 surface 模式下最初没写 alpha 字节（高字节留 0）→ 整块被
+  合成器当透明，表现为"窗口按钮和色板圆点消失、露出壁纸"。修法：surface 内一律写
+  `0xFF000000 | color`，透明只由"圆角外空白"承担。
+- `fill_rounded_rect` 走的是 vg64 矢量管线，但 vg64 最终落到 `gfx64_blend_pixel`，
+  所以只要叶子函数适配了它也跟着适配 —— 不用单独改。
+
+视觉与迁移前**逐点比对**（1920×1080 原始 PPM，步长 2，窗口区域）：差异仅 31 个采样点，
+集中在右下圆角 1px 抗锯齿过渡带，属预期（AA 数学由"混背景"改为"写 coverage"）。
+
+**代价（要如实记）**：每帧每窗口多一次 memset + 一次全窗 blend，窗口内容绘制开销约翻倍。
+下一步应当做的是"只重画脏窗口 + 脏矩形合成"，否则 Surface 的收益被这个开销吃掉。
+
 **仍缺**（这才是完整 Surface）：
 1. 绘制目标隔离 —— 窗口内容直接画进自己的 buffer，而不是先画屏幕再抓；
 2. 裁剪 —— clip 到窗口矩形（现在靠各绘制函数自觉不出界）；
