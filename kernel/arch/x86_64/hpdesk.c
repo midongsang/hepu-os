@@ -3503,7 +3503,11 @@ void hs_panel_render_all(void)
 static void hs_dynamic_island_render(void)
 {
     int island_w = hs_sx(g_shell.ui.island_width);
-    int island_h = hs_sy(g_shell.ui.island_height);
+    /* V0.59.30: 折叠态胶囊高度 = 顶栏高度, 两者等高(用户明确要求)。
+     * 原来取 island_height(28) 而顶栏是 bar_height(40), 差 12 逻辑像素 ——
+     * 视觉上胶囊嵌在顶栏里, 上下都留缝。现在单一来源: 折叠态一律跟顶栏走,
+     * island_height 只作为展开动画的旧参考保留。 */
+    int island_h = hs_sy(g_shell.ui.bar_height);
     int island_x = (g_shell.screen_width - island_w) / 2;
     /* V0.59.29: 胶囊垂直居中于顶栏。原来 y 直接取 config 的 island_y(12),
      * 实测胶囊 12..52 / 顶栏 12..70 —— 贴上沿, 下面空 18px, 偏上 9px。
@@ -3521,7 +3525,7 @@ static void hs_dynamic_island_render(void)
     {
         /* P0: 展开/收起尺寸连续插值(缓动), 不再是瞬跳 */
         int e = hs_ease_out_cubic(g_island_t);
-        int ww = hs_sx(g_shell.ui.island_width), hh = hs_sy(g_shell.ui.island_height);
+        int ww = hs_sx(g_shell.ui.island_width), hh = hs_sy(g_shell.ui.bar_height);
         int tw = hs_sx(360), th = hs_sy(120);
         island_w = ww + (tw - ww) * e / 100;
         island_h = hh + (th - hh) * e / 100;
@@ -3531,9 +3535,9 @@ static void hs_dynamic_island_render(void)
         if (island_y < bar_top) island_y = bar_top;
     }
 
-    gfx64_fill_rounded_rect(island_x, island_y, island_w, island_h, hs_s(15),
+    gfx64_fill_rounded_rect(island_x, island_y, island_w, island_h, hs_s(18),
                             g_shell.colors.titlebar_bg);
-    gfx64_draw_rounded_rect(island_x, island_y, island_w, island_h, hs_s(15),
+    gfx64_draw_rounded_rect(island_x, island_y, island_w, island_h, hs_s(18),
                             g_shell.colors.border);
 
     uint8_t h = rtc64_get_hours();
