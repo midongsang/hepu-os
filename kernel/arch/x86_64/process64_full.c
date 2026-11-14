@@ -176,6 +176,27 @@ static uint64_t scheduler_ticks = 0;
 /* Per-CPU当前进程索引（每个CPU独立运行） */
 static volatile int per_cpu_current_idx[16];  /* 16 = MAX_CPUS */
 
+/* SMP 完整化: 每核专属 idle 槽。
+ *
+ * 为什么必须有: per_cpu_current_idx[] 原来统一初始化为 0, 也就是各核都指向
+ * BSP 的 processes[0]。AP 一旦参与调度, 会把这个"属于 BSP 的 idle"当成自己的
+ * old —— 把 AP 的 rsp/rbp 写进它的 context, 等 BSP 回到 idle 时用的是 AP 的栈。
+ * 所以每个参与调度的核必须有自己的一份 idle PCB。
+ *
+ * 约定: pid = PROC_CPU_IDLE_PID_BASE + cpu_id, 用 pid 判定而不加结构体字段,
+ * 避免改动 process_t 布局(其 context 偏移被 _Static_assert 钉住)。
+ * idle 永不进就绪队列, 只在"本核无活可干"时被切回。 */
+#define PROC_CPU_IDLE_PID_BASE 900
+static int g_cpu_idle_idx[16];
+static int g_ap_sched_ready = 0;
+static void proc_bind_cpu_idles(void);
+static int proc_is_cpu_idle(const process_t *p)
+{
+    /* pid=0 是 BSP 的 idle —— 它承载的正是桌面主循环, 同样不能入就绪队列:
+     * 一旦入队, AP 会把它"窃取"走, 两个核同时执行桌面主循环。 */
+    return p && (p->pid == 0 || p->pid >= PROC_CPU_IDLE_PID_BASE);
+}
+
 static int sched_cur_pid_internal(void)
 {
     extern uint32_t smp_get_current_cpu(void);
@@ -273,6 +294,10 @@ void process64_init(void)
     devfs64_init();
     /* 初始化安全裁决层（基于能力的域间访问控制） */
     sec64_init();
+
+    /* SMP: 为每个在线 AP 绑一份自己的 idle, 并置 AP 调度就绪标志。
+       必须在 process_initialized=1 之后(上面已置), 且 smp_init 已完成(online 表有效)。 */
+    proc_bind_cpu_idles();
 
     vga_puts("[PROC64] Process manager initialized (32 procs, 5 priorities, idle=PID0)\n");
 }
@@ -589,6 +614,64 @@ process_t* process64_get_current(void)
     return NULL;
 }
 
+/* SMP: 为每个在线 AP 建立专属 idle PCB 并绑定 per-CPU 当前进程。
+ * 由 process64_init 末尾调用（此时 smp_init 的 online 表已有效）。 */
+static void proc_bind_cpu_idles(void)
+{
+    extern uint32_t smp_get_current_cpu(void);
+    extern int smp_cpu_is_online(uint32_t cpu_id);
+
+    uint32_t bsp = smp_get_current_cpu();
+    int bound = 0;
+
+    for (int i = 0; i < 16; i++) g_cpu_idle_idx[i] = -1;
+    if (bsp < 16) g_cpu_idle_idx[bsp] = 0;   /* BSP 的 idle 就是 processes[0] */
+
+    for (int c = 0; c < 16; c++) {
+        if (c == (int)bsp) continue;
+        if (!smp_cpu_is_online((uint32_t)c)) continue;
+        int slot = -1;
+        for (int s = 1; s < MAX_PROCESSES; s++) {
+            if (processes[s].state == PROC_STATE_UNUSED) { slot = s; break; }
+        }
+        if (slot < 0) break;
+        process_t *p = &processes[slot];
+        proc_memset(p, 0, (int)sizeof(process_t));
+        p->pid = PROC_CPU_IDLE_PID_BASE + c;
+        p->state = PROC_STATE_RUNNING;
+        p->priority = PRIORITY_IDLE;
+        p->cpu_id = c;
+        p->domain_id = DOMAIN_ID_KERNEL;
+        p->default_slice = 10;
+        p->time_slice = 10;
+        p->context.rsp = 0;
+        p->context.rbp = 0;
+        p->context_switches = 0;
+        p->parent_pid = 0;
+        p->running_on = c;
+        proc_init_fx(p);
+        proc_memset(p->name, 0, 32);
+        p->name[0] = 'i'; p->name[1] = 'd'; p->name[2] = 'l'; p->name[3] = 'e';
+        p->name[4] = (char)('0' + (c % 10));
+        g_cpu_idle_idx[c] = slot;
+        per_cpu_current_idx[c] = slot;
+        per_cpu_current_pid[c] = p->pid;
+        bound++;
+    }
+
+    g_ap_sched_ready = 1;
+    {
+        extern void vga_puts(const char *);
+        extern void vga_put_hex(uint64_t);
+        vga_puts("[SMP] per-CPU idle bound: ");
+        vga_put_hex((uint64_t)bound);
+        vga_puts("\n");
+    }
+}
+
+/* AP 调度是否可用(process64_init 完成且每核 idle 已绑定) */
+int process64_ap_sched_ready(void) { return g_ap_sched_ready; }
+
 /* Dev-1: 导出当前进程的 domain_id，供 hepu_dev 等模块使用 */
 int process64_get_current_domain_id(void)
 {
@@ -714,7 +797,9 @@ int process64_schedule(void)
         if (old && old->state == PROC_STATE_RUNNING) {
             old->state = PROC_STATE_READY;
             old->time_slice = old->default_slice;
-            add_to_ready_queue_locked(old - processes);
+            /* 本核 idle 只置 READY, 不入队: 它靠"无活可干"时的回退切回,
+               入队会和其它核重复入队(队列不去重)导致同一 idle 被切多次。 */
+            if (!proc_is_cpu_idle(old)) add_to_ready_queue_locked(old - processes);
         }
 
         processes[idx].state = PROC_STATE_RUNNING;
@@ -758,7 +843,7 @@ int process64_schedule(void)
             if (old && old->state == PROC_STATE_RUNNING) {
                 old->state = PROC_STATE_READY;
                 old->time_slice = old->default_slice;
-                add_to_ready_queue_locked(old - processes);
+                if (!proc_is_cpu_idle(old)) add_to_ready_queue_locked(old - processes);
             }
 
             processes[idx].state = PROC_STATE_RUNNING;
@@ -777,6 +862,28 @@ int process64_schedule(void)
                 }
                 return ret_pid;
             }
+        }
+    }
+
+    /* 无活可干: 本核若有专属 idle, 切回去。
+     * AP 靠这一步回到 hlt 循环; 没有它, AP 会在最后一个进程(可能已 ZOMBIE)
+     * 的上下文里继续执行。BSP 的 idle 就是当前上下文, 不需要切。 */
+    {
+        process_t *old = process64_get_current();
+        int idle_idx = (cur_cpu < 16) ? g_cpu_idle_idx[cur_cpu] : -1;
+        if (old && idle_idx >= 0 && (int)(old - processes) != idle_idx) {
+            extern void context_switch_64(uint64_t *old_ctx, uint64_t *new_ctx);
+            process_t *ip = &processes[idle_idx];
+            int ret_pid = ip->pid;
+            ip->state = PROC_STATE_RUNNING;
+            per_cpu_current_idx[cur_cpu] = idle_idx;
+            per_cpu_current_pid[cur_cpu] = ip->pid;
+            if (old->state == PROC_STATE_RUNNING) old->state = PROC_STATE_READY;
+            old->running_on = -1;
+            ip->running_on = (int)cur_cpu;
+            sched_lock_release(sched_iflags);
+            context_switch_64((uint64_t *)&old->context, (uint64_t *)&ip->context);
+            return ret_pid;
         }
     }
 

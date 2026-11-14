@@ -272,6 +272,15 @@ void ap_c_entry(void)
     }
 }
 
+/* SB-25 总开关: AP 参与调度。
+ *
+ * 0 = 关闭。基础设施(每核 idle、IPI 重调度、每核 TSS/syscall/LAPIC)已就位,
+ *     但 PLAN_SMP_HARDENING_R5 §7.3 要求顺序: 先清 §7.1 的三处单核假设
+ *     (fork 父快照 / readdir 静态表 / 裸盘静态缓冲), 再打开这里。
+ *     倒序打开会得到"一开就崩、崩在哪说不清"。
+ * 1 = 打开(仅在上述三处清完之后)。 */
+#define HS_AP_SCHED_ENABLED 0
+
 /* SMP定时器tick（每个CPU的Local APIC定时器中断调用） */
 void smp_timer_tick(void)
 {
@@ -280,14 +289,35 @@ void smp_timer_tick(void)
         per_cpu_timer_ticks[cpu_id]++;
     }
 
-    /* AP也参与调度：如果有就绪进程，触发调度 */
+    /* AP也参与调度：如果有就绪进程，触发调度。
+     *
+     * V0.60.x: 取消 && 0 的临时禁用。原先禁用的理由是"先验证 apic_mode
+     * 修复后的渲染稳定性", 而当时把 AP 调度打开会踩两个坑, 现在都已补齐:
+     *   ① 每核 TSS / syscall per-CPU 存储 / 每核 LAPIC (SB-17/18/19)
+     *   ② 每核专属 idle —— 否则 AP 会拿 BSP 的 idle processes[0] 当 old,
+     *      把 AP 的栈写进 BSP 的上下文(见 process64 的 proc_bind_cpu_idles)
+     * 仍然只在 process64 初始化完成后才允许(process64_ap_sched_ready)。 */
     extern int process64_get_running_count(void);
-    if (process64_get_running_count() > 1) {
+    if (cpu_id != bsp_cpu_id && HS_AP_SCHED_ENABLED && process64_get_running_count() > 1) {
+        extern int process64_ap_sched_ready(void);
         extern int process64_schedule(void);
-        /* 非BSP CPU可以调度进程
-           暂时禁用AP调度，先验证apic_mode修复的渲染稳定性 */
-        if (cpu_id != bsp_cpu_id && 0) {
-            process64_schedule();
+        if (HS_AP_SCHED_ENABLED && process64_ap_sched_ready()) {
+            int ap_pid = process64_schedule();
+            if (ap_pid >= 0) {
+                /* 诊断: 证明 AP 真的切到了进程(限流, 约每 500 次打印一行) */
+                static uint64_t ap_sw = 0;
+                if ((++ap_sw % 500) == 0) {
+                    extern void vga_puts(const char *);
+                    extern void vga_put_hex(uint64_t);
+                    vga_puts("[APSCHED] cpu=");
+                    vga_put_hex(cpu_id);
+                    vga_puts(" pid=");
+                    vga_put_hex((uint64_t)ap_pid);
+                    vga_puts(" sw=");
+                    vga_put_hex(ap_sw);
+                    vga_puts("\n");
+                }
+            }
         }
     }
 }
@@ -329,10 +359,14 @@ void smp_ipi_handler(void)
         if (arg) sb21_invlpg(arg);
         else     sb21_flush_all_tlb();
         break;
-    case IPI_MSG_RESCHEDULE:
-        /* AP 调度开关仍关着（smp_timer_tick 里的 && 0），这里只记录；
-         * 开关打开后在此直接进 process64_schedule()。 */
+    case IPI_MSG_RESCHEDULE: {
+        /* AP 调度已打开(smp_timer_tick 里无 && 0)。由别的核点名要求重新调度,
+         * 与定时器 tick 走同一个入口; 未就绪时静默跳过。 */
+        extern int process64_ap_sched_ready(void);
+        extern int process64_schedule(void);
+        if (process64_ap_sched_ready()) process64_schedule();
         break;
+    }
     case IPI_MSG_STOP:
         /* 先清 pending 再停机，避免汇聚方等一个永远不会到的应答；
          * 停住的核只能靠 INIT/复位唤醒。 */
@@ -688,6 +722,13 @@ cpu_info_t *smp_get_cpu_info(uint32_t cpu_id)
 {
     if (cpu_id >= MAX_CPUS) return 0;
     return &cpu_table[cpu_id];
+}
+
+/* 该核是否已上线（供进程管理为 AP 绑定专属 idle 用） */
+int smp_cpu_is_online(uint32_t cpu_id)
+{
+    if (cpu_id >= MAX_CPUS) return 0;
+    return cpu_table[cpu_id].online ? 1 : 0;
 }
 
 /* 启动应用处理器（AP） */

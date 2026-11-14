@@ -78,7 +78,7 @@ supersedes: null
 | AP LAPIC 使能 | `kernel/arch/x86_64/apic64.c:489-503` | `apic64_enable_for_ap()`：TPR=0（492）、SVR 置使能位（495）、LVT 错误屏蔽（498）、清 ESR（501-502）。注释明确 SVR 软件使能位是 per-CPU，BSP 的 `apic64_init()` 不会替 AP 启用 |
 | BSP LAPIC 初始化 | `kernel/arch/x86_64/apic64.c:200-248` | 映射 APIC/IOAPIC MMIO（207-210）、读 ID/版本（214-215）、TPR/SVR/LVT 配置（231-242）；`apic_mode=0` PIC 兼容模式（245-246） |
 | SMP 初始化 | `kernel/arch/x86_64/smp.c:246-350` | ACPI MADT 优先（255-268），CPUID 后备（271-280）；trampoline 复制到 `0x8000`（291）；BSP 先起定时器（302）；遍历 ACPI 核调 `smp_start_single_ap`（312-317）；最后用 `ap_started_count` 自旋同步，带 5e8 次超时（325-343） |
-| AP 调度现状 | `kernel/arch/x86_64/smp.c:134-143` | `smp_timer_tick()` 里 AP 参与调度的分支被 `&& 0` 禁用（140）：**AP 在线但不跑调度，所有进程仍由 BSP 运行** |
+| AP 调度现状 | `kernel/arch/x86_64/smp.c` 的 `HS_AP_SCHED_ENABLED`（2026-11-14 前是 `&& 0`） | 宏默认 `0`：**AP 在线、基础设施就位，但不参与调度，所有进程仍由 BSP 运行**；置 1 前必须先清 §7.1 |
 | IPI 向量 | `kernel/arch/x86_64/lib64.c:443-448` | 向量 `0x50` 分发到 `smp_ipi_handler()`；发送侧 `apic64_send_ipi / _all / _others` 在 `apic64.c:454-481` |
 
 ### 1.2 现有「锁」与原子手段
@@ -333,6 +333,18 @@ QEMU 二进制：`tools/bin/qemu-system-x86_64`（7.2.0，未编 user 网络后�
 
 ## 七、SB-25 解锁前置清单（AUDIT_R3 补充，2026-11-14）
 
+> **2026-11-14 落地进度**：SB-25 的**基础设施**已完成并合入（`smp.c` 里改用总开关
+> `HS_AP_SCHED_ENABLED`，默认 `0`）：
+> 1. 每核专属 idle PCB（`process64` 的 `proc_bind_cpu_idles`）—— 打开 AP 调度前必须有的
+>    前提，否则 AP 会把 BSP 的 `processes[0]` 当成自己的 old，把 AP 的栈写进桌面主循环的
+>    上下文（实测：不解这一条直接打开，桌面在回归里 `desk=0`）；
+> 2. BSP idle（pid 0）与每核 idle（pid ≥ 900）都不进就绪队列，避免被 AP "窃取"后两核
+>    同时执行桌面主循环；
+> 3. 无候选时切回本核 idle 的回退分支（否则 AP 会停在最后一个进程的上下文里）；
+> 4. `IPI_MSG_RESCHEDULE` 真正接上 `process64_schedule()`。
+>
+> **开关仍为 0**，因为下面 §7.1 的三处单核假设还没清 —— 这是本节自己的顺序要求。
+
 > 来源：`docs/security/AUDIT_R3.md` 的 R3-3 / R3-5 / R3-7 与同轮审计中顺带确认的几条。
 > 这一节回答一个之前没写清的问题：**打开 AP 调度之前，还有什么东西会立刻崩。**
 
@@ -366,5 +378,6 @@ QEMU 二进制：`tools/bin/qemu-system-x86_64`（7.2.0，未编 user 网络后�
 
 ### 7.4 一处行号纠错
 
-本文档此前写"SB-25 不实施即保持 `smp.c:140` 的禁用位"。实测该判断所在行已漂移到
-`smp.c:289`。引用时请以 `cpu_id != bsp_cpu_id` 这个条件作为锚点，不要用行号。
+本文档此前写"SB-25 不实施即保持 `smp.c:140` 的禁用位"。实测该行号已两次漂移
+（`smp.c:289` → 现为 `smp_timer_tick` 里的 `HS_AP_SCHED_ENABLED`）。
+引用时请以宏名或 `cpu_id != bsp_cpu_id` 这个条件作为锚点，不要用行号。
