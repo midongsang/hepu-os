@@ -3487,7 +3487,10 @@ void hs_panel_render_all(void)
         }
         if (L) {
             /* 顶栏半透明(88%), 其余面板保持不透明 */
-            int op = (idx == HS_PANEL_TOP_BAR) ? 224 : 255;
+            /* 顶栏与时钟胶囊同一透明度: 胶囊嵌在顶栏里, 两者 alpha 不一致
+             * 会露出一块比顶栏更"实"的补丁。其余面板保持不透明。 */
+            int op = (idx == HS_PANEL_TOP_BAR ||
+                      idx == HS_PANEL_DYNAMIC_ISLAND) ? 224 : 255;
             hs_layer_draw_a(L, px, py, pw, ph, g_shell.panel_registry[idx].render,
                             !(g_in_partial_frame && L->valid), op);
         }
