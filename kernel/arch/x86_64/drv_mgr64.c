@@ -94,7 +94,10 @@ int drv_mgr_update(void)
     g_repo_loaded = 0;
 
     vga_puts("[DRVMGR] Fetching repo index...\n");
-    int len = http64_get(DRV_REPO_HOST "/index.txt", buf, sizeof(buf) - 1);
+    /* V0.59.15: 这个调用发生在桌面渲染路径里, 用默认 15 秒会把一帧卡死 15 秒。
+     * 仓库索引拿不到就拉倒, 3 秒上限。 */
+    extern int http64_get_timeout(const char *url, uint8_t *response, int max_response, int timeout_s);
+    int len = http64_get_timeout(DRV_REPO_HOST "/index.txt", buf, sizeof(buf) - 1, 3);
     if (len <= 0) {
         vga_puts("[DRVMGR] Repo unreachable (need network + repo server)\n");
         return -1;

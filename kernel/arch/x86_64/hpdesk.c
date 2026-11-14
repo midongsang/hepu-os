@@ -5631,7 +5631,10 @@ static void hpdesk_render_inner(void)
     {
         extern int dhcp64_is_bound(void);
         static int up_checked = 0;
-        if (!up_checked && dhcp64_is_bound()) {
+        /* V0.59.15: 这里在渲染路径里做同步网络 I/O —— 启动期一旦网络就绪, 这一帧
+         * 就被卡住(原 15 秒)。两处改动: 挪到启动 30 秒之后(错开桌面首屏), 超时降 3 秒
+         * (见 drv_mgr_update)。彻底异步需要把 HTTP 拆成状态机, 留到后面做。 */
+        if (!up_checked && dhcp64_is_bound() && g_frame_no > 1800) {
             up_checked = 1;
             extern int drv_mgr_update(void);
             int dn = drv_mgr_update();

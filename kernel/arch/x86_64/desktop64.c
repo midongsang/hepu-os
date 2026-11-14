@@ -198,8 +198,13 @@ void desktop64_run(void)
         static int wx_tries = 0;
         /* V0.58.3: 6 次 × 每次最多阻塞数秒 = 启动期累计卡顿近 20 秒。
          * 降到 3 次、间隔 300 帧, 累计阻塞控制在 10 秒内且分散。 */
-        if (wx_tries < 3) {
-            if (++wx_tick >= 300) {
+        /* V0.59.15: 启动期不再自动拉天气。同步 HTTP 会把主循环堵住(每次最多 3 秒,
+         * 还带重试), 表现为桌面启动一段时间内时钟与画面一起冻住。
+         * 现在推迟到启动 60 秒后只试一次: 首屏完全不受影响, 顶栏天气卡片在这之前
+         * 显示 "--" 占位(本来就有占位逻辑)。 */
+        if (wx_tries < 1) {
+            /* 主循环一轮约 1ms, 60000 轮 ≈ 60 秒墙钟(按轮数算, 不是帧数) */
+            if (++wx_tick >= 60000) {
                 wx_tick = 0;
                 extern int hpdesk_fetch_weather(void);
                 if (hpdesk_fetch_weather()) wx_tries = 6;
