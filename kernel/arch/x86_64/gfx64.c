@@ -169,6 +169,49 @@ void gfx64_present_region(int x, int y, int w, int h)
     spinlock_unlock_irqrestore(&g_gfx_lock, gfx_f);
 }
 
+/* ARGB 图像合成(V0.59.10): 把 32bpp ARGB 源图(src, sw x sh)以 (dx,dy) 为左上角
+ * 混合到当前渲染目标。opacity 是整体不透明度(0..255), 与每像素 alpha 相乘; 走裁剪。
+ *
+ * 这是 Surface 的第一步原语: 窗口有了自己的 ARGB buffer 之后, 合成器就靠它把
+ * "带圆角透明"的窗口贴到屏幕上。以前所有绘制都是覆盖式写实色, 没有 alpha 通道,
+ * 所以窗口一旦画进独立 buffer, 圆角外的像素就没有"透过"语义 —— 只能靠这个入口补上。
+ * 像素格式与 gfx64 内部一致: 内存 32 位值为 0xAARRGGBB(小端下即 B,G,R,A 字节序)。 */
+void gfx64_blend_image(void *src, int sw, int sh, int dx, int dy, int opacity)
+{
+    if (!gfx_initialized || !src || sw <= 0 || sh <= 0 || gfx_bpp != 32) return;
+    if (opacity <= 0) return;
+    uint8_t *dstb = gfx_target ? gfx_target : front_buffer;
+    uint32_t *s32 = (uint32_t *)src;
+    uint32_t *d32 = (uint32_t *)dstb;
+    int pitch32 = gfx_pitch / 4;
+
+    for (int j = 0; j < sh; j++) {
+        int ty = dy + j;
+        if (ty < 0 || (uint32_t)ty >= gfx_height) continue;
+        if (g_clip_on && (ty < g_clip_y0 || ty >= g_clip_y1)) continue;
+        uint32_t *srow = s32 + j * sw;
+        uint32_t *drow = d32 + ty * pitch32;
+        for (int i = 0; i < sw; i++) {
+            int tx = dx + i;
+            if (tx < 0 || (uint32_t)tx >= gfx_width) continue;
+            if (g_clip_on && (tx < g_clip_x0 || tx >= g_clip_x1)) continue;
+            uint32_t s = srow[i];
+            int a = (int)((s >> 24) & 0xFF);
+            if (opacity < 255) a = a * opacity / 255;
+            if (a == 0) continue;
+            uint32_t fg = s & 0x00FFFFFFu;
+            uint32_t *p = drow + tx;
+            if (a >= 255) { *p = fg; continue; }
+            uint32_t bg = *p;
+            int keep = 255 - a;
+            int r = (int)((fg & 0xFF) * a / 255 + (bg & 0xFF) * keep / 255);
+            int g = (int)(((fg >> 8) & 0xFF) * a / 255 + ((bg >> 8) & 0xFF) * keep / 255);
+            int b = (int)(((fg >> 16) & 0xFF) * a / 255 + ((bg >> 16) & 0xFF) * keep / 255);
+            *p = (bg & 0xFF000000u) | ((uint32_t)b << 16) | ((uint32_t)g << 8) | (uint32_t)r;
+        }
+    }
+}
+
 /* 复制背景缓冲区域到帧缓冲（整行64位复制，分层渲染用） */
 void gfx64_blit_to(uint8_t *dstfb, uint8_t *bg, int x, int y, int w, int h)
 {
