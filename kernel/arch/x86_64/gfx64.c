@@ -7,6 +7,7 @@
  * ========================================================================== */
 
 #include <stdint.h>
+#include "display_backend.h"
 #include "spinlock.h"
 #include <stddef.h>
 #include "../../shared/gfx/gfx_shared.h"
@@ -153,13 +154,41 @@ void gfx64_set_target_back(void)
  * 那段 8MB 拷贝期间任何别的绘制都会画到前台去（窗口期最长可达数毫秒）。
  * 这里改成显式传目标：blit 内部函数接受 dst，present 期间全局 gfx_target
  * 完全不动。 */
+/* ---- 第一层：显示后端（见 display_backend.h）----
+ * 现役只有 lfb：直接写线性帧缓冲。它就是把下面两段原来写死在
+ * gfx64_present / gfx64_present_region 里的逻辑原样搬进来，
+ * 所以改造前后画面必须逐像素一致。 */
+static const display_backend_t *g_display = 0;
+
+static int lfb_db_init(int w, int h, int pitch, int bpp, uint8_t *fb)
+{
+    (void)w; (void)h; (void)pitch; (void)bpp;
+    front_buffer = fb;
+    return 0;
+}
+
+static void lfb_db_present(void)
+{
+    gfx64_blit_to(front_buffer, back_buffer, 0, 0, (int)gfx_width, (int)gfx_height);
+}
+
+static void lfb_db_present_region(int x, int y, int w, int h)
+{
+    gfx64_blit_to(front_buffer, back_buffer, x, y, w, h);
+}
+
+static const display_backend_t lfb_backend = {
+    "lfb", lfb_db_init, lfb_db_present, lfb_db_present_region
+};
+
 void gfx64_present(void)
 {
     if (!gfx_initialized) return;
     if (!back_buffer) return;
+    if (!g_display || !g_display->present) return;
     uint64_t gfx_f = spinlock_lock_irqsave(&g_gfx_lock);
     uint64_t t0 = gfx_rdtsc();
-    gfx64_blit_to(front_buffer, back_buffer, 0, 0, (int)gfx_width, (int)gfx_height);
+    g_display->present();
     gfx64_prof_present += gfx_rdtsc() - t0;
     spinlock_unlock_irqrestore(&g_gfx_lock, gfx_f);
 }
@@ -219,9 +248,10 @@ void gfx64_present_region(int x, int y, int w, int h)
 {
     if (!gfx_initialized || !back_buffer) return;
     if (w <= 0 || h <= 0) return;
+    if (!g_display || !g_display->present_region) return;
     uint64_t gfx_f = spinlock_lock_irqsave(&g_gfx_lock);
     uint64_t t0 = gfx_rdtsc();
-    gfx64_blit_to(front_buffer, back_buffer, x, y, w, h);
+    g_display->present_region(x, y, w, h);
     gfx64_prof_present += gfx_rdtsc() - t0;
     spinlock_unlock_irqrestore(&g_gfx_lock, gfx_f);
 }
@@ -563,13 +593,16 @@ const uint8_t font8x16[128][16] = {
 /* 设置图形模式信息（由bootloader或内核调用） */
 void gfx64_set_mode(int width, int height, int pitch, int bpp, uint8_t *fb)
 {
+    /* 第一层：注册显示后端。当前只有 lfb；换成 virtio/VBE 后端只需改这一行。
+     * 放在加锁之前 —— 只是指针赋值，且 init 需要在这个临界区里被调用。 */
+    g_display = &lfb_backend;
     uint64_t gfx_f = spinlock_lock_irqsave(&g_gfx_lock);
     gfx_fb_info.width = width;
     gfx_fb_info.height = height;
     gfx_fb_info.pitch = pitch;
     gfx_fb_info.bpp = bpp;
     gfx_fb_info.framebuffer = fb;
-    front_buffer = fb;
+    if (g_display && g_display->init) g_display->init(width, height, pitch, bpp, fb);
 
     vga_puts("[GFX64] Mode set: ");
     vga_put_hex(width);

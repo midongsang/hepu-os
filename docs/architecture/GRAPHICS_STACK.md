@@ -21,6 +21,7 @@
 hs_apps.c     应用内容（终端/文件管理器/任务管理器各自的 render 回调）
 hpdesk.c      窗口管理 + 面板 + 合成（单进程，一体化）
 gfx64.c       绘图原语 + 前后缓冲 + 裁剪 + 渲染目标 + 合成
+display_backend.h  ← 第一层：显示后端接口（2026-11-14 新增，现役仅 lfb）
 hsinput.c     键鼠原始输入
 font64.c      字形栅格
 ```
@@ -36,7 +37,7 @@ font64.c      字形栅格
 
 | 层 | 用户方案里的职责 | 现状 | 已落地 / 还缺 |
 |---|---|---|---|
-| **第一层：显示后端** | 帧缓冲 / GPU / 后端切换 | **缺** | gfx64 有 `front_buffer`/`back_buffer`/`gfx_target` 三个目标，但没有"后端接口"这一层，代码直接操作 LFB。`GRAPHICS.md` 里的 VGA/VBE/virtio 三后端是规划，未落地 |
+| **第一层：显示后端** | 帧缓冲 / GPU / 后端切换 | **接口已落地，只有 lfb 一个后端** | 2026-11-14 新增 `display_backend.h`：3 个入口 `init / present / present_region`，`gfx64` 通过 `g_display` 指针调用，`set_mode` 时注册。现役 `lfb_backend` 是把原来直接写 `front_buffer` 的两段**原样搬进来**，行为零变化（+320 B）。`set_target` 故意不收 —— 它是合成层的"当前渲染目标"，不是后端能力。VBE/virtio/多显示器后端仍只是规划，但现在只需要加一个 backend，上层不用改 |
 | **第二层：窗口合成器** | 窗口模型、Z 序、脏区、Surface、合成 | **主体已落地** | 已：`hs_window_t`、Z 序、拖动、脏区框架、统一裁剪、ARGB 合成原语、窗口常驻 surface、面板层表面复用。缺：合成仍是整窗 blend（没有按脏区裁剪的合成）、`opacity`、不透明区域、父子窗口 |
 | **第三层：GUI 组件库** | 控件树、布局、事件分发、控件级脏区 | **只有布局** | 已：`hs_ui_box_t` 单遍 arrange→paint。缺：控件级 hit-test（点击仍由 hpdesk 按坐标判定，`hs_ui_hit()` 建好未接）、控件级脏区上报、控件状态与样式 |
 
