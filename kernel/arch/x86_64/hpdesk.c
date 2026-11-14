@@ -1965,6 +1965,8 @@ static uint32_t hs_mix_color(uint32_t a, uint32_t b, int pct)
 
 static uint8_t *sh_mask = 0;
 static uint8_t *sh_tmp = 0;
+static uint32_t *sh_argb = 0;      /* 预渲染的投影 ARGB(黑底+掩膜 alpha), 供批量合成 */
+static uint32_t sh_argb_cap = 0;
 static uint32_t sh_cap = 0;
 static int sh_mw = 0, sh_mh = 0;
 static int sh_kw = -1, sh_kh = -1;      /* 缓存 key: 窗口宽高 */
@@ -2021,6 +2023,7 @@ static int sh_build(int ww, int hh, int pad, int rc, int r, int off)
     int mw = ww + 2 * pad, mh = hh + 2 * pad + off;
     if (mw <= 0 || mh <= 0 || mw > 2048 || mh > 1400) return 0;
     uint32_t need = (uint32_t)mw * (uint32_t)mh;
+    uint32_t need4 = need * 4;
     if (need > sh_cap) {
         if (sh_mask) kfree(sh_mask);
         if (sh_tmp) kfree(sh_tmp);
@@ -2028,6 +2031,12 @@ static int sh_build(int ww, int hh, int pad, int rc, int r, int off)
         sh_tmp = (uint8_t *)kmalloc((uint64_t)need);
         sh_cap = (sh_mask && sh_tmp) ? need : 0;
         if (!sh_cap) return 0;
+    }
+    if (need4 > sh_argb_cap) {
+        if (sh_argb) kfree(sh_argb);
+        sh_argb = (uint32_t *)kmalloc((uint64_t)need4);
+        sh_argb_cap = sh_argb ? need4 : 0;
+        if (!sh_argb) return 0;
     }
     /* 实心圆角矩形当遮挡体 */
     for (long y = 0; y < mh; y++) {
@@ -2040,6 +2049,19 @@ static int sh_build(int ww, int hh, int pad, int rc, int r, int off)
     for (int pass = 0; pass < SH_PASSES; pass++) {
         sh_box_h(sh_mask, sh_tmp, mw, mh, r);
         sh_box_v(sh_tmp, sh_mask, mw, mh, r);
+    }
+    /* 预渲染 ARGB: 窗口内部透明(窗口自己会盖住), 环带写黑底 + 掩膜 alpha,
+     * 每帧直接走批量 gfx64_blend_image, 不再逐像素 blend_pixel。 */
+    for (long y = 0; y < mh; y++) {
+        const uint8_t *row = sh_mask + y * mw;
+        uint32_t *arow = sh_argb + y * mw;
+        for (long x = 0; x < mw; x++) {
+            if (sh_in_rounded(x, y, pad, pad + off, pad + ww - 1, pad + off + hh - 1, rc)) {
+                arow[x] = 0;
+            } else {
+                arow[x] = (uint32_t)row[x] << 24;   /* RGB=0 黑, alpha=掩膜 */
+            }
+        }
     }
     sh_mw = mw; sh_mh = mh; sh_kw = ww; sh_kh = hh;
     return 1;
@@ -2077,33 +2099,6 @@ static void hs_window_shadow_analytic(const hs_window_t *w)
             if (dist < d2) { long u = d2 - dist; a += (int)(u * u * a2 / ((long)d2 * d2)); }
             if (a > 90) a = 90;
             if (a > 0) gfx64_blend_pixel(x, y, 0x000000, a);
-        }
-    }
-}
-
-/* 单条边带的合成 */
-static inline void sh_blit_slice(const hs_window_t *w, int mx0, int my0,
-                                 int xb, int xe, int yb, int ye,
-                                 int pad, int rc, int off)
-{
-    extern void gfx64_blend_pixel(int x, int y, uint32_t fg, int alpha);
-    extern int gfx64_get_width(void);
-    extern int gfx64_get_height(void);
-    for (int y = yb; y < ye; y++) {
-        int sy = my0 + y;
-        if (sy < 0 || sy >= gfx64_get_height()) continue;
-        const uint8_t *row = sh_mask + (long)y * sh_mw;
-        for (int x = xb; x < xe; x++) {
-            int sx = mx0 + x;
-            if (sx < 0 || sx >= gfx64_get_width()) continue;
-            /* OBS-03: 遮挡体在 mask 里是 [pad, pad+off] 起算的（阴影整体下移 off），
-             * 这里必须用同一组坐标判"窗口内部"。原先按 pad 起算会把窗口上方
-             * pad..pad+off、下方 pad+h-1..pad+off+h-1 的阴影一起当内部抹掉，
-             * 表现为四个角外侧阴影缺失、只贴边 1px 留一道暗线。 */
-            if (sh_in_rounded(x, y, pad, pad + off,
-                              pad + w->width - 1, pad + off + w->height - 1, rc)) continue;
-            int a = (int)row[x] * SH_STRENGTH / 255;
-            if (a >= 3) gfx64_blend_pixel(sx, sy, 0x000000, a);
         }
     }
 }
@@ -2179,6 +2174,9 @@ static void hs_stroke_round(int x, int y, int w, int h, int r, uint32_t color)
     }
 }
 
+static inline uint64_t hs_rdtsc(void);
+static uint64_t g_cyc_shadow, g_cyc_shadow_build, g_cyc_shadow_blit, g_cyc_title, g_cyc_border;
+
 static void hs_window_shadow(const hs_window_t *w)
 {
     if (w->width <= 0 || w->height <= 0) return;
@@ -2204,25 +2202,27 @@ static void hs_window_shadow(const hs_window_t *w)
     int off = 3;
     int pk = ((rc * 4096 + pad) * 4096 + r) * 512 + off;
 
+    uint64_t sb0 = hs_rdtsc();
     if (sh_kw != w->width || sh_kh != w->height || sh_kpk != pk) {
         if (!sh_build(w->width, w->height, pad, rc, r, off)) {
             hs_window_shadow_analytic(w);   /* 内存不够, 退回解析式 */
             return;
         }
     }
+    uint64_t sb1 = hs_rdtsc();
+    g_cyc_shadow_build += sb1 - sb0;
+    g_cyc_shadow += sb1 - sb0;
     int mx0 = w->x - pad;
     /* 阴影源在 mask 里下移了 off, 但 blit 原点必须对齐真实窗口, 否则窗口正下方
      * 那 off 一段既没阴影、又被当成"窗口内部"跳过, 会出现一条空缝。 */
     int my0 = w->y - pad;
 
     sh_kpk = pk;
-    /* 只走四条边带, 中间整块跳过 —— 那是窗口自己会盖住的区域, 算它纯属浪费 */
-    int oy = pad + off, ob = pad + off + w->height;   /* 遮挡体上下边界(mask 坐标) */
-    int ox1 = pad + w->width;                          /* 遮挡体右边界 */
-    sh_blit_slice(w, mx0, my0, 0, sh_mw, 0, oy, pad, rc, off);                     /* 上 */
-    sh_blit_slice(w, mx0, my0, 0, sh_mw, ob, sh_mh, pad, rc, off);                 /* 下 */
-    sh_blit_slice(w, mx0, my0, 0, pad, oy, ob, pad, rc, off);                      /* 左 */
-    sh_blit_slice(w, mx0, my0, ox1, sh_mw, oy, ob, pad, rc, off);                  /* 右 */
+    uint64_t sb2 = hs_rdtsc();
+    gfx64_blend_image(sh_argb, sh_mw, sh_mh, mx0, my0, 255);
+    uint64_t sb3 = hs_rdtsc();
+    g_cyc_shadow_blit += sb3 - sb2;
+    g_cyc_shadow += sb3 - sb2;
 }
 
 /* ===== P0 脏区框架 (V0.59.5) =====
@@ -2295,8 +2295,8 @@ static inline uint64_t hs_rdtsc(void)
 static uint64_t g_cyc_render_all, g_cyc_blend, g_cyc_panel;
 /* V0.59.16 二级切分: 把 render_all 与 other 各自再拆一层 */
 static uint64_t g_cyc_wall, g_cyc_panels, g_cyc_cc, g_cyc_notify, g_cyc_cursor;
-static uint64_t g_cyc_shadow, g_cyc_memset, g_cyc_content;
-static uint64_t g_cyc_bgfill, g_cyc_surfens, g_cyc_title, g_cyc_cursordraw, g_cyc_ctxmenu, g_cyc_loophdr;
+static uint64_t g_cyc_memset, g_cyc_content;
+static uint64_t g_cyc_bgfill, g_cyc_surfens, g_cyc_cursordraw, g_cyc_ctxmenu, g_cyc_loophdr;
 static uint64_t g_seg_pre, g_seg_mid, g_seg_post;
 static uint64_t g_seg_lp, g_seg_lm, g_seg_lq;
 /* 拖动帧各阶段时间戳(相对本帧入口) */
@@ -2373,10 +2373,16 @@ void hs_window_render_all(void)
         /* V0.59.12: 鼠标相对窗口的位置变了才可能改变窗口外观(hover 高亮),
          * 绝对位置变化不算 —— 拖动时两者相同, 这类帧可以直接复用 surface。 */
         {
+            extern int hs_window_is_dragging(void);
             int rx = g_shell.mouse_x - w->x, ry = g_shell.mouse_y - w->y;
             int inside = (rx >= 0 && rx < w->width && ry >= 0 && ry < w->height);
-            if (rx != w->hover_rel_x || ry != w->hover_rel_y) w->content_dirty = 1;
-            if (inside != w->hover_inside) w->content_dirty = 1;
+            /* V0.59.21: 拖动由标题栏发起, 鼠标相对窗口的偏移不变、外观不变; 窗口 x
+             * 每帧 +10 会让 rx 每帧都变, 若照常置脏会击穿 surface 复用。拖动期间
+             * 不因 hover_rel/inside 变化置脏。 */
+            if (!hs_window_is_dragging()) {
+                if (rx != w->hover_rel_x || ry != w->hover_rel_y) w->content_dirty = 1;
+                if (inside != w->hover_inside) w->content_dirty = 1;
+            }
             w->hover_rel_x = rx; w->hover_rel_y = ry; w->hover_inside = inside;
         }
 
@@ -2406,6 +2412,7 @@ void hs_window_render_all(void)
         }
 
         /* 标题栏（浮动窗口） */
+        uint64_t tt0 = hs_rdtsc();
         if (w->type == HS_WINDOW_FLOATING) {
             /* 标题栏高度跟随 DPI: 内容已按窗口尺寸放大, 标题栏若留 24 物理像素,
              * 125% 下相对就变窄, 标题与按钮会挤到一起。 */
@@ -2470,16 +2477,20 @@ void hs_window_render_all(void)
                 }
             }
         }
+        g_cyc_title += hs_rdtsc() - tt0;
 
         /* 边框 */
+        { uint64_t bd0 = hs_rdtsc();
         uint32_t border = w->focus ?
                           g_shell.colors.accent : w->border_color;
         if (wrc > 0)
             hs_stroke_round(w->x, w->y, w->width, w->height, wrc, border);
         else
             gfx64_draw_rect(w->x, w->y, w->width, w->height, border);
+        g_cyc_border += hs_rdtsc() - bd0; }
 
         /* 标题（跟随主题前景色） */
+        uint64_t tt2 = hs_rdtsc();
         if (w->type != HS_WINDOW_POPUP || w->title[0]) {
             void *fb = gfx64_get_framebuffer();
             uint32_t tc = g_shell.colors.window_fg;
@@ -2524,6 +2535,7 @@ void hs_window_render_all(void)
                                tx, w->y + hs_sy(6), tbuf,
                                tc, hs_s(12));
         }
+        g_cyc_title += hs_rdtsc() - tt2;
 
         /* 自定义渲染回调 */
         if (w->render) {
@@ -5523,8 +5535,8 @@ void hs_drag_selftest(void)
                 g_st_sy = w->y + 16;
                 hs_window_drag_start(g_st_sx, g_st_sy);
                 g_cyc_render_all = g_cyc_blend = g_cyc_wall = g_cyc_panels = g_cyc_cc = 0;
-        g_cyc_notify = g_cyc_cursor = g_cyc_shadow = g_cyc_memset = g_cyc_content = 0;
-        g_cyc_bgfill = g_cyc_surfens = g_cyc_title = g_cyc_cursordraw = g_cyc_ctxmenu = g_cyc_loophdr = 0;
+        g_cyc_notify = g_cyc_cursor = g_cyc_shadow = g_cyc_shadow_build = g_cyc_shadow_blit = g_cyc_memset = g_cyc_content = 0;
+        g_cyc_bgfill = g_cyc_surfens = g_cyc_title = g_cyc_border = g_cyc_cursordraw = g_cyc_ctxmenu = g_cyc_loophdr = 0;
         gfx64_prof_present = 0;
         g_seg_lp = g_seg_pre; g_seg_lm = g_seg_mid; g_seg_lq = g_seg_post;
         g_t_drag_start = hs_rdtsc();
@@ -5569,6 +5581,11 @@ void hs_drag_selftest(void)
                    (uint32_t)((g_cyc_shadow / nf) / 1000), (uint32_t)((g_cyc_memset / nf) / 1000),
                    (uint32_t)((g_cyc_content / nf) / 1000), (uint32_t)((g_cyc_cc / nf) / 1000),
                    (uint32_t)((g_cyc_notify / nf) / 1000));
+        vga_printf("[PROF6] shadowBuildK=%d shadowBlitK=%d titleK=%d borderK=%d\n",
+                   (uint32_t)((g_cyc_shadow_build / nf) / 1000),
+                   (uint32_t)((g_cyc_shadow_blit / nf) / 1000),
+                   (uint32_t)((g_cyc_title / nf) / 1000),
+                   (uint32_t)((g_cyc_border / nf) / 1000));
         g_cyc_render_all = g_cyc_blend = 0; gfx64_prof_present = 0;
     }
     vga_printf("[SELFTEST] drag end, dirty_region_frames=%d surface_reuse=%d surface_repaint=%d\n",
