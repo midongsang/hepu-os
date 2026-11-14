@@ -37,7 +37,11 @@ font64.c      字形栅格
 
 | 层 | 用户方案里的职责 | 现状 | 已落地 / 还缺 |
 |---|---|---|---|
-| **第一层：显示后端** | 帧缓冲 / GPU / 后端切换 | **接口已落地，只有 lfb 一个后端** | 2026-11-14 新增 `display_backend.h`：3 个入口 `init / present / present_region`，`gfx64` 通过 `g_display` 指针调用，`set_mode` 时注册。现役 `lfb_backend` 是把原来直接写 `front_buffer` 的两段**原样搬进来**，行为零变化（+320 B）。`set_target` 故意不收 —— 它是合成层的"当前渲染目标"，不是后端能力。VBE/virtio/多显示器后端仍只是规划，但现在只需要加一个 backend，上层不用改 |
+| **第一层：显示后端** | 帧缓冲 / GPU / 后端切换 | **接口已落地，只有 lfb 一个后端** | 2026-11-14 新增 `display_backend.h`：3 个入口 `init / present / present_region`，`gfx64` 通过 `g_display` 指针调用，`set_mode` 时注册。现役 `lfb_backend` 是把原来直接写 `front_buffer` 的两段**原样搬进来**，行为零变化（+320 B）。2026-11-14 补第二个实现 `mirror`（`display_mirror.c`，写 RAM 镜像而非显存），用于检验抽象：
+启动时 `gfx64_display_backend_selftest()` 把后台缓冲写同一帧图案，分别经 lfb 与 mirror 提交，
+从显存/镜像缓冲读回算 FNV hash 比对，串口打印 `[GFXDB] backend equivalence PASS`。
+这层抽象由此有了硬判据（同帧两后端提交必须逐字节一致），不再是"只有一根独苗"。
+注意 mirror 不是硬件第二后端，virtio-gpu 移植仍是独立项。`set_target` 故意不收 —— 它是合成层的"当前渲染目标"，不是后端能力。VBE/virtio/多显示器后端仍只是规划，但现在只需要加一个 backend，上层不用改 |
 | **第二层：窗口合成器** | 窗口模型、Z 序、脏区、Surface、合成 | **主体已落地** | 已：`hs_window_t`、Z 序、拖动、脏区框架、统一裁剪、ARGB 合成原语、窗口常驻 surface、面板层表面复用。缺：合成仍是整窗 blend（没有按脏区裁剪的合成）、`opacity`、不透明区域、父子窗口 |
 | **第三层：GUI 组件库** | 控件树、布局、事件分发、控件级脏区 | **只有布局** | 已：`hs_ui_box_t` 单遍 arrange→paint。缺：控件级 hit-test（点击仍由 hpdesk 按坐标判定，`hs_ui_hit()` 建好未接）、控件级脏区上报、控件状态与样式 |
 

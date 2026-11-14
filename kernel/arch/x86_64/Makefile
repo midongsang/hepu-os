@@ -39,6 +39,7 @@ C_SOURCES = \
     $(ARCH_DIR)/rtl8139_64.c \
     $(ARCH_DIR)/e1000_64.c \
     $(ARCH_DIR)/gfx64.c \
+    $(ARCH_DIR)/display_mirror.c \
     $(ARCH_DIR)/cursor64.c \
     $(ARCH_DIR)/cursor_modern_data.c \
     $(ARCH_DIR)/png64.c \

@@ -1213,6 +1213,10 @@ void x86_64_kernel_main(void)
             vga_puts("[REG] autorun done\n");
         }
 
+        /* 三层模型第一层: 显示后端等价性自检(同一帧经 lfb 与 mirror 提交必须一致)。
+         * 放在进桌面主循环之前 —— 之后画面就归桌面管了。 */
+        { extern int gfx64_display_backend_selftest(void);
+          gfx64_display_backend_selftest(); }
         desktop64_run();
     } else {
         vga_puts("[INIT] Falling back to text shell\n");

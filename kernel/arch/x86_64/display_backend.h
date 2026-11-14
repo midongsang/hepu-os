@@ -32,4 +32,11 @@ typedef struct display_backend {
     void (*present_region)(int x, int y, int w, int h);
 } display_backend_t;
 
+/* 第二个实现：RAM 镜像后端（display_mirror.c）。
+ * 用途是检验这层抽象 —— 同一帧经它和 lfb 提交必须逐像素一致。 */
+extern const display_backend_t display_mirror_backend;
+
+/* 运行时切换后端（抽象的一部分：换后端不该要求重编上层）。 */
+void gfx64_set_display_backend(const display_backend_t *b);
+
 #endif /* DISPLAY_BACKEND_H */

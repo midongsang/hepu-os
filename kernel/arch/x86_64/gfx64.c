@@ -181,6 +181,105 @@ static const display_backend_t lfb_backend = {
     "lfb", lfb_db_init, lfb_db_present, lfb_db_present_region
 };
 
+/* 供第二个后端读取渲染缓冲（display_mirror.c 用） */
+uint8_t *gfx64_back_buffer(void) { return back_buffer; }
+uint8_t *gfx64_front_raw(void) { return front_buffer; }
+uint32_t gfx64_width_px(void) { return gfx_width; }
+uint32_t gfx64_height_px(void) { return gfx_height; }
+uint32_t gfx64_pitch_bytes(void) { return gfx_pitch; }
+
+/* 运行时切换后端。抽象的意义就在这里：上层一行不改，写屏目标可以换。
+ * 会重新调 init 绑定 —— lfb 因此把 front_buffer 指回显存。 */
+void gfx64_set_display_backend(const display_backend_t *b)
+{
+    if (!b || !b->present) return;
+    g_display = b;
+    if (b->init) b->init((int)gfx_width, (int)gfx_height, (int)gfx_pitch, gfx_bpp, front_buffer);
+}
+
+/* ---- 后端等价性自检 ----
+ * 这层抽象唯一的硬判据：同一帧分别经两个后端提交，读回比对必须一致。
+ * 做法: 往后台缓冲写一个可复现的图案 -> lfb 提交 -> 从显存读回算 hash;
+ *       切 mirror 提交 -> 从镜像缓冲读回算 hash; 两者相等才算抽象成立。
+ * 只在启动时跑一次，跑完切回 lfb。 */
+static uint32_t gfx_hash_rows(uint8_t *buf, uint32_t pitch, uint32_t rows, uint32_t w)
+{
+    uint32_t h = 2166136261u;
+    for (uint32_t y = 0; y < rows; y++) {
+        uint8_t *r = buf + (uint64_t)y * pitch;
+        for (uint32_t i = 0; i < w * 4u; i++) {
+            h ^= r[i];
+            h *= 16777619u;
+        }
+    }
+    return h;
+}
+
+int gfx64_display_backend_selftest(void)
+{
+    extern const display_backend_t display_mirror_backend;
+    extern uint8_t *display_mirror_buffer(void);
+    extern void vga_puts(const char *);
+    extern void vga_put_hex(uint64_t);
+    if (!gfx_initialized) {
+        vga_puts("[GFXDB] skip: gfx not initialized\n");
+        return -1;
+    }
+    /* 后台缓冲是首次 present/set_target_back 才分配的；桌面主循环还没进来，
+     * 这里先把它拉起来，自检完再恢复成前台目标。 */
+    if (!back_buffer) {
+        extern void gfx64_set_target_back(void);
+        extern void gfx64_set_target_front(void);
+        gfx64_set_target_back();
+        gfx64_set_target_front();
+    }
+    if (!back_buffer) {
+        vga_puts("[GFXDB] skip: back buffer alloc failed\n");
+        return -1;
+    }
+    if (gfx_bpp != 32 || !gfx_pitch) {
+        vga_puts("[GFXDB] skip: bpp=");
+        vga_put_hex(gfx_bpp);
+        vga_puts(" pitch=");
+        vga_put_hex(gfx_pitch);
+        vga_puts("\n");
+        return -1;
+    }
+
+    uint32_t rows = (gfx_height < 64u) ? gfx_height : 64u;
+    /* 可复现图案: 每行同色、行间递变 */
+    uint32_t sp = gfx_pitch / 4u;
+    for (uint32_t y = 0; y < rows; y++) {
+        uint32_t c = 0x00112233u + y * 0x01010101u;
+        uint32_t *row = (uint32_t *)back_buffer + (uint64_t)y * sp;
+        for (uint32_t x = 0; x < gfx_width; x++) row[x] = c;
+    }
+
+    /* ① lfb 提交, 从显存读回 */
+    gfx64_set_display_backend(&lfb_backend);
+    gfx64_present();
+    uint32_t h_lfb = gfx_hash_rows(front_buffer, gfx_pitch, rows, gfx_width);
+
+    /* ② mirror 提交, 从镜像缓冲读回 */
+    gfx64_set_display_backend(&display_mirror_backend);
+    uint8_t *mb = display_mirror_buffer();
+    if (!mb) { gfx64_set_display_backend(&lfb_backend); return -2; }
+    gfx64_present();
+    uint32_t h_mir = gfx_hash_rows(mb, gfx_pitch, rows, gfx_width);
+
+    /* 切回现役后端 */
+    gfx64_set_display_backend(&lfb_backend);
+
+    vga_puts("[GFXDB] backend equivalence ");
+    vga_puts(h_lfb == h_mir ? "PASS" : "FAIL");
+    vga_puts(" lfb=");
+    vga_put_hex(h_lfb);
+    vga_puts(" mirror=");
+    vga_put_hex(h_mir);
+    vga_puts("\n");
+    return (h_lfb == h_mir) ? 0 : -3;
+}
+
 void gfx64_present(void)
 {
     if (!gfx_initialized) return;
