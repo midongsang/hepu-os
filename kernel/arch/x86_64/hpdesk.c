@@ -2289,6 +2289,14 @@ static inline uint64_t hs_rdtsc(void)
     return ((uint64_t)d << 32) | a;
 }
 static uint64_t g_cyc_render_all, g_cyc_blend, g_cyc_panel;
+/* V0.59.16 二级切分: 把 render_all 与 other 各自再拆一层 */
+static uint64_t g_cyc_wall, g_cyc_panels, g_cyc_cc, g_cyc_notify, g_cyc_cursor;
+static uint64_t g_cyc_shadow, g_cyc_memset, g_cyc_content;
+static uint64_t g_cyc_bgfill, g_cyc_surfens, g_cyc_title, g_cyc_cursordraw, g_cyc_ctxmenu, g_cyc_loophdr;
+static uint64_t g_seg_pre, g_seg_mid, g_seg_post;
+static uint64_t g_seg_lp, g_seg_lm, g_seg_lq;
+/* 拖动帧各阶段时间戳(相对本帧入口) */
+static uint64_t g_ts1, g_ts2, g_ts3, g_ts4, g_ts5, g_ts6;
 static int g_prof_frames;
 extern uint64_t gfx64_prof_present;
 
@@ -2368,7 +2376,9 @@ void hs_window_render_all(void)
             w->hover_rel_x = rx; w->hover_rel_y = ry; w->hover_inside = inside;
         }
 
+        uint64_t se0 = hs_rdtsc();
         void *tsurf = hs_window_surface_ensure(w);
+        g_cyc_surfens += hs_rdtsc() - se0;
         if (tsurf && !w->content_dirty) {
             /* 内容没变: 直接贴上一帧的 surface, 跳过 memset + 全部绘制 */
             { uint64_t b0 = hs_rdtsc();
@@ -2378,9 +2388,13 @@ void hs_window_render_all(void)
             continue;
         }
         if (tsurf) {
-            memset(tsurf, 0, (size_t)w->width * w->height * 4);
-            gfx64_fill_round_rect_argb(tsurf, w->width, w->height, 0, 0,
+            { uint64_t m0 = hs_rdtsc();
+              memset(tsurf, 0, (size_t)w->width * w->height * 4);
+              g_cyc_memset += hs_rdtsc() - m0; }
+            { uint64_t b0 = hs_rdtsc();
+              gfx64_fill_round_rect_argb(tsurf, w->width, w->height, 0, 0,
                                        w->width, w->height, wrc, w->bg_color, 15);
+              g_cyc_bgfill += hs_rdtsc() - b0; }
             gfx64_target_begin(tsurf, w->width, w->height, w->x, w->y);
         } else {
             if (wrc > 0) gfx64_fill_round_rect_aa(w->x, w->y, w->width, w->height, wrc, w->bg_color);
@@ -2512,7 +2526,9 @@ void hs_window_render_all(void)
             /* V0.59.8: 窗口内容统一裁剪到窗口矩形。终端/列表这类"内容比窗口高"的
              * 界面以前会画到窗口外(覆盖下面的壁纸/别的窗口), 现在被裁在这里。 */
             gfx64_clip_set(w->x, w->y, w->width, w->height);
-            w->render(w);
+            { uint64_t c0 = hs_rdtsc();
+              w->render(w);
+              g_cyc_content += hs_rdtsc() - c0; }
             gfx64_clip_disable();
         }
 
@@ -5340,7 +5356,9 @@ static void hs_present_with_cursor(int mx, int my)
     gfx64_present();
     gfx64_set_target_front();
     hs_cursor_init_once();
-    hs_ctx_menu_render();     /* 菜单与光标同为前台叠加层 */
+    { uint64_t k0 = hs_rdtsc();
+      hs_ctx_menu_render();     /* 菜单与光标同为前台叠加层 */
+      g_cyc_ctxmenu += hs_rdtsc() - k0; }
     {
         extern void cursor64_set_kind(int kind);
         extern void cursor64_set_theme(int t);
@@ -5349,7 +5367,9 @@ static void hs_present_with_cursor(int mx, int my)
         cursor64_set_scale(g_ui_scale_pct);
         cursor64_set_kind(hs_cursor_kind_at(mx, my));
     }
-    cursor64_draw(mx, my);
+    { uint64_t k0 = hs_rdtsc();
+      cursor64_draw(mx, my);
+      g_cyc_cursordraw += hs_rdtsc() - k0; }
 }
 
 /* 拖动自测(V0.59.5 验证脏区局部路径用)。默认关闭; 需要复验时把 0 改成 1:
@@ -5378,7 +5398,11 @@ void hs_drag_selftest(void)
                 g_st_sx = w->x + 60;
                 g_st_sy = w->y + 16;
                 hs_window_drag_start(g_st_sx, g_st_sy);
-                g_cyc_render_all = g_cyc_blend = 0; gfx64_prof_present = 0;
+                g_cyc_render_all = g_cyc_blend = g_cyc_wall = g_cyc_panels = g_cyc_cc = 0;
+        g_cyc_notify = g_cyc_cursor = g_cyc_shadow = g_cyc_memset = g_cyc_content = 0;
+        g_cyc_bgfill = g_cyc_surfens = g_cyc_title = g_cyc_cursordraw = g_cyc_ctxmenu = g_cyc_loophdr = 0;
+        gfx64_prof_present = 0;
+        g_seg_lp = g_seg_pre; g_seg_lm = g_seg_mid; g_seg_lq = g_seg_post;
         g_t_drag_start = hs_rdtsc();
         vga_printf("[SELFTEST] drag begin win=%d from %d,%d\n", w->id, w->x, w->y);
                 break;
@@ -5402,6 +5426,25 @@ void hs_drag_selftest(void)
         uint32_t otherK  = (frameK > rendK + presK) ? (frameK - rendK - presK) : 0;
         vga_printf("[PROF] drag %d frames: frameK=%d renderAllK=%d blendK=%d presentK=%d otherK=%d\n",
                    nf, frameK, rendK, blendK, presK, otherK);
+        {
+            uint32_t a1 = (uint32_t)((g_ts1) / 1000), a2 = (uint32_t)((g_ts2) / 1000);
+            uint32_t a3 = (uint32_t)((g_ts3) / 1000), a4 = (uint32_t)((g_ts4) / 1000);
+            uint32_t a5 = (uint32_t)((g_ts5) / 1000), a6 = (uint32_t)((g_ts6) / 1000);
+            vga_printf("[PROF5] hdrK=%d wallK=%d panelK=%d winK=%d ccNotifyK=%d presentK=%d\n",
+                       a1, a2 - a1, a3 - a2, a4 - a3, a5 - a4, a6 - a5);
+        }
+        vga_printf("[PROF4] preK=%d midK=%d postK=%d\n",
+                   (uint32_t)(((g_seg_pre - g_seg_lp) / nf) / 1000),
+                   (uint32_t)(((g_seg_mid - g_seg_lm) / nf) / 1000),
+                   (uint32_t)(((g_seg_post - g_seg_lq) / nf) / 1000));
+        vga_printf("[PROF3] bgfillK=%d surfensK=%d cursorK=%d ctxmenuK=%d\n",
+                   (uint32_t)((g_cyc_bgfill / nf) / 1000), (uint32_t)((g_cyc_surfens / nf) / 1000),
+                   (uint32_t)((g_cyc_cursordraw / nf) / 1000), (uint32_t)((g_cyc_ctxmenu / nf) / 1000));
+        vga_printf("[PROF2] wallK=%d panelsK=%d shadowK=%d memsetK=%d contentK=%d ccK=%d notifyK=%d\n",
+                   (uint32_t)((g_cyc_wall / nf) / 1000), (uint32_t)((g_cyc_panels / nf) / 1000),
+                   (uint32_t)((g_cyc_shadow / nf) / 1000), (uint32_t)((g_cyc_memset / nf) / 1000),
+                   (uint32_t)((g_cyc_content / nf) / 1000), (uint32_t)((g_cyc_cc / nf) / 1000),
+                   (uint32_t)((g_cyc_notify / nf) / 1000));
         g_cyc_render_all = g_cyc_blend = 0; gfx64_prof_present = 0;
     }
     vga_printf("[SELFTEST] drag end, dirty_region_frames=%d surface_reuse=%d surface_repaint=%d\n",
@@ -5412,6 +5455,7 @@ void hs_drag_selftest(void)
 
 static void hpdesk_render_inner(void)
 {
+    uint64_t __rs0 = hs_rdtsc();
     {
     }
     /* V0.13.11: 双缓冲原子帧 — 全部绘制到后台缓冲, 帧末一次性提交(消除撕裂/半帧) */
@@ -5530,13 +5574,19 @@ static void hpdesk_render_inner(void)
         int dx_ = 0, dy_ = 0, dw_ = 0, dh_ = 0;
         if (!g_content_dirty && !animating && hs_dirty_rect(&dx_, &dy_, &dw_, &dh_)) {
             gfx64_set_target_back();
+            g_ts1 = hs_rdtsc() - __rs0;
             hs_wallpaper_render_rect(dx_, dy_, dw_, dh_);
+            g_ts2 = hs_rdtsc() - __rs0;
             hs_panel_render_all();
+            g_ts3 = hs_rdtsc() - __rs0;
             hs_window_render_all();
+            g_ts4 = hs_rdtsc() - __rs0;
             if (g_shell.panel_registry[HS_PANEL_CONTROL_CENTER].enabled)
                 hs_control_center_render();
             hs_notification_render();
+            g_ts5 = hs_rdtsc() - __rs0;
             gfx64_present_region(dx_, dy_, dw_, dh_);
+            g_ts6 = hs_rdtsc() - __rs0;
             gfx64_set_target_front();
             hs_cursor_init_once();
             {
@@ -5584,7 +5634,10 @@ static void hpdesk_render_inner(void)
         return;
     }
 
-    hs_wallpaper_render();
+    g_seg_pre += hs_rdtsc() - __rs0;
+    { uint64_t w0 = hs_rdtsc();
+      hs_wallpaper_render();
+      g_cyc_wall += hs_rdtsc() - w0; }
     /* V0.56: 切壁纸后首帧 — 壁纸绘制完成即采样提取源色 (窗口/面板尚未绘制) */
     if (g_wallpaper_dirty) {
         g_wallpaper_dirty = 0;
@@ -5592,12 +5645,17 @@ static void hpdesk_render_inner(void)
     }
 
     /* 通过面板注册表渲染所有启用的面板 */
-    hs_panel_render_all();
+    { uint64_t p0 = hs_rdtsc();
+      hs_panel_render_all();
+      g_cyc_panels += hs_rdtsc() - p0; }
 
     hs_window_render_all();
     /* 控制中心绘制在窗口之上，避免被最大化窗口遮挡 */
-    if (g_shell.panel_registry[HS_PANEL_CONTROL_CENTER].enabled)
+    if (g_shell.panel_registry[HS_PANEL_CONTROL_CENTER].enabled) {
+        uint64_t cc0 = hs_rdtsc();
         hs_control_center_render();
+        g_cyc_cc += hs_rdtsc() - cc0;
+    }
     /* V0.13.40: USB存储自动挂载(启动检测 + 热插拔事件) */
     {
         extern int usb64_hotplug_pending(void);
@@ -5671,10 +5729,12 @@ static void hpdesk_render_inner(void)
     } /* end of: 内容层重绘 (dirty/动画时) */
 
     /* 提交: 后台内容→前台, 光标单独叠加在前台, 不污染后台缓冲 */
+    g_seg_mid += hs_rdtsc() - __rs0;
     hs_present_with_cursor(mx, my);
     g_content_dirty = 0;
     g_last_mx = mx;
     g_last_my = my;
+    g_seg_post += hs_rdtsc() - __rs0;
 }
 
 /* V0.59.13 分段计时包装: 整帧 / render_all / blend / present 各自 cycles。
