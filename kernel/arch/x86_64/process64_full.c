@@ -548,16 +548,52 @@ void ksvc_beat_entry(void)
  */
 volatile uint32_t g_ksvc_uptime_s = 0;
 
+/* SB-08 验收用的整行日志: 一次 vga_puts 拼好整行,
+ * 分多次调用会被别的核插进来(实测打出 "fail=[KEYBOARD64] Keyboard initialized") */
+static void sb08_log(uint32_t cpu, uint32_t ok, uint32_t fail, uint32_t bad, int has_bad)
+{
+    extern void vga_puts(const char *);
+    char b[80]; int n = 0;
+    const char *p1 = "[SB08] fpu probe cpu=";
+    while (*p1) b[n++] = *p1++;
+    b[n++] = '0'; b[n++] = 'x'; b[n++] = (char)(cpu < 10 ? '0' + cpu : 'a' + cpu - 10);
+    const char *p2 = " ok=";
+    while (*p2) b[n++] = *p2++;
+    { uint32_t v = ok; char t[8]; int k = 0; if (!v) t[k++] = '0'; while (v) { uint32_t d = v & 0xF; t[k++] = (char)(d < 10 ? '0' + d : 'a' + d - 10); v >>= 4; } while (k) b[n++] = t[--k]; }
+    const char *p3 = " fail=";
+    while (*p3) b[n++] = *p3++;
+    { uint32_t v = fail; char t[8]; int k = 0; if (!v) t[k++] = '0'; while (v) { uint32_t d = v & 0xF; t[k++] = (char)(d < 10 ? '0' + d : 'a' + d - 10); v >>= 4; } while (k) b[n++] = t[--k]; }
+    if (has_bad) {
+        const char *p4 = " first_bad_cpu=";
+        while (*p4) b[n++] = *p4++;
+        { uint32_t v = bad; char t[8]; int k = 0; if (!v) t[k++] = '0'; while (v) { uint32_t d = v & 0xF; t[k++] = (char)(d < 10 ? '0' + d : 'a' + d - 10); v >>= 4; } while (k) b[n++] = t[--k]; }
+    }
+    b[n++] = '\n'; b[n] = 0;
+    vga_puts(b);
+}
+
 void khouse_entry(void)
 {
     extern void hpdesk_mark_dirty(void);
     extern uint64_t pit64_get_ms(void);
+    extern int sb08_fpu_probe(void);
+    extern uint32_t smp_get_current_cpu(void);
     uint64_t last = 0;
+    uint32_t ok = 0, fail = 0, beats = 0;
     for (;;) {
         uint64_t now = pit64_get_ms();
         if (now - last >= 1000) {
             last = now;
             hpdesk_mark_dirty();
+            /* SB-08: AP 侧浮点负载。放在 khouse 而不是 kstat ——
+             * kstat 优先级最低, 实测会被调度到 BSP 并占住桌面主循环(desk=0)。
+             * 每拍 200 次, 与 desktop64 主循环里的 BSP 负载并发跑。 */
+            if (smp_get_current_cpu() != 0) {
+                for (int k = 0; k < 200; k++) {
+                    if (sb08_fpu_probe()) ok++; else fail++;
+                }
+                if (++beats <= 3) sb08_log(smp_get_current_cpu(), ok, fail, 0, fail ? 1 : 0);
+            }
         }
         process64_yield();
     }

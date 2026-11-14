@@ -1216,6 +1216,12 @@ void x86_64_kernel_main(void)
             vga_puts("[REG] autorun done\n");
         }
 
+        /* SB-08: BSP 侧浮点自检一次(AP 侧由 kstat 持续跑) */
+        { extern int sb08_fpu_probe(void);
+          int r = sb08_fpu_probe();
+          vga_puts("[SB08] bsp probe ");
+          vga_puts(r ? "PASS" : "FAIL");
+          vga_puts("\n"); }
         /* 三层模型第一层: 显示后端等价性自检(同一帧经 lfb 与 mirror 提交必须一致)。
          * 放在进桌面主循环之前 —— 之后画面就归桌面管了。 */
         { extern int gfx64_display_backend_selftest(void);

@@ -397,6 +397,21 @@ void irq64_register_handler(int irq, irq_handler_t handler)
 #define FPU_SAVE_MAX_CPUS 16
 static uint8_t fpu_save_area[FPU_SAVE_MAX_CPUS][512] __attribute__((aligned(64)));
 
+/* SB-08 验收探针: 用 SSE 做一段结果可预测的浮点计算。
+ * 1000 次 +1.0 在 double 下必须精确等于 1000.0 —— 只要中途有一次中断
+ * 把 XMM 状态存错/恢复到别人的槽, 累加器就会漂, 返回值立刻变 0。
+ * 这是目前唯一能把"FPU 保存区是否串核"变成可判定信号的测试。 */
+int sb08_fpu_probe(void)
+{
+    volatile double acc = 0.0;
+    for (int i = 0; i < 1000; i++) acc += 1.0;
+    if (acc != 1000.0) return 0;
+    /* 再用单精度走一遍, 覆盖 xmm 的不同位宽写路径 */
+    volatile float fa = 0.0f;
+    for (int i = 0; i < 256; i++) fa += 1.0f;
+    return (fa == 256.0f) ? 1 : 0;
+}
+
 /* V0.13.46: 内核tick（vec40每1ms递增，未响应看门狗用） */
 /* V0.58.5 / SB-02: 多核的 0x40 中断会并发写，改原子递增 */
 uint64_t g_kernel_tick64 = 0;

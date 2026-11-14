@@ -231,6 +231,29 @@ void desktop64_run(void)
 
         { uint64_t __t = desktop64_rdtsc(); hs_input_poll(); g_cyc_input += desktop64_rdtsc() - __t; }
 
+        /* SB-08 验收: BSP 侧持续浮点负载 —— 与 AP 上 kstat 的探针并发,
+         * 两核各自的中断要在各自的 FXSAVE 槽里保存/恢复, 这里的结果是判据。
+         * 验收结束后可以删掉(每 20 帧一次, 开销微秒级)。 */
+        {
+            static int sbt = 0, sbc = 0;
+            static uint32_t sb_ok = 0, sb_fail = 0;
+            extern int sb08_fpu_probe(void);
+            extern void vga_puts(const char *);
+            extern void vga_put_hex(uint64_t);
+            if (++sbt >= 5) {
+                sbt = 0;
+                if (sb08_fpu_probe()) sb_ok++; else sb_fail++;
+                if (++sbc >= 200) {
+                    sbc = 0;
+                    vga_puts("[SB08] bsp load ok=");
+                    vga_put_hex(sb_ok);
+                    vga_puts(" fail=");
+                    vga_put_hex(sb_fail);
+                    vga_puts("\n");
+                }
+            }
+        }
+
         /* V0.13.51: 内存压力周期检查 (每~100帧: 低内存时回收块缓存) */
         static int mp_tick = 0;
         if (++mp_tick >= 100) {
