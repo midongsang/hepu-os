@@ -392,11 +392,6 @@ static const int g_disp_scale_pcts[4] = {100, 125, 150, 200};
 #define HS_DISP_BTN_W 64
 #define HS_DISP_BTN_GAP 72
 static int g_disp_shadow_y = 0;     /* Display 页阴影开关行 */
-static int g_disp_island_y = 0;     /* Display 页胶囊投影方式行 */
-/* 时钟胶囊的层次处理:
- * 0 = 只保留下沿投影(胶囊嵌在顶栏里, 四周投影会糊成一圈灰)
- * 1 = 不投外阴影, 改成一圈内描边(菜单栏控件常见做法) */
-static int g_island_shadow_mode = 0;
 static int g_disp_cursor_y = 0;     /* Display 页光标主题行 */
 static int g_settings_storage_ry = 0; /* V0.13.39: 存储管理行点击区域 */
 static int g_settings_reg_ry = 0;    /* V0.13.39: 注册表查看行 */
@@ -714,10 +709,6 @@ void hs_display_save(void)
     const char *k4 = "cursor=";
     j = 0; while (k4[j]) { buf[p++] = k4[j++]; }
     buf[p++] = g_shell.ui.cursor_theme ? '1' : '0';
-    buf[p++] = '\n';
-    const char *k5 = "ishadow=";
-    j = 0; while (k5[j]) { buf[p++] = k5[j++]; }
-    buf[p++] = g_island_shadow_mode ? '1' : '0';
     buf[p++] = '\n'; buf[p] = 0;
     int rc = ext2_64_write_file(HS_DISPLAY_CFG, (const uint8_t *)buf, (uint32_t)p);
     vga_printf("[DISPLAY] save %s rc=%d\n", HS_DISPLAY_CFG, rc);
@@ -811,14 +802,6 @@ int hs_display_load(void)
             buf[i + 6] == 'w' && buf[i + 7] == '=') {
             g_shell.ui.window_shadow = (buf[i + 8] == '1');
             vga_printf("[DISPLAY] loaded shadow=%d\n", g_shell.ui.window_shadow);
-            found = 1;
-            i += 8;
-        }
-        if (buf[i] == 'i' && buf[i + 1] == 's' && buf[i + 2] == 'h' &&
-            buf[i + 3] == 'a' && buf[i + 4] == 'd' && buf[i + 5] == 'o' &&
-            buf[i + 6] == 'w' && buf[i + 7] == '=') {
-            g_island_shadow_mode = (buf[i + 8] == '1');
-            vga_printf("[DISPLAY] loaded ishadow=%d\n", g_island_shadow_mode);
             found = 1;
             i += 8;
         }
@@ -3218,24 +3201,6 @@ static void hs_settings_window_render(hs_window_t *w)
             ry += SETK(24);
         }
 
-        /* 时钟胶囊的层次: 下沿投影 / 内描边 */
-        {
-            char ib[56];
-            int q = 0;
-            const char *ip = "Island Capsule: ";
-            while (ip[q]) { ib[q] = ip[q]; q++; }
-            const char *iv = g_island_shadow_mode ? "Inset Border" : "Down Edge";
-            int q2 = 0; while (iv[q2]) ib[q++] = iv[q2++];
-            const char *ih_ = "  [click to toggle]";
-            q2 = 0; while (ih_[q2]) ib[q++] = ih_[q2++];
-            ib[q] = 0;
-            font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                               rx, ry, ib,
-                               g_shell.colors.panel_fg, SETK(12));
-            g_disp_island_y = ry;
-            ry += SETK(24);
-        }
-
         /* 光标主题 */
         {
             char cb[48];
@@ -3317,8 +3282,6 @@ static void hs_sidebar_render(void);
 static void hs_control_center_render(void);
 void hs_cc_shadow_paint(void);
 void hs_sh_paint(int slot, int x, int y, int w, int h, int rc, int div);
-void hs_sh_paint_down(int slot, int x, int y, int w, int h, int rc, int div);
-static uint32_t hs_dim(uint32_t c, int k);
 static void hs_desktop_clock_render(void);
 static void hs_weather_widget_render(void);
 static void hs_dynamic_island_render(void);
@@ -3525,8 +3488,7 @@ void hs_panel_render_all(void)
             int bar_top = hs_sy(8), bar_h = hs_sy(g_shell.ui.bar_height);
             int iy = bar_top + (bar_h - ih) / 2;
             if (iy < bar_top) iy = bar_top;
-            if (g_island_shadow_mode == 0)
-                hs_sh_paint_down(2, ix, iy, iw, ih, hs_s(15), 40);
+            hs_sh_paint(2, ix, iy, iw, ih, hs_s(15), 40);
         } else if (idx == HS_PANEL_WEATHER) {
             int wx = g_shell.screen_width - hs_sx(g_shell.ui.weather_margin_right);
             int wy = g_shell.screen_height - hs_sy(g_shell.ui.weather_margin_bottom);
@@ -3603,12 +3565,6 @@ static void hs_dynamic_island_render(void)
                             g_shell.colors.titlebar_bg);
     gfx64_draw_rounded_rect(island_x, island_y, island_w, island_h, hs_s(15),
                             g_shell.colors.border);
-    if (g_island_shadow_mode == 1) {
-        /* B: 不投外阴影, 靠一圈内描边界定层次。胶囊嵌在半透明顶栏里, 外投影没有
-         * 壁纸可落, 只会把顶栏糊出一圈灰; 内描边是同一位置最干净的解法。 */
-        gfx64_draw_rounded_rect(island_x + 1, island_y + 1, island_w - 2, island_h - 2,
-                                hs_s(14), hs_dim(g_shell.colors.titlebar_bg, 58));
-    }
 
     uint8_t h = rtc64_get_hours();
     uint8_t m = rtc64_get_minutes();
@@ -4789,36 +4745,6 @@ void hs_sh_paint(int slot, int x, int y, int w, int h, int rc, int div)
     gfx64_blend_image(c->argb, c->mw, c->mh, x - pad, y - pad, 255);
 }
 
-/* 只贴下沿: 给"嵌在容器里的控件"用。整圈投影在顶栏这种细条容器里会糊成一圈灰,
- * 裁成只剩底边一条, 读起来就是"压在顶栏底边投下的一点厚度"。 */
-void hs_sh_paint_down(int slot, int x, int y, int w, int h, int rc, int div)
-{
-    if (slot < 0 || slot >= HS_SHC_N) return;
-    if (w <= 0 || h <= 0) return;
-    int mn = w < h ? w : h;
-    int r = mn / div;
-    if (r < 10) r = 10;
-    if (r > 34) r = 34;
-    int off = 4;
-    int pad = 3 * r + 6;
-    int pk = ((rc * 4096 + pad) * 4096 + r) * 512 + off;
-    hs_shc_t *c = &g_shc[slot];
-    if (c->kw != w || c->kh != h || c->kpk != pk) {
-        if (!hs_shc_build(c, w, h, pad, rc, r, off)) return;
-        c->kpk = pk;
-    }
-    int band_top = pad + off + h - 6;      /* buffer 内, 从面板底边往上 6px 起 */
-    if (band_top < 0) band_top = 0;
-    int band_h = c->mh - band_top;
-    if (band_h <= 0) return;
-    int sx = pad - r; if (sx < 0) sx = 0;
-    int bw = w + 2 * r;
-    if (sx + bw > c->mw) bw = c->mw - sx;
-    if (bw <= 0) return;
-    gfx64_blend_image_sub(c->argb, c->mw, c->mh, sx, band_top, bw, band_h,
-                          x - pad + sx, y - pad + band_top, 255);
-}
-
 void hs_cc_shadow_paint(void)
 {
     if (!g_cc_open) return;
@@ -5416,18 +5342,6 @@ void hpdesk_handle_click(int x, int y)
                 extern void hs_display_save(void);
                 hs_display_save();
                 vga_printf("[SETTINGS] window shadow = %d\n", g_shell.ui.window_shadow);
-                return;
-            }
-
-            /* Display 页: 时钟胶囊 下沿投影 <-> 内描边 */
-            if (g_settings_page == 4 && g_disp_island_y > 0 &&
-                y >= g_disp_island_y - 4 && y <= g_disp_island_y + 22 &&
-                x >= w->x + hs_set_k(w, 16) && x <= w->x + w->width - hs_set_k(w, 16)) {
-                g_island_shadow_mode = g_island_shadow_mode ? 0 : 1;
-                g_content_dirty = 1;
-                extern void hs_display_save(void);
-                hs_display_save();
-                vga_printf("[SETTINGS] island shadow mode = %d\n", g_island_shadow_mode);
                 return;
             }
 
