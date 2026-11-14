@@ -182,6 +182,7 @@ static void t_exec(const char *line)
         t_put("  devmode <password> - become developer (off to revert)");
         t_put("  kmod - kernel modules");
         t_put("  ps ifconfig uname mkdir touch rm rmdir cp mv head wc");
+        t_put("  sha256sum <path> - print SHA-256 hex digest of file");
         t_put("  Tab=complete  Up/Dn=history  PgUp/PgDn=scroll");
         return;
     }
@@ -445,6 +446,57 @@ static void t_exec(const char *line)
         t_put(auth64_elevate(arg) == 0 ?
               "devmode: developer mode enabled (persistent)" :
               "devmode: wrong password");
+        return;
+    }
+    /* sha256sum <path>: 4KB 分块流式读取, 喂给 auth64 流式 SHA-256, 输出 64 位小写 hex。
+     * 路径解析与 mkdir/rm/run 一致: 绝对路径原样用, 相对路径拼 t_cwd, 不擅自加前导斜杠。 */
+    if (strcmp(cmd, "sha256sum") == 0) {
+        extern int  auth64_sha256_ctx_size(void);
+        extern void auth64_sha256_init(void *ctx);
+        extern void auth64_sha256_update(void *ctx, const uint8_t *data, uint32_t len);
+        extern void auth64_sha256_final(void *ctx, uint8_t out[32]);
+        extern int  ext2_64_read_file_offset(const char *path, uint8_t *buffer,
+                                             uint32_t max_size, uint32_t offset);
+        if (!arg[0]) { t_put("usage: sha256sum <path>"); return; }
+        char full[512];
+        if (arg[0] == '/') hs_strcpyn(full, arg, 510);
+        else {
+            hs_strcpyn(full, t_cwd, 250);
+            int fl = hs_strlen(full);
+            if (fl > 0 && full[fl - 1] != '/') { full[fl++] = '/'; full[fl] = 0; }
+            hs_strcpyn(full + fl, arg, 250);
+        }
+        static uint64_t sha_ctx[16];
+        if (auth64_sha256_ctx_size() > (int)sizeof(sha_ctx)) {
+            t_put("sha256sum: internal ctx too small"); return;
+        }
+        static uint8_t blk[4096];
+        uint32_t offset = 0;
+        int got = 0;
+        auth64_sha256_init(sha_ctx);
+        while (1) {
+            int len = ext2_64_read_file_offset(full, blk, sizeof(blk), offset);
+            if (len <= 0) break;
+            auth64_sha256_update(sha_ctx, blk, (uint32_t)len);
+            offset += (uint32_t)len;
+            got += len;
+            if (len < (int)sizeof(blk)) break;
+        }
+        if (got == 0) { t_put("sha256sum: cannot read file"); return; }
+        uint8_t digest[32];
+        auth64_sha256_final(sha_ctx, digest);
+        static const char hexd[] = "0123456789abcdef";
+        char out[65];
+        for (int k = 0; k < 32; k++) {
+            out[k * 2]     = hexd[digest[k] >> 4];
+            out[k * 2 + 1] = hexd[digest[k] & 0x0F];
+        }
+        out[64] = 0;
+        char line[128];
+        strcpy(line, out);
+        strcpy(line + hs_strlen(line), "  ");
+        strcpy(line + hs_strlen(line), full);
+        t_put(line);
         return;
     }
     /* V0.59.3: 本表没覆盖到的命令转给 shell64 的完整命令表(ps/df/dmesg/ss/... 都在那边)。

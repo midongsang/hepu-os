@@ -88,7 +88,7 @@
 
 ## 八~十一
 
-- 包管理：只有 App Store（GUI），无 CLI 包管理器；`sha256sum` 可用 `auth64_sha256` 实现（未做）
+- 包管理：只有 App Store（GUI），无 CLI 包管理器；`sha256sum <path>` 已落地（auth64 流式 init/update/final，4KB 分块读取）
 - 服务管理：无 systemd 类框架，桌面/网络服务由内核启动流程拉起
 - 图形面板：任务管理器、磁盘管理器、设备管理器、日志查看器、设置（显示/外观）均已有，后端就是上面这些 CLI 的同一批数据源
 

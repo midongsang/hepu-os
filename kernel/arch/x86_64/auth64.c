@@ -123,6 +123,99 @@ void auth64_sha256(const uint8_t *data, uint32_t len, uint8_t out[32])
     }
 }
 
+/* ============================================================================
+ * 流式 SHA-256 接口（init / update / final）
+ * 复用上面同一套 sha_k / rotr32 / shr32 与相同压缩轮函数，供大文件分块哈希；
+ * 下面的一次性接口 auth64_sha256 行为完全不变，算法与实现均不改动。
+ * ========================================================================== */
+typedef struct {
+    uint32_t h[8];
+    uint64_t bitlen;
+    uint8_t  buf[64];
+    uint32_t buflen;
+} auth64_sha256_ctx_t;
+
+static void auth64_sha256_compress(uint32_t h[8], const uint8_t block[64])
+{
+    uint32_t w[64];
+    uint32_t i;
+    for (i = 0; i < 16; i++) {
+        w[i] = ((uint32_t)block[i*4] << 24) |
+               ((uint32_t)block[i*4 + 1] << 16) |
+               ((uint32_t)block[i*4 + 2] << 8) |
+               (uint32_t)block[i*4 + 3];
+    }
+    for (i = 16; i < 64; i++) {
+        uint32_t s0 = rotr32(w[i-15],7) ^ rotr32(w[i-15],18) ^ shr32(w[i-15],3);
+        uint32_t s1 = rotr32(w[i-2],17) ^ rotr32(w[i-2],19) ^ shr32(w[i-2],10);
+        w[i] = w[i-16] + s0 + w[i-7] + s1;
+    }
+    uint32_t a=h[0],b=h[1],c=h[2],d=h[3],e=h[4],f=h[5],g=h[6],hh=h[7];
+    for (i = 0; i < 64; i++) {
+        uint32_t S1 = rotr32(e,6) ^ rotr32(e,11) ^ rotr32(e,25);
+        uint32_t ch = (e & f) ^ (~e & g);
+        uint32_t t1 = hh + S1 + ch + sha_k[i] + w[i];
+        uint32_t S0 = rotr32(a,2) ^ rotr32(a,13) ^ rotr32(a,22);
+        uint32_t mj = (a & b) ^ (a & c) ^ (b & c);
+        uint32_t t2 = S0 + mj;
+        hh=g; g=f; f=e; e=d+t1; d=c; c=b; b=a; a=t1+t2;
+    }
+    h[0]+=a; h[1]+=b; h[2]+=c; h[3]+=d; h[4]+=e; h[5]+=f; h[6]+=g; h[7]+=hh;
+}
+
+int auth64_sha256_ctx_size(void) { return (int)sizeof(auth64_sha256_ctx_t); }
+
+void auth64_sha256_init(void *ctx_)
+{
+    auth64_sha256_ctx_t *ctx = (auth64_sha256_ctx_t *)ctx_;
+    ctx->h[0]=0x6a09e667; ctx->h[1]=0xbb67ae85; ctx->h[2]=0x3c6ef372; ctx->h[3]=0xa54ff53a;
+    ctx->h[4]=0x510e527f; ctx->h[5]=0x9b05688c; ctx->h[6]=0x1f83d9ab; ctx->h[7]=0x5be0cd19;
+    ctx->bitlen = 0;
+    ctx->buflen = 0;
+}
+
+void auth64_sha256_update(void *ctx_, const uint8_t *data, uint32_t len)
+{
+    auth64_sha256_ctx_t *ctx = (auth64_sha256_ctx_t *)ctx_;
+    ctx->bitlen += (uint64_t)len * 8;
+    uint32_t off = 0;
+    while (off < len) {
+        uint32_t take = 64 - ctx->buflen;
+        if (take > len - off) take = len - off;
+        for (uint32_t k = 0; k < take; k++)
+            ctx->buf[ctx->buflen + k] = data[off + k];
+        ctx->buflen += take;
+        off += take;
+        if (ctx->buflen == 64) {
+            auth64_sha256_compress(ctx->h, ctx->buf);
+            ctx->buflen = 0;
+        }
+    }
+}
+
+void auth64_sha256_final(void *ctx_, uint8_t out[32])
+{
+    auth64_sha256_ctx_t *ctx = (auth64_sha256_ctx_t *)ctx_;
+    uint32_t i;
+    /* 追加 0x80，补 0 到 56 字节，再写 8 字节大端位长（与一次性接口同一编码） */
+    ctx->buf[ctx->buflen++] = 0x80;
+    if (ctx->buflen > 56) {
+        while (ctx->buflen < 64) ctx->buf[ctx->buflen++] = 0;
+        auth64_sha256_compress(ctx->h, ctx->buf);
+        ctx->buflen = 0;
+    }
+    while (ctx->buflen < 56) ctx->buf[ctx->buflen++] = 0;
+    for (i = 0; i < 8; i++)
+        ctx->buf[56 + i] = (uint8_t)(ctx->bitlen >> (56 - 8 * i));
+    auth64_sha256_compress(ctx->h, ctx->buf);
+    for (i = 0; i < 8; i++) {
+        out[i*4]   = (uint8_t)(ctx->h[i] >> 24);
+        out[i*4+1] = (uint8_t)(ctx->h[i] >> 16);
+        out[i*4+2] = (uint8_t)(ctx->h[i] >> 8);
+        out[i*4+3] = (uint8_t)(ctx->h[i]);
+    }
+}
+
 /* SHA256(pass) → 64位hex字符串 */
 static void hash_password(const char *pass, char *out_hex) {
     uint8_t digest[32];
