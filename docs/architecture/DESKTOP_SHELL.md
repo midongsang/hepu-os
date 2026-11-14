@@ -57,6 +57,9 @@ Clavis 用 `Common/Metrics.qml` + `Common/Typography.qml` 统一全部尺寸与�
 **Hepu 落地**：在 hepushell.c 顶部定义一套常量表（`HS_SP_XS=2` 等），逐步替换散落的魔法数字。
 优先替换：按钮圆角（当前四角异常）、顶栏高度、图标尺寸、窗口内边距——即用户多次反馈的"圆角突出/间距混乱"根因。
 
+> **已登记**：Hepu 的取值表、换算式、阴影口径与已知不一致项统一记在 [VISUAL_SPEC.md](VISUAL_SPEC.md)。
+> 本节只保留路线论证（为什么照 Clavis 走），具体数字一律以 VISUAL_SPEC 为准。
+
 ### 1.2 图标 = 矢量字体，不是位图
 Clavis 的 `Components/MaterialSymbol.qml`：用 **Material Symbols 可变字体**渲染图标（Text + FILL/opsz 双轴），
 天然矢量（任意尺寸清晰）、单色（颜色=前景色，随主题）、可做填充动画。配合 `ThemeIcon`（系统主题图标）/`SvgIcon`（SVG）/`FileThemeIcon`（文件类型图标）分层。
