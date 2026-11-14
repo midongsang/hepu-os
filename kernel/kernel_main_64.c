@@ -795,8 +795,15 @@ void x86_64_kernel_main(void)
            降到与 idle 同级后, 二者在同一队列里按 scheduler_ticks 轮转, 主循环能
            按时间片取回 CPU; 同时 kbeat 仍是真线程, 任务管理器里显示为运行态。 */
         process64_create("kbeat", ksvc_beat_entry, 0);
-        /* khouse / kstat: 有真实职责, 但目前只能登记挂起 —— 见 process64_create_suspended
-         * 注释里关于 idle 不在就绪队列的说明, 不硬跑。 */
+        /* khouse / kstat: 仍然挂起。
+         * 2026-11-14 试过激活(AP 调度打开 + idle 回退已就位), 结果 #GP:
+         *   [EXCEPTION] vector=0xD rip=0x46 error=0xDEADBEEFCAFEBABE
+         * 原因不是 idle 回不来了, 而是这两个线程干的事(hpdesk_mark_dirty /
+         * g_ksvc_uptime_s)是**桌面内核上下文的共享状态**, 一旦可能在另一个核上
+         * 跑, 桌面主循环正在用的状态就被并发改写。这是"桌面还没下沉到 ring3、
+         * 没有契约边界"的直接后果 —— 不是加两把锁能解决的, 需要先把桌面状态
+         * 收进一个明确的 owner。
+         * 在此之前它们只登记、不参与调度(V0.57.1 的口径不变)。 */
         process64_create_suspended("khouse", khouse_entry, 2);
         process64_create_suspended("kstat", kstat_entry, 3);
     }

@@ -279,7 +279,39 @@ void ap_c_entry(void)
  *     (fork 父快照 / readdir 静态表 / 裸盘静态缓冲), 再打开这里。
  *     倒序打开会得到"一开就崩、崩在哪说不清"。
  * 1 = 打开(仅在上述三处清完之后)。 */
-#define HS_AP_SCHED_ENABLED 0
+#define HS_AP_SCHED_ENABLED 1
+
+/* 把 [APSCHED] 诊断行一次性拼成整串再输出。
+ * 原来分多次 vga_puts/vga_put_hex, 每次各拿一次打印锁 —— 中间会被别的核
+ * 插进半行, 日志变成 "sw=[PROC64] Created process: 0x0kstat"。 */
+static void ap_sched_diag_line(uint32_t cpu, int pid, uint64_t sw)
+{
+    char b[80];
+    int p = 0;
+    const char *tag = "[APSCHED] cpu=";
+    while (*tag) b[p++] = *tag++;
+    char t[16];
+    int n = 0;
+    uint32_t v = cpu;
+    if (v == 0) t[n++] = '0';
+    while (v) { t[n++] = "0123456789abcdef"[v & 0xF]; v >>= 4; }
+    while (n) b[p++] = t[--n];
+    b[p++] = ' '; const char *t2 = "pid=";
+    while (*t2) b[p++] = *t2++;
+    n = 0; int pv = pid;
+    if (pv == 0) t[n++] = '0';
+    while (pv) { t[n++] = "0123456789abcdef"[pv & 0xF]; pv >>= 4; }
+    while (n) b[p++] = t[--n];
+    b[p++] = ' '; const char *t3 = "sw=";
+    while (*t3) b[p++] = *t3++;
+    n = 0; uint64_t sv = sw;
+    if (sv == 0) t[n++] = '0';
+    while (sv) { t[n++] = "0123456789abcdef"[sv & 0xF]; sv >>= 4; }
+    while (n) b[p++] = t[--n];
+    b[p++] = '\n'; b[p] = 0;
+    extern void vga_puts(const char *);
+    vga_puts(b);
+}
 
 /* SMP定时器tick（每个CPU的Local APIC定时器中断调用） */
 void smp_timer_tick(void)
@@ -306,16 +338,9 @@ void smp_timer_tick(void)
             if (ap_pid >= 0) {
                 /* 诊断: 证明 AP 真的切到了进程(限流, 约每 500 次打印一行) */
                 static uint64_t ap_sw = 0;
-                if ((++ap_sw % 500) == 0) {
-                    extern void vga_puts(const char *);
-                    extern void vga_put_hex(uint64_t);
-                    vga_puts("[APSCHED] cpu=");
-                    vga_put_hex(cpu_id);
-                    vga_puts(" pid=");
-                    vga_put_hex((uint64_t)ap_pid);
-                    vga_puts(" sw=");
-                    vga_put_hex(ap_sw);
-                    vga_puts("\n");
+                /* 前 3 次 + 之后每 500 次: 短回归(几秒)也能看到证据 */
+                if (ap_sw < 3 || (ap_sw % 500) == 0) {
+                    ap_sched_diag_line(cpu_id, ap_pid, ap_sw);
                 }
             }
         }

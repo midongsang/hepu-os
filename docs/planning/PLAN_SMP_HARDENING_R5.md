@@ -386,12 +386,54 @@ QEMU 二进制：`tools/bin/qemu-system-x86_64`（7.2.0，未编 user 网络后�
 > 拿不回 CPU —— 实测停日志在 `Created process: khouse` 之后。已改为从源头不入队
 > （`g_create_no_enqueue`），窗口消失。
 
+### 7.1.1 开关已打开（2026-11-14）
+
+`HS_AP_SCHED_ENABLED` 已置 **1**，§7.1 三处清完之后才开的。
+
+实测证据（串口）：
+
+```
+[SMP] per-CPU idle bound: 0xB          ; 12 核, 11 个 AP 全部建了专属 idle
+[APSCHED] cpu=1 pid=1 sw=0             ; -smp 2, AP 抢到 kbeat
+[APSCHED] cpu=8 pid=1 sw=0             ; -smp 12, AP 在 cpu8 上真跑起来了
+```
+
+回归：`-smp 2` 2/2、`-smp 12` 1/1，全部 `desk=1 EXC=0 PASS=1 FAIL=0 SPINERR=0
+timercal=0`。**AP 调度是通的，桌面没有因此停摆。**
+
+### 7.1.2 试过激活 khouse / kstat —— 失败，原因值得记
+
+开关打开后顺手把两个常驻线程从 `create_suspended` 改成 `create`（让 AP 有活干），
+结果：
+
+```
+[EXCEPTION] vector=0xD rip=0x46 error=0xDEADBEEFCAFEBABE
+```
+
+不是 idle 回不来（回退分支已生效），是这两个线程做的事
+（`hpdesk_mark_dirty` / `g_ksvc_uptime_s`）属于**桌面内核上下文的共享状态**。
+一旦它们可能在另一个核上跑，桌面主循环正在用的状态就被并发改写。
+这是"桌面还在内核里、没有契约边界"的直接后果，不是加锁能收口的 ——
+需要先把桌面状态收进一个明确的 owner（对应 OVERVIEW 里"桌面下沉 ring3"那项）。
+所以两者**继续 `create_suspended`**。
+
+### 7.1.3 打开开关暴露的日志问题（已修）
+
+多核同时打日志会把行撕成 `sw=[PROC64] Created process: 0x0kstat`。
+排查发现 `void vga_puts` 在树里有**两个定义**：`kernel/arch/x86/vga.c`（旧，
+实际不参与 64 位链接的 dead code）和 `kernel/arch/x86_64/lib64.c`（生效的那个，
+SB-05 已带 `print_lock`）。真正撕行的是 `[APSCHED]` 自己分多次
+`vga_puts`+`vga_put_hex` 输出 —— 每次各拿一次锁，中间能被插。
+已改为**先拼成整串再一次 `vga_puts`**，现在日志是干净的
+`[APSCHED] cpu=1 pid=1 sw=0`。
+
 **SB-08 多核浮点验收基线（2026-11-14）**：`-smp 12` 跑通，`desk=1 EXC=0 PASS=1
 FAIL=0 SPINERR=0`，日志确认 `CPU count: 0xC`、`per-CPU idle bound: 0xB`（11 AP +
 BSP 全部建了专属 idle）。这说明 12 核下 PID 表、idle 绑定、per-CPU 结构都没有越界。
-**但 FPU 保存区 8 槽 `& 7` 的踩踏要等 `HS_AP_SCHED_ENABLED=1` 之后才会真实发生**
-（AP 不调度就没有两个核同时用 FPU 的场景），所以真正的验收要放在开关打开后的
-第一轮：`-smp 12` + 两核同时跑浮点循环，看结果是否串。
+**开关现在已经打开了，但 FPU 8 槽的踩踏仍未真正验到**：目前 AP 抢到的只有
+kbeat（纯整数循环，不碰 XMM/FP），所以 `& 7` 的槽冲突还没有制造出条件。
+真正的验收需要**两个核同时跑浮点负载** —— 做法是给 kstat 加一段浮点自检
+（在 SB-08 里改保存区索引 `& (MAX_CPUS-1)` 之前，先让冲突发生一次，看清现象）。
 
 ### 7.2 已经在阶段 1 覆盖、但要核对是否真的覆盖到 AP 的
 
