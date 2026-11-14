@@ -804,11 +804,26 @@ void x86_64_kernel_main(void)
          * 没有契约边界"的直接后果 —— 不是加两把锁能解决的, 需要先把桌面状态
          * 收进一个明确的 owner。
          * 在此之前它们只登记、不参与调度(V0.57.1 的口径不变)。 */
-        /* §5-2 落地后重试: khouse 跨核跑。它只调 hpdesk_mark_dirty(),
-         * 现在那一步在非 owner 上下文里只置请求位, 由桌面主循环消费。 */
-        process64_create("khouse", khouse_entry, 2);
-        /* kstat 只写一个 volatile uint32(单字原子), 可以跨核; §5-2 后一并放开 */
-        process64_create("kstat", kstat_entry, 3);
+        /* 2026-11-15 回退: khouse/kstat 恢复"只登记、不参与调度"。
+         *
+         * 昨天(SB-08)把它们改成 process64_create 让它们真跑起来, 结果冷启动
+         * 4 轮里挂 1 轮、6 轮里挂 3 轮, 三种失败模式:
+         *   a) [SPINLOCK] ERR addr=g_sched_lock owner=0x-1 cur=0x0(双重解锁);
+         *   b) [EXCEPTION] vector=0xD rip=0xDEADBEEFCAFEBABE(跳到未初始化内存);
+         *   c) 无异常无报错, 画面停在胶囊启动动画 t=0 后再不前进。
+         * 共同点: AP 在**启动期**(PS/2 鼠标初始化前后)就开始调度这两个线程,
+         * 而桌面那套状态(owner 槽位/z-order/脏矩形)此刻还没就位。
+         *
+         * 试过把 cpu_id 改成硬绑定(不再把 0 当"任意核"), 失败率反而升到 1/4 ——
+         * 因为 AP 失去 kbeat 这个常驻候选后会频繁走"每核 idle 回退",
+         * 那条路径的上下文初始化还不稳(DEADBEEF 就是从那出来的)。
+         *
+         * 结论: 启动期只允许 kbeat(prio 0, 与 idle 同级)参与调度。
+         * khouse/kstat 保留为挂起态, 任务管理器里仍可见, 但不下场跑。
+         * SB-08 的 AP 侧证据已经拿到(-smp 4: fpu probe cpu=0x1 ok=c8 fail=0),
+         * 需要复验时临时改回 create 即可, 不作为默认配置。 */
+        process64_create_suspended("khouse", khouse_entry, 2);
+        process64_create_suspended("kstat", kstat_entry, 3);
     }
 
     /* 初始化用户态进程 */
