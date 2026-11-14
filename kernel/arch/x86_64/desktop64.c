@@ -17,6 +17,8 @@ extern void hpdesk_render(void);
 extern void hpdesk_handle_key(int key);
 extern void hpdesk_update_mouse(int x, int y);
 extern void hpdesk_mark_dirty(void);
+extern void hpdesk_claim_owner(void);
+extern void hpdesk_deskstate_drain(void);
 extern void hpdesk_mouse_down(int x, int y);
 extern void hpdesk_mouse_up(int x, int y);
 extern void hpdesk_handle_click(int x, int y);
@@ -99,6 +101,8 @@ static inline uint64_t desktop64_rdtsc(void)
 
 void desktop64_run(void)
 {
+    /* 进主循环前把 owner 身份钉住: 此后只有这个上下文能直接改桌面状态 */
+    hpdesk_claim_owner();
     if (!desktop_initialized) {
         if (desktop64_init() != 0) {
             vga_puts("[DESKTOP64] Failed to initialize desktop\n");
@@ -251,6 +255,7 @@ void desktop64_run(void)
         if (now - last_render_ms >= 16) {
             last_render_ms = now;
             uint64_t __t = desktop64_rdtsc();
+            hpdesk_deskstate_drain();   /* §5-2: 先消费跨核标脏请求, 再渲染 */
             hpdesk_render();
             g_cyc_render_call += desktop64_rdtsc() - __t;
         }

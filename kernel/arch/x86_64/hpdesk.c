@@ -5814,7 +5814,36 @@ hs_window_t *hs_wm_windows(int *count)
     return g_wm.windows;
 }
 
-void hpdesk_mark_dirty(void)
+/* ===== §5-2 桌面状态收 owner =====
+ * 脏矩形与窗口 content_dirty 只有桌面主循环这一个写者。
+ * 跨核线程(AP 上跑的 khouse 等)想标脏时不能直接改这些状态 —— 脏矩形是
+ * 4 个 int 的并集运算, 两个核同时改会算出"只有半个矩形"的脏区;
+ * 窗口的 content_dirty 同理。所以非 owner 只置一个请求位, owner 每帧取走执行。
+ * 判据: 串口能看到 deferred 请求被 owner 消费的次数。 */
+extern void vga_put_hex(uint64_t v);
+static int g_desk_owner_slot = -1;
+static volatile uint32_t g_desk_req_dirty = 0;
+static volatile uint32_t g_desk_ext_requests = 0;
+
+void hpdesk_claim_owner(void)
+{
+    if (g_desk_owner_slot >= 0) return;
+    extern int process64_current_index(void);
+    g_desk_owner_slot = process64_current_index();
+    vga_puts("[DESKOWN] owner slot=");
+    vga_put_hex((uint64_t)(g_desk_owner_slot < 0 ? 0 : g_desk_owner_slot));
+    vga_puts("\n");
+}
+
+int hpdesk_is_owner(void)
+{
+    extern int process64_current_index(void);
+    if (g_desk_owner_slot < 0) return 0;
+    return process64_current_index() == g_desk_owner_slot;
+}
+
+/* 真正改桌面状态的那一步, 只允许 owner 上下文执行 */
+static void desk_apply_dirty(void)
 {
     g_content_dirty = 1;
     /* 全局"有东西变了"无法定位到具体窗口, 保守起见把所有窗口标脏。 */
@@ -5822,6 +5851,39 @@ void hpdesk_mark_dirty(void)
     int n = 0;
     hs_window_t *ws = hs_wm_windows(&n);
     for (int i = 0; i < n; i++) ws[i].content_dirty = 1;
+}
+
+/* owner 每帧调用: 把跨核请求转成真实状态变更 */
+void hpdesk_deskstate_drain(void)
+{
+    if (!__atomic_load_n(&g_desk_req_dirty, __ATOMIC_ACQUIRE)) return;
+    __atomic_store_n(&g_desk_req_dirty, 0, __ATOMIC_RELEASE);
+    desk_apply_dirty();
+    static int logged = 0;
+    if (!logged) {
+        logged = 1;
+        vga_puts("[DESKOWN] deferred handled, ext_requests=");
+        vga_put_hex((uint64_t)__atomic_load_n(&g_desk_ext_requests, __ATOMIC_RELAXED));
+        vga_puts("\n");
+    }
+}
+
+void hpdesk_mark_dirty(void)
+{
+    if (!hpdesk_is_owner()) {
+        __atomic_store_n(&g_desk_req_dirty, 1, __ATOMIC_RELEASE);
+        __atomic_add_fetch(&g_desk_ext_requests, 1, __ATOMIC_RELAXED);
+        static int logged = 0;
+        if (!logged) {
+            logged = 1;
+            extern int process64_current_index(void);
+            vga_puts("[DESKOWN] defer from slot=");
+            vga_put_hex((uint64_t)(uint32_t)process64_current_index());
+            vga_puts("\n");
+        }
+        return;
+    }
+    desk_apply_dirty();
 }
 
 /* V0.55.0 P0: PNG 解码链路自检 (ext2 读取 -> pmm 分配 -> inflate -> 反滤波)

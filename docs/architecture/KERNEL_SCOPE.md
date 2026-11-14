@@ -83,6 +83,19 @@
 1. **文档锁定归属**（本文）—— 每个模块写清 owner，谁是唯一能改它的核/线程。
 2. **桌面状态收 owner**：脏矩形、z-order、焦点三样各自只有一个写入者。
    做完这一步，`khouse/kstat` 才能在多核下跑（现在不能）。
+   **进度（2026-11-14）：脏矩形已收 owner，khouse/kstat 已跨核跑通。**
+   实现：`hpdesk_claim_owner()` 在桌面主循环入口钉住 owner（进程槽 = 桌面上下文），
+   `hpdesk_is_owner()` 判定；非 owner 调 `hpdesk_mark_dirty()` 时**不直接改
+   `g_content_dirty`/窗口 `content_dirty`**，只置一个请求位 + 计数，
+   由 owner 每帧在 `hpdesk_deskstate_drain()` 里消费执行。
+   为什么不能靠加锁：脏矩形是 4 个 int 的并集运算，两个核同时做会算出"只有半个矩形"
+   的脏区，锁只能防撕裂不能防逻辑错。
+   证据（`-smp 4` 实跑 30 秒）：`[KHOUSE] entered cpu=0x3`、
+   `[DESKOWN] defer from slot=0x5`、`[DESKOWN] deferred handled, ext_requests=0x1`；
+   `khouse`/`kstat` 均从 `create_suspended` 改为 `create`，跑在 AP 上，#GP 不再出现
+   （§7.1.2 记录的 0xD 异常随之消失）。回归 `-smp 2` 2/2、`-smp 12` 1/1 全绿。
+   仍未收 owner 的：z-order 与焦点（现有 `g_wm_lock` 保护簿记，但语义上仍允许任意
+   核调用 `hs_window_*`；下一步是把这些入口也加 owner 断言）。
 3. **framebuffer 契约**：把"写屏"从 `gfx64` 抽成一个最小接口（map + blit + flip），
    合成逻辑整体搬到用户态。这一步做完，① 和 ② 一起解决。
 4. **syscall 转发层切分**：把 `syscall64_full.c` 的业务搬进 fs/mm，syscall 只剩分发。
@@ -90,6 +103,11 @@
 
 ## 6. 与当前 SMP 状态的关系
 
-- `HS_AP_SCHED_ENABLED=1` 已开，AP 目前只跑 `kbeat`（纯整数、不碰桌面），这是**安全上限**。
-- 在 §5-2 做完之前，不要让任何**会碰桌面状态**的线程跨核运行。
-- `SB-08`（FPU 保存区 8 槽 vs 16 核）的实测也建议放在 §5-2 之后：那时才有真实的双核浮点负载。
+- `HS_AP_SCHED_ENABLED=1` 已开。**此前** AP 只跑 `kbeat`（纯整数、不碰桌面），那是安全上限。
+- **2026-11-14 起**：§5-2 的脏矩形 owner 已落地，`khouse`/`kstat` 可以跨核跑
+  （非 owner 只提请求，owner 消费）。所以"会碰桌面状态的线程不许跨核"这条
+  现在收窄为"**不许绕过 owner 直接改桌面状态**"。
+- 仍未收 owner 的：z-order 与焦点（`g_wm_lock` 只保护簿记，不限制调用者）。
+  在它们收 owner 之前，仍然不要让第三方线程直接调窗口管理入口。
+- `SB-08`（FPU 保存区 8 槽 vs 16 核）仍未实测，需要真实双核浮点负载 —— 现在
+  `kstat` 已能跨核跑，可作为下一轮的试验载体。

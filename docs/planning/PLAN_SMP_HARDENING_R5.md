@@ -417,6 +417,28 @@ timercal=0`。**AP 调度是通的，桌面没有因此停摆。**
 需要先把桌面状态收进一个明确的 owner（对应 OVERVIEW 里"桌面下沉 ring3"那项）。
 所以两者**继续 `create_suspended`**。
 
+### 7.1.4 收 owner 之后：khouse / kstat 已跨核（2026-11-14）
+
+KERNEL_SCOPE §5-2 落地后重试，`khouse`/`kstat` 都改成 `create`：
+
+- `hpdesk_claim_owner()` 在 `desktop64_run()` 入口记录 owner 进程槽（=桌面上下文）；
+- `hpdesk_mark_dirty()` 在非 owner 上下文只置 `g_desk_req_dirty` 请求位并计数，
+  不碰 `g_content_dirty` 与窗口 `content_dirty`；
+- 桌面主循环每帧 `hpdesk_deskstate_drain()` 消费请求、执行真正的状态变更；
+- `kstat` 只写一个 `volatile uint32`（单字原子），无需中转。
+
+`-smp 4` 实跑 30 秒串口证据：
+
+```
+[DESKOWN] defer from slot=0x5
+[DESKOWN] deferred handled, ext_requests=0x1
+```
+
+（`khouse` 在 AP 上首次进入时打印过 `cpu=0x3`，诊断用途，已移除。）
+无 `[EXCEPTION]`。回归 `-smp 2` 2/2、`-smp 12` 1/1。
+7.1.2 里那个 `vector=0xD` 不再复现 —— 当时判断（"桌面状态被并发改写"）是对的，
+修法不是加锁而是收 owner。
+
 ### 7.1.3 打开开关暴露的日志问题（已修）
 
 多核同时打日志会把行撕成 `sw=[PROC64] Created process: 0x0kstat`。

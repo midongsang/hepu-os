@@ -804,8 +804,11 @@ void x86_64_kernel_main(void)
          * 没有契约边界"的直接后果 —— 不是加两把锁能解决的, 需要先把桌面状态
          * 收进一个明确的 owner。
          * 在此之前它们只登记、不参与调度(V0.57.1 的口径不变)。 */
-        process64_create_suspended("khouse", khouse_entry, 2);
-        process64_create_suspended("kstat", kstat_entry, 3);
+        /* §5-2 落地后重试: khouse 跨核跑。它只调 hpdesk_mark_dirty(),
+         * 现在那一步在非 owner 上下文里只置请求位, 由桌面主循环消费。 */
+        process64_create("khouse", khouse_entry, 2);
+        /* kstat 只写一个 volatile uint32(单字原子), 可以跨核; §5-2 后一并放开 */
+        process64_create("kstat", kstat_entry, 3);
     }
 
     /* 初始化用户态进程 */
