@@ -657,23 +657,21 @@ static void itoa_hs(int value, char *buf);
 
 /* 显示设置持久化: /display.conf (key=value, 与 config.hsqml 分开写, 互不覆盖) */
 #define HS_DISPLAY_CFG "/display.conf"
-/* 自动档位: 以 1024x768 为 100% 基准, 按屏高(纵向像素密度)推算,
- * 再吸附到 Display 页的四档上。2048x1536 -> 200%。 */
+/* 自动档位: 以 1920x1080 为 100% 基准, 按屏高/屏宽推算, 再吸附到 Display 页的四档。
+ * 3840x2160 -> 200%, 2560x1440 -> 125%(吸附), 1080p 及以下 -> 100%。 */
 int hs_display_auto_scale(void)
 {
     /* 设计基准 1024x768(横向) / 720(纵向预算)。
      * 缩放 pct 的语义是"元素放大 pct/100 倍", 逻辑画布 = 屏宽/pct、屏高/pct,
      * 必须 >= 基准才装得下整版。
      *
-     * 纵向基准取 720 而不是 768: 16:9 屏(1920x1080)在 150% 下 logical 是 1280x720,
-     * 用 768 会判"装不下"而退回 125% —— 1080p 上永远拿不到 150% 的字号。
-     * 同一版式在 720 预算下排布, 4:3 屏上反而更宽松:
-     *   1024x768@100%  -> logical 1024x768, 比 720 多 48(留白, 不溢出)
-     *   2048x1536@200% -> logical 1024x768, 同上
-     *   1920x1080@150% -> logical 1280x720, 刚好卡住
-     * 200% 在 1080p 上是 960x540, 改基准也救不回来, 那是物理限制。 */
-    int by_h = g_shell.screen_height * 100 / 720;
-    int by_w = g_shell.screen_width * 100 / 1024;
+     * 基准改成 1920x1080(原来是 1024x768/720): 1080p 上就是 100%, 元素按 1:1
+     * 像素走。低分辨率(720p 及以下)被 lim 夹到 100, 不会缩到看不清。
+     *   1920x1080@100% -> logical 1920x1080
+     *   2560x1440@125% -> logical 2048x1152
+     *   3840x2160@200% -> logical 1920x1080 */
+    int by_h = g_shell.screen_height * 100 / 1080;
+    int by_w = g_shell.screen_width * 100 / 1920;
     int lim = (by_h < by_w) ? by_h : by_w;
     if (lim < 100) lim = 100;
     int steps[4] = {100, 125, 150, 200};
@@ -3076,7 +3074,10 @@ static void hs_settings_window_render(hs_window_t *w)
                            rx, ry, "Desktop:", g_shell.colors.panel_fg, SETK(12));
         for (int i = 0; i < 9; i++) {
             int bx = rx + SETK(76) + (i % 3) * SETK(22);
-            int by = ry - SETK(4) + (i / 3) * SETK(22);
+            /* 原来 by = ry - 4: ry 是文字基线, 色块从基线往上 4px 起, 与
+             * "Desktop:" 这一行字重叠。64 位 TTF 字身偏上还能看, 32 位的 8x16
+             * 点阵在 100% 下正好被压穿。改为落到基线下方。 */
+            int by = ry + SETK(6) + (i / 3) * SETK(22);
             gfx64_fill_rect(bx, by, SETK(16), SETK(16), g_color_presets[i]);
             uint32_t bc = (g_shell.colors.bg == g_color_presets[i])
                         ? g_shell.colors.panel_fg : g_shell.colors.border;
@@ -3505,8 +3506,14 @@ static int hs_panel_bounds(int idx, int *ox, int *oy, int *ow, int *oh)
         int cy = hs_sy(g_shell.ui.clock_y);
         int wx = sw - hs_sx(g_shell.ui.weather_margin_right) - hs_sx(380);
         if (cx > wx) cx = wx;
+        /* 与 hs_desktop_clock_render 必须用同一套夹取 —— 否则层贴到 cx、
+         * 内容画在别处, 时钟会只露出一截(100% 下实测只剩 "lay")。 */
+        if (cx > sw / 8) cx = sw / 8;
         if (cx < hs_sx(20)) cx = hs_sx(20);
-        int cw = sw - cx;
+        /* 层不需要横跨到屏右缘: 时钟+日期最宽约 420 逻辑像素, 取 460 留白。
+         * 之前 cw=sw-cx 会给出 1350 宽的层, 2.7MB, 32 位池装不下。 */
+        int cw = hs_sx(460);
+        if (cx + cw > sw) cw = sw - cx;
         int ch = hs_sy(300) + hs_sy(g_shell.ui.clock_font_size) * 2;
         *ox = cx - hs_sx(12); if (*ox < 0) *ox = 0;
         *oy = cy - hs_sy(20); if (*oy < 0) *oy = 0;
@@ -4063,6 +4070,12 @@ static void hs_desktop_clock_render(void)
         int wx = g_shell.screen_width - hs_sx(g_shell.ui.weather_margin_right);
         int max_x = wx - hs_sx(380);
         if (clock_x > max_x) clock_x = max_x;
+        /* 100% 缩放下窗口宽度从 1035 收到 690(居中时左缘约屏宽 32%), 而
+         * clock_x 是按 150% 的版式定的, 落在屏宽中部 —— 窗口一收窄, 时钟就
+         * 从左缘露出一半(截图里 13:51 和日期只剩一截)。桌面时钟属于桌面装饰,
+         * 统一钳在左侧 1/8 以内, 任何缩放下都不和居中窗口抢位置。 */
+        if (clock_x > g_shell.screen_width / 8)
+            clock_x = g_shell.screen_width / 8;
         if (clock_x < hs_sx(20)) clock_x = hs_sx(20);
     }
 
@@ -7251,7 +7264,15 @@ void hs_notification_render(void)
         } else if (g_notif_pos == 2) { /* 右下: 向上堆叠 */
             /* 与顶栏/QC 同一 margin, 否则卡身冲出屏幕右缘(150% 下 06:2x 被裁) */
             x = g_shell.screen_width - w - hs_sx(10);
-            y = g_shell.screen_height - 40 - (popup_count + 1) * (h + gap);
+            /* 控制中心也停左下角附近这一片: 100% 下通知卡(64px)正好压进
+             * 控制中心黄块的中间, 两层糊在一起。改为锚在控制中心上沿。 */
+            {
+                int ccx = 0, ccy = 0, ccw = 0, cch = 0;
+                cc_geometry(&ccx, &ccy, &ccw, &cch);
+                int anchor = (cch > 0) ? ccy : (g_shell.screen_height - hs_sx(10));
+                y = anchor - (popup_count + 1) * (h + gap);
+                if (y < hs_sy(8)) y = hs_sy(8);
+            }
         } else {                       /* 左下 */
             x = 8;
             y = g_shell.screen_height - 40 - (popup_count + 1) * (h + gap);
