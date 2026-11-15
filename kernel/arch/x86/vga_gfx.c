@@ -117,7 +117,7 @@ static inline void io_wait(void) {
  * QEMU std VGA 宽容可显示, 但真机 NVIDIA 等 VGA 兼容显卡严格遵守
  * 时序寄存器导致乱码. 标准值经 DOS/Linux VGA 驱动广泛验证, 全兼容. */
 static const uint8_t crtc_regs[] = {
-    0x5F, 0x4F, 0x50, 0x82, 0x54, 0x80, 0xBF, 0x1F,
+    0x5F, 0x27, 0x28, 0x90, 0x2D, 0xC3, 0xBF, 0x1F,
     0x00, 0x41, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x9C, 0x8E, 0x8F, 0x28, 0x40, 0x96, 0xB9, 0xA3,
     0xFF
@@ -365,6 +365,14 @@ void vga_gfx_init(void)
 /* 切换回文本模式 (80x25) */
 void vga_gfx_text_mode(void)
 {
+    /* D-7 取证：谁把图形模式切回文本模式？打返回地址，串口留下调用者。 */
+    {
+        extern void serial_puts(uint16_t, const char *);
+        extern void serial_puthex(uint16_t, uint32_t);
+        serial_puts(0x3F8, "[VTEXTMODE] called from 0x");
+        serial_puthex(0x3F8, (uint32_t)__builtin_return_address(0));
+        serial_puts(0x3F8, "\n");
+    }
     __asm__ volatile ("cli");
 
     /* 简化的文本模式设置 */

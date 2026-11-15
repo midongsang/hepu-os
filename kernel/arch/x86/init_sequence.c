@@ -527,6 +527,7 @@ int hepu_init_phase(init_phase_t phase)
                 extern void serial_puts(uint16_t, const char *);
                 serial_puts(0x3F8, "[APPS] 7/7: elastic_desktop_init done!\n");
                 gfx_fb_stats("after-desktop-init");
+                { extern void vga_dump_regs(void); vga_dump_regs(); }
             }
             ai_notification_init(); creator_mode_init();
             onboarding_init(); lowmem_throttle_init();

@@ -40,8 +40,32 @@ static void cjk_write_slot(uint8_t slot, const uint8_t *glyph)
 }
 
 /* 写一字到 2 槽 (含寄存器序列) */
+
+/* CJK 字模写入通过"平面 2"进行，会临时改 SR2/SR4/GC5/GC6。
+ * 这些寄存器在**图形模式(0x13)**下的值与文本模式不同（SR4=0x0E / GC5=0x40 /
+ * GC6=0x05），而本文件旧实现把"恢复"硬编码成文本值(SR4=0x03 / GC5=0x00 /
+ * GC6=0x0E) —— 于是字体一加载完，图形模式就被改成位平面语义，整屏变条纹。
+ * 正确做法：进入时读回原值，结束时写回原值，不假设当前是哪种模式。 */
+static inline void cjk_save_regs(uint8_t *sr2, uint8_t *sr4, uint8_t *gc5, uint8_t *gc6)
+{
+    outb(0x3C4, 0x02); *sr2 = inb(0x3C5);
+    outb(0x3C4, 0x04); *sr4 = inb(0x3C5);
+    outb(0x3CE, 0x05); *gc5 = inb(0x3CF);
+    outb(0x3CE, 0x06); *gc6 = inb(0x3CF);
+}
+
+static inline void cjk_restore_regs(uint8_t sr2, uint8_t sr4, uint8_t gc5, uint8_t gc6)
+{
+    outb(0x3CE, 0x05); outb(0x3CF, gc5);
+    outb(0x3CE, 0x06); outb(0x3CF, gc6);
+    outb(0x3C4, 0x02); outb(0x3C5, sr2);
+    outb(0x3C4, 0x04); outb(0x3C5, sr4);
+}
+
 static void cjk_load_glyph(int slot, const cjk_glyph_t *g)
 {
+    uint8_t sr2_old, sr4_old, gc5_old, gc6_old;
+    cjk_save_regs(&sr2_old, &sr4_old, &gc5_old, &gc6_old);
     outb(0x3C4, 0x04); outb(0x3C5, 0x02);   /* SR4 关奇偶 */
     outb(0x3C4, 0x02); outb(0x3C5, 0x04);   /* SR2 plane 2 */
     outb(0x3CE, 0x05); outb(0x3CF, 0x00);   /* GC5 读模式 0 */
@@ -54,9 +78,7 @@ static void cjk_load_glyph(int slot, const cjk_glyph_t *g)
     }
     cjk_write_slot((uint8_t)(0x80 + slot * 2), left);
     cjk_write_slot((uint8_t)(0x80 + slot * 2 + 1), right);
-    outb(0x3CE, 0x06); outb(0x3CF, 0x0E);   /* GC6 恢复 */
-    outb(0x3C4, 0x02); outb(0x3C5, 0x0F);   /* SR2 恢复 */
-    outb(0x3C4, 0x04); outb(0x3C5, 0x03);   /* SR4 恢复 */
+    cjk_restore_regs(sr2_old, sr4_old, gc5_old, gc6_old);
     cjk_slot_uni[slot] = g->unicode;
     cjk_loads++;
 }
@@ -103,6 +125,8 @@ void cjk_init(void)
     /* 标准字体写入序列 (Linux vgacon 同款):
      * 1) SR4=0x02 关闭奇偶模式(平面写使能)  2) SR2=0x04 Map Mask plane 2
      * 3) GC5=0 读模式0  4) GC6=0x04 文本段 0xA0000 */
+    uint8_t sr2_old, sr4_old, gc5_old, gc6_old;
+    cjk_save_regs(&sr2_old, &sr4_old, &gc5_old, &gc6_old);
     outb(0x3C4, 0x04); outb(0x3C5, 0x02);   /* SR4 = 2: 关闭奇偶 */
     outb(0x3C4, 0x02); outb(0x3C5, 0x04);   /* SR2 = 4: Map Mask plane 2 */
     outb(0x3CE, 0x05); outb(0x3CF, 0x00);   /* GC5 = 0 */
@@ -128,9 +152,7 @@ void cjk_init(void)
     }
     cjk_slot_used = (int)HEPU_CJK_FONT_COUNT + npre;
 
-    outb(0x3CE, 0x06); outb(0x3CF, 0x0E);   /* GC6 恢复 */
-    outb(0x3C4, 0x02); outb(0x3C5, 0x0F);   /* SR2 恢复 */
-    outb(0x3C4, 0x04); outb(0x3C5, 0x03);   /* SR4 恢复奇偶 */
+    cjk_restore_regs(sr2_old, sr4_old, gc5_old, gc6_old);
 
     vga_printf("[CJK] font: %d glyphs (%dKB), %d slots preloaded\n",
                (int)HEPU_CJK_BIG_COUNT,
