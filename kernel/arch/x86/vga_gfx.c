@@ -201,6 +201,15 @@ void vga_dump_regs(void)
  * 注意 vbe_fb 是本文件 static，32 位其它模块只能通过这个函数查。 */
 int gfx_has_vbe_fb(void)
 {
+    /* D-7: bochs dispi 路径也算"有真帧缓冲"。
+     * 否则 init_sequence 会因为 vbe_fb 为空而调 vga_gfx_init()，
+     * 后者无条件把 gfx_width/height/bpp/fb_addr 重置成 320x200@8bpp/0xA0000
+     * —— 与 dispi 已经设好的 640x480@32bpp/0xFD000000 直接冲突，
+     * 日志还会打出误导性的 "no VBE/GOP framebuffer -> entering VGA mode 0x13"。 */
+    {
+        extern uint32_t bochs_dispi_fb_phys(void);
+        if (bochs_dispi_fb_phys() != 0) return 1;
+    }
     return (vbe_fb != NULL) && (vbe_width > 0) && (vbe_height > 0);
 }
 

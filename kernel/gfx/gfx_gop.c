@@ -21,6 +21,19 @@ extern int gfx_refresh_rate;
 
 /* 后端状态 */
 static int gop_initialized = 0;
+
+/* D-7: GOP 真实性标志。
+ * 真正的 GOP 后端要求 UEFI 引导阶段把 Graphics Output Protocol 的
+ * framebuffer 描述（base/size/pitch/像素格式）传进来。32 位内核走
+ * BIOS + multiboot，**永远没有这东西**。
+ *
+ * 旧实现只检查 gfx_width != 0 && gfx_height != 0 就宣告成功 ——
+ * 于是只要有人（比如 bochs dispi 真彩色路径）先把 gfx_width 填了，
+ * 这个后端就会在探测阶段抢在 VBE 之前被选中，然后画到 0x80000000
+ * （一个硬编码的"QEMU 默认地址"）上，屏幕一片黑。
+ *
+ * 现在默认不可用，只有引导层显式置位才算数。 */
+int gfx_gop_available = 0;
 static uint32_t gop_width = 0;
 static uint32_t gop_height = 0;
 static uint32_t gop_bpp = 0;
@@ -37,6 +50,12 @@ static int gop_init(void)
     if (gop_initialized) return 0;
 
     serial_puts(0x3F8, "[GFX-GOP] initializing GOP backend...\n");
+
+    /* D-7: 没有 UEFI 传来的 GOP 协议就是假 GOP，直接拒绝 */
+    if (!gfx_gop_available) {
+        serial_puts(0x3F8, "[GFX-GOP] no GOP protocol from firmware (BIOS boot), refuse\n");
+        return -1;
+    }
 
     /* 获取当前图形模式信息 */
     gop_width = gfx_width;

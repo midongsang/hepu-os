@@ -7,6 +7,7 @@
 #include "types.h"
 #include "init_sequence.h"
 #include "compat_detect.h"
+#include "paging.h"   /* D-7: LFB 映射需要 PAGE_PRESENT / PAGE_WRITE */
 
 /* V0.10.5: 安全初始化调用 - 防止单个函数卡住导致整个启动失败 */
 static int init_call_count = 0;
@@ -477,7 +478,7 @@ int hepu_init_phase(init_phase_t phase)
             {
                 extern void gfx_flip(void);
                 extern int gfx_bpp;
-                if (gfx_bpp == 8) gfx_flip();
+                if (gfx_bpp == 8) gfx_flip();   /* 8bpp 下字模会落到 0xA0000，需刷掉 */
             }
             { extern void serial_puts(uint16_t, const char *); serial_puts(0x3F8, "[APPS] 4/7: kernel/drivers/userland...\n"); }
             kernel_opt_init(); drivers2_init(); appeco_init();
@@ -542,9 +543,9 @@ int hepu_init_phase(init_phase_t phase)
             {
                 extern void elastic_desktop_main_loop(void);
                 extern int gfx_bpp;
-                if (gfx_bpp == 8) {
+                if (gfx_bpp == 8 || gfx_bpp == 32) {
                     extern void serial_puts(uint16_t, const char *);
-                    serial_puts(0x3F8, "[EDESKTOP] entering main loop (32-bit VGA path)\n");
+                    serial_puts(0x3F8, "[EDESKTOP] entering main loop (32-bit path)\n");
                     elastic_desktop_main_loop();
                 }
             }

@@ -179,6 +179,39 @@ void hepu_sched_init(void)
     extern void serial_puts(uint16_t, const char *);
     serial_puts(0x3F8, "[GFX-TEST] legacy gfx_selftest disabled (using pluggable gfx subsystem)\n");
     /* V7.00: 可插拔图形子系统初始化和自测 */
+    /* D-7 第二步: 32 位真彩色。
+     * 桌面是按 24 位真彩色画的（0x2D3748 这类 0xRRGGBB），VGA 0x13 只有 8bpp
+     * 索引色 —— 0x2D3748 会被当成调色板索引 0x48 去查，查不到就是黑屏。
+     * 这里用 bochs dispi 把显示切成 32bpp 并回填 gfx_* 全局量,
+     * 必须在下面 gfx_*_register / gfx_probe_backend 之前 —— 后端探测看的就是它们。
+     *
+     * 此刻分页还没开(第 295 行才 paging_enable), LFB 物理地址可直接访问,
+     * 所以只设模式不映射; 映射放到 paging_enable 之后补。 */
+    {
+        extern int bochs_dispi_init(uint32_t, uint32_t, uint32_t);
+        extern uint32_t bochs_dispi_fb_phys(void);
+        extern uint32_t bochs_dispi_width(void);
+        extern uint32_t bochs_dispi_height(void);
+        extern uint32_t bochs_dispi_bpp(void);
+        extern int gfx_width, gfx_height, gfx_bpp;
+        extern uint8_t *gfx_fb_addr;
+        if (bochs_dispi_init(640, 480, 32) == 0) {
+            gfx_width  = (int)bochs_dispi_width();
+            gfx_height = (int)bochs_dispi_height();
+            gfx_bpp    = (int)bochs_dispi_bpp();
+            gfx_fb_addr = (uint8_t *)bochs_dispi_fb_phys();
+            serial_puts(0x3F8, "[GFX] true-color mode applied: ");
+            extern void serial_puthex(uint16_t, uint32_t);
+            serial_puthex(0x3F8, (uint32_t)gfx_width);
+            serial_puts(0x3F8, "x");
+            serial_puthex(0x3F8, (uint32_t)gfx_height);
+            serial_puts(0x3F8, "@32bpp fb=0x");
+            serial_puthex(0x3F8, (uint32_t)(uintptr_t)gfx_fb_addr);
+            serial_puts(0x3F8, "\n");
+        } else {
+            serial_puts(0x3F8, "[GFX] dispi unavailable, keep default 320x200@8bpp\n");
+        }
+    }
     extern void gfx_vga_register(void);
     extern void gfx_gop_register(void);
     extern void gfx_virtio_register(void);
@@ -293,6 +326,26 @@ void hepu_mem_init(uint32_t mem_kb)
     paging_init(mem_kb);
     syscall_dbg_check("after-paging");
     paging_enable();
+    /* D-7: bochs dispi 的真彩色 LFB 在 0xFD000000, 远超 256MB 直映区。
+     * 分页一开, 之前能直接写的物理地址就变成#PF —— 必须补映射。 */
+    {
+        extern uint32_t bochs_dispi_fb_phys(void);
+        extern uint32_t bochs_dispi_width(void);
+        extern uint32_t bochs_dispi_height(void);
+        extern page_directory_t *paging_get_kernel_dir(void);
+        extern int paging_map(page_directory_t *, uint32_t, uint32_t, uint32_t);
+        uint32_t fb = bochs_dispi_fb_phys();
+        if (fb && fb >= 0x10000000u) {
+            uint32_t bytes = bochs_dispi_width() * bochs_dispi_height() * 4u;
+            int ok = 1;
+            for (uint32_t off = 0; off < bytes; off += 4096u) {
+                if (paging_map(paging_get_kernel_dir(), fb + off, fb + off,
+                               PAGE_PRESENT | PAGE_WRITE) != 0) { ok = 0; break; }
+            }
+            serial_puts(0x3F8, ok ? "[GFX] LFB mapped after paging_enable\n"
+                                 : "[GFX] LFB map failed after paging_enable\n");
+        }
+    }
     /* V6.80: 映射GOP帧缓冲区（可能在256MB以上，如0x80000000） */
     {
         #include "multiboot.h"

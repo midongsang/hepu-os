@@ -319,12 +319,54 @@ double-height，真实分辨率仍是 320×200），所以尺寸本身不是证�
 也就是说：**五处寄存器错让"写显存"这件事成立了，但颜色这件事还根本不通。**
 在 8bpp 上无论怎么修寄存器都不可能出现桌面 —— 24 位色无法用 256 色索引表达。
 
-**下一步（32 位图形的正解）**：走 **bochs dispi VBE + 线性帧缓冲**，把 32 位切到
-真彩色（640×480×32 或 1024×768×32），和 64 位用同一套 `gfx_bpp == 32` 路径。
-需要三样东西，32 位都还没有：
-1. PCI config 读写（`0xCF8/0xCFC`）拿 VGA 设备的 **BAR0 = LFB 物理地址**
-2. bochs dispi 端口（`0x01CE/0x01CF`）设模式、读 pitch
-3. 把这些接到 `gfx_core` 的 VBE 后端（代码里已有 VBE LFB 路径，32 位没走过）
+**已完成：32 位切到真彩色（第七处错也一起修了）。**
+
+新增 `kernel/gfx/bochs_dispi.c`（32 位专属，符合 `GRAPHICS_BOUNDARY.md` 规则 3）：
+读 dispi ID → 设 640×480×32 → 读回验证 → 读 PCI `0:2.0` BAR0 → 回填 `gfx_*`。
+
+实测串口：
+
+```
+[BD-VBE] dispi id=0x0x0000B0C5
+[BD-VBE] mode set: 0x00000280x0x000001E0@0x00000020bpp     ← 640x480@32
+[BD-VBE] pci 0:2.0 bar0=0x0xFD000000
+[BD-VBE] linear framebuffer ready
+[GFX] true-color mode applied: 640x480@32bpp fb=0xFD000000
+```
+
+**这中间又抓出三处错（D-7 的第六、七、八处）：**
+
+**⑥ 假 GOP 抢走真后端。** `kernel/gfx/gfx_gop.c` 的 `gop_init()` 只看
+`gfx_width != 0 && gfx_height != 0` 就宣告成功，而这两个全局量**默认就是 320/200**
+（`vga_gfx.h` 里 `GFX_WIDTH 320`）。所以它永远"成功"，并且在探测顺序里排在 VBE
+前面，把真后端顶掉，然后画到硬编码的 `gfx_fb_phys = 0x80000000` 上 —— 一片黑。
+修法：加 `gfx_gop_available` 标志，默认 0；只有 UEFI 引导真的拿到 GOP 协议才置位。
+32 位走 BIOS/multiboot，永远没有 → 直接拒绝。日志变成
+`[GFX-GOP] no GOP protocol from firmware (BIOS boot), refuse`。
+
+**⑦ 图形初始化发生在分页启用之前，LFB 会掉出直映区。**
+`kernel_init.c` 里图形后端注册在第 187 行，而 `paging_enable()` 在第 295 行。
+所以 dispi 必须**在图形段之前**设模式（此刻没分页，LFB 物理地址可直接写）；
+而 `paging_init` 只直映前 256MB，`0xFD000000` 在区外 ——
+必须 `paging_enable()` 之后补一遍 `paging_map`，否则第一次绘制就 #PF。
+一开始把 dispi 放在 `init_sequence` 的 `[APPS] 3/7` 段是错的：`gfx_subsystem_selftest`
+在它之前就跑完了，自检 test9 在 320×200 下画 `y=400` 的线，越界卡死，
+**永远走不到后面那段代码**（日志里连 `[APPS]` 都没有）。
+
+**⑧ 回退判断不认 dispi，把刚设好的真彩色覆盖回 8bpp。**
+`gfx_has_vbe_fb()` 只查 `vbe_fb`，而 dispi 路径没填它 → `init_sequence` 判定
+"没有真帧缓冲"，于是调 `vga_gfx_init()`，后者**无条件**把 `gfx_width/height/bpp/
+fb_addr` 重置成 320×200@8bpp/`0xA0000`，还打出误导性的
+`no VBE/GOP framebuffer -> entering VGA mode 0x13`。
+修法：`gfx_has_vbe_fb()` 先查 `bochs_dispi_fb_phys() != 0`。
+
+**结果**：`screendump` 变成 **640×480**，画面是**准确的 `0x2D3748` 深灰蓝**
+（`draw_modern_background` 的颜色第一次被正确解释），184 色。
+串口 `[EDESKTOP] entering main loop (32-bit path)` + `with mouse...` 都在。
+
+**仍未做（布局层，不是链路层）**：顶栏 / 图标 / 文字还没出现在画面上 ——
+背景画对了但元素没画，属于 `calc_ui_scale()` 在 640×480 下的缩放/定位适配问题。
+链路（真彩色 + 后端 + 主循环）已经通了，这是纯排版问题。
 
 **额外发现：32 位启动后进的是 shell，不是 GUI 桌面。**
 `[APPS] 7/7: elastic_desktop_init done!` 之后紧跟 `[SHELL] main started` ——
