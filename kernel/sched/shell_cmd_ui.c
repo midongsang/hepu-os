@@ -461,15 +461,12 @@ void cmd_edesktop(void)
     serial_puts(0x3F8, "[EDESKTOP] entering elastic desktop mode...\n");
     vga_puts(" [EDESKTOP] entering elastic desktop mode...\n");
 
-    /* 初始化图形模式 */
-    vga_gfx_init();
-
-    /* 进入弹性桌面主循环（ESC退出） */
-    extern void elastic_desktop_main_loop(void);
-    elastic_desktop_main_loop();
-
-    /* 退出后重启恢复字体 */
-    sys_reboot_after_gfx();
+    /* 旧弹性桌面(desktop_render.c, 4522 行)已下线: 内核桌面只剩 hpdesk 一套,
+     * 32/64 共用。这里不再切图形模式进第二套桌面 —— 否则用户会看到一套
+     * 跟主桌面完全不同的界面, 分不清哪个才是真的。 */
+    serial_puts(0x3F8, "[EDESKTOP] retired: desktop_render.c is no longer reachable\n");
+    vga_puts(" desktop is provided by hpdesk; this entry is retired.\n");
+    return;
 }
 
 
@@ -790,14 +787,8 @@ void cmd_fontsize(char *args)
 
     vga_printf("Font size set to %dpx (setting=%d)\n", size, setting_val);
 
-    /* V7.17: 如果在图形模式下，立即重绘桌面 */
-    extern int gfx_width;
-    if (gfx_width > 0) {
-        extern void desktop_render_test(void);
-        vga_puts("Refreshing desktop with new font size...\n");
-        desktop_render_test();
-        vga_puts("Desktop refreshed.\n");
-    }
+    /* V7.17 原来在这里重绘旧桌面让字号立刻生效。旧桌面已下线,
+     * 字号由 hpdesk 在下一帧自己按 clock_font_size 取, 不需要这里推。 */
 }
 
 /* V7.18: 字体类型切换命令 */
@@ -834,12 +825,6 @@ void cmd_fonttype(char *args)
         vga_puts("Unknown font type. Use: bitmap, aa, truetype\n");
     }
 
-    /* 如果在图形模式下，重绘桌面 */
-    extern int gfx_width;
-    if (gfx_width > 0) {
-        extern void desktop_render_test(void);
-        desktop_render_test();
-    }
 }
 
 /* V7.30: TrueType Hinting控制 */
@@ -864,12 +849,6 @@ void cmd_hinting(char *args)
         vga_puts("Unknown option. Use: hinting on|off\n");
     }
 
-    /* 如果在图形模式下，重绘桌面 */
-    extern int gfx_width;
-    if (gfx_width > 0) {
-        extern void desktop_render_test(void);
-        desktop_render_test();
-    }
 }
 
 /* V7.19: 从文件系统加载TrueType字体 */
@@ -931,12 +910,6 @@ void cmd_fontload(char *args)
         vga_puts("TrueType font loaded successfully!\n");
         vga_puts("Use 'fonttype truetype' to switch to TrueType font.\n");
 
-        /* 如果在图形模式下，重绘桌面 */
-        extern int gfx_width;
-        if (gfx_width > 0) {
-            extern void desktop_render_test(void);
-            desktop_render_test();
-        }
     } else {
         vga_puts("Failed to load TrueType font (invalid format?)\n");
     }
@@ -1034,12 +1007,6 @@ void cmd_fontlist(char *args)
         int index = args[0] - '0';
         if (font_select(index) == 0) {
             vga_printf("Selected font: %s\n", font_get_name(index));
-            /* 重绘桌面 */
-            extern int gfx_width;
-            if (gfx_width > 0) {
-                extern void desktop_render_test(void);
-                desktop_render_test();
-            }
         } else {
             vga_printf("Failed to select font %d\n", index);
         }

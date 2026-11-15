@@ -285,19 +285,10 @@ void shell_main(void)
         cmd_run_auto("pae_compat_test");
         serial_puts(0x3F8, "[AUTO] pae_compat_test done\n");
         serial_puts(0x3F8, "[AUTO] PAE validation complete\n");
-        /* V6.90: 自动渲染桌面用于视觉验证 (5秒后自动继续) */
-        serial_puts(0x3F8, "[AUTO] rendering desktop preview...\n");
-        extern void vga_gfx_init(void);
-        vga_gfx_init();
-        extern void desktop_render_test(void);
-        desktop_render_test();
-        /* 保持桌面显示5秒 */
-        extern void pit_sleep(uint32_t);
-        pit_sleep(5000);
-        /* 切回文本模式 */
-        extern void vga_gfx_text_mode(void);
-        vga_gfx_text_mode();
-        serial_puts(0x3F8, "[AUTO] desktop preview done\n");
+        /* V6.90 原来在这里渲一帧旧桌面(desktop_render.c)做视觉验证。
+         * 旧桌面已下线, 内核桌面统一由 hpdesk 提供, 这一段不再调它 ——
+         * 否则自检会拉出一套跟真实桌面不同的界面, 反而误导。 */
+        serial_puts(0x3F8, "[AUTO] desktop preview skipped (desktop moved to hpdesk)\n");
     }
     firstboot_welcome();  /* V3.87-E15: 首次启动引导页(auto-test 之后, 避免被挤出屏外) */
 #endif
