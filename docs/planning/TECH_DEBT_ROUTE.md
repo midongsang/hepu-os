@@ -121,6 +121,53 @@
 **注意这只是第一条线**：32 位其余文件（`kernel/fs/*.c`、`kernel/mm/*.c` 等）**仍未接 `shared/`**。
 引用数 1 是"开了头"，不是"完成"——D-2 的完整口径是 32 位核心子系统都走契约，不是单文件打钩。
 
+**顺带解决了 32 位真正的硬阻塞：网络自检死循环**（不属于 D-2，但它是 D-2 的验证前提）。
+
+现象：32 位串口停在 `[NET-TEST] Starting DHCP...`，60 秒、75 秒、加 `-nic user` 都一样，
+总是 306 行。原以为"等网络超时"，实际是**死循环**。
+
+根因（一行诊断代码定死）：
+
+```
+[NET-TEST] diag tick=0 if=0(interrupts OFF)
+```
+
+32 位从启动到 net proto **全程 IF=0**（`kernel/arch/x86` 里除 `vga_gfx.c` 两处外
+没有任何 `sti`），PIT 中断不执行，`pit_get_ticks()` 恒 0。而 `dhcp_start()` 的超时判据是：
+
+```c
+while (pit_get_ticks() - start_time < 3000)   /* start_time = 0 → 0-0 < 3000 永远真 */
+```
+
+**永远成立，出不来。** 不是网络慢，是超时条件在中断关闭时数学上不成立。
+
+修法（`kernel/net/dhcp.c`）：双判据 `dhcp_wait_expired()` —— tick 一旦开始走就用真时间，
+tick 不走就退化为轮询次数上限（`DHCP_WAIT_SPINS 400000`）。
+
+**为什么不动 `sti`**：32 位整条启动路径都不开中断（图形阶段才开），这是既有设计；
+在 net 之前补 `sti` 会让 PIT ISR 里的 `sched_tick()` 进到未验证的启动期调度 ——
+64 位在 `3aeb4b6` 踩过这个坑（khouse/kstat 参与启动期调度直接死锁）。改一个等待循环
+是局部止损，开中断是把风险摊到全局。
+
+**效果**：串口 **306 → 536 行**，跑完 52 个 KUNIT suite、字体加载、
+`[APPS] 7/7 elastic_desktop_init done`、`[SHELL] main started`。
+
+`tools/regress32.sh` 判据同步从 3 条加到 5 条（加 `[NET-TEST] === Self-Test Complete ===`
+和 `[DESKTOP] elastic free desktop init done`），实测 5 条全过。
+
+**第一次跑到这么远，也就第一次看见 32 位的存量问题**（都是 32 位历史遗留，不是 D-2 引入）：
+
+| suite | 结果 |
+|---|---|
+| syscall deep | 0x31 passed / **1 failed** |
+| user scenario | 0xD passed / **3 failed** |
+| integration | 0xD passed / **1 failed** |
+| security E2E | 0xE passed / **1 failed** |
+
+合计 6 个 fail，`[KTEST] RESULT: FAIL`。**32 位从来没跑到这一步，所以这些从没被看见过。**
+
+
+
 **验收**：32 位内核能编能跑（32 位回归按现状跑通）；32 位侧引用 `shared/` 的文件数从 0 变 1；
 64 位回归不受影响。
 
@@ -189,3 +236,25 @@ D-1（定位双重解锁） → D-2（32 位接入 shared） → D-3（create_pr
 
 D-1 排第一是因为它是**唯一一条"会挂且靠止损"**的。D-2 排第二是因为它决定"双微内核"
 是不是真的成立。D-4 虽然项数多但都是视觉一致性，可以随时插空做。
+
+---
+
+## D-7 32 位图形模式未生效（显示花屏）
+
+**为什么排在这**：它会"挂靠"——图形画不出来，32 位就永远验不到桌面对不对，
+后面所有 32 位 UI 工作都没法验收。
+
+**现状证据**：32 位跑到 `[DESKTOP] elastic free desktop init done`（逻辑初始化成功），
+但 QEMU `screendump` 得到的是 **720×400**（= VGA 文本模式的分辨率），画面是彩色像素块，
+没有任何可读文本或桌面元素。
+
+**定性**：`kernel/arch/x86/vga_gfx.c` 按 mode 0x13（320×200×256）或 VBE LFB 逐像素写
+`framebuffer`，但**模式没切换成功** —— 于是像素数据被写进了文本模式显存区域，
+把 80×25 的字符位图覆盖成花屏。这不是"画错了"，是**目标显存不对**。
+
+**验收**：`screendump` 尺寸等于 `gfx_width × gfx_height`，且画面能辨识出顶栏/图标。
+
+**回滚**：无（修复，非优化）。
+
+**下一步取证顺序**：① 0x13 模式设置序列返回值；② VBE 是否已把 CRTC 改成线性模式、
+导致 0x13 的寄存器表不兼容；③ `gfx_width/gfx_height` 与真实显存的对应关系。

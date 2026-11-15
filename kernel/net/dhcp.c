@@ -183,6 +183,29 @@ static int dhcp_build_request(hepu_dhcp_msg_t *msg, uint8_t *mac,
 }
 
 /* 启动DHCP */
+/* ----------------------------------------------------------------------------
+ * DHCP 等待判据（D-2 相关，但根因是中断状态）
+ *
+ * 原判据是 `pit_get_ticks() - start < 3000`，前提是 PIT 在走。
+ * 实测 32 位启动阶段 **全程 IF=0（中断关闭）**，pit_get_ticks() 恒为 0，
+ * 于是 `0 - 0 < 3000` 永远成立 —— 等待循环变成死循环，串口停在
+ * "[NET-TEST] Starting DHCP..." 之后再也不动。
+ *
+ * 这里改成双判据：tick 一旦开始走就用真时间；tick 不走（中断关闭）就退化为
+ * 轮询次数上限。不改变任何网络行为，只让"超时"这个条件在两种中断状态下都能成立。
+ * -------------------------------------------------------------------------- */
+#define DHCP_WAIT_TICKS 3000
+#define DHCP_WAIT_SPINS 400000
+
+static int dhcp_wait_expired(uint32_t start_tick, uint32_t spins)
+{
+    extern uint32_t pit_get_ticks(void);
+    uint32_t now = pit_get_ticks();
+    if (now != start_tick)
+        return (now - start_tick) >= DHCP_WAIT_TICKS;
+    return spins >= DHCP_WAIT_SPINS;
+}
+
 int dhcp_start(const char *interface)
 {
     if (!dhcp_initialized || !interface) return -1;
@@ -236,7 +259,9 @@ int dhcp_start(const char *interface)
     udp_sendto(sock, 0xFFFFFFFF, 67, (uint8_t *)&discover, sizeof(discover));
 
     uint32_t start_time = pit_get_ticks();
-    while (pit_get_ticks() - start_time < 3000) {
+    uint32_t spins = 0;
+    while (!dhcp_wait_expired(start_time, spins)) {
+        spins++;
         net_poll();
         int len = udp_recvfrom(sock, reply, sizeof(reply), NULL, NULL);
         if (len > 0) {
@@ -267,7 +292,9 @@ int dhcp_start(const char *interface)
         udp_sendto(sock, 0xFFFFFFFF, 67, (uint8_t *)&request, sizeof(request));
 
         start_time = pit_get_ticks();
-        while (pit_get_ticks() - start_time < 3000) {
+        spins = 0;
+        while (!dhcp_wait_expired(start_time, spins)) {
+            spins++;
             net_poll();
             int len = udp_recvfrom(sock, reply, sizeof(reply), NULL, NULL);
             if (len > 0) {

@@ -18,7 +18,24 @@ void network_selftest(void)
     if (selftest_done) return;
     selftest_done = 1;
 
-    serial_puts(0x3F8, "[NET-TEST] === Network Self-Test ===\n");
+    /* 诊断: DHCP 卡住的根因就在这两个值。dhcp_start 的超时判据是 pit_get_ticks(),
+     * 如果 tick 不走(中断没开), while(tick-start < 3000) 就是死循环。 */
+    {
+        extern uint32_t pit_get_ticks(void);
+        uint32_t flags;
+        __asm__ volatile ("pushf; pop %0" : "=r"(flags));
+        serial_puts(0x3F8, "[NET-TEST] === Network Self-Test ===\n");
+        serial_puts(0x3F8, "[NET-TEST] diag tick=");
+        {
+            char b[12]; uint32_t v = pit_get_ticks(); int i = 0;
+            if (!v) b[i++] = '0';
+            else { char t[12]; int j = 0; while (v) { t[j++] = '0' + (v % 10); v /= 10; }
+                   while (j) b[i++] = t[--j]; }
+            b[i] = 0;
+            serial_puts(0x3F8, b);
+        }
+        serial_puts(0x3F8, (flags & 0x200) ? " if=1\n" : " if=0(interrupts OFF)\n");
+    }
 
     /* 测试1: DHCP启动（非阻塞） */
     serial_puts(0x3F8, "[NET-TEST] Starting DHCP...\n");
