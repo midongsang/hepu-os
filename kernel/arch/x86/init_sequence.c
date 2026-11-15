@@ -471,6 +471,14 @@ int hepu_init_phase(init_phase_t phase)
             }
             camera2_init(); audio2_init(); telecom2_init();
             ai2_init(); carlink_init(); enterprise2_init();
+            /* CJK 字模是按"文本平面 2"写 0xA0000 的（slot 从 0x80 起 = offset 0x1000+），
+             * 在图形模式下那就是帧缓冲 —— 字体一加载屏幕上就多出点阵。
+             * 这里立刻 flip 一次，用 back_buffer 把它覆盖掉。 */
+            {
+                extern void gfx_flip(void);
+                extern int gfx_bpp;
+                if (gfx_bpp == 8) gfx_flip();
+            }
             { extern void serial_puts(uint16_t, const char *); serial_puts(0x3F8, "[APPS] 4/7: kernel/drivers/userland...\n"); }
             kernel_opt_init(); drivers2_init(); appeco_init();
             kernel_core_init(); drivers_real_init();
@@ -527,6 +535,19 @@ int hepu_init_phase(init_phase_t phase)
                 extern void serial_puts(uint16_t, const char *);
                 serial_puts(0x3F8, "[APPS] 7/7: elastic_desktop_init done!\n");
                 gfx_fb_stats("after-desktop-init");
+            /* 只 init 不绘制 = 屏幕上什么都没有。32 位此前就停在这一步、
+             * 直接掉进 shell，所以"图形通了但没内容"。这里进真正的桌面主循环。
+             * 它会一直跑（桌面系统本就如此），因此后面的 shell 不会自动启动；
+             * 需要 shell 时在桌面里退出。 */
+            {
+                extern void elastic_desktop_main_loop(void);
+                extern int gfx_bpp;
+                if (gfx_bpp == 8) {
+                    extern void serial_puts(uint16_t, const char *);
+                    serial_puts(0x3F8, "[EDESKTOP] entering main loop (32-bit VGA path)\n");
+                    elastic_desktop_main_loop();
+                }
+            }
                 { extern void vga_dump_regs(void); vga_dump_regs(); }
             }
             ai_notification_init(); creator_mode_init();

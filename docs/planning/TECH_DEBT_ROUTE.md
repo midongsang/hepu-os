@@ -303,6 +303,29 @@ double-height，真实分辨率仍是 320×200），所以尺寸本身不是证�
 所以点阵留在了屏上。要么图形模式下把字模写进内存表（不碰显存），要么字体加载后强制
 重绘一次。
 
+**已修：32 位进桌面主循环（但仍画不出东西，见下一段）。**
+在 `[APPS] 7/7` 之后直接调 `elastic_desktop_main_loop()`，串口确认
+`[EDESKTOP] entering main loop (32-bit VGA path)` 之后接上的是
+`[EDESKTOP] entering main loop with mouse...` —— 绘制循环真的在跑。
+同时在字体加载后补了一次 `gfx_flip()`，把字模污染的点阵盖掉。
+
+**新发现的根本矛盾（这才是"黑屏"的真因）：色深不匹配。**
+`desktop_render.c` 的桌面是**按 24 位真彩色画的**：
+`draw_modern_background()` 用 `gfx_fill_rect(0, 0, gfx_width, gfx_height, 0x2D3748)`，
+图标、顶栏、文字全是 `0xRRGGBB`。而 32 位当前跑在 **VGA 0x13 = 8bpp 索引色**，
+调色板只有我们自己设的那 16 个颜色。于是 `0x2D3748` 被当成**调色板索引 0x48** 去查，
+查不到 → 全屏变成黑（截图里只剩中间一行稀疏点，那是字模残留）。
+
+也就是说：**五处寄存器错让"写显存"这件事成立了，但颜色这件事还根本不通。**
+在 8bpp 上无论怎么修寄存器都不可能出现桌面 —— 24 位色无法用 256 色索引表达。
+
+**下一步（32 位图形的正解）**：走 **bochs dispi VBE + 线性帧缓冲**，把 32 位切到
+真彩色（640×480×32 或 1024×768×32），和 64 位用同一套 `gfx_bpp == 32` 路径。
+需要三样东西，32 位都还没有：
+1. PCI config 读写（`0xCF8/0xCFC`）拿 VGA 设备的 **BAR0 = LFB 物理地址**
+2. bochs dispi 端口（`0x01CE/0x01CF`）设模式、读 pitch
+3. 把这些接到 `gfx_core` 的 VBE 后端（代码里已有 VBE LFB 路径，32 位没走过）
+
 **额外发现：32 位启动后进的是 shell，不是 GUI 桌面。**
 `[APPS] 7/7: elastic_desktop_init done!` 之后紧跟 `[SHELL] main started` ——
 桌面只做了 init，没有任何绘制循环在跑（`desktop_render.c` 的 `gfx_flip()` 一次都没被调用，
