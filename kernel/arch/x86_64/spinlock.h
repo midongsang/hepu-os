@@ -57,8 +57,17 @@ int spinlock_is_locked(spinlock_t *lock);
  * ------------------------------------------------------------------------- */
 static inline uint64_t spinlock_lock_irqsave(spinlock_t *lock)
 {
+#if defined(__x86_64__)
     uint64_t flags;
     __asm__ volatile("pushfq\n\tpopq %0" : "=r"(flags) : : "memory");
+#else
+    /* D-8/P1-4: hpdesk.c 现在也编进 32 位, 会包含本头文件。
+     * 32 位汇编器没有 pushfq/popq, 用 pushfl/popl;
+     * 高位补 0 —— 32 位 RFLAGS 本来就只到 bit 21, IF 在 bit 9 不变。 */
+    uint32_t flags32;
+    __asm__ volatile("pushfl\n\tpopl %0" : "=r"(flags32) : : "memory");
+    uint64_t flags = (uint64_t)flags32;
+#endif
     __asm__ volatile("cli" ::: "memory");
     spinlock_lock(lock);
     return flags;

@@ -57,7 +57,17 @@ INITRD_OBJ = $(BUILD_DIR)/initrd.o
 
 # V2.01: scheduler.c为历史死代码(被process.c/kernel_core.c取代), 显式排除不编译
 # V0.10.133: 排除x86_64目录(64位特定代码), 避免32位编译错误
-C_SRCS = $(filter-out $(KERNEL_DIR)/sched/scheduler.c $(KERNEL_DIR)/arch/x86_64/%,$(shell find $(KERNEL_DIR) -name "*.c"))
+# D-8 / P1-4: hpdesk.c(64 位桌面) 也编进 32 位 —— 这是"32 位共用 64 位桌面"。
+#   它不碰硬件, 只调 gfx64_* 图元(ARCHITECTURE_LAYERS.md 判据), 所以 32 位只要
+#   提供同签名的 gfx64_* 实现(见 arch/x86/gfx64_compat*.c)就能链接。
+#   64 位其余文件仍排除 —— 只放行这一个。
+HP_DESK_SHARED = $(KERNEL_DIR)/arch/x86_64/hpdesk.c
+# 先排除全部 x86_64, 再把 hpdesk.c 单独追加回来
+# hs_ui.c(UI 树/命中) + hsqml.c(QML 解析) 也是纯软件, 跟 hpdesk 一起放行
+HP_DESK_DEPS = $(HP_DESK_SHARED) \
+               $(KERNEL_DIR)/arch/x86_64/hs_ui.c \
+               $(KERNEL_DIR)/arch/x86_64/hsqml.c
+C_SRCS = $(filter-out $(KERNEL_DIR)/sched/scheduler.c $(KERNEL_DIR)/arch/x86_64/%,$(shell find $(KERNEL_DIR) -name "*.c")) $(HP_DESK_DEPS)
 
 # 目标文件
 ASM_OBJS = $(patsubst $(KERNEL_DIR)/%.S,$(BUILD_DIR)/%.o,$(ASM_SRCS))

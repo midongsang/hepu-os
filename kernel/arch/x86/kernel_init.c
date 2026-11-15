@@ -195,7 +195,10 @@ void hepu_sched_init(void)
         extern uint32_t bochs_dispi_bpp(void);
         extern int gfx_width, gfx_height, gfx_bpp;
         extern uint8_t *gfx_fb_addr;
-        if (bochs_dispi_init(640, 480, 32) == 0) {
+        /* P1-2: 与 64 位桌面同分辨率。64 位 hpdesk 按 1920x1080 / 150% 设计
+         * (VISUAL_SPEC.md), 32 位若停在 640x480, 侧栏 500 逻辑像素直接装不下,
+         * 共用桌面前提就是两边同屏。 */
+        if (bochs_dispi_init(1920, 1080, 32) == 0) {
             gfx_width  = (int)bochs_dispi_width();
             gfx_height = (int)bochs_dispi_height();
             gfx_bpp    = (int)bochs_dispi_bpp();

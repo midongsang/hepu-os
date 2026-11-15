@@ -544,10 +544,34 @@ int hepu_init_phase(init_phase_t phase)
              * (SYS_MMAP)，桌面逻辑搬到 user/apps/desktop.c。
              *
              * 这里不再进 elastic_desktop_main_loop()，只留一句交接日志。 */
+            /* D-8 / P1-4: 32 位第一次跑 64 位那套桌面。
+             *
+             * hpdesk.c(8206 行) 已编进 32 位 —— 它不碰硬件, 只调 gfx64_* 图元
+             * (ARCHITECTURE_LAYERS.md 判据), 32 位用 gfx64_compat*.c 提供同名实现。
+             * 这里先只画一帧验证链路, 主循环放到下一步。 */
             {
                 extern void serial_puts(uint16_t, const char *);
-                serial_puts(0x3F8,
-                    "[EDESKTOP] in-kernel desktop retired; handed to user space\n");
+                void init_serial_puthex(uint32_t);
+                extern int  hpdesk_init(int, int);
+                extern void hpdesk_render(void);
+                extern int gfx_width, gfx_height;
+
+                serial_puts(0x3F8, "[EDESKTOP] calling hpdesk_init on 32-bit\n");
+                int rc = hpdesk_init(gfx_width, gfx_height);
+                serial_puts(0x3F8, "[EDESKTOP] hpdesk_init rc=");
+                init_serial_puthex((uint32_t)rc);
+                serial_puts(0x3F8, "\n");
+                if (rc == 0) {
+                    uint32_t t0l, t0h, t1l, t1h;
+                    __asm__ volatile("rdtsc" : "=a"(t0l), "=d"(t0h));
+                    hpdesk_render();
+                    __asm__ volatile("rdtsc" : "=a"(t1l), "=d"(t1h));
+                    uint64_t dt = ((uint64_t)t1h << 32 | t1l) - ((uint64_t)t0h << 32 | t0l);
+                    serial_puts(0x3F8, "[EDESKTOP] first frame rendered, cycles=");
+                    init_serial_puthex((uint32_t)(dt >> 32));
+                    init_serial_puthex((uint32_t)(dt & 0xFFFFFFFFu));
+                    serial_puts(0x3F8, "\n");
+                }
             }
                 { extern void vga_dump_regs(void); vga_dump_regs(); }
             }

@@ -34,12 +34,11 @@ extern int      gfx_bpp;
 extern uint8_t *framebuffer;
 
 /* 共享算法层 (两边都编) */
-extern void gfx_algo_draw_rect(void *fb, int pitch, int bpp, uint32_t color,
-                               int x, int y, int w, int h);
-extern void gfx_algo_draw_line(void *fb, int pitch, int bpp, uint32_t color,
-                               int x0, int y0, int x1, int y1);
-extern void gfx_algo_fill_rounded_rect(void *fb, int pitch, int bpp, uint32_t color,
-                                       int x, int y, int w, int h, int radius);
+/* 注意: shared/gfx/gfx_algo.c 里的三个函数第一个参数是 gfx_algo_backend_t *ops,
+ * 不是 framebuffer —— 早期这里按"fb/pitch/bpp"声明并调用, 参数整体错位后
+ * 把 framebuffer 当结构体指针解引用, 画出一条长度天文数字的线, 直接把内核卡死
+ * (P1-4 实测: 顶栏第一次 draw_rounded_rect 就挂在这)。
+ * 结论: 32 位兼容层不再复用 gfx_algo_*, 全部自己实现。 */
 
 /* ---------- 裁剪状态 ---------- */
 static int g32_clip_on = 0;
@@ -109,21 +108,71 @@ void gfx64_fill_rect(int x, int y, int w, int h, uint32_t color)
     gfx_fillrect_rgb(x, y, w, h, color);   /* 非 32bpp 退回旧路径 */
 }
 
+/* 32 位矩形描边: 上下两条横线走批量, 左右两条竖线逐像素(高度小) */
 void gfx64_draw_rect(int x, int y, int w, int h, uint32_t color)
 {
     g32_clamp(&x, &y, &w, &h);
     if (w <= 0 || h <= 0) return;
-    gfx_algo_draw_rect(framebuffer, gfx_pitch, gfx_bpp, color, x, y, w, h);
+    gfx64_fill_rect(x, y, w, 1, color);
+    if (h > 1) gfx64_fill_rect(x, y + h - 1, w, 1, color);
+    if (h > 2) {
+        int row;
+        for (row = 1; row < h - 1; row++) {
+            extern void gfx_putpixel(int, int, uint32_t);
+            gfx_putpixel(x, y + row, color);
+            if (w > 1) gfx_putpixel(x + w - 1, y + row, color);
+        }
+    }
 }
 
 /* ================= 圆角 ================= */
 
+/* 整数开方: 只用于算圆角每行内缩量 */
+static int g32_isqrt(int v)
+{
+    if (v <= 0) return 0;
+    int r = v, i;
+    for (i = 0; i < 3; i++) r = (r + v / r) >> 1;
+    while (r > 0 && r * r > v) r--;
+    while ((r + 1) * (r + 1) <= v) r++;
+    return r;
+}
+
+/* P1-4: 原来整块丢给 gfx_algo_fill_rounded_rect —— 逐像素, 一个 260x40 胶囊
+ * 就要一万次单像素调用。这里按行走: 每行只算左右内缩 dx, 中间段 rep stosl
+ * 一次写完。轮廓 dx = radius - sqrt(radius^2 - dy^2), 视觉上与 AA 版几乎无差。 */
 void gfx64_fill_rounded_rect(int x, int y, int w, int h, int radius, uint32_t color)
 {
     g32_clamp(&x, &y, &w, &h);
     if (w <= 0 || h <= 0) return;
-    gfx_algo_fill_rounded_rect(framebuffer, gfx_pitch, gfx_bpp, color,
-                               x, y, w, h, radius);
+
+    if (gfx_bpp != 32) {
+        gfx_fillrect_rgb(x, y, w, h, color);   /* 非 32bpp: 退回直角矩形 */
+        return;
+    }
+    if (radius > w / 2) radius = w / 2;
+    if (radius > h / 2) radius = h / 2;
+    if (radius <= 0) { gfx64_fill_rect(x, y, w, h, color); return; }
+
+    uint32_t v = color | 0xFF000000u;
+    int r2 = radius * radius;
+    int row;
+    for (row = 0; row < h; row++) {
+        int dx = 0;
+        if (row < radius) {
+            int dy = radius - row - 1;
+            dx = radius - g32_isqrt(r2 - dy * dy);
+        } else if (row >= h - radius) {
+            int dy = row - (h - radius);
+            dx = radius - g32_isqrt(r2 - dy * dy);
+        }
+        int rw = w - 2 * dx;
+        if (rw <= 0) continue;
+        if (y + row < 0 || y + row >= gfx_height) continue;
+        uint32_t *p = (uint32_t *)(framebuffer + (size_t)(y + row) * gfx_pitch)
+                                 + (x + dx);
+        g32_fill_row32(p, rw, v);
+    }
 }
 
 void gfx64_draw_rounded_rect(int x, int y, int w, int h, int radius, uint32_t color)
@@ -217,7 +266,23 @@ void gfx64_fill_circle_gradient(int cx, int cy, int r, uint32_t c1, uint32_t c2)
 
 void gfx64_draw_line_aa(int x0, int y0, int x1, int y1, uint32_t color)
 {
-    gfx_algo_draw_line(framebuffer, gfx_pitch, gfx_bpp, color, x0, y0, x1, y1);
+    /* 32 位: 自己的 Bresenham, 不做抗锯齿(退化项已在启动时声明) */
+    {
+        extern void gfx_putpixel(int, int, uint32_t);
+        int dx = x1 > x0 ? x1 - x0 : x0 - x1;
+        int dy = y1 > y0 ? y1 - y0 : y0 - y1;
+        int sx = x0 < x1 ? 1 : -1;
+        int sy = y0 < y1 ? 1 : -1;
+        int err = dx - dy;
+        int guard = 0;
+        while (guard++ < 4096) {
+            gfx_putpixel(x0, y0, color);
+            if (x0 == x1 && y0 == y1) break;
+            int e2 = err * 2;
+            if (e2 > -dy) { err -= dy; x0 += sx; }
+            if (e2 <  dx) { err += dx; y0 += sy; }
+        }
+    }
 }
 
 void gfx64_fill_polygon(const int *pts, int n, uint32_t color)
@@ -334,9 +399,69 @@ uint32_t gfx64_get_pixel(int x, int y)
 
 /* ================= 字体 ================= */
 
+/* P1-4: 原来直接转发 gfx_draw_string_font。它在 32 位下取的是可变字号
+ * (hpdesk 传 hs_s(16) = 150% 下 24px), 而 font_render_glyph 的缩放路径
+ * 对非 16px 会给出错位的 bitmap —— 屏幕上就是一片白横条纹。
+ * 改成自己画: UTF-8 解码 -> font_render_glyph 固定拿 8x16 点阵 -> 直接写 LFB。
+ * 字号固定 16px(与 150% 下的视觉尺寸最接近), 不在字号上折腾。 */
 void font64_draw_string(void *fb, int fw, int fh,
                         int x, int y, const char *str, uint32_t color, uint16_t size)
 {
-    (void)fb; (void)fw; (void)fh;
-    gfx_draw_string_font(x, y, str, color, (int)size);
+    extern int font_render_glyph(uint32_t codepoint, uint8_t type, uint16_t size,
+                                 const uint8_t **bitmap, uint16_t *width,
+                                 uint16_t *height, int16_t *advance,
+                                 int16_t *bearing_x, int16_t *bearing_y);
+    (void)fb; (void)fw; (void)fh; (void)size;
+
+    if (!str || gfx_bpp != 32) return;
+    uint32_t v = color | 0xFF000000u;
+    int cur_x = x, cur_y = y;
+
+    while (*str) {
+        uint32_t cp;
+        const unsigned char *p8 = (const unsigned char *)str;
+        if (p8[0] < 0x80) { cp = p8[0]; str += 1; }
+        else if ((p8[0] & 0xE0) == 0xC0 && p8[1]) {
+            cp = ((uint32_t)(p8[0] & 0x1F) << 6) | (p8[1] & 0x3F); str += 2;
+        } else if ((p8[0] & 0xF0) == 0xE0 && p8[1] && p8[2]) {
+            cp = ((uint32_t)(p8[0] & 0x0F) << 12) |
+                 ((uint32_t)(p8[1] & 0x3F) << 6) | (p8[2] & 0x3F); str += 3;
+        } else if ((p8[0] & 0xF8) == 0xF0 && p8[1] && p8[2] && p8[3]) {
+            cp = ((uint32_t)(p8[0] & 0x07) << 18) |
+                 ((uint32_t)(p8[1] & 0x3F) << 12) |
+                 ((uint32_t)(p8[2] & 0x3F) << 6) | (p8[3] & 0x3F); str += 4;
+        } else { cp = p8[0]; str += 1; }
+
+        const uint8_t *bm = 0;
+        uint16_t w = 0, h = 0;
+        int16_t adv = 0, bx = 0, by = 0;
+        if (font_render_glyph(cp, 1 /* BITMAP_8x16 */, 16,
+                              &bm, &w, &h, &adv, &bx, &by) != 0) {
+            cur_x += 8;
+            continue;
+        }
+        /* 防御: 位图尺寸异常直接跳过, 不要画出一片横线 */
+        if (!bm || w == 0 || h == 0 || w > 32 || h > 32) { cur_x += 8; continue; }
+
+        for (uint16_t row = 0; row < h; row++) {
+            int py = cur_y + by + row;
+            if (py < 0 || py >= gfx_height) continue;
+            uint32_t *line = (uint32_t *)(framebuffer + (size_t)py * gfx_pitch);
+            for (uint16_t col = 0; col < w; col++) {
+                uint8_t a = bm[row * w + col];
+                if (!a) continue;
+                int px = cur_x + bx + col;
+                if (px < 0 || px >= gfx_width) continue;
+                if (a == 255) line[px] = v;
+                else {
+                    uint32_t bg = line[px];
+                    int r = (((v >> 16) & 0xFF) * a + ((bg >> 16) & 0xFF) * (255 - a)) / 255;
+                    int g = (((v >> 8) & 0xFF) * a + ((bg >> 8) & 0xFF) * (255 - a)) / 255;
+                    int b = ((v & 0xFF) * a + (bg & 0xFF) * (255 - a)) / 255;
+                    line[px] = (uint32_t)((r << 16) | (g << 8) | b) | 0xFF000000u;
+                }
+            }
+        }
+        cur_x += (adv > 0 && adv < 40) ? adv : (int)w;
+    }
 }

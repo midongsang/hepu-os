@@ -2604,6 +2604,15 @@ static inline uint64_t hs_rdtsc(void)
     __asm__ volatile("rdtsc" : "=a"(a), "=d"(d));
     return ((uint64_t)d << 32) | a;
 }
+
+/* P1-4: 32 位跑 hpdesk 时的阶段打点。64 位为空宏, 行为完全不变。 */
+#if defined(__i386__)
+#define HPD_TRACE(msg) do { \
+    extern void serial_puts(uint16_t, const char *); \
+    serial_puts(0x3F8, msg); } while (0)
+#else
+#define HPD_TRACE(msg) do { } while (0)
+#endif
 static uint64_t g_cyc_render_all, g_cyc_blend, g_cyc_panel;
 /* V0.59.16 二级切分: 把 render_all 与 other 各自再拆一层 */
 static uint64_t g_cyc_wall, g_cyc_panels, g_cyc_cc, g_cyc_notify, g_cyc_cursor;
@@ -6531,6 +6540,7 @@ static void hpdesk_render_inner(void)
     { uint64_t w0 = hs_rdtsc();
       hs_wallpaper_render();
       g_cyc_wall += hs_rdtsc() - w0; }
+    HPD_TRACE("[HPD] wallpaper done\n");
     /* V0.56: 切壁纸后首帧 — 壁纸绘制完成即采样提取源色 (窗口/面板尚未绘制) */
     if (g_wallpaper_dirty) {
         g_wallpaper_dirty = 0;
@@ -6541,8 +6551,10 @@ static void hpdesk_render_inner(void)
     { uint64_t p0 = hs_rdtsc();
       hs_panel_render_all();
       g_cyc_panels += hs_rdtsc() - p0; }
+    HPD_TRACE("[HPD] panels done\n");
 
     hs_window_render_all();
+    HPD_TRACE("[HPD] windows done\n");
     /* 控制中心绘制在窗口之上，避免被最大化窗口遮挡 */
     if (g_shell.panel_registry[HS_PANEL_CONTROL_CENTER].enabled && g_cc_open) {
         uint64_t cc0 = hs_rdtsc();
