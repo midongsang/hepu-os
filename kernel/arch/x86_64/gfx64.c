@@ -144,9 +144,53 @@ void gfx64_set_target_back(void)
 {
     uint64_t gfx_f = spinlock_lock_irqsave(&g_gfx_lock);
     if (!back_buffer && !back_buf_alloc_ok) {
-        uint64_t phys = pmm64_alloc_pages((GFX_MAX_BUF + 4095) / 4096);
+        /* P0-2 修复: 原来固定按 GFX_MAX_BUF(1024x768x4=3MB) 分配, 而实际屏
+         * 1920x1080 需要 8.3MB, 且 gfx_target 写入无边界检查 —— 越界写 5.3MB
+         * 到内核堆, 表现为随机崩。改为按实际屏尺寸分配。 */
+        uint64_t need = (uint64_t)GFX_MAX_BUF;
+        if (gfx_width > 0 && gfx_height > 0) {
+            need = (uint64_t)gfx_width * (uint64_t)gfx_height * 4ULL;
+        }
+        uint64_t pages = (need + 4095) / 4096;
+        uint64_t phys = pmm64_alloc_pages(pages);
         if (phys) {
             back_buffer = (uint8_t *)(uintptr_t)phys;
+            extern void klog64_log(const char *);
+            extern void serial_puts(uint16_t, const char *);
+            extern void serial_puthex(uint16_t, uint32_t);
+            char b[96]; int i = 0;
+            const char *t = "[GFX-BB] alloc pages=";
+            while (*t) b[i++] = *t++;
+            { uint64_t v = pages; char d[16]; int j = 0;
+              if (!v) d[j++] = '0';
+              while (v) { d[j++] = (char)('0' + v % 10); v /= 10; }
+              while (j) b[i++] = d[--j]; }
+            t = " bytes="; while (*t) b[i++] = *t++;
+            { uint64_t v = pages * 4096; char d[16]; int j = 0;
+              if (!v) d[j++] = '0';
+              while (v) { d[j++] = (char)('0' + v % 10); v /= 10; }
+              while (j) b[i++] = d[--j]; }
+            t = " (w,h="; while (*t) b[i++] = *t++;
+            { int v = gfx_width; char d[8]; int j = 0;
+              if (!v) d[j++] = '0';
+              while (v) { d[j++] = (char)('0' + v % 10); v /= 10; }
+              while (j) b[i++] = d[--j]; }
+            b[i++] = ',';
+            { int v = gfx_height; char d[8]; int j = 0;
+              if (!v) d[j++] = '0';
+              while (v) { d[j++] = (char)('0' + v % 10); v /= 10; }
+              while (j) b[i++] = d[--j]; }
+            b[i++] = ')'; b[i++] = '\n'; b[i] = 0;
+            klog64_log(b);
+            serial_puts(0x3F8, "[GFX-BB] pages=");
+            serial_puthex(0x3F8, (uint32_t)pages);
+            serial_puts(0x3F8, " bytes=");
+            serial_puthex(0x3F8, (uint32_t)(pages * 4096));
+            serial_puts(0x3F8, " w=");
+            serial_puthex(0x3F8, (uint32_t)gfx_width);
+            serial_puts(0x3F8, " h=");
+            serial_puthex(0x3F8, (uint32_t)gfx_height);
+            serial_puts(0x3F8, "\n");
         }
         back_buf_alloc_ok = 1;
     }

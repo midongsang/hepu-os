@@ -81,11 +81,32 @@ void gfx64_put_pixel(int x, int y, uint32_t color)
     gfx_putpixel(x, y, color);
 }
 
+/* P1-1: 原来走 gfx_fillrect_rgb —— 双层循环、每像素一次边界检查 + bpp 分支。
+ * 1920x1080 全屏 = 207 万次调用, 一帧要秒级。这里按行用 rep stosl 批量写,
+ * 只有 gfx_bpp != 32 时才退回旧路径。 */
+static inline void g32_fill_row32(uint32_t *dst, int n, uint32_t v)
+{
+    __asm__ volatile("rep stosl"
+                     : "+D"(dst), "+c"(n)
+                     : "a"(v)
+                     : "memory");
+}
+
 void gfx64_fill_rect(int x, int y, int w, int h, uint32_t color)
 {
     g32_clamp(&x, &y, &w, &h);
     if (w <= 0 || h <= 0) return;
-    gfx_fillrect_rgb(x, y, w, h, color);
+
+    if (gfx_bpp == 32) {
+        uint32_t v = color | 0xFF000000u;
+        for (int row = y; row < y + h; row++) {
+            uint32_t *p = (uint32_t *)(framebuffer + (size_t)row * gfx_pitch)
+                                     + x;
+            g32_fill_row32(p, w, v);
+        }
+        return;
+    }
+    gfx_fillrect_rgb(x, y, w, h, color);   /* 非 32bpp 退回旧路径 */
 }
 
 void gfx64_draw_rect(int x, int y, int w, int h, uint32_t color)
