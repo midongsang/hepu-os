@@ -17,7 +17,17 @@
 #include "paging.h"
 #include "mm.h"
 #include "constants.h"
+/* KERNEL_SCOPE §5-6 / TECH_DEBT_ROUTE D-2: 32 位接入统一源码树的用户访问契约。
+ * 这份头是 32/64 共用的**声明面**，实现在各架构自己写 —— 引它意味着
+ * "32 位从此按同一套契约命名与语义"，不再各写一套。 */
+#include "../../shared/security/user_access.h"
 extern const char *hepu_kernel_version;
+
+/* 契约要求的外部变量：本架构的用户空间上限。
+ * 32 位用户空间是 3GB（0x00000000-0xBFFFFFFF），内核从 0xC0000000 起。
+ * 注意它是**变量**不是宏：契约里有 extern 声明，必须有一个定义，否则链接不过、
+ * 或者默认 0 让所有用户指针校验失败。 */
+uintptr_t hepu_user_space_limit = 0xBFFFFFFF;
 
 /* V7.70安全修复: 用户态内存分配记录表
  * 跟踪sys_malloc/sys_mmap分配的地址，防止任意地址释放导致堆破坏 */
@@ -107,14 +117,90 @@ static int user_alloc_remove(uint32_t addr) {
 int user_ptr_valid(const void *ptr, uint32_t size) {
     uint32_t addr = (uint32_t)ptr;
     if (addr == 0) return 0;
-    if (addr >= 0xC0000000) return 0;
+    /* 上限改用契约变量 hepu_user_space_limit，不再写死 0xC0000000 ——
+     * 32/64 两套内核从此读同一个来源。 */
+    if (addr > (uint32_t)hepu_user_space_limit) return 0;
     if (addr + size < addr) return 0;  /* 溢出 */
-    if (addr + size > 0xC0000000) return 0;
+    if (addr + size - 1 > (uint32_t)hepu_user_space_limit) return 0;
     return 1;
 }
 
+/* ---- 统一契约里 32 位原先缺的五个入口（语义对齐 64 位 user_access64.c）----
+ * 32 位没有 64 位那套页表级校验（ua_page_ok），所以这里只做范围 + 溢出检查；
+ * 语义边界保持一致：空指针/零长度一律拒绝，越界一律拒绝。 */
+
+/* 契约自检：32 位接入 shared 之后，校验规则必须真的按 hepu_user_space_limit 走。
+ * 三条判据都对才算过 —— 尤其是"上限边界"这一条，它是 32/64 唯一真正不同的地方。 */
+void user_access32_selftest(void)
+{
+    int bad = 0;
+    /* 1) 正常用户地址（低地址）必须放行 */
+    if (!hepu_is_user_address(0x00100000, 16)) bad++;
+    /* 2) 内核地址（上限之上）必须拒绝 */
+    if (hepu_is_user_address(0xC0000000, 4)) bad++;
+    /* 3) 上限正好压线：0xBFFFFFFF 单字节可读，再往后一格越界 */
+    if (!hepu_is_user_address(0xBFFFFFFF, 1)) bad++;
+    if (hepu_is_user_address(0xBFFFFFFF, 2)) bad++;
+    /* 4) 溢出必须拒绝 */
+    if (hepu_is_user_address(0xFFFFF000, 0x2000)) bad++;
+    /* 串口优先（回归脚本只抓串口），同时打到 VGA */
+    {
+        extern void serial_puts(uint16_t port, const char *s);
+        serial_puts(0x3F8, bad ? "[SEC32] user_access contract BAD\n"
+                               : "[SEC32] user_access contract PASS limit=0xBFFFFFFF\n");
+    }
+    if (bad) vga_printf("[SEC32] user_access contract BAD\n");
+}
+
+int hepu_is_user_address(uintptr_t addr, size_t size)
+{
+    if (addr == 0) return 0;
+    if (addr + size < addr) return 0;                       /* 溢出 */
+    if (addr > hepu_user_space_limit) return 0;
+    if (addr + size - 1 > hepu_user_space_limit) return 0;
+    return 1;
+}
+
+int verify_user_read(const void *user_ptr, size_t size)
+{
+    if (!user_ptr || size == 0) return 0;
+    return user_ptr_valid(user_ptr, (uint32_t)size);
+}
+
+int verify_user_write(void *user_ptr, size_t size)
+{
+    if (!user_ptr || size == 0) return 0;
+    return user_ptr_valid(user_ptr, (uint32_t)size);
+}
+
+int copy_str_from_user(char *kernel_dst, const char *user_src, size_t max_size)
+{
+    if (!kernel_dst || !user_src || max_size == 0) return -1;
+    size_t i = 0;
+    while (i < max_size - 1) {
+        if (!user_ptr_valid(user_src + i, 1)) { kernel_dst[i] = 0; return -1; }
+        kernel_dst[i] = user_src[i];
+        if (kernel_dst[i] == 0) return (int)i;
+        i++;
+    }
+    kernel_dst[i] = 0;
+    return (int)i;
+}
+
+int user_strlen(const char *user_str, size_t max_size)
+{
+    if (!user_str || max_size == 0) return -1;
+    size_t len = 0;
+    while (len < max_size) {
+        if (!user_ptr_valid(user_str + len, 1)) return -1;
+        if (user_str[len] == 0) return (int)len;
+        len++;
+    }
+    return -1;
+}
+
 /* 从用户空间复制到内核空间 */
-int copy_from_user(void *dst, const void *src, uint32_t size) {
+int copy_from_user(void *dst, const void *src, size_t size) {
     if (!user_ptr_valid(src, size)) {
         vga_printf("[MEM] copy_from_user: invalid user ptr 0x%x size %d\n",
                    (uint32_t)src, size);
@@ -125,7 +211,7 @@ int copy_from_user(void *dst, const void *src, uint32_t size) {
 }
 
 /* 从内核空间复制到用户空间 */
-int copy_to_user(void *dst, const void *src, uint32_t size) {
+int copy_to_user(void *dst, const void *src, size_t size) {
     if (!user_ptr_valid(dst, size)) {
         vga_printf("[MEM] copy_to_user: invalid user ptr 0x%x size %d\n",
                    (uint32_t)dst, size);

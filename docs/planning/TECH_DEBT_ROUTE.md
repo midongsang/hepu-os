@@ -91,6 +91,36 @@
 `[SERIAL] COM1` 就绪、`[INITRD] head=0x55504548`、无 `PANIC/#GP/#PF`。
 实测 PASS。**这是 32 位第一次有回归兜底。**
 
+**D-2b 已做（2026-11-15）**：32 位 `sys_mem.c` 接上 `shared/security/user_access.h`。
+
+不是"加个 include 就算接上了"——契约要求的是一个**变量 + 七个函数**，而 32 位原先自写
+一套（写死 `0xC0000000`、签名用 `uint32_t`、函数名也对不上）。改动：
+
+| 项 | 原状 | 现状 |
+|---|---|---|
+| 用户空间上限 | `user_ptr_valid` 里写死 `0xC0000000` | 定义 `hepu_user_space_limit = 0xBFFFFFFF`，校验读它 |
+| 边界判据 | `addr + size > 0xC0000000` | `addr + size - 1 > limit`（压线单字节可读，与 64 位一致） |
+| `copy_from_user`/`copy_to_user` | `uint32_t size` | `size_t size`（32 位同宽，ABI 不变） |
+| 五个契约入口 | 全缺 | 补齐 `hepu_is_user_address`/`verify_user_read`/`verify_user_write`/`copy_str_from_user`/`user_strlen` |
+
+**32 位没有 `ua_page_ok`**：64 位那套逐页校验依赖页表，32 位这里只做范围 + 溢出检查，
+语义边界保持一致（空指针/零长度/越界一律拒），这是**如实的能力差**，不是补齐了。
+
+**自检 `user_access32_selftest()`**（`init_sequence.c` 在 fs 阶段之后调用）：
+五条判据 —— 低地址放行、内核地址拒绝、`0xBFFFFFFF` 单字节可读、往后一格越界、
+溢出拒绝。串口实测：
+
+```
+[SEC32] user_access contract PASS limit=0xBFFFFFFF
+```
+
+**验收**：32 位引用 `shared/` 的文件数 **0 → 1**；`tools/regress32.sh` PASS
+（`serial=1 initrd=1 fault=0 lines=307`，比 D-2a 多一行即自检行）；64 位标准回归 1/1 不受影响。
+`kernel.elf` 3,474,260 B。
+
+**注意这只是第一条线**：32 位其余文件（`kernel/fs/*.c`、`kernel/mm/*.c` 等）**仍未接 `shared/`**。
+引用数 1 是"开了头"，不是"完成"——D-2 的完整口径是 32 位核心子系统都走契约，不是单文件打钩。
+
 **验收**：32 位内核能编能跑（32 位回归按现状跑通）；32 位侧引用 `shared/` 的文件数从 0 变 1；
 64 位回归不受影响。
 

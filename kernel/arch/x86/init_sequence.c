@@ -296,6 +296,10 @@ int hepu_init_phase(init_phase_t phase)
             extern void ide_ext2_selftest(void);
             ide_ext2_selftest();
 #endif
+            /* D-2: 32 位已接入 shared/security/user_access.h 契约，跑一次自检 */
+            extern void user_access32_selftest(void);
+            user_access32_selftest();
+
             ext4_init(); ext4_register();
             fscrypt_init(); partition_init(); ahci_init();
             nvme_init(); hepu_exfat_init(); hepu_ntfs_init();
