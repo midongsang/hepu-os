@@ -115,7 +115,11 @@ static inline void desktop_puts(int x, int y, const char *s, uint8_t color)
         int sc = (gfx_height * 100) / 768;
         if (sc < 75) sc = 75;
         fsize = (uint16_t)(((int)fsize * sc) / 100);
-        if (fsize < 11) fsize = 11;
+        /* 640x480: 42px 图标放两字名字(2*fsize) 必须 <= 图标间距(~74px),
+         * 否则相邻图标名会连成一行。这里按宽度收一档。 */
+        /* 640x480 一档: 直接固定 11px, 长名字(应用商店)也放得下 */
+        if (gfx_width <= 800) fsize = 11;
+        if (fsize < 10) fsize = 10;
     }
     gfx_draw_string_font((uint32_t)x, (uint32_t)y, s, vga_color_to_rgb(color), fsize);
 }
@@ -4073,7 +4077,8 @@ void elastic_desktop_render(void)
             int sc = (gfx_height * 100) / 768;
             if (sc < 75) sc = 75;
             fsize = (uint16_t)(((int)fsize * sc) / 100);
-            if (fsize < 11) fsize = 11;
+            if (gfx_width <= 800) fsize = 11;
+            if (fsize < 10) fsize = 10;
         }
         int text_width = utf8_string_width(app->name, fsize);
         if (text_width <= 0) text_width = name_len * (fsize / 2);
