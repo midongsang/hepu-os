@@ -1331,6 +1331,15 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
             set_color(EFI_YELLOW, EFI_BLACK);
             print_str(L"  [GOP not available, using UEFI text mode]\r\n");
             set_color(EFI_LIGHTGRAY, EFI_BLACK);
+            /* 显式清零 0x6000 的帧缓冲描述块，表示"本次引导没有图形模式"。
+             * 不清的话内核会读到上次引导/其他组件留下的旧值, 拿到一个
+             * 已经失效的 fb 地址去映射, 结果是黑屏或崩在映射里。
+             * 内核 gfx64_init_from_bootloader 见到 width/height/fb 全 0 会
+             * return -1, 主流程据此回退文本 shell。 */
+            {
+                volatile UINT32 *fb_info = (volatile UINT32 *)0x6000;
+                for (int i = 0; i < 4; i++) fb_info[i] = 0;
+            }
         } else {
             set_color(EFI_GREEN, EFI_BLACK);
             print_str(L"  [OK] GOP high resolution mode enabled\r\n");

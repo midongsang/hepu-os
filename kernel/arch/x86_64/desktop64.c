@@ -8,7 +8,7 @@
 #include <stddef.h>
 
 extern void vga_puts(const char *s);
-extern void gfx64_init_from_bootloader(void);
+extern int gfx64_init_from_bootloader(void);
 extern void gfx64_get_info(int *width, int *height, int *bpp);
 
 /* Hepu Desktop 接口 */
@@ -62,11 +62,22 @@ int desktop64_init(void)
         return -1;
     }
     int bpp;
-    gfx64_init_from_bootloader();
+    int gfx_rc = gfx64_init_from_bootloader();
     gfx64_get_info(&screen_width, &screen_height, &bpp);
 
-    if (screen_width == 0 || screen_height == 0) {
-        vga_puts("[DESKTOP64] No VBE mode, using text mode\n");
+    /* 图形不可用: 无 framebuffer 描述, 或 gfx64 内部初始化失败。
+     * 两条都归到同一个文本模式兜底, 并把 hepu_nographics 置 1 —— 这样
+     * shell 的 gui 命令知道当前是文本模式, 不会假装还能再拉一次桌面。
+     * 串口单独打一行 [GFX-FALLBACK]: 真机 UEFI 下 0xB8000 不可见, 屏幕
+     * 上可能一片黑, 这行是唯一能确认"已经走了兜底"的证据。 */
+    if (gfx_rc != 0 || screen_width == 0 || screen_height == 0) {
+        if (gfx_rc != 0)
+            vga_puts("[DESKTOP64] gfx64 init failed, using text mode\n");
+        else
+            vga_puts("[DESKTOP64] No VBE/GOP mode, using text mode\n");
+        { extern void serial_puts(uint16_t, const char *);
+          serial_puts(0x3F8, "[GFX-FALLBACK] graphics unavailable, text console only\n"); }
+        hepu_nographics = 1;
         return -1;
     }
 
