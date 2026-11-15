@@ -498,6 +498,10 @@ static void load_theme_from_config(hsqml_node_t *theme)
     g_shell.colors.panel_fg = hsqml_get_color(theme, "panel_fg", g_shell.colors.panel_fg);
     g_shell.colors.border = hsqml_get_color(theme, "border", g_shell.colors.border);
     g_shell.colors.accent = hsqml_get_color(theme, "accent", g_shell.colors.accent);
+    /* 色板描边(a.k.a "当前生效项")原来钉在 theme_source 的初值 Lavender 上,
+     * 而界面真正的强调色来自 config 的 Theme.accent —— 两个来源从不同步,
+     * 于是设置里描边在紫、界面却是金。这里让描边跟随实际 accent。 */
+    g_shell.theme_source = g_shell.colors.accent;
     g_shell.colors.window_bg = hsqml_get_color(theme, "window_bg", g_shell.colors.window_bg);
     g_shell.colors.window_fg = hsqml_get_color(theme, "window_fg", g_shell.colors.window_fg);
     g_shell.colors.titlebar_bg = hsqml_get_color(theme, "titlebar_bg", g_shell.colors.titlebar_bg);
@@ -649,6 +653,16 @@ static int hpdesk_load_config(const char *config)
         g_disp_scale_auto = 1;
         vga_printf("[DISPLAY] auto scale=%d%% (screen %dx%d)\n",
                    a, g_shell.screen_width, g_shell.screen_height);
+        {   /* 图形模式下 vga_printf 看不到, 串口留一份缩放证据 */
+            extern void serial_puts(uint16_t, const char *);
+            extern void serial_puthex(uint16_t, uint32_t);
+            serial_puts(0x3F8, "[SCALE] pct="); serial_puthex(0x3F8, (uint32_t)g_ui_scale_pct);
+            serial_puts(0x3F8, " bar_h=");      serial_puthex(0x3F8, (uint32_t)hs_sy(g_shell.ui.bar_height));
+            serial_puts(0x3F8, " island=");     serial_puthex(0x3F8, (uint32_t)hs_sx(g_shell.ui.island_width));
+            serial_puts(0x3F8, " accent=");     serial_puthex(0x3F8, (uint32_t)g_shell.colors.accent);
+            serial_puts(0x3F8, " theme=");      serial_puthex(0x3F8, (uint32_t)g_shell.theme);
+            serial_puts(0x3F8, "\n");
+        }
     }
     return applied > 0 ? 0 : -1;
 }
@@ -1202,8 +1216,15 @@ static void hs_wallpaper_render_rect(int x, int y, int w, int h)
     }
 }
 
+/* 用户在 Settings 里手选过强调色后, 壁纸取色不再覆盖 —— 否则切一次壁纸
+ * 就把手动选的色吃掉(theme_source 和 accent 一起被改写)。 */
+static int g_accent_manual = 0;
+/* 色板里"当前生效强调色"对应的那一格(按色相最近匹配), -1 = 没有匹配 */
+static int g_accent_nearest_preset = -1;
+
 static void hs_wallpaper_sample_theme(void)
 {
+    if (g_accent_manual) return;
     int w = g_shell.screen_width, h = g_shell.screen_height;
     uint32_t best = 0;
     int best_s = 40;                 /* 饱和度门槛: 近中性色不取 */
@@ -1223,7 +1244,11 @@ static void hs_wallpaper_sample_theme(void)
         g_shell.theme_source = best;
         vga_printf("[WALLPAPER] source color #%06x applied\n", best);
     } else {
+        /* 采样不到色(纯色/低饱和壁纸)时, 原来只改了 theme_source 描边标记,
+         * 没 apply —— Settings 里色板描边停在 Lavender, 而 accent 还是主题
+         * 默认值(金), 用户看到的"选了紫、界面却是金"就是这个。这里补上。 */
         g_shell.theme_source = 0xD0BCFF;
+        hs_theme_apply_source_color(0xD0BCFF);
     }
 }
 
@@ -3046,12 +3071,33 @@ static void hs_settings_window_render(hs_window_t *w)
                            rx, ry, "Accent Color (click to apply):", g_shell.colors.panel_fg, SETK(12));
         ry += SETK(22);
         /* 8 个预设色板圆点，点击即应用 */
+        {
+            int h2 = 0, s2 = 0, l2 = 0, best = 1 << 30, bi = -1;
+            rgb_to_hsl(g_shell.colors.accent, &h2, &s2, &l2);
+            for (int k = 0; k < HS_THEME_PRESET_COUNT; k++) {
+                int h1 = 0, s1 = 0, l1 = 0;
+                rgb_to_hsl(g_theme_presets[k], &h1, &s1, &l1);
+                int dh = (h1 > h2) ? (h1 - h2) : (h2 - h1);
+                if (dh > 180) dh = 360 - dh;
+                if (dh < best) { best = dh; bi = k; }
+            }
+            g_accent_nearest_preset = (best <= 24) ? bi : -1;
+        }
         for (int i = 0; i < HS_THEME_PRESET_COUNT; i++) {
             int sx = rx + i * SETK(28);
             int sy = ry;
-            gfx64_fill_circle(sx + SETK(10), sy + SETK(10), SETK(10), g_theme_presets[i]);
+            /* 当前生效的那一格直接画成 accent 本尊, 而不是预设常量 ——
+             * 否则"圈住黄圆"和"界面是另一档金"仍然是两个颜色, 用户照样觉得对不上。 */
+            gfx64_fill_circle(sx + SETK(10), sy + SETK(10), SETK(10),
+                              (i == g_accent_nearest_preset) ? g_shell.colors.accent : g_theme_presets[i]);
             /* 当前生效色描边 */
-            if (g_theme_presets[i] == g_shell.theme_source) {
+            /* 描边 = "当前生效的强调色"。原来按 theme_source 精确比对, 但主题的
+             * accent(如 Light 的琥珀金 0xC9A96E)不等于任何一个预设, 结果一个圈都
+             * 画不出来, 用户看到的是"设置里啥都没选"。改按色相最接近匹配。 */
+            /* 只标"色相最接近"的那一个, 不能用一个绝对阈值 ——
+             * Light 主题的琥珀金(≈40°)同时落在 Orange(27°) 和 Yellow(35°)
+             * 的 15° 窗口里, 会一次画出两个圈。 */
+            if (i == g_accent_nearest_preset) {
                 gfx64_draw_rounded_rect(sx - SETK(2), sy - SETK(2), SETK(24), SETK(24), SETK(12), g_shell.colors.panel_fg);
             }
         }
@@ -5547,6 +5593,7 @@ void hpdesk_handle_click(int x, int y)
                         hpdesk_set_theme(g_shell.theme);  /* 重置为当前主题默认色板 */
                         hs_theme_apply_source_color(g_theme_presets[i]);
                         g_shell.theme_source = g_theme_presets[i];
+                        g_accent_manual = 1;
                         vga_puts("[SETTINGS] theme source color applied\n");
                         return;
                     }

@@ -177,11 +177,20 @@ void gfx64_fill_rounded_rect(int x, int y, int w, int h, int radius, uint32_t co
 
 void gfx64_draw_rounded_rect(int x, int y, int w, int h, int radius, uint32_t color)
 {
-    /* 退化: 四条边 + 四角小弧. 32 位暂不需要更精细的描边圆角 */
-    gfx64_draw_rect(x + radius, y, w - 2 * radius, 1, color);
-    gfx64_draw_rect(x + radius, y + h - 1, w - 2 * radius, 1, color);
-    gfx64_draw_rect(x, y + radius, 1, h - 2 * radius, color);
-    gfx64_draw_rect(x + w - 1, y + radius, 1, h - 2 * radius, color);
+    /* 退化: 四条边 + 四角小弧. 32 位暂不需要更精细的描边圆角.
+     * 但 radius 必须夹住: Settings 的强调色选中圈是 24x24 配 radius 12,
+     * 按 w-2*radius 算出来边宽 0、什么都不画, 32 位就一个圈都没有。 */
+    int r = radius;
+    if (r > w / 2 - 1) r = w / 2 - 1;
+    if (r > h / 2 - 1) r = h / 2 - 1;
+    if (r < 0) r = 0;
+    /* 圆角把边吃光就退化成直角框: 24x24 配 radius 12 时边宽只剩 2px,
+     * 画出来像四个孤立的点, 不像"选中"。 */
+    if (w - 2 * r < 3) r = 0;
+    gfx64_draw_rect(x + r, y, w - 2 * r, 1, color);
+    gfx64_draw_rect(x + r, y + h - 1, w - 2 * r, 1, color);
+    gfx64_draw_rect(x, y + r, 1, h - 2 * r, color);
+    gfx64_draw_rect(x + w - 1, y + r, 1, h - 2 * r, color);
 }
 
 void gfx64_fill_round_rect_aa(int x, int y, int w, int h, int radius, uint32_t color)
