@@ -3118,8 +3118,8 @@ int64_t syscall64_dispatch(int number, int64_t arg1, int64_t arg2,
      * 系统调用一个都看不到，排查时「这个调用到底发生没有」根本查不出来。 */
 #ifdef HEPU_TRACE_LINUX_SYSCALL
     {
-        extern int user_process_current_env_type(void);
-        if (user_process_current_env_type() == ENV_LINUX_COMPAT) {
+        extern int compat_gate_active(void);
+        if (compat_gate_active()) {
             vga_puts("[S");
             print_syscall_number(number);
             vga_puts(" a=");
@@ -3149,8 +3149,8 @@ int64_t syscall64_dispatch(int number, int64_t arg1, int64_t arg2,
 
     /* 边界检查 */
     if (number < 0 || number >= SYSCALL_MAX) {
-        extern int user_process_current_env_type(void);
-        if (user_process_current_env_type() == ENV_LINUX_COMPAT) {
+        extern int compat_gate_lenient_unknown(void);
+        if (compat_gate_lenient_unknown()) {
             g_syscall64_handled = 1;   /* 兼容层：已处理（按 0 返回，让 glibc 继续） */
             return 0;
         }
@@ -3163,8 +3163,8 @@ int64_t syscall64_dispatch(int number, int64_t arg1, int64_t arg2,
 
     /* 检查函数指针是否存在 */
     if (!syscall_table[number]) {
-        extern int user_process_current_env_type(void);
-        if (user_process_current_env_type() != ENV_LINUX_COMPAT) {
+        extern int compat_gate_lenient_unknown(void);
+        if (!compat_gate_lenient_unknown()) {
             vga_puts("[SYSCALL64] Unimplemented syscall: ");
             print_syscall_number(number);
             vga_puts("\n");
@@ -3179,8 +3179,8 @@ int64_t syscall64_dispatch(int number, int64_t arg1, int64_t arg2,
     int64_t ret = syscall_table[number](arg1, arg2, arg3, arg4, arg5, arg6);
 #ifdef HEPU_TRACE_LINUX_SYSCALL
     {
-        extern int user_process_current_env_type(void);
-        if (user_process_current_env_type() == ENV_LINUX_COMPAT) {
+        extern int compat_gate_active(void);
+        if (compat_gate_active()) {
             vga_puts(" ret=");
             print_syscall_number((uint64_t)ret);
             vga_puts("\n");

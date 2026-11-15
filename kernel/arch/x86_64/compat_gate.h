@@ -34,6 +34,13 @@ int compat_gate_translate_nr(int nr);
  * 判定逻辑只有这一份。 */
 int compat_gate_detect_elf(void *elf_data, uint64_t size);
 
+/* 兼容域对"内核不支持这个调用"是否应采取宽容策略：
+ * 静默（不刷串口）+ 按 0 返回，让 glibc 自己往下走。
+ * 原生域返回 0 —— 那边要打日志 + 返回 -ENOSYS。
+ * 这是 syscall 主干里唯一还需要知道的"兼容语义"，收在这里，
+ * 主干不再直接问 env_type。 */
+int compat_gate_lenient_unknown(void);
+
 /* 翻译表规模（非零项数），供自检与文档统计使用。 */
 int compat_gate_map_entries(void);
 

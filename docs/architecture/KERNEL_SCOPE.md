@@ -150,6 +150,17 @@
      （外来 ABI 仍被判成兼容域，Linux 程序仍真跑得起来）；
    ② 标准回归 `-smp 2` 2/2（原生程序没被误判成兼容域，号表没走错）。
    二进制 937,128 B（+128 B）。
+   **进度（2026-11-15，第 3 步）**：syscall 主干里的 4 处 `env_type` 判定收进网关，
+   `syscall64_full.c` 里再也搜不到 `user_process_current_env_type`（引用数 0）。
+   真正有行为差异的只有两条策略，收成 `compat_gate_lenient_unknown()`：
+   兼容域对"号段越界 / 表里没有"的调用**静默 + 按 0 返回**（glibc 启动期要探测
+   几十个号，逐个打日志会把串口冲干净，返回 -ENOSYS 又会让部分老逻辑走不通）；
+   原生域照旧打日志 + 返回 -ENOSYS。另外两处是 `HEPU_TRACE_LINUX_SYSCALL`
+   编译开关内的跟踪打印，改调 `compat_gate_active()`。
+   **意义**：syscall 主干此后不再知道"有没有 Linux 这回事"，它只知道网关给的
+   一条策略结论 —— 这是把兼容语义从主干剥离出来的关键一步。
+   回归：`regress_linux.sh` PASS（exec=1 hello=1 returned=1）、标准回归 2/2，
+   二进制 937,128 B（不变，纯重构）。
 4. **framebuffer 契约**：把"写屏"从 `gfx64` 抽成一个最小接口（map + blit + flip），
    合成逻辑整体搬到用户态。这一步做完，① 和 ② 一起解决。
    （现状：第一层 `display_backend.h` 已落地，lfb + mirror 双后端，等价自检通过。）

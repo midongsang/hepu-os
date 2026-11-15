@@ -97,6 +97,14 @@ int compat_gate_active(void)
     return user_process_current_env_type() == ENV_LINUX_COMPAT;
 }
 
+int compat_gate_lenient_unknown(void)
+{
+    /* glibc 启动期会探测几十个号（inotify/epoll/futex 变体…），
+     * 每个都打一行日志会把串口冲干净，返回 -ENOSYS 又会让部分老逻辑走不通；
+     * 所以兼容域统一"静默 + 0"。 */
+    return compat_gate_active();
+}
+
 int compat_gate_translate_nr(int nr)
 {
     if (nr < 0 || nr >= 350) return 0;
