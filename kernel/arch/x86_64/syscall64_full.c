@@ -29,7 +29,10 @@ extern int hepu_is_user_address(uintptr_t addr, size_t size);
  * 这里按字符串长度复制、强制 NUL 结尾，超长路径直接拒绝（不静默截断）。 */
 static void print_syscall_number(int64_t v);
 
-static int copy_user_path(char *dst, size_t dstsz, const char *user_path)
+/* KERNEL_SCOPE §5-5 第 1 步: 去 static —— 搬出去的 fs 业务函数也要用同一份
+ * "从用户态拷路径"实现。路径拷贝是 syscall 的边界动作, 归 syscall 层所有，
+ * 但实现得跨文件可见。 */
+int copy_user_path(char *dst, size_t dstsz, const char *user_path)
 {
     if (!dst || dstsz < 2 || !user_path) return -1;
     int n = copy_str_from_user(dst, user_path, dstsz);
@@ -2321,36 +2324,19 @@ static int64_t sys_getppid(void)
 }
 
 /* sys_unlink - 删除文件 */
-static int64_t sys_unlink(const char *path)
-{
-    if (!path) return -1;
-    /* 安全：从用户空间复制路径 */
-    char kpath[256];
-    if (copy_user_path(kpath, sizeof(kpath), path) < 0) return -1;
-    extern int ext2_64_delete_file(const char *path);
-    return ext2_64_delete_file(kpath);
-}
+/* §5-5: 实现已搬到 fs_dir_sys.c */
+static int64_t sys_unlink(const char *path);
+
 
 /* sys_mkdir - 创建目录 */
-static int64_t sys_mkdir(const char *path, int mode)
-{
-    if (!path) return -1;
-    (void)mode;
-    char kpath[256];
-    if (copy_user_path(kpath, sizeof(kpath), path) < 0) return -1;
-    extern int ext2_64_create_dir(const char *path);
-    return ext2_64_create_dir(kpath);
-}
+/* §5-5: 实现已搬到 fs_dir_sys.c */
+static int64_t sys_mkdir(const char *path, int mode);
+
 
 /* sys_rmdir - 删除目录 */
-static int64_t sys_rmdir(const char *path)
-{
-    if (!path) return -1;
-    char kpath[256];
-    if (copy_user_path(kpath, sizeof(kpath), path) < 0) return -1;
-    extern int ext2_64_delete_dir(const char *path);
-    return ext2_64_delete_dir(kpath);
-}
+/* §5-5: 实现已搬到 fs_dir_sys.c */
+static int64_t sys_rmdir(const char *path);
+
 
 /* sys_lseek - 移动文件指针 */
 static int64_t sys_lseek(int fd, int64_t offset, int whence)

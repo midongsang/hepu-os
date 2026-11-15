@@ -184,6 +184,18 @@
    **仍是半步**：只给了信息，没给映射动作。真 map 需要内核批一个物理页段
    映射给 ring3，并定义"谁拥有前台"——那一步才可能把合成搬出去。
 5. **syscall 转发层切分**：把 `syscall64_full.c` 的业务搬进 fs/mm，syscall 只剩分发。
+   **进度（2026-11-15，第 1 批：目录三件套）**：新建 `fs_dir_sys.c` + `fs_sys.h`，
+   把 `sys_unlink` / `sys_mkdir` / `sys_rmdir` 从 `syscall64_full.c` 切出去，
+   行为一字未改（只是换了住址），`syscall64_full.c` 里只留三行声明。
+   选这一簇的理由：**依赖面最小** —— 只需 `copy_user_path` + `ext2_64` 的四个入口，
+   不碰 fd 表、不碰锁、不碰进程上下文，切出去之后行为不可能变。
+   配套把 `copy_user_path` 去掉 `static` 并收进 `fs_sys.h`：路径拷入是 syscall
+   的**边界动作**，归 syscall 层所有，但实现要跨文件可见 —— 不复制第二份。
+   证据：链接通过（三个符号都在）、标准回归 2/2、`syscall64_full.c` 3203 → 3189 行、
+   二进制 937,640 B（+256 B）。
+   **诚实缺口**：目录操作的错误码路径（EEXIST 之类）本来就没有单测，这次也没补；
+   依据是"逐字搬移 + 链接通过 + 回归通过"，不是实测。下一批如果动到有分支逻辑的
+   （`sys_stat` 的字段填充、fd 表锁），必须先补、后切。
 6. **32 位侧接入 `kernel/shared/`**（**不是归档**，`UNIFIED_SOURCE_TREE.md` P1）：
    现状是 32 位引用 shared 的文件数 = **0**，64 位已 12+。第一条按文档走：
    32 位 `sys_mem.c` → `shared/security/user_access.h`。
