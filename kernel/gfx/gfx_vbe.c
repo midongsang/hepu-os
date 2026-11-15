@@ -314,6 +314,36 @@ static gfx_backend_t vbe_backend = {
     .has_double_buffer = vbe_has_double_buffer,
 };
 
+/* D-7: VBE 后端在初始化时把 gfx_* 快照进 vbe_width/height/bpp/pitch/framebuffer
+ * 这组静态量。32 位真彩色路径是「先注册后端, 再由 bochs dispi 改模式」, 于是
+ * 后端内部还停在 320x200@8bpp: vbe_pitch=320 而实际每行 2560 字节,
+ * vbe_putpixel 写成 fb[y*80 + x] —— y 被压缩 8 倍, 整屏变成横条纹点阵。
+ * 设完模式必须回来同步一次。 */
+void gfx_vbe_sync_mode(void)
+{
+    extern int gfx_width;
+    extern int gfx_height;
+    extern int gfx_bpp;
+    extern uint8_t *gfx_fb_addr;
+
+    vbe_width  = (uint32_t)gfx_width;
+    vbe_height = (uint32_t)gfx_height;
+    vbe_bpp    = (uint32_t)gfx_bpp;
+    vbe_pitch  = vbe_width * (vbe_bpp / 8);
+    vbe_framebuffer = gfx_fb_addr;
+    vbe_fb_phys = (uint32_t)(uintptr_t)gfx_fb_addr;
+
+    serial_puts(0x3F8, "[GFX-VBE] sync: ");
+    serial_puthex(0x3F8, vbe_width);
+    serial_puts(0x3F8, "x");
+    serial_puthex(0x3F8, vbe_height);
+    serial_puts(0x3F8, "@");
+    serial_puthex(0x3F8, vbe_bpp);
+    serial_puts(0x3F8, "bpp pitch=");
+    serial_puthex(0x3F8, vbe_pitch);
+    serial_puts(0x3F8, "\n");
+}
+
 void gfx_vbe_register(void)
 {
     extern int gfx_register_backend(gfx_backend_t *backend);

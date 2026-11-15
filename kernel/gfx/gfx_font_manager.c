@@ -245,21 +245,25 @@ int font_render_glyph(uint32_t codepoint, uint8_t type, uint16_t size,
             /* 自动切换到TrueType字体渲染CJK字符 */
             type = FONT_TYPE_TRUETYPE;
         } else {
-            /* TrueType未加载，显示CJK占位符（方框） */
-            *width = size;
-            *height = size;
-            *advance = size;
+            /* TrueType未加载，显示CJK占位符（方框）。
+             * D-7: 这里原来把 width/height 设成 size、又把栈上的 src_bitmap 交出去，
+             * 调用方按 bitmap[row * width + col] 解码 —— 既是悬空指针，行宽也对不上
+             * （width=20 而数组只有 8 列），读到的全是垃圾 alpha，屏幕上就是一片
+             * 横条纹。改成固定的 8x16 方框 + 静态缓冲，尺寸和数组一致。 */
+            static uint8_t cjk_placeholder[8 * 16];
+            *width = 8;
+            *height = 16;
+            *advance = 8;
             *bearing_x = 0;
             *bearing_y = 0;
             if (bitmap) {
-                /* 绘制一个空心方框作为占位符 */
-                for (int y = 0; y < size && y < 16; y++) {
-                    for (int x = 0; x < size && x < 8; x++) {
-                        int is_edge = (x == 0 || x == size - 1 || y == 0 || y == size - 1);
-                        src_bitmap[y * 8 + x] = is_edge ? 128 : 0;
+                for (int y = 0; y < 16; y++) {
+                    for (int x = 0; x < 8; x++) {
+                        int is_edge = (x == 0 || x == 7 || y == 0 || y == 15);
+                        cjk_placeholder[y * 8 + x] = is_edge ? 255 : 0;
                     }
                 }
-                *bitmap = src_bitmap;
+                *bitmap = cjk_placeholder;
             }
             return 0;
         }

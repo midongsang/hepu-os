@@ -224,6 +224,11 @@ void hepu_sched_init(void)
                 serial_puthex(0x3F8, (uint32_t)gfx_pitch);
                 serial_puts(0x3F8, "\n");
             }
+            /* VBE 后端内部状态同样要跟上, 否则它仍按 320x200@8bpp 算行跨距 */
+            {
+                extern void gfx_vbe_sync_mode(void);
+                gfx_vbe_sync_mode();
+            }
             serial_puts(0x3F8, "[GFX] true-color mode applied: ");
             extern void serial_puthex(uint16_t, uint32_t);
             serial_puthex(0x3F8, (uint32_t)gfx_width);

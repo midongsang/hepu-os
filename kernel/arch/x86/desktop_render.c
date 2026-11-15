@@ -4003,6 +4003,10 @@ void elastic_desktop_render(void)
     /* 绘制扁平化背景 */
     draw_modern_background();
 
+
+
+
+
     /* 绘制顶部状态栏 */
     draw_statusbar();
 
@@ -4046,6 +4050,7 @@ void elastic_desktop_render(void)
         int text_x = ix + (icon_size - text_width) / 2;
         desktop_puts(text_x, iy + icon_size + 6, app->name, 0x0F);
     }
+
 
     /* 绘制底部Dock栏 */
     draw_dock_modern();
