@@ -33,7 +33,7 @@ SRCS := hello.c shell.c forktest.c
 TARGETS := $(BUILD_DIR)/hello.elf $(BUILD_DIR)/shell.elf $(BUILD_DIR)/forktest.elf \
            $(BUILD_DIR)/sec_test.elf $(BUILD_DIR)/comptest.elf \
            $(BUILD_DIR)/ps.elf \
-           $(BUILD_DIR)/clone_test.elf
+           $(BUILD_DIR)/clone_test.elf $(BUILD_DIR)/fbdesc.elf
 
 # 全量构建目标：原生用户程序 + Linux 兼容层 PIE 测试程序 + 历史测试程序（SEC-12）
 # 注意：真正的 all 目标在**文件末尾**定义 —— GNU Make 在**读取规则时**就展开
@@ -128,6 +128,13 @@ $(BUILD_DIR)/clone_test.elf: $(BUILD_DIR)/clone_test.o $(LDSCRIPT)
 	$(LD) $(LDFLAGS) -T $(LDSCRIPT) -o $@ $<
 	@echo "Built user ELF: $@"
 	@ls -lh $@
+
+# fbdesc：framebuffer 契约探针（KERNEL_SCOPE §5-4）
+$(BUILD_DIR)/fbdesc.o: $(USER_DIR)apps/fbdesc.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD_DIR)/fbdesc.elf: $(BUILD_DIR)/fbdesc.o $(LDSCRIPT)
+	$(LD) $(LDFLAGS) -T $(LDSCRIPT) -o $@ $<
+	@echo "Built user ELF: $@"
 
 # pipe test
 $(BUILD_DIR)/pipe_test.o: $(USER_DIR)apps/pipe_test.c | $(BUILD_DIR)

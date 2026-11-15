@@ -164,6 +164,25 @@
 4. **framebuffer 契约**：把"写屏"从 `gfx64` 抽成一个最小接口（map + blit + flip），
    合成逻辑整体搬到用户态。这一步做完，① 和 ② 一起解决。
    （现状：第一层 `display_backend.h` 已落地，lfb + mirror 双后端，等价自检通过。）
+   **进度（2026-11-15，第 1 步：map 的信息面）**：`map + blit + flip` 里，
+   blit / flip 等价于现役 `present_region` / `present`，已具备；缺的是 **map** ——
+   用户态不知道显存在哪，一切都无从谈起。所以先补"可映射描述"：
+   `display_backend.h` 增 `fb_desc_t`（物理基址/宽高/pitch/bpp/格式/是否双缓冲）
+   与 `gfx64_fb_desc()`；新 syscall `SYS_FB_DESC(229)` 把描述拷给用户态。
+   描述**不进 vtable**：两个后端共享同一块物理显存，mirror 只是换了提交目标，
+   它是 gfx64 的全局属性，塞进 vtable 会破坏这层刻意保留的 3 入口最小面。
+   端到端探针 `user/apps/fbdesc.c` 打进镜像并在启动电池里跑，实测
+   `[FBDESC] phys=0x80000000 w=1920 h=1080 pitch=7680 bpp=32 fmt=1 flags=0`
+   → `[FBDESC] contract PASS`。
+   **探针立刻抓出的两个事实**：① `phys` 第一版按十进制打却加了 `0x` 前缀，
+   打出 `0x2147483648` 看着像坏值，实际就是 `0x80000000`（QEMU 的 LFB 基址）——
+   取证工具的格式错误会伪装成内核 bug，已修成 `out_hex`。② `flags=0` 表示
+   **此刻没有后台缓冲**：双缓冲是 `gfx64_set_target_back()` 首次调用时才 lazy
+   分配的，启动电池跑在桌面之前。这是如实描述，不是缺陷；但它说明
+   "用户态拿描述直接写显存"这条路此刻并不安全（会和内核提交打架），
+   真正开放 map 必须同时给出"前台所有权"语义。
+   **仍是半步**：只给了信息，没给映射动作。真 map 需要内核批一个物理页段
+   映射给 ring3，并定义"谁拥有前台"——那一步才可能把合成搬出去。
 5. **syscall 转发层切分**：把 `syscall64_full.c` 的业务搬进 fs/mm，syscall 只剩分发。
 6. **32 位侧接入 `kernel/shared/`**（**不是归档**，`UNIFIED_SOURCE_TREE.md` P1）：
    现状是 32 位引用 shared 的文件数 = **0**，64 位已 12+。第一条按文档走：

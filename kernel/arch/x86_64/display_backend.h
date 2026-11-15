@@ -32,6 +32,34 @@ typedef struct display_backend {
     void (*present_region)(int x, int y, int w, int h);
 } display_backend_t;
 
+/* ---------------------------------------------------------------------------
+ * framebuffer 契约（KERNEL_SCOPE §5-4 第 1 步）
+ *
+ * §5-4 要的是 "map + blit + flip" 三个最小原语，让合成以后能搬到 ring3。
+ * 现有 3 入口已经覆盖 blit/present：`present` = flip，`present_region` = blit。
+ * 缺的是 **map** —— 用户态要知道"显存在哪、多大、什么格式"，才能自己去映射。
+ *
+ * 所以契约的第一块砖是**可映射描述**：内核把帧缓冲的物理基址和布局交出去，
+ * 用户态据此自己映射（映射本身仍要内核批，但"信息可得"是前提）。
+ * 这条信息不属于任何单个后端 —— 两个后端共享同一块物理显存，
+ * mirror 只是替换了"提交到哪"。所以它是 gfx64 的全局属性，不进 vtable，
+ * 以免破坏这层刻意保留的 3 入口最小面。
+ * ------------------------------------------------------------------------- */
+typedef struct fb_desc {
+    uint64_t phys;     /* 帧缓冲物理基址（可映射） */
+    uint32_t width;    /* 像素宽 */
+    uint32_t height;   /* 像素高 */
+    uint32_t pitch;    /* 每扫描行字节数 */
+    uint32_t bpp;      /* 每像素位数 */
+    uint32_t format;   /* 1 = BGRX8888（当前唯一格式） */
+    uint32_t flags;    /* bit0: 后台缓冲可用 */
+} fb_desc_t;
+
+#define FB_DESC_FLAG_DOUBLE_BUFFERED 0x1u
+
+/* 返回当前帧缓冲描述；未初始化返回 0。 */
+const fb_desc_t *gfx64_fb_desc(void);
+
 /* 第二个实现：RAM 镜像后端（display_mirror.c）。
  * 用途是检验这层抽象 —— 同一帧经它和 lfb 提交必须逐像素一致。 */
 extern const display_backend_t display_mirror_backend;

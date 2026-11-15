@@ -864,8 +864,18 @@ void x86_64_kernel_main(void)
 #if defined(HEPU_BOOT_SELFTEST) && HEPU_BOOT_SELFTEST
         /* V0.33: 电池汇总用的「预期异常数」（crash_jump.elf 是故意的坏地址测试） */
         static uint64_t g_static_expected_exceptions = 0;
-        /* 安全回归：用户地址访问限制（内核地址/未映射地址应被拒绝，不崩溃） */
         extern int user_process_exec(const char *path);
+
+        /* KERNEL_SCOPE §5-4 第 1 步: framebuffer 契约探针。
+         * 验的是"用户态能不能拿到显存的物理基址与布局" —— 这是把合成搬到
+         * ring3 的前提。拿不到，后面"用户态自己映射、自己合成"无从谈起。 */
+        vga_puts("[FBDESC] Running /bin/fbdesc.elf...\n");
+        if (user_process_exec("/bin/fbdesc.elf") < 0) {
+            vga_puts("[FBDESC] fbdesc.elf not available (optional)\n");
+        }
+        vga_puts("[FBDESC] returned\n");
+
+        /* 安全回归：用户地址访问限制（内核地址/未映射地址应被拒绝，不崩溃） */
         vga_puts("[SEC] Running user-address security regression /bin/sec_test.elf...\n");
         if (user_process_exec("/bin/sec_test.elf") < 0) {
             vga_puts("[SEC] sec_test.elf not available (optional)\n");

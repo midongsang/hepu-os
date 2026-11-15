@@ -2766,6 +2766,17 @@ static int64_t wrap_newuname(int64_t a1, int64_t a2, int64_t a3, int64_t a4, int
 static int64_t wrap_futex(int64_t a1, int64_t a2, int64_t a3, int64_t a4, int64_t a5, int64_t a6) {
     return sys_futex((uint64_t)a1, (int)a2, (uint32_t)a3, (uint64_t)a4, (uint64_t)a5, (uint32_t)a6);
 }
+/* KERNEL_SCOPE §5-4: framebuffer 契约查询。
+ * 只交出"描述"（物理基址/尺寸/pitch/bpp/格式/有无后台缓冲），不含映射动作 ——
+ * 用户态拿到这份描述之后才有资格谈"自己映射、自己合成"。 */
+static int64_t wrap_fb_desc(int64_t a1, int64_t a2, int64_t a3, int64_t a4, int64_t a5, int64_t a6) {
+    extern int copy_to_user(void *user_dst, const void *kernel_src, size_t size);
+    extern const void *gfx64_fb_desc(void);
+    (void)a2;(void)a3;(void)a4;(void)a5;(void)a6;
+    const void *d = gfx64_fb_desc();
+    if (!d || !a1) return -1;
+    return copy_to_user((void*)a1, d, sizeof(uint64_t) + 6 * sizeof(uint32_t)) ? -1 : 0;
+}
 static int64_t wrap_getrandom(int64_t a1, int64_t a2, int64_t a3, int64_t a4, int64_t a5, int64_t a6) {
     (void)a4;(void)a5;(void)a6; return sys_getrandom((uint64_t)a1, a2, (uint64_t)a3);
 }
@@ -3034,6 +3045,7 @@ static syscall_fn_t syscall_table[SYSCALL_MAX] = {
     [SYSCALL_CLOCK_GETRES] = wrap_clock_getres,
     [SYSCALL_CLOCK_NANOSLEEP] = wrap_clock_nanosleep,
     [SYSCALL_NEWFSTATAT] = wrap_newfstatat,
+    [SYS_FB_DESC]       = wrap_fb_desc,
 };
 
 /* 安全修复：旧实现用 char tmp[8]/buf[8] 打印调用号，用户传入 rax=2147483647

@@ -22,6 +22,11 @@ void gfx64_blend_pixel(int x, int y, uint32_t fg, int alpha);
 /* 图形模式信息（使用共享gfx_framebuffer_t结构） */
 static gfx_framebuffer_t gfx_fb_info = {0};
 
+/* KERNEL_SCOPE §5-4: framebuffer 契约描述。phys 是**物理**基址 —— gfx_fb_info
+ * 里的 framebuffer 是内核映射后的虚拟地址，交出去对用户态没意义。 */
+static uint64_t g_fb_phys = 0;
+static fb_desc_t g_fb_desc = {0};
+
 /* 兼容旧代码的宏（逐步迁移到gfx_fb_info） */
 #define gfx_width       (gfx_fb_info.width)
 #define gfx_height      (gfx_fb_info.height)
@@ -1334,6 +1339,21 @@ void early_fb_text_init_from_bootloader(void)
     vga_puts("\n");
 }
 
+/* KERNEL_SCOPE §5-4: 把"显存在哪/多大/什么格式"交出去，用户态据此自己映射。
+ * 注意这里只给**描述**，不给映射 —— 映射仍要内核批准，但"信息可得"是前提。 */
+const fb_desc_t *gfx64_fb_desc(void)
+{
+    if (!gfx_width || !gfx_height) return 0;
+    g_fb_desc.phys   = g_fb_phys;
+    g_fb_desc.width  = (uint32_t)gfx_width;
+    g_fb_desc.height = (uint32_t)gfx_height;
+    g_fb_desc.pitch  = (uint32_t)gfx_pitch;
+    g_fb_desc.bpp    = (uint32_t)gfx_bpp;
+    g_fb_desc.format = 1;  /* BGRX8888 */
+    g_fb_desc.flags  = back_buffer ? FB_DESC_FLAG_DOUBLE_BUFFERED : 0;
+    return &g_fb_desc;
+}
+
 int gfx64_init_from_bootloader(void)
 {
     /* VBE/GOP信息存储在0x6000: w(2)h(2)pitch(2)bpp(1) + fb(4) + fb_hi(4) */
@@ -1344,6 +1364,8 @@ int gfx64_init_from_bootloader(void)
     uint8_t bpp = *(volatile uint8_t *)(0x6000 + 6);
     uint64_t fb = (uint64_t)*(volatile uint32_t *)(0x6000 + 8)
                 | ((uint64_t)*(volatile uint32_t *)(0x6000 + 12) << 32);
+
+    g_fb_phys = fb;   /* §5-4: 记物理基址（映射前），供 fb_desc 交给用户态 */
 
     if (width == 0 || height == 0 || fb == 0) {
         vga_puts("[GFX64] No VBE info from bootloader\n");
