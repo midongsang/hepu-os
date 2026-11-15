@@ -132,10 +132,13 @@ int reg64_get_int(const char *key, int def)  { (void)key; return def; }
 int l10n64_get_lang(void)                    { return 0; }
 const char *l10n64_tr(int id)                { (void)id; return ""; }
 
-/* 图片解码: 32 位没有解码器, 壁纸走纯色兜底 */
-int  png64_decode(const uint8_t *data, int len, png64_image_t *out)
-{ (void)data; (void)len; if (out) { out->width = 0; out->height = 0; out->rgba = 0; } return -1; }
-void png64_free(png64_image_t *img)  { (void)img; }
+/* png64.c 内部用 pmm64_alloc_pages 拿连续页做 inflate 输出缓冲,
+ * 返回物理地址后直接当指针用(依赖 identity map, 32 位满足)。 */
+extern uint64_t mm_alloc_pages(uint32_t n);
+uint64_t pmm64_alloc_pages(uint64_t n) { return mm_alloc_pages((uint32_t)n); }
+
+/* 图片解码: png64.c 已真实编进 32 位(自含 inflate, 无外部依赖),
+ * 这里只留 jpeg 的空壳 */
 void jpeg64_free(void *img)          { (void)img; }
 
 /* 文件关联 / 文件管理器光标 */
@@ -156,9 +159,38 @@ void cursor64_set_kind(int kind) { (void)kind; }
 /* TLB shootdown 计数: 32 位单核, 恒 0 */
 uint64_t vmm64_tlb_shootdown_count(void) { return 0; }
 
-/* ext2 读文件: 桌面壁纸/配置文件走这里, 32 位先返回失败走兜底 */
+/* ext2 读文件: 桌面壁纸/配置文件走这里。
+ *
+ * 32 位有自己的 ext2(ide_ext2_fm.c, 手机 UI 一直在用), 接口是
+ * "目录 + 文件名"两段式, 而这里要的是完整路径。拆开转调即可 ——
+ * fm_dir_ino 对 "/" 直接返回根 inode, 多级目录走 ext2_resolve_path。 */
+extern int ide_ext2_read_file(const char *dirpath, const char *name, char *buf, int max);
 int ext2_64_read_file(const char *path, uint8_t *buffer, uint32_t max_size)
-{ (void)path; (void)buffer; (void)max_size; return -1; }
+{
+    if (!path || !buffer || max_size < 2) return -1;
+    if (path[0] != '/') return -1;
+    const char *last = 0;
+    for (const char *q = path; *q; q++) if (*q == '/') last = q;
+    if (!last || !last[1]) return -1;
+    char dir[128];
+    int dl = (int)(last - path);
+    if (dl <= 0) { dir[0] = '/'; dir[1] = 0; }
+    else {
+        if (dl >= 127) return -1;
+        for (int i = 0; i < dl; i++) dir[i] = path[i];
+        dir[dl] = 0;
+    }
+    {
+        extern void serial_puts(uint16_t, const char *);
+        extern void serial_puthex(uint16_t, uint32_t);
+        int n = ide_ext2_read_file(dir, last + 1, (char *)buffer, (int)max_size);
+        serial_puts(0x3F8, "[HP32-FS] "); serial_puts(0x3F8, path);
+        serial_puts(0x3F8, " dir="); serial_puts(0x3F8, dir);
+        serial_puts(0x3F8, " n="); serial_puthex(0x3F8, (uint32_t)(n < 0 ? 0xFFFFFFFFu : (uint32_t)n));
+        serial_puts(0x3F8, "\n");
+        return n;
+    }
+}
 
 /* ---------------------------------------------------------------------------
  * 桌面离屏层专用池

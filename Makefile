@@ -66,7 +66,8 @@ HP_DESK_SHARED = $(KERNEL_DIR)/arch/x86_64/hpdesk.c
 # hs_ui.c(UI 树/命中) + hsqml.c(QML 解析) 也是纯软件, 跟 hpdesk 一起放行
 HP_DESK_DEPS = $(HP_DESK_SHARED) \
                $(KERNEL_DIR)/arch/x86_64/hs_ui.c \
-               $(KERNEL_DIR)/arch/x86_64/hsqml.c
+               $(KERNEL_DIR)/arch/x86_64/hsqml.c \
+               $(KERNEL_DIR)/arch/x86_64/png64.c
 C_SRCS = $(filter-out $(KERNEL_DIR)/sched/scheduler.c $(KERNEL_DIR)/arch/x86_64/%,$(shell find $(KERNEL_DIR) -name "*.c")) $(HP_DESK_DEPS)
 
 # 目标文件
