@@ -115,3 +115,35 @@ int cursor64_pick_size(int w, int h) { (void)w; (void)h; return g_cursor_size; }
 void cursor64_set_theme(int t) { (void)t; }
 
 /* hs_window_drag_* 是 hpdesk.c 自己的函数, 不要在这里重复定义 */
+
+/* ================= 字体宽度 ================= */
+
+/* 32 位对应 font64.c 的 font64_get_string_width。
+ * 32 位 font64_draw_string 走的是固定 8x16 点阵(见 gfx64_compat.c),
+ * 每个 ASCII 字符前进 8px, 非 ASCII(UTF-8 多字节, 主要是 CJK)按 16px 算 ——
+ * 与 draw 里的推进量保持一致, 否则居中/右对齐会偏。 */
+int font64_get_string_width(const char *str, uint16_t size)
+{
+    (void)size;
+    if (!str) return 0;
+    int w = 0;
+    const unsigned char *p = (const unsigned char *)str;
+    while (*p) {
+        if (p[0] < 0x80)              { w += 8;  p += 1; }
+        else if ((p[0] & 0xE0) == 0xC0 && p[1]) { w += 16; p += 2; }
+        else if ((p[0] & 0xF0) == 0xE0 && p[1] && p[2]) { w += 16; p += 3; }
+        else if ((p[0] & 0xF8) == 0xF0 && p[1] && p[2] && p[3]) { w += 16; p += 4; }
+        else                          { w += 8;  p += 1; }
+    }
+    return w;
+}
+
+/* 32 位对应 gfx64.c 的 gfx64_get_info(64 位从自己的全局读, 这里从 32 位全局读)。
+ * 放这一层是为了让 desk_surface.c 保持无架构分支 —— 它只需要一个"屏幕多大"的答案。 */
+void gfx64_get_info(int *width, int *height, int *bpp)
+{
+    extern int gfx_width, gfx_height, gfx_bpp;
+    if (width)  *width  = gfx_width;
+    if (height) *height = gfx_height;
+    if (bpp)    *bpp    = gfx_bpp;
+}

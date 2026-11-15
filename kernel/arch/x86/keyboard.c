@@ -198,6 +198,24 @@ char keyboard_getchar(void)
         wd_feed();  /* V3.87-E6: 等输入=系统活跃, 喂狗防误触发 */
         extern void softirq_run(void);
         softirq_run();  /* V3.87-E8: 等待输入时执行底半部 */
+
+        /* 桌面在"等键盘"这段时间里驱动。没有这一处, 32 位桌面就只有
+         * init 阶段画的那一帧, 时钟不走、鼠标不动 —— 看起来就是个假桌面。
+         * 节流放在这里而不是桌面层: 桌面层要保持无架构分支(COMMON), 时间源
+         * 各架构不一样。PIT 1kHz, 16 tick ≈ 60fps。 */
+        {
+            extern int desk_is_running(void);
+            extern int desk_tick(void);
+            extern uint32_t pit_get_ticks(void);
+            static uint32_t last_tick = 0;
+            if (desk_is_running()) {
+                uint32_t now = pit_get_ticks();
+                if ((uint32_t)(now - last_tick) >= 16) {
+                    last_tick = now;
+                    desk_tick();
+                }
+            }
+        }
         /* V4.07-E52: 低电量自动深度睡眠——输入空闲时消费标志进入
          * SUSPEND(深度睡眠等待循环, RTC 闹钟/按键可唤醒). 唤醒后
          * 回到此处继续等输入. */

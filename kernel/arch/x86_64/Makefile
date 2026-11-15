@@ -94,6 +94,10 @@ C_SOURCES = \
     $(KERNEL_DIR)/shared/fs/ext2_algo.c \
     $(KERNEL_DIR)/shared/lib/lib_shared.c \
     $(KERNEL_DIR)/shared/debug/debug_shared.c \
+    $(KERNEL_DIR)/shared/desktop/desk_registry.c \
+    $(KERNEL_DIR)/shared/desktop/desk_surface.c \
+    $(KERNEL_DIR)/shared/desktop/desk_hpdesk.c \
+    $(KERNEL_DIR)/shared/desktop/desk_runtime.c \
     $(KERNEL_DIR)/crypto/crypto.c \
     $(KERNEL_DIR)/crypto/aes.c \
     $(KERNEL_DIR)/crypto/aes_gcm.c \
@@ -177,7 +181,7 @@ C_OBJECTS = $(addprefix $(BUILD_DIR)/, $(notdir $(C_SOURCES:.c=.o)))
 ASM_OBJECTS = $(addprefix $(BUILD_DIR)/, $(notdir $(ASM_SOURCES:.S=.o)))
 
 # VPATH用于查找源文件
-vpath %.c $(KERNEL_DIR) $(ARCH_DIR) $(KERNEL_DIR)/lib $(KERNEL_DIR)/shared/gfx $(KERNEL_DIR)/shared/drivers $(KERNEL_DIR)/shared/fs $(KERNEL_DIR)/shared/lib $(KERNEL_DIR)/shared/debug $(KERNEL_DIR)/crypto $(KERNEL_DIR)/net
+vpath %.c $(KERNEL_DIR) $(ARCH_DIR) $(KERNEL_DIR)/lib $(KERNEL_DIR)/shared/gfx $(KERNEL_DIR)/shared/drivers $(KERNEL_DIR)/shared/fs $(KERNEL_DIR)/shared/lib $(KERNEL_DIR)/shared/debug $(KERNEL_DIR)/shared/desktop $(KERNEL_DIR)/crypto $(KERNEL_DIR)/net
 vpath %.S $(ARCH_DIR)
 
 

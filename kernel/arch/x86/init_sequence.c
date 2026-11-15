@@ -552,26 +552,30 @@ int hepu_init_phase(init_phase_t phase)
             {
                 extern void serial_puts(uint16_t, const char *);
                 void init_serial_puthex(uint32_t);
-                extern int  hpdesk_init(int, int);
-                extern void hpdesk_render(void);
                 extern int gfx_width, gfx_height;
+                /* 桌面经注册表启动, 不再直接调 hpdesk_init ——
+                 * 这样"可切换桌面"这条接口才真的被用起来: 上层只认
+                 * desk_start()/desk_tick(), 具体是哪个桌面由注册表决定。
+                 * scale 参数对 hpdesk 只是个提示, 它自己按 config 算。 */
+                extern int  desk_start(uint32_t);
+                extern int  desk_tick(void);
 
-                serial_puts(0x3F8, "[EDESKTOP] calling hpdesk_init on 32-bit\n");
-                int rc = hpdesk_init(gfx_width, gfx_height);
+                serial_puts(0x3F8, "[EDESKTOP] desk_start on 32-bit\n");
+                int rc = desk_start(100);
                 serial_puts(0x3F8, "[EDESKTOP] res=");
                 init_serial_puthex((uint32_t)gfx_width);
                 serial_puts(0x3F8, "x");
                 init_serial_puthex((uint32_t)gfx_height);
-                serial_puts(0x3F8, " hpdesk_init rc=");
+                serial_puts(0x3F8, " desk_start rc=");
                 init_serial_puthex((uint32_t)rc);
                 serial_puts(0x3F8, "\n");
                 if (rc == 0) {
                     uint32_t t0l, t0h, t1l, t1h;
                     __asm__ volatile("rdtsc" : "=a"(t0l), "=d"(t0h));
-                    hpdesk_render();
+                    desk_tick();
                     __asm__ volatile("rdtsc" : "=a"(t1l), "=d"(t1h));
                     uint64_t dt = ((uint64_t)t1h << 32 | t1l) - ((uint64_t)t0h << 32 | t0l);
-                    serial_puts(0x3F8, "[EDESKTOP] first frame rendered, cycles=");
+                    serial_puts(0x3F8, "[EDESKTOP] first frame via registry, cycles=");
                     init_serial_puthex((uint32_t)(dt >> 32));
                     init_serial_puthex((uint32_t)(dt & 0xFFFFFFFFu));
                     serial_puts(0x3F8, "\n");

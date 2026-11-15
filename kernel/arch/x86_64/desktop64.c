@@ -127,12 +127,23 @@ void desktop64_run(void)
         }
     }
 
-    /* Hepu Desktop：启动即初始化 */
+    /* Hepu Desktop：启动即初始化 —— 但走注册表, 不再直接调 hpdesk_init。
+     * desk_start 会把内置 hpdesk 注册进 desk_registry 并调它的 init,
+     * 主循环随后只用 desk_tick() 取帧, 于是"可切换桌面"这条接口
+     * 在 64 位也真的被用起来了(32 位在 init_sequence 里同样走它)。 */
     static int hpdesk_started = 0;
     if (!hpdesk_started) {
-        hpdesk_init(screen_width, screen_height);
+        extern int desk_start(uint32_t);
+        extern uint32_t desk_scale_hint(void);
+        int rc = desk_start(desk_scale_hint());
         hpdesk_started = 1;
-        vga_puts("[DESKTOP64] Hepu Desktop started as default desktop\n");
+        if (rc == 0)
+            vga_puts("[DESKTOP64] Hepu Desktop started via desk_registry\n");
+        else {
+            vga_puts("[DESKTOP64] desk_start failed, rc=");
+            { extern void vga_put_hex(uint64_t); vga_put_hex((uint64_t)(unsigned)rc); }
+            vga_puts("\n");
+        }
     }
 
 #ifdef HEPU_ATA_HILBA_TEST
@@ -296,7 +307,10 @@ void desktop64_run(void)
             last_render_ms = now;
             uint64_t __t = desktop64_rdtsc();
             hpdesk_deskstate_drain();   /* §5-2: 先消费跨核标脏请求, 再渲染 */
-            hpdesk_render();
+            /* 取帧走注册表: desk_tick() 内部调当前桌面的 frame。
+             * 现在注册的就是 hpdesk, frame 等价于 hpdesk_render();
+             * 换成别的桌面时这里不需要改。 */
+            { extern int desk_tick(void); desk_tick(); }
             g_cyc_render_call += desktop64_rdtsc() - __t;
         }
 

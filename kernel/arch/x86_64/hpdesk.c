@@ -131,6 +131,13 @@ extern uint64_t pit64_get_ticks(void);
  * 把缩放做成显式因子后, 分辨率变了不会再顺带改变"组件相对大小",
  * 用户也能在设置里单独放大界面(字体是矢量光栅化, 放大是重画不是拉伸)。 */
 int g_ui_scale_pct = 100;
+
+/* 给桌面运行时(desk_runtime.c)读的缩放提示: 它是 COMMON 层, 不该直接
+ * 引用 g_ui_scale_pct 这个 hpdesk 私有全局, 所以由 hpdesk 自己导出。 */
+uint32_t desk_scale_hint(void)
+{
+    return (uint32_t)g_ui_scale_pct;
+}
 /* 1=缩放跟随分辨率自动(默认), 0=用户在 Display 页手动选过档位 */
 int g_disp_scale_auto = 1;
 int g_disp_scale_auto_pct = 100;
