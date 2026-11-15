@@ -28,6 +28,12 @@ int compat_gate_active(void);
  * 返回 0 表示"不需要/不支持翻译"，调用方保留原号（与原实现语义一致）。 */
 int compat_gate_translate_nr(int nr);
 
+/* 判定一个 ELF 该走哪套 ABI：返回 1 = Linux 兼容域，0 = Hepu 原生。
+ * 从 elf64.c 的 elf64_is_linux_abi() 搬来 —— "这是不是外来 ABI" 属于兼容层
+ * 的判断，不属于 ELF 解析模块的判断。elf64.c 里保留同名薄封装供既有调用方使用，
+ * 判定逻辑只有这一份。 */
+int compat_gate_detect_elf(void *elf_data, uint64_t size);
+
 /* 翻译表规模（非零项数），供自检与文档统计使用。 */
 int compat_gate_map_entries(void);
 

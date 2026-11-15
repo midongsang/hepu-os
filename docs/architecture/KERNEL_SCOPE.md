@@ -137,6 +137,19 @@
    ② 必须 `grep -F` —— `[LINUX]` 在正则里是字符类，不用 `-F` 一辈子匹配不上。
    注意：`BOOT_SELFTEST=1` 的电池本身含"故意的坏地址测试"，出现 EXCEPTION 属预期，
    判据不看 EXCEPTION 计数。
+   **进度（2026-11-15，第 2 步）**：ELF 的 ABI 判定也搬进了同一个网关。
+   `elf64_is_linux_abi()` 的函数体（PT_INTERP / NT_GNU_ABI_TAG / PIE /
+   链接基址在原生区外 四条判据）整段移到 `compat_gate_detect_elf()`，
+   `elf64.c` 只留一个薄封装转调，**判定逻辑只有一份**。理由：`elf64.c` 是 ELF
+   解析模块，"这个 ELF 属于哪套 ABI" 是兼容层的判断，不该由解析模块下结论；
+   解析原语（`elf64_verify` / `find_interp` / `has_gnu_abi_tag` / `link_base`）
+   仍留在 `elf64.c`，搬走的只有结论。
+   为让网关能调 `has_gnu_abi_tag`，该函数去掉 `static`（解析原语本身没动）。
+   这一步开始动真实判定，所以两条回归都跑了：
+   ① `tools/regress_linux.sh` → `exec=1 hello=1 returned=1` PASS
+     （外来 ABI 仍被判成兼容域，Linux 程序仍真跑得起来）；
+   ② 标准回归 `-smp 2` 2/2（原生程序没被误判成兼容域，号表没走错）。
+   二进制 937,128 B（+128 B）。
 4. **framebuffer 契约**：把"写屏"从 `gfx64` 抽成一个最小接口（map + blit + flip），
    合成逻辑整体搬到用户态。这一步做完，① 和 ② 一起解决。
    （现状：第一层 `display_backend.h` 已落地，lfb + mirror 双后端，等价自检通过。）

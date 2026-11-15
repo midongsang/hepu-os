@@ -6,7 +6,36 @@
 #include <stdint.h>
 #include "compat_gate.h"
 #include "syscall.h"   /* V0.54.6: 统一 syscall 号（唯一真源） */
-#include "elf64.h"     /* ENV_LINUX_COMPAT */
+#include "elf64.h"     /* ENV_LINUX_COMPAT + ELF 解析原语 */
+
+/* Hepu 原生程序区：原生 ELF 链接在这里。链接基址落在区外 = 外来 ABI。 */
+#define HEPU_NATIVE_PROG_BASE 0x40000000ULL
+#define HEPU_NATIVE_PROG_END  0x50000000ULL
+
+int compat_gate_detect_elf(void *elf_data, uint64_t size)
+{
+    extern int elf64_verify(void *elf_data);
+    extern const char *elf64_find_interp(void *elf_data, uint64_t size);
+    extern int elf64_has_gnu_abi_tag(void *elf_data, uint64_t size);
+    extern uint64_t elf64_link_base(void *elf_data, uint64_t size);
+
+    if (!elf_data || size < sizeof(elf64_header_t)) return 0;
+    if (elf64_verify(elf_data) != 0) return 0;
+    elf64_header_t *ehdr = (elf64_header_t*)elf_data;
+
+    /* 1) 带动态链接器 = Linux 风格可执行文件 */
+    if (elf64_find_interp(elf_data, size)) return 1;
+    /* 2) GNU/Linux ABI 标记（PT_NOTE 里的 NT_GNU_ABI_TAG） */
+    if (elf64_has_gnu_abi_tag(elf_data, size)) return 1;
+    /* 3) PIE：要加载偏置才能落进用户窗口，走兼容路径 */
+    if (ehdr->e_type == ET_DYN) return 1;
+    /* 4) 链接基址在原生程序区之外 */
+    {
+        uint64_t base = elf64_link_base(elf_data, size);
+        if (base && (base < HEPU_NATIVE_PROG_BASE || base >= HEPU_NATIVE_PROG_END)) return 1;
+    }
+    return 0;
+}
 
 /* Linux x86_64 → Hepu 原生号。
  * V0.54.6: 32/64 位 syscall 号统一之后，旧表仍指向统一前的 Hepu 号

@@ -89,7 +89,8 @@ int elf64_has_interp(void *elf_data, uint64_t size)
 
 /* 扫描 PT_NOTE，找 NT_GNU_ABI_TAG（GNU/Linux ABI 标记）
  * note 格式：namesz(4) descsz(4) type(4) name(namesz,4字节对齐) desc(descsz,4字节对齐) */
-static int elf64_has_gnu_abi_tag(void *elf_data, uint64_t size)
+/* 去 static：compat_gate_detect_elf() 需要它做 ABI 判定（解析原语本身仍属本模块）。 */
+int elf64_has_gnu_abi_tag(void *elf_data, uint64_t size)
 {
     if (!elf_data || size < sizeof(elf64_header_t)) return 0;
     elf64_header_t *ehdr = (elf64_header_t*)elf_data;
@@ -125,22 +126,13 @@ static int elf64_has_gnu_abi_tag(void *elf_data, uint64_t size)
 #define HEPU_NATIVE_PROG_BASE 0x40000000ULL
 #define HEPU_NATIVE_PROG_END  0x50000000ULL
 
+/* DESIGN.md 约束一第 2 步：判定逻辑搬到 compat_gate（"这是不是外来 ABI"
+ * 属于兼容层的判断，不属于 ELF 解析模块）。这里只留薄封装，函数体只有一份。
+ * 解析原语（elf64_verify/find_interp/has_gnu_abi_tag/link_base）仍留本模块。 */
 int elf64_is_linux_abi(void *elf_data, uint64_t size)
 {
-    if (!elf_data || size < sizeof(elf64_header_t)) return 0;
-    if (elf64_verify(elf_data) != 0) return 0;
-    elf64_header_t *ehdr = (elf64_header_t*)elf_data;
-
-    /* 1) 动态链接器 = 一定是 Linux 风格可执行文件 */
-    if (elf64_find_interp(elf_data, size)) return 1;
-    /* 2) GNU/Linux ABI 标记 */
-    if (elf64_has_gnu_abi_tag(elf_data, size)) return 1;
-    /* 3) PIE：需要加载偏置才能落进用户窗口，走兼容路径 */
-    if (ehdr->e_type == ET_DYN) return 1;
-    /* 4) 链接基址在原生程序区之外 */
-    uint64_t base = elf64_link_base(elf_data, size);
-    if (base && (base < HEPU_NATIVE_PROG_BASE || base >= HEPU_NATIVE_PROG_END)) return 1;
-    return 0;
+    extern int compat_gate_detect_elf(void *elf_data, uint64_t size);
+    return compat_gate_detect_elf(elf_data, size);
 }
 
 
