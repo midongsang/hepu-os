@@ -47,9 +47,17 @@ grep -qF '[NET-TEST] === Self-Test Complete ===' "$RUN/ser32.txt" && have_net=1
 # ⑤ 桌面初始化返回（说明跑道已经延伸到 app framework 之后）
 grep -qF '[DESKTOP] elastic free desktop init done' "$RUN/ser32.txt" && have_desk=1
 lines=$(wc -l < "$RUN/ser32.txt")
-echo "serial=$have_serial initrd=$have_initrd net=$have_net desk=$have_desk fault=$have_fault lines=$lines"
+# 判据 6: 图形栈边界 —— 32 位图形实现不得混进 64 位构建, 反之亦然
+# （见 docs/architecture/GRAPHICS_BOUNDARY.md）
+if ./tools/check_gfx_boundary.sh >/dev/null 2>&1; then
+    have_bound=1
+else
+    have_bound=0
+fi
+
+echo "serial=$have_serial initrd=$have_initrd net=$have_net desk=$have_desk fault=$have_fault bound=$have_bound lines=$lines"
 if [ "$have_serial" -eq 1 ] && [ "$have_initrd" -eq 1 ] && [ "$have_net" -eq 1 ] \
-   && [ "$have_desk" -eq 1 ] && [ "$have_fault" -eq 0 ]; then
+   && [ "$have_desk" -eq 1 ] && [ "$have_fault" -eq 0 ] && [ "$have_bound" -eq 1 ]; then
   echo "== 32 位内核冒烟 PASS"
   exit 0
 fi

@@ -161,6 +161,18 @@ ASM_SOURCES = \
     $(ARCH_DIR)/kjmp64.S
 
 # 对象文件（放在build目录下）
+# ---- 图形栈边界守卫 (GRAPHICS_BOUNDARY.md) ----
+# 64 位的图形实现只有三处: gfx64.c / desktop64.c / shared/gfx/gfx_algo.c(纯算法)。
+# kernel/gfx/* (18 个 vga/vbe/gop/virtio 后端)、arch/x86/desktop_render.c、
+# vga_gfx.c、vga_cjk.c 全部属于 32 位内核。若 64 位构建意外引入它们,
+# 不要静默编进去 —— 直接让构建失败。
+GFX32_IN_64 := $(filter $(KERNEL_DIR)/gfx/% %/desktop_render.c %/vga_gfx.c \
+                       %/vga_cjk.c %/elastic_desktop.c %/boot_gfx.c \
+                       %/gfx_selftest.c %/vga.c,$(C_SOURCES))
+ifneq ($(strip $(GFX32_IN_64)),)
+$(error 图形栈边界被打破: 64 位构建引入了 32 位图形实现 -> $(GFX32_IN_64))
+endif
+
 C_OBJECTS = $(addprefix $(BUILD_DIR)/, $(notdir $(C_SOURCES:.c=.o)))
 ASM_OBJECTS = $(addprefix $(BUILD_DIR)/, $(notdir $(ASM_SOURCES:.S=.o)))
 
