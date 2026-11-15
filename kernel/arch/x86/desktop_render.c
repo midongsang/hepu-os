@@ -78,7 +78,9 @@ static int utf8_string_width(const char *s, int size)
     int width = 0;
     /* V7.94: 中文字符实际advance = tt_size = size * 3 / 2（TrueType全角字符advance_width=units_per_em）
      * 之前使用size导致宽度计算偏小，文字居中偏移错误导致被截断 */
-    int cjk_width = size * 3 / 2;
+    /* D-7: 中文实际 advance 就是 size(D-7 实测字形宽 ≈ size),
+     * 原来按 size*3/2 算, 两个字的宽度就超过图标宽度, 图标名会连成一行。 */
+    int cjk_width = size;
     while (*s) {
         if (*s & 0x80) {
             /* UTF-8多字节字符（中文等），宽度约为size*3/2 */
@@ -4065,13 +4067,21 @@ void elastic_desktop_render(void)
         uint16_t fsize = font_get_size();
         if (fsize < 16) fsize = 16;
         if (fsize > 32) fsize = 32;
+        /* D-7: 这里必须和 desktop_puts 用同一个字号, 否则一边按 32 算宽度、
+         * 一边按缩放后的 24 画字, text_x 就被推到图标右侧, 相邻图标的名字压在一起。 */
+        {
+            int sc = (gfx_height * 100) / 768;
+            if (sc < 75) sc = 75;
+            fsize = (uint16_t)(((int)fsize * sc) / 100);
+            if (fsize < 11) fsize = 11;
+        }
         int text_width = utf8_string_width(app->name, fsize);
         if (text_width <= 0) text_width = name_len * (fsize / 2);
-        /* D-7: 宽度算大了会把 text_x 推到图标左边甚至屏外, 多个图标的名字
-         * 就叠在同一块区域。这里夹一下。 */
-        if (text_width > icon_size + 24) text_width = icon_size + 24;
+        /* D-7: 按真实宽度居中, 允许略微溢出图标宽度。
+         * 之前这里把宽度夹到 icon_size+24, 结果所有图标名的起点被拉到同一块,
+         * 8 个名字连成一行。 */
         int text_x = ix + (icon_size - text_width) / 2;
-        if (text_x < 0) text_x = 0;
+        if (text_x < 2) text_x = 2;
         desktop_puts(text_x, iy + icon_size + 6, app->name, 0x0F);
     }
 

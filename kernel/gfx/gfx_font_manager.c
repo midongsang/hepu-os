@@ -608,11 +608,9 @@ void gfx_draw_string_font(uint32_t x, uint32_t y, const char *str, gfx_color_t f
                     }
                 }
             }
-            /* D-7: advance 必须不小于字形实际宽度, 否则中文字符会互相压在一起。
-             * TrueType 未加载时回退路径给出的 advance 常常小于缩放后的 width,
-             * 屏幕上就是一堆中文字叠成一团。 */
-            if (advance < (int16_t)width) advance = (int16_t)width;
-            if (advance < 1) advance = (int16_t)(width ? width : 8);
+            /* D-7: 只在 advance 明显异常(<=0)时兜底。之前写成"advance 不小于 width"
+             * 把字间距撑到了字形宽度那么大, 屏幕上字与字之间全是空隙。 */
+            if (advance <= 0) advance = (int16_t)(width ? width : 8);
             cur_x += (uint32_t)advance;
         }
     }
