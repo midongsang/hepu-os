@@ -45,11 +45,24 @@ fi
 # ---- 判据 3: 32 位图形文件必须留在 32 位目录 ----
 missing=0
 for f in kernel/gfx/gfx_core.c kernel/gfx/gfx_vga.c kernel/gfx/gfx_vbe.c \
-         kernel/arch/x86/vga_gfx.c kernel/arch/x86/desktop_render.c \
-         kernel/drivers/vga_cjk.c; do
+         kernel/arch/x86/vga_gfx.c kernel/drivers/vga_cjk.c; do
     [ -f "$f" ] || { say "[BOUND] FAIL(missing): $f 不见了"; missing=1; FAIL=1; }
 done
-[ "$missing" = "0" ] && say "[BOUND] ok: 32 位图形实现全部在 32 位目录里"
+# desktop_render.c(旧 32 位桌面) 已按 D-7 迁出内核 -> archive/legacy-desktop/。
+# 判据的本意是"32 位图形实现不得混进 64 位目录", 迁出内核同样合格;
+# 但若它出现在 x86_64 目录, 那就是混入, 直接判 FAIL。
+if [ -f kernel/arch/x86_64/desktop_render.c ]; then
+    say "[BOUND] FAIL(leak): 旧桌面 desktop_render.c 出现在 64 位目录"
+    FAIL=1
+elif [ -f kernel/arch/x86/desktop_render.c ]; then
+    say "[BOUND] ok: desktop_render.c 仍在 32 位目录"
+else
+    [ -f archive/legacy-desktop/desktop_render.c ] || {
+        say "[BOUND] FAIL(lost): desktop_render.c 既不在 32 位目录也不在 archive/"; FAIL=1; }
+    [ -f archive/legacy-desktop/desktop_render.c ] && \
+        say "[BOUND] ok: desktop_render.c 已迁出内核(archive/legacy-desktop)"
+fi
+[ "$missing" = "0" ] && say "[BOUND] ok: 其余 32 位图形实现全部在 32 位目录里"
 
 # ---- 判据 4: 64 位图形实现只有三处 ----
 n64=$(grep -c -E 'gfx64\.c|desktop64\.c|gfx_algo\.c' "$MK64")

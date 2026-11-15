@@ -48,7 +48,7 @@
 | `kernel/arch/x86/vga_gfx_aa.c` | 抗锯齿绘制 |
 | `kernel/arch/x86/vga.c` | 文本控制台 |
 | `kernel/arch/x86/boot_gfx.c` | 启动期图形 |
-| `kernel/arch/x86/desktop_render.c` | 弹性桌面（`elastic_desktop_render` / `main_loop`） |
+| ~~`kernel/arch/x86/desktop_render.c`~~ | **已迁出内核**（D-7 收口）。源码保留在 `archive/legacy-desktop/`，不参与任何构建 |
 | `kernel/arch/x86/elastic_desktop.c` | 桌面初始化 |
 | `kernel/arch/x86/gfx_selftest.c` | 图形自检 |
 | `kernel/drivers/vga_cjk.c` | CJK 字模 → 平面 2 |
@@ -113,7 +113,7 @@ Makefile:173: *** 图形栈边界被打破: 64 位构建引入了 32 位图形�
 | 1 | 64 位 Makefile 不含 `kernel/gfx/` | ok |
 | 2 | 守卫宏 `GFX32_IN_64` 在位 | ok |
 | 3 | `shared/gfx` 无 `outb/inb/端口/0xA0000/0xB8000` | ok |
-| 4 | 32 位图形文件全部还在 32 位目录 | ok |
+| 4 | 32 位图形文件留在 32 位目录；已迁出的必须落在 `archive/`，不得出现在 `x86_64` 目录 | ok |
 | 5 | 64 位图形实现恰好 3 处 | ok |
 
 当前输出：`[BOUND] === 图形栈边界完好 ===`，退出码 0。
