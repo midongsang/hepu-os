@@ -169,11 +169,33 @@ $(INITRD_IMG): $(BUILD_DIR)/user/hello.hug $(BUILD_DIR)/user/hello_c.hug \
     $(BUILD_DIR)/winhello.exe $(BUILD_DIR)/winargs.exe $(BUILD_DIR)/macho_demo \
     $(BUILD_DIR)/loop.elf \
     $(BUILD_DIR)/crashdemo.elf $(BUILD_DIR)/crashud.elf \
-    $(BUILD_DIR)/hello-rust.elf $(BUILD_DIR)/cat.elf $(BUILD_DIR)/echo.elf $(BUILD_DIR)/sysinfo.elf $(BUILD_DIR)/file-server.elf $(BUILD_DIR)/fs-client.elf $(BUILD_DIR)/ipc-e2e-test.elf $(BUILD_DIR)/fork-test.elf $(BUILD_DIR)/file-server-e2e-test.elf $(BUILD_DIR)/socket-test.elf $(BUILD_DIR)/app-store.elf $(BUILD_DIR)/log-service.elf \
-    $(BUILD_DIR)/gfxtest.elf \
-    $(BUILD_DIR)/test_hepu.txt
+    $(RUST_USER_ELFS) \
+    $(BUILD_DIR)/gfxtest.elf
+# 注意：旧列表末尾还有一个 $(BUILD_DIR)/test_hepu.txt，但它**既没有生成规则、
+# 源文件也不存在** —— 写死成一个永远不会出现的依赖，导致 initrd 永远做不出来。
+# 已移除。若将来真的需要这个文本文件，必须先给它一条规则。
 	@echo "  MKINITRD $@"
 	@python3 tools/mkinitrd.py $@ $^ > /dev/null
+
+# ---------------------------------------------------------------------------
+# Rust 用户程序：本机没装 cargo 时整体跳过。
+#
+# 为什么：这些 .elf 只是 initrd 里的**附加应用**，不是内核的编译依赖。
+# 但 initrd.img 的规则把它们写死在依赖列表里，于是"没装 Rust"会让
+# **32 位内核整个编不出来** —— 把环境问题升级成了构建失败。
+# 有 cargo 的环境（CI/真机）行为不变：HAVE_CARGO 非空则列表照旧。
+# ---------------------------------------------------------------------------
+HAVE_CARGO := $(shell which cargo 2>/dev/null)
+ifeq ($(HAVE_CARGO),)
+  RUST_USER_ELFS :=
+else
+  RUST_USER_ELFS := $(BUILD_DIR)/hello-rust.elf $(BUILD_DIR)/cat.elf \
+                    $(BUILD_DIR)/echo.elf $(BUILD_DIR)/sysinfo.elf \
+                    $(BUILD_DIR)/file-server.elf $(BUILD_DIR)/fs-client.elf \
+                    $(BUILD_DIR)/ipc-e2e-test.elf $(BUILD_DIR)/fork-test.elf \
+                    $(BUILD_DIR)/file-server-e2e-test.elf $(BUILD_DIR)/socket-test.elf \
+                    $(BUILD_DIR)/app-store.elf $(BUILD_DIR)/log-service.elf
+endif
 
 # V4.02: Rust用户态应用——C核心+汇编最底层+Rust用户态技术路线验证
 # 使用nightly Rust工具链，自定义hepu-i686目标，Linux i386 syscall ABI

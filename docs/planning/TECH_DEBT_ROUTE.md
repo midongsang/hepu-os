@@ -72,6 +72,25 @@
 **第一步（按 `UNIFIED_SOURCE_TREE.md` P1 走）**：32 位 `sys_mem.c` →
 `shared/security/user_access.h`。只做"引用现成头文件、复用现成校验"，不改 32 位行为。
 
+**D-2a 已做（2026-11-15，先把 32 位基线立起来）**：这条债不能直接动代码 ——
+动之前 32 位**根本编不出来**，改完也无从验证。查到的三道墙和处置：
+
+| # | 墙 | 处置 |
+|---|---|---|
+| 1 | `user/libhepu/crt0.S` 只有 64 位写法（`%rsp`/`%rax`/`syscall`），32 位构建报 `bad register name '%rsp'` | 按 `__x86_64__` 分支：64 位 `syscall` + rdi；32 位 `int $0x80` + ebx（入口见 `kernel/arch/x86/interrupt.S`） |
+| 2 | initrd 的依赖列表写死 12 个 Rust 用户程序，本机 **没有 cargo** → 内核整个编不出来 | 用 `which cargo` 条件化：无 cargo 时 `RUST_USER_ELFS` 为空。这些是 initrd 里的**附加应用**，不是内核依赖，不该把环境问题升级成构建失败 |
+| 3 | `$(BUILD_DIR)/test_hepu.txt` 在 initrd 依赖里，但**既无生成规则、源文件也不存在** | 从依赖里移除并留注释。这是个永远不可能满足的幽灵依赖 |
+
+**结果**：32 位内核编出来了（`build_v250/hepu-kernel.bin` 3,315,694 B），
+并且**能启动** —— 用 `qemu-system-i386 -kernel kernel.elf`（**必须 .elf**：
+纯 .bin 没有 multiboot 头，QEMU 静默不动，表现为串口零输出）。
+串口 306 行，跑到 `[INIT] phase: net proto`，途中 `[INITRD] base=... head=0x55504548`
+（head = "HEPU" 魔数）、`[HUGETLB] selftest: pass=0x7 fail=0x0`。
+
+**新增 `tools/regress32.sh`**：32 位冒烟回归，三条判据 ——
+`[SERIAL] COM1` 就绪、`[INITRD] head=0x55504548`、无 `PANIC/#GP/#PF`。
+实测 PASS。**这是 32 位第一次有回归兜底。**
+
 **验收**：32 位内核能编能跑（32 位回归按现状跑通）；32 位侧引用 `shared/` 的文件数从 0 变 1；
 64 位回归不受影响。
 
