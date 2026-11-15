@@ -19,6 +19,10 @@ void spinlock_init(spinlock_t *lock)
 }
 
 /* 加锁（阻塞等待，支持递归） */
+/* SB-26 诊断影子变量（见 spinlock.h 的说明：不能用结构字段，会挪 .bss 布局）。 */
+volatile uint64_t g_sl_last_lock_addr = 0;
+volatile uint64_t g_sl_last_lock_site = 0;
+
 void spinlock_lock(spinlock_t *lock)
 {
     uint32_t cpu_id = apic64_get_id();
@@ -38,6 +42,10 @@ void spinlock_lock(spinlock_t *lock)
     /* 获取锁成功 */
     lock->owner_cpu = cpu_id;
     lock->recursion_count = 1;
+    /* SB-26: 记住"谁锁的"(影子变量, 不动结构布局)。
+     * 双重解锁的真因是"锁了没放/放了两次", 只看 unlock 方永远定位不到源头。 */
+    g_sl_last_lock_addr = (uint64_t)lock;
+    g_sl_last_lock_site = (uint64_t)__builtin_return_address(0);
 }
 
 /* 解锁 */
@@ -67,8 +75,13 @@ void spinlock_unlock(spinlock_t *lock)
         const char *p4 = " rec=";
         while (*p4) b[n++] = *p4++;
         { uint32_t r = lock->recursion_count; b[n++] = (char)(r < 10 ? '0' + r : 'a' + r - 10); }
-        const char *p5 = " at=0x";
+        const char *p5 = " lock_at=0x";
         while (*p5) b[n++] = *p5++;
+        /* 只有"最近一次加锁"正是这把锁时, lock_at 才是可信的那个源头 */
+        uint64_t ls = (g_sl_last_lock_addr == (uint64_t)lock) ? g_sl_last_lock_site : 0;
+        for (int sh = 60; sh >= 0; sh -= 4) b[n++] = (char)(((ls >> sh) & 0xF) < 10 ? '0' + ((ls >> sh) & 0xF) : 'a' + ((ls >> sh) & 0xF) - 10);
+        const char *p6 = " unlock_at=0x";
+        while (*p6) b[n++] = *p6++;
         uint64_t ra = (uint64_t)__builtin_return_address(0);
         for (int sh = 60; sh >= 0; sh -= 4) b[n++] = (char)(((ra >> sh) & 0xF) < 10 ? '0' + ((ra >> sh) & 0xF) : 'a' + ((ra >> sh) & 0xF) - 10);
         b[n++] = '\n'; b[n] = 0;
