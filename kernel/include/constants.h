@@ -96,7 +96,9 @@
 #define COM1_PORT           0x3F8       /* COM1端口 */
 
 /* === 系统调用 === */
-#define SYS_MAX             222          /* 最大系统调用号 (V0.9.0: +3D演示) */
+/* D-8: 与 syscall.h 统一为 236。两处曾一个 222 一个 236, 32 位表按 222 开,
+ * SYS_FB_DESC(229) 直接越界编译失败。 */
+#define SYS_MAX             236          /* 最大系统调用号, 与 syscall.h 一致 */
 
 /* === 网络 === */
 #define MAX_SOCKETS         128         /* V6.77: 最大socket数(原64) */

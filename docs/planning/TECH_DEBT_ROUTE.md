@@ -447,3 +447,67 @@ back_buffer，等于用一块陈旧缓冲盖掉刚画好的桌面 —— 实测�
 桌面只做了 init，没有任何绘制循环在跑（`desktop_render.c` 的 `gfx_flip()` 一次都没被调用，
 `[FLIP]` 只有我们手动加的那一次）。也就是说 32 位的图形**通了但没内容**：
 不是画错，是没人画。
+
+
+---
+
+## D-8：32 位桌面搬到用户态，32/64 共用一份桌面
+
+**起因（用户定调）**："搬到用户态，然后 32 位桌面先关掉。让 32 和 64 真正共用桌面，
+留可切换的图形化桌面接口，用户以后可以自己加其他桌面。"
+
+### 为什么必须这么做
+
+32 位是**微内核** —— 应用在用户态；64 位是**单体内核** —— 桌面在 ring0。
+把 4522 行 GUI 塞在 32 位内核里，等于让微内核做单体内核的事，而且和 64 位那套
+（`hpdesk.c` 8206 行 + `hs_apps.c` 4498 行）永远无法共用。
+
+### 四件事
+
+| # | 内容 | 状态 |
+|---|---|---|
+| 1 | 32 位内核内桌面**下线** | ✅ `init_sequence.c` 不再进 `elastic_desktop_main_loop` |
+| 2 | **桌面接口契约** + 注册表 | ✅ `kernel/shared/desktop/desk_api.h` + `desk_registry.c` |
+| 3 | 32 位 `SYS_FB_DESC`（用户态拿显存描述） | ✅ `kernel/arch/x86/sys_fb.c` |
+| 4 | 32 位用户态桌面程序 | ⏳ 待做（需要 `SYS_MMAP` 能把 LFB 映射进 ring3） |
+| 5 | 64 位桌面接同一接口 | ⏳ 待做（现状 `hpdesk.c` 仍直写） |
+
+### 接口长什么样
+
+```c
+/* 桌面只看到这个 */
+typedef struct desk_surface {
+    int width, height, bpp, pitch;
+    uint32_t scale_pct;
+    void *ctx;
+    void (*put_pixel)(...);  void (*fill_rect)(...);
+    void (*hline)(...);      void (*draw_text)(...);
+    int  (*text_width)(...);  void (*present)(...);
+} desk_surface_t;
+
+/* 一个桌面实现 */
+typedef struct desk_backend {
+    const char *name, *display_name;
+    int  (*init)(desk_surface_t*);
+    int  (*frame)(desk_surface_t*);
+    int  (*event)(desk_surface_t*, const desk_input_t*);
+    void (*fini)(desk_surface_t*);
+} desk_backend_t;
+
+desk_register(&my_desk);   /* 用户自己加一个桌面 */
+desk_select("mine");       /* 切过去 */
+```
+
+**硬判据**：桌面实现里不许出现 `outb` / `inb` / `0xA0000` / 物理地址 / 寄存器名。
+出现了就说明它偷偷做了后端的事，违反 `GRAPHICS_BOUNDARY.md`。
+
+### 顺手修的一个坑
+
+`SYS_MAX` 有两处定义：`constants.h` 是 **222**、`syscall.h` 是 **236**。
+32 位表按 222 开，`SYS_FB_DESC`(229) 直接**越界编译失败**。
+统一成 236。
+
+### 验收
+
+- 32 位冒烟 **PASS**，569 行（桌面下线后 shell 继续跑，输出比之前多 40 行）
+- 串口出现 `[EDESKTOP] in-kernel desktop retired; handed to user space`

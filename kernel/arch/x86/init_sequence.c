@@ -536,18 +536,18 @@ int hepu_init_phase(init_phase_t phase)
                 extern void serial_puts(uint16_t, const char *);
                 serial_puts(0x3F8, "[APPS] 7/7: elastic_desktop_init done!\n");
                 gfx_fb_stats("after-desktop-init");
-            /* 只 init 不绘制 = 屏幕上什么都没有。32 位此前就停在这一步、
-             * 直接掉进 shell，所以"图形通了但没内容"。这里进真正的桌面主循环。
-             * 它会一直跑（桌面系统本就如此），因此后面的 shell 不会自动启动；
-             * 需要 shell 时在桌面里退出。 */
+            /* D-7 收口: 32 位桌面从内核里下线，改由用户态应用负责。
+             *
+             * 原因: 32 位是微内核 —— 应用在用户态。把整套桌面(4522 行 GUI)
+             * 塞进 ring0 与架构定位相悖，也让 32/64 两套桌面永远无法共用。
+             * 内核这边只保留两件事: framebuffer 描述 (SYS_FB_DESC) 与映射
+             * (SYS_MMAP)，桌面逻辑搬到 user/apps/desktop.c。
+             *
+             * 这里不再进 elastic_desktop_main_loop()，只留一句交接日志。 */
             {
-                extern void elastic_desktop_main_loop(void);
-                extern int gfx_bpp;
-                if (gfx_bpp == 8 || gfx_bpp == 32) {
-                    extern void serial_puts(uint16_t, const char *);
-                    serial_puts(0x3F8, "[EDESKTOP] entering main loop (32-bit path)\n");
-                    elastic_desktop_main_loop();
-                }
+                extern void serial_puts(uint16_t, const char *);
+                serial_puts(0x3F8,
+                    "[EDESKTOP] in-kernel desktop retired; handed to user space\n");
             }
                 { extern void vga_dump_regs(void); vga_dump_regs(); }
             }
