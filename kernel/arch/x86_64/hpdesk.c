@@ -3548,7 +3548,17 @@ static void *hs_layer_ensure(hs_layer_t *L, int x, int y, int w, int h)
     if (w <= 0 || h <= 0) return 0;
     if (L->surf && L->w == w && L->h == h && L->x == x && L->y == y) return L->surf;
     if (L->surf) { kfree(L->surf); L->surf = 0; }
+#if defined(__i386__)
+    /* P1-4: 32 位的 kheap 有一个结构性 bug —— 早期某次分配之后, 链表只剩
+     * 前 ~101KB 的 9 个 used 块, 后面 31.9MB 再也没回到链表(maxfree=0)。
+     * 直接在 kmalloc 上要 691KB 的离屏层必然失败([LY] no surface)。
+     * 这里给桌面开一块专用静态池(BSS, 不占 bin 体积), 绕开 kheap。
+     * 64 位不受影响 —— 整段在 __i386__ 内。 */
+    extern uint8_t *hpdesk32_layer_pool_alloc(uint32_t bytes);
+    void *p = hpdesk32_layer_pool_alloc((uint32_t)((uint32_t)w * (uint32_t)h * 4u));
+#else
     void *p = kmalloc((uint64_t)w * h * 4);
+#endif
     if (!p) { L->w = L->h = 0; L->valid = 0; return 0; }
     L->surf = p; L->w = w; L->h = h; L->x = x; L->y = y; L->valid = 0;
     return p;
@@ -3717,7 +3727,7 @@ static void hs_dynamic_island_render(void)
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            island_x + (island_w - text_w) / 2, island_y + (island_h - font_size) / 2,
                            time, g_shell.colors.panel_fg, font_size);
-    } else {
+        } else {
         /* 展开状态：时间+日期+天气+系统状态
          * 改为整块在岛内垂直居中: 旧实现固定 +hs_sy(12) 偏移,
          * 放大后文字块比岛还高, 上半被裁。 */
@@ -4870,9 +4880,24 @@ void hs_sh_paint(int slot, int x, int y, int w, int h, int rc, int div)
     int r = mn / div;
     if (r < 10) r = 10;
     if (r > 34) r = 34;
+#if defined(__i386__)
+    /* P1-4: 32 位堆只有 32MB, 阴影缓存按 pad=3*r+6 算面积, 侧栏那张要 3MB,
+     * 三个面板叠起来直接把堆吃空, 连带离屏层都分配不到([LY] no surface)。
+     * 半径减半 -> 面积降到 1/4, 视觉上阴影小一点但仍然在。 */
+    r = (r + 1) / 2;
+    if (r < 4) r = 4;
+#endif
     int off = 4;                  /* 轻微下移, 四边仍有近场暗部 */
     int pad = 3 * r + 6;
     int pk = ((rc * 4096 + pad) * 4096 + r) * 512 + off;
+#if defined(__i386__)
+    /* P1-4: 32 位先不做阴影。理由不是"画不出来", 是"画得太慢":
+     * 阴影是 3*r+6 的 pad 外加 SH_PASSES 遍框式模糊, 侧栏那档 864x1014 要跑
+     * 约 87 万像素 x 若干遍, 在 QEMU 的 TCG 下把首帧拖过 70 秒。
+     * 64 位照旧走完整阴影 —— 这段只在 __i386__ 里。 */
+    (void)slot; (void)x; (void)y; (void)w; (void)h; (void)rc; (void)div;
+    return;
+#endif
     hs_shc_t *c = &g_shc[slot];
     if (c->kw != w || c->kh != h || c->kpk != pk) {
         if (!hs_shc_build(c, w, h, pad, rc, r, off)) return;
@@ -6344,6 +6369,14 @@ void hs_drag_selftest(void)
 
 static void hpdesk_render_inner(void)
 {
+#if defined(__i386__)
+    /* P1-4: dispi 切到 1920x1080 后, LFB 最上面几行还留着上一次 VGA 文本模式的
+     * 显存内容(y=1 那一行是 16 色调色板的随机彩色)。壁纸 fill 理论上覆盖全屏,
+     * 但实测盖不住最顶 6 行, 这里显式清一次底, 保证从 0 行开始就是桌面。 */
+    gfx64_fill_rect(0, 0, g_shell.screen_width, g_shell.screen_height,
+                    g_shell.colors.bg);
+#endif
+
     uint64_t __rs0 = hs_rdtsc();
     {
     }

@@ -316,18 +316,65 @@ void gfx64_fill_polygon(const int *pts, int n, uint32_t color)
 
 /* ================= 位图 ================= */
 
+/* P1-4b: 原来转发 gfx_blit_alpha(framebuffer, dx, dy, src, sw, sh, opacity),
+ * 但 vga_gfx.c 里的真实签名是 (x, y, w, h, data, alpha) —— 参数整体错位:
+ *   x=framebuffer(0xFD000000) y=dx w=dy h=src指针 data=宽度 alpha=高度
+ * 后果有二: ① x 越界导致混合被静默跳过 —— 顶栏/灵动岛的半透明从来没生效;
+ * ② h 拿到了 src 指针值, 循环次数爆炸 —— dock 层合成直接卡死。
+ * 这里按 32bpp 自己走行: 每像素 src alpha x 整层 opacity, a==255 直接赋值。 */
 void gfx64_blend_image(void *src, int sw, int sh, int dx, int dy, int opacity)
 {
-    gfx_blit_alpha(framebuffer, dx, dy, src, sw, sh, opacity);
+    if (!src || sw <= 0 || sh <= 0 || gfx_bpp != 32 || opacity <= 0) return;
+    if (dx >= gfx_width || dy >= gfx_height) return;
+    if (dx + sw <= 0 || dy + sh <= 0) return;
+
+    int sx0 = 0, sw_e = sw;
+    if (dx < 0) { sx0 = -dx; sw_e = sw + dx; dx = 0; }
+    if (dx + sw_e > gfx_width) sw_e = gfx_width - dx;
+    if (sw_e <= 0) return;
+
+    uint32_t *s = (uint32_t *)src;
+    int op = opacity > 255 ? 255 : opacity;
+    for (int row = 0; row < sh; row++) {
+        int py = dy + row;
+        if (py < 0 || py >= gfx_height) continue;
+        uint32_t *d = (uint32_t *)(framebuffer + (size_t)py * gfx_pitch) + dx;
+        uint32_t *srow = s + (size_t)row * sw + sx0;
+        if (op == 255) {
+            for (int i = 0; i < sw_e; i++) {
+                uint32_t px = srow[i];
+                int a = (int)(px >> 24);
+                if (a == 0) continue;
+                if (a == 255) { d[i] = px; continue; }
+                uint32_t bg = d[i];
+                int r = (((px >> 16) & 0xFF) * a + ((bg >> 16) & 0xFF) * (255 - a)) / 255;
+                int g = (((px >> 8) & 0xFF) * a + ((bg >> 8) & 0xFF) * (255 - a)) / 255;
+                int b = ((px & 0xFF) * a + (bg & 0xFF) * (255 - a)) / 255;
+                d[i] = (uint32_t)(0xFF000000u | (r << 16) | (g << 8) | b);
+            }
+        } else {
+            for (int i = 0; i < sw_e; i++) {
+                uint32_t px = srow[i];
+                int a = (int)(px >> 24);
+                if (a == 0) continue;
+                a = a * op / 255;
+                if (a <= 0) continue;
+                uint32_t bg = d[i];
+                int r = (((px >> 16) & 0xFF) * a + ((bg >> 16) & 0xFF) * (255 - a)) / 255;
+                int g = (((px >> 8) & 0xFF) * a + ((bg >> 8) & 0xFF) * (255 - a)) / 255;
+                int b = ((px & 0xFF) * a + (bg & 0xFF) * (255 - a)) / 255;
+                d[i] = (uint32_t)(0xFF000000u | (r << 16) | (g << 8) | b);
+            }
+        }
+    }
 }
 
 void gfx64_blend_image_sub(void *src, int sw, int sh, int sx, int sy,
                            int dx, int dy, int w, int h, int opacity)
 {
-    /* 退化: 不做子矩形, 整图贴 */
-    (void)sx; (void)sy;
-    gfx_blit_alpha(framebuffer, dx, dy, src, sw, sh, opacity);
-    (void)w; (void)h;
+    /* 退化: 不做子矩形, 整图贴(同样自实现, 不走错位的 gfx_blit_alpha) */
+    (void)sx; (void)sy; (void)w; (void)h;
+    gfx64_blend_image(src, sw, sh, dx, dy, opacity);
 }
 
 void gfx64_blend_pixel(int x, int y, uint32_t fg, int alpha)
@@ -348,7 +395,7 @@ void gfx64_blend_pixel(int x, int y, uint32_t fg, int alpha)
 
 void gfx64_blit_rgba(int x, int y, int w, int h, const void *src)
 {
-    gfx_blit_alpha(framebuffer, x, y, src, w, h, 255);
+    gfx64_blend_image((void *)src, w, h, x, y, 255);
 }
 
 void gfx64_blur_region(int x, int y, int w, int h, int blur_radius,

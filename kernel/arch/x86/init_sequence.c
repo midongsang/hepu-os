@@ -558,7 +558,11 @@ int hepu_init_phase(init_phase_t phase)
 
                 serial_puts(0x3F8, "[EDESKTOP] calling hpdesk_init on 32-bit\n");
                 int rc = hpdesk_init(gfx_width, gfx_height);
-                serial_puts(0x3F8, "[EDESKTOP] hpdesk_init rc=");
+                serial_puts(0x3F8, "[EDESKTOP] res=");
+                init_serial_puthex((uint32_t)gfx_width);
+                serial_puts(0x3F8, "x");
+                init_serial_puthex((uint32_t)gfx_height);
+                serial_puts(0x3F8, " hpdesk_init rc=");
                 init_serial_puthex((uint32_t)rc);
                 serial_puts(0x3F8, "\n");
                 if (rc == 0) {

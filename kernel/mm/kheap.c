@@ -24,6 +24,58 @@ typedef struct block_header {
 #define ALIGN(x, a) (((x) + (a) - 1) & ~((a) - 1))
 
 static block_header_t *heap_start = NULL;
+
+#if defined(__i386__)
+/* ---------------------------------------------------------------------------
+ * 32 位兜底池(bump allocator)
+ *
+ * 现场: 32 位 kheap 在 32MB 堆上只维护了 9 个节点、maxfree=0、链尾停在
+ * heap_start+103KB —— 后面 31.9MB 再没回到链表, 连 8KB 都分配不出来。
+ * 桌面(hpdesk)要 691KB 的离屏层、3MB 的阴影缓存, 全部 OOM。
+ *
+ * 这里不试图修那条链(它的损坏路径还没定位干净), 而是加一层兜底:
+ * 主链遍历失败时从静态区 bump 分配。兜底块带独立 magic, kfree 识别后
+ * 直接静默归还(不合并、不动 heap_used), 不会污染主链, 也不会刷 bad magic。
+ *
+ * 24MB: 阴影 3x3MB + 离屏层 5x691KB + 其余零碎, 余量足够。
+ * 整段在 __i386__ 内, 64 位一字节都不受影响。
+ * ------------------------------------------------------------------------- */
+#define KF_POOL_MAGIC   0x4B46424Cu     /* "KFBL" */
+#define KF_POOL_BYTES   (24u * 1024u * 1024u)
+static uint8_t  kf_pool[KF_POOL_BYTES] __attribute__((aligned(64)));
+static uint32_t kf_pool_used;
+
+static void *kf_pool_alloc(uint32_t size)
+{
+    extern void serial_puts(uint16_t, const char *);
+    extern void serial_puthex(uint16_t, uint32_t);
+
+    uint32_t need = HEADER_SIZE + size;
+    need = ALIGN(need, 64);
+    if (kf_pool_used + need > KF_POOL_BYTES) {
+        static int warned = 0;
+        if (!warned) {
+            warned = 1;
+            serial_puts(0x3F8, "[KF-POOL] full used=");
+            serial_puthex(0x3F8, kf_pool_used);
+            serial_puts(0x3F8, " req=");
+            serial_puthex(0x3F8, size);
+            serial_puts(0x3F8, "\n");
+        }
+        return NULL;
+    }
+    uint8_t *raw = kf_pool + kf_pool_used;
+    kf_pool_used += need;
+
+    block_header_t *h = (block_header_t *)raw;
+    h->magic = KF_POOL_MAGIC;
+    h->size  = size;
+    h->used  = 1;
+    h->next  = NULL;
+    h->prev  = NULL;
+    return (void *)(raw + HEADER_SIZE);
+}
+#endif
 static uint32_t heap_end = 0;
 static uint32_t heap_total = 0;
 static uint32_t heap_used = 0;
@@ -255,10 +307,57 @@ void *kmalloc(size_t size)
         }
         cur = cur->next;
     }
+#if defined(__i386__)
+    /* 主链找不到合适块 -> 兜底池(见文件上方 KF_POOL 说明)。
+     * 必须在释放 kheap_lock 之前做, 保证 trace 与计数一致。 */
+    {
+        void *fb = kf_pool_alloc(size);
+        if (fb) {
+            heap_used += size + HEADER_SIZE;
+            kmalloc_calls++;
+            kmalloc_total_bytes += size;
+            if (heap_used > kheap_peak) kheap_peak = heap_used;
+            trace_add(fb, (uint32_t)__builtin_return_address(0), size);
+            ret = fb;
+            goto out;
+        }
+    }
+#endif
     kmalloc_fail++;  /* V3.87-E1 */
     /* V6.85: OOM时先释放锁，避免vga_printf/klog内部调用kmalloc导致递归死锁 */
     spin_unlock_irqrestore(&kheap_lock, flags);
     extern void klog_printf_lvl(int, const char *, ...);
+    {
+        extern void serial_puts(uint16_t base, const char *s);
+        extern void serial_puthex(uint16_t base, uint32_t val);
+        serial_puts(0x3F8, "[KHEAP-OOM] req=");
+        serial_puthex(0x3F8, size);
+        serial_puts(0x3F8, " used=");
+        serial_puthex(0x3F8, heap_used);
+        serial_puts(0x3F8, " total=");
+        serial_puthex(0x3F8, heap_total);
+        serial_puts(0x3F8, "\n");
+        /* 遍历一次, 打节点数 + 最大空闲块 + 链尾是否对齐 heap_end */
+        {
+            block_header_t *q = heap_start;
+            uint32_t nodes = 0, maxfree = 0, lastend = 0;
+            while (q && nodes < 100000) {
+                if (!q->used && q->size > maxfree) maxfree = q->size;
+                lastend = (uint32_t)q + HEADER_SIZE + q->size;
+                nodes++;
+                q = q->next;
+            }
+            serial_puts(0x3F8, "[KHEAP-OOM] nodes=");
+            serial_puthex(0x3F8, nodes);
+            serial_puts(0x3F8, " maxfree=");
+            serial_puthex(0x3F8, maxfree);
+            serial_puts(0x3F8, " end=0x");
+            serial_puthex(0x3F8, lastend);
+            serial_puts(0x3F8, " heap_end=0x");
+            serial_puthex(0x3F8, heap_end);
+            serial_puts(0x3F8, "\n");
+        }
+    }
     klog_printf_lvl(0, "[KHEAP] OOM: req=%d used=%d total=%d free=%d\n",
                     size, heap_used, heap_total, heap_total - heap_used);
     vga_printf("[KHEAP] warn: kheap OOM ! req=%d used=%d total=%d free=%d\n",
@@ -345,6 +444,15 @@ void kfree(void *ptr)
         block = (block_header_t *)((uint8_t *)ptr - HEADER_SIZE);
     }
 
+#if defined(__i386__)
+    if (block->magic == KF_POOL_MAGIC) {
+        /* 兜底池块: bump 分配无法回收, 静默丢弃即可(不合并、不动 heap_used) */
+        heap_used -= block->size + HEADER_SIZE;
+        kfree_calls++;
+        spin_unlock_irqrestore(&kheap_lock, flags);
+        return;
+    }
+#endif
     if (block->magic != HEADER_MAGIC) {
         vga_printf("[KHEAP] error: bad block magic at 0x%x (slab/misalign?) caller=0x%x\n",
                    (uint32_t)ptr, (uint32_t)__builtin_return_address(0));

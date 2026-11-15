@@ -325,8 +325,11 @@ void hepu_mem_init(uint32_t mem_kb)
     /* V6.60: 动态内核堆大小, 避免小内存机器上堆覆盖所有可用内存
      * V6.76: 扩展分级支持更大内存: <128M=8M, <256M=16M, <512M=32M, <1G=64M, >=1G=128M */
     uint32_t heap_size = 128 * 1024 * 1024;
+    /* P1-4: 256MB 档从 16MB 提到 32MB。hpdesk 的离屏层(顶栏 691KB、侧栏等)
+     * 加上阴影缓存(单个最大 3MB, 3 个面板)在 16MB 下会 OOM, 表现是
+     * [LY] no surface —— 顶栏没有半透明、面板也没有阴影。 */
     if (mem_kb < 128 * 1024) heap_size = 8 * 1024 * 1024;
-    else if (mem_kb < 256 * 1024) heap_size = 16 * 1024 * 1024;
+    else if (mem_kb < 256 * 1024) heap_size = 32 * 1024 * 1024;
     else if (mem_kb < 512 * 1024) heap_size = 32 * 1024 * 1024;
     else if (mem_kb < 1024 * 1024) heap_size = 64 * 1024 * 1024;
     mm_add_region(heap_base, heap_size, MEM_REGION_RESERVED);

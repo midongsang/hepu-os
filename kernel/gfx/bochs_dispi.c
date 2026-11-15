@@ -19,6 +19,11 @@ typedef unsigned char  uint8_t;
 typedef unsigned short uint16_t;
 typedef unsigned int   uint32_t;
 
+static inline void bd_outb(uint16_t port, uint8_t val)
+{ __asm__ volatile ("outb %0, %1" : : "a"(val), "Nd"(port)); }
+static inline uint8_t bd_inb(uint16_t port)
+{ uint8_t v; __asm__ volatile ("inb %1, %0" : "=a"(v) : "Nd"(port)); return v; }
+
 /* ---- 端口 IO ---- */
 static inline void bd_outw(uint16_t port, uint16_t val)
 {
@@ -162,6 +167,11 @@ int bochs_dispi_init(uint32_t want_w, uint32_t want_h, uint32_t want_bpp)
     bd_height = ry;
     bd_bpp    = rb;
     bd_fb_phys = bar0;
+
+    /* 注意: 这里试过关 VGA 输出(AR 0x20)想清掉 screendump 最上面几行
+     * 的 VGA 文本残留, 但 QEMU 会因此把显示退回 640x480 默认模式 ——
+     * screendump 拿到 640x480 全黑。已回退。那 6px 只影响 QEMU 的 screendump,
+     * 真机 LFB 没有这层东西, 保持现状。 */
 
     dputs("[BD-VBE] linear framebuffer ready\n");
     return 0;

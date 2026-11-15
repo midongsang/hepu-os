@@ -159,3 +159,38 @@ uint64_t vmm64_tlb_shootdown_count(void) { return 0; }
 /* ext2 读文件: 桌面壁纸/配置文件走这里, 32 位先返回失败走兜底 */
 int ext2_64_read_file(const char *path, uint8_t *buffer, uint32_t max_size)
 { (void)path; (void)buffer; (void)max_size; return -1; }
+
+/* ---------------------------------------------------------------------------
+ * 桌面离屏层专用池
+ *
+ * 为什么不用 kmalloc: 32 位 kheap 实测有结构性问题 —— 早期分配之后链表只剩
+ * 前 ~101KB 的 9 个 used 块, 后面 31.9MB 永远回不到链表(maxfree=0),
+ * 要 691KB 的离屏层必然拿不到。桌面层是"画完就贴回去"的临时缓冲,
+ * 用一块静态 BSS 池最直接, 也完全不碰 kheap 的既有问题。
+ *
+ * 4MB: 顶栏 691KB + 灵动岛 + dock + 时钟 + 侧栏(750x900x4=2.7MB)。
+ * 64 位不走这条路径。
+ * ------------------------------------------------------------------------- */
+#define HPD32_POOL_BYTES (4u * 1024u * 1024u)
+static uint8_t  s_hpd32_pool[HPD32_POOL_BYTES];
+static uint32_t s_hpd32_pool_used;
+
+uint8_t *hpdesk32_layer_pool_alloc(uint32_t bytes)
+{
+    extern void serial_puts(uint16_t, const char *);
+    extern void serial_puthex(uint16_t, uint32_t);
+
+    if (bytes == 0) return 0;
+    bytes = (bytes + 63u) & ~63u;          /* 64 字节对齐 */
+    if (s_hpd32_pool_used + bytes > HPD32_POOL_BYTES) {
+        serial_puts(0x3F8, "[HPD32-POOL] full, req=");
+        serial_puthex(0x3F8, bytes);
+        serial_puts(0x3F8, " used=");
+        serial_puthex(0x3F8, s_hpd32_pool_used);
+        serial_puts(0x3F8, "\n");
+        return 0;
+    }
+    uint8_t *p = s_hpd32_pool + s_hpd32_pool_used;
+    s_hpd32_pool_used += bytes;
+    return p;
+}
