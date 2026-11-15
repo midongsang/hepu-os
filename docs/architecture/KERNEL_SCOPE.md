@@ -126,6 +126,17 @@
    `.toolchain/regress.sh` 只跑原生 child；本次的正确性依据是"同表同判定"的等价性，
    不是实测。下一步搬 `elf64_is_linux_abi()` 与 `user_process.c` 的 Linux 适配分支时，
    必须补一个 Linux ELF 实跑用例。
+   **进度（2026-11-15，第 1 步的验证兜底已补）**：新增 `tools/regress_linux.sh`。
+   用 `BOOT_SELFTEST=1` 重建内核（启动电池里有 `/bin/hello_linux.elf` 一条），QEMU 起
+   来抓串口，要求三条同时成立：`[LINUX] Running /bin/hello_linux.elf...`（exec 没被拒）、
+   `Hello Linux!`（程序真的跑到了 write(1)）、`[LINUX] returned`（正常退出）。
+   只有第一条不算通过 —— exec 成功但程序跑挂一样会打第一条。
+   实测 `exec=1 hello=1 returned=1` → PASS。这把"翻译表搬走后 Linux 程序还跑不跑"
+   从等价性推理变成了实跑证据。
+   两个踩过的坑记在脚本里：① 串口日志是二进制且多核会撕行，必须先 `strings` 再判；
+   ② 必须 `grep -F` —— `[LINUX]` 在正则里是字符类，不用 `-F` 一辈子匹配不上。
+   注意：`BOOT_SELFTEST=1` 的电池本身含"故意的坏地址测试"，出现 EXCEPTION 属预期，
+   判据不看 EXCEPTION 计数。
 4. **framebuffer 契约**：把"写屏"从 `gfx64` 抽成一个最小接口（map + blit + flip），
    合成逻辑整体搬到用户态。这一步做完，① 和 ② 一起解决。
    （现状：第一层 `display_backend.h` 已落地，lfb + mirror 双后端，等价自检通过。）
