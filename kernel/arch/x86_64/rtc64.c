@@ -117,6 +117,34 @@ uint8_t rtc64_get_seconds(void)
     return t.second;
 }
 
+/* 日期字段: 桌面上的日期标签原来写死 "October 15, Thursday", 与真实日期无关,
+ * 32/64 都假。这里把年月日周放出来, 让共用桌面层能拼出真日期。 */
+uint8_t rtc64_get_day(void)
+{
+    rtc_time_t t;
+    rtc64_get_time(&t);
+    return t.day;
+}
+uint8_t rtc64_get_month(void)
+{
+    rtc_time_t t;
+    rtc64_get_time(&t);
+    return t.month;
+}
+uint16_t rtc64_get_year(void)
+{
+    rtc_time_t t;
+    rtc64_get_time(&t);
+    return t.year;
+}
+/* 1=Sunday .. 7=Saturday (CMOS 原始口径) */
+uint8_t rtc64_get_weekday(void)
+{
+    rtc_time_t t;
+    rtc64_get_time(&t);
+    return t.weekday;
+}
+
 /* 初始化RTC */
 void rtc64_init(void)
 {

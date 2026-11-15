@@ -82,6 +82,39 @@ extern char *strcpy(char *dst, const char *src);
 extern uint8_t rtc64_get_seconds(void);
 extern uint8_t rtc64_get_minutes(void);
 extern uint8_t rtc64_get_hours(void);
+extern uint8_t rtc64_get_day(void);
+extern uint8_t rtc64_get_month(void);
+extern uint16_t rtc64_get_year(void);
+extern uint8_t rtc64_get_weekday(void);   /* 1=Sunday .. 7=Saturday */
+
+/* 桌面上的日期标签原来是写死的字面量 "October 15, Thursday" —— 时间走 RTC 是真的,
+ * 日期却是常量, 32/64 都一样。这里按 RTC 实值拼 "November 16, Sunday"。
+ * 手写拼接而不用 snprintf: 32 位兼容层没有格式化输出。 */
+static void hs_date_label(char *out, int max)
+{
+    static const char *MON[] = {
+        "January", "February", "March", "April", "May", "June",
+        "July", "August", "September", "October", "November", "December"
+    };
+    static const char *WD[] = {
+        "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"
+    };
+    int mo = (int)rtc64_get_month(), d = (int)rtc64_get_day(), w = (int)rtc64_get_weekday();
+    if (mo < 1 || mo > 12) mo = 1;
+    if (d < 1 || d > 31) d = 1;
+    if (w < 1 || w > 7) w = 1;
+    const char *mn = MON[mo - 1];
+    const char *wn = WD[w - 1];
+    int n = 0;
+    for (const char *q = mn; *q && n < max - 1; q++) out[n++] = *q;
+    if (n < max - 1) out[n++] = ' ';
+    if (d >= 10 && n < max - 2) out[n++] = (char)('0' + (d / 10));
+    if (n < max - 1) out[n++] = (char)('0' + (d % 10));
+    if (n < max - 1) out[n++] = ',';
+    if (n < max - 1) out[n++] = ' ';
+    for (const char *q = wn; *q && n < max - 1; q++) out[n++] = *q;
+    out[n] = 0;
+}
 
 /* 内存 */
 extern void pmm64_get_stats(uint64_t *total, uint64_t *used, uint64_t *free);
@@ -3065,7 +3098,8 @@ static void hs_settings_window_render(hs_window_t *w)
                            rx, ry, "Appearance", g_shell.colors.panel_fg, SETK(16));
         ry += SETK(30);
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           rx, ry, "Theme: Light / Dark", g_shell.colors.panel_fg, SETK(12));
+                           rx, ry, (g_shell.theme == HS_THEME_DARK) ? "Theme: Dark" : "Theme: Light",
+                           g_shell.colors.panel_fg, SETK(12));
         ry += SETK(24);
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            rx, ry, "Accent Color (click to apply):", g_shell.colors.panel_fg, SETK(12));
@@ -3105,8 +3139,20 @@ static void hs_settings_window_render(hs_window_t *w)
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            rx, ry, "Font: DejaVu Sans", g_shell.colors.panel_fg, SETK(12));
         ry += SETK(24);
-        font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           rx, ry, "Clock Size: 40px", g_shell.colors.panel_fg, SETK(12));
+        {
+            /* 原来写死 "40px", 不跟 clock_font_size 走; 用户核对缩放时这是最直接的
+             * 误导源。改成拼实际配置值。 */
+            char cs[32];
+            int v = g_shell.ui.clock_font_size, n = 0;
+            const char *pre = "Clock Size: ";
+            for (const char *q = pre; *q && n < 24; q++) cs[n++] = *q;
+            if (v >= 100) cs[n++] = (char)('0' + v / 100);
+            if (v >= 10) cs[n++] = (char)('0' + (v / 10) % 10);
+            cs[n++] = (char)('0' + v % 10);
+            cs[n++] = 'p'; cs[n++] = 'x'; cs[n] = 0;
+            font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                               rx, ry, cs, g_shell.colors.panel_fg, SETK(12));
+        }
         ry += SETK(24);
         /* V0.56: 壁纸切换行 (点击循环 Classic/Dusk/Ocean) */
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
@@ -3795,8 +3841,10 @@ static void hs_dynamic_island_render(void)
                            island_x + hs_sx(20), cy, time, g_shell.colors.panel_fg, f_time);
         cy += f_time + hs_sy(8);
         /* 日期 */
+        char dlab[40];
+        hs_date_label(dlab, (int)sizeof(dlab));
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           island_x + hs_sx(20), cy, "October 15, Thursday", g_shell.colors.text_secondary, f_date);
+                           island_x + hs_sx(20), cy, dlab, g_shell.colors.text_secondary, f_date);
         /* 右侧天气 */
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            island_x + island_w - hs_sx(100), cy, "26C Cloudy", g_shell.colors.text_secondary, f_date);
@@ -4134,7 +4182,8 @@ static void hs_desktop_clock_render(void)
     font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                        clock_x, clock_y, time, g_shell.colors.accent, hs_s(g_shell.ui.clock_font_size));
 
-    static const char date[] = "October 15, Thursday";
+    char date[40];
+    hs_date_label(date, (int)sizeof(date));
     /* 日期不得越过天气卡左缘: 200% 下 20 字符按 date_font_size 直接画会溢出卡片,
      * 截图表现为卡片右侧外面露出半截 "...ay"。按可用宽反推字号上限。 */
     {
@@ -4209,7 +4258,8 @@ static void hs_lock_screen_render(void)
                        clock_x, clock_y, time, g_shell.colors.panel_fg, hs_s(64));
 
     /* 日期 */
-    char date[32] = "October 15, Thursday";
+    char date[40];
+    hs_date_label(date, (int)sizeof(date));
     int date_w = hs_sx(17 * 10);
     font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                        clock_x + (hs_sx(360) - date_w) / 2, clock_y + hs_sy(110), date, g_shell.colors.accent, hs_s(20));

@@ -40,6 +40,27 @@ uint8_t rtc64_get_hours(void)   { int h, m, s; read_hms(&h, &m, &s); return (uin
 uint8_t rtc64_get_minutes(void) { int h, m, s; read_hms(&h, &m, &s); return (uint8_t)(m & 0xFF); }
 uint8_t rtc64_get_seconds(void) { int h, m, s; read_hms(&h, &m, &s); return (uint8_t)(s & 0xFF); }
 
+/* 日期字段 —— 32 位 rtc_get_time 已经带 day/month/year, 直接转出来。
+ * weekday 它不给, 用 Zeller 同余从年月日算(1=Sunday..7=Saturday, 与 CMOS 同口径)。 */
+static void read_ymd(int *y, int *mo, int *d)
+{
+    int h, m, s;
+    *y = 2000; *mo = 1; *d = 1;
+    rtc_get_time(&h, &m, &s, d, mo, y);
+}
+uint8_t rtc64_get_day(void)   { int y, mo, d; read_ymd(&y, &mo, &d); return (uint8_t)d; }
+uint8_t rtc64_get_month(void) { int y, mo, d; read_ymd(&y, &mo, &d); return (uint8_t)mo; }
+uint16_t rtc64_get_year(void) { int y, mo, d; read_ymd(&y, &mo, &d); return (uint16_t)y; }
+uint8_t rtc64_get_weekday(void)
+{
+    int y, mo, d;
+    read_ymd(&y, &mo, &d);
+    if (mo < 3) { mo += 12; y -= 1; }
+    int k = y % 100, j = y / 100;
+    int hh = (d + (13 * (mo + 1)) / 5 + k + k / 4 + j / 4 + 5 * j) % 7;  /* 0=Saturday */
+    return (uint8_t)(((hh + 6) % 7) + 1);                                /* -> 1=Sunday */
+}
+
 /* ---- PIT: 32 位 pit_get_ticks 是 uint32_t, 64 位签名是 uint64_t ---- */
 uint64_t pit64_get_ticks(void)
 {
