@@ -183,6 +183,9 @@ hpdesk_render()
 
 要点（V0.59.20 状态）：现役是单进程一体化（该模型的方案 1），处于阶段 2 后期。
 **合成器层主体已落地**（窗口模型、Z 序、脏矩形、统一裁剪、ARGB 合成、窗口离屏表面、
-面板层表面复用）；**仍缺的是第一层的 DisplayBackend 抽象，和第三层的控件级事件分发
-与控件级脏区上报**。前三个抽象（Surface / 脏矩形 / 控件基类）里，前两个已完成，
-控件基类只做了布局半成品。
+面板层表面复用）；**第一层的 DisplayBackend 抽象已落地**（2026-11-14：`display_backend.h` 三入口
+`init/present/present_region`，lfb + mirror 双后端，`[GFXDB] backend equivalence PASS`）。
+**仍缺的是第三层的控件级事件分发与控件级脏区上报** —— `hs_ui_hit` 目前只接了
+设置窗口导航栏一处（`[HSUI] nav hit selftest PASS items=0x5`），控制中心 / 侧栏 /
+Dock / 顶栏图标 / 窗口按钮仍是按坐标判定。前三个抽象（Surface / 脏矩形 / 控件基类）
+里，前两个已完成，控件基类只做了布局半成品。

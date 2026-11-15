@@ -7,16 +7,23 @@
 
 `kernel/arch/x86_64/Makefile` 的 `C_SOURCES` / `ASM_SOURCES` 是唯一真相：**136 个文件、89,619 行**编进 `hepu-kernel64.bin`。
 
-其余 ~149,000 行不参与 64 位构建：
+其余约 30 万行**属于 32 位内核与共享代码**，不参与 64 位构建。仓库是**两套内核、一棵源码树**：
+顶层 `Makefile` 用 `find kernel -name "*.c"` 全量编译 32 位内核（只排除 `arch/x86_64/` 与
+`sched/scheduler.c`），`arch/x86_64/Makefile` 编译 64 位内核。两者的公共部分按
+`UNIFIED_SOURCE_TREE.md` 逐步上移到 `kernel/shared/`（**32 位稳定优先**）。
 
 | 未编译内容 | 行数 | 说明 |
 |---|---|---|
-| `kernel/arch/x86/`（32 位树） | 46,162 | 旧内核，冻结待决（见 PLAN §6） |
-| `kernel/sched/` 里的应用层 | ~23,000 | 69 个文件里只有 `sched.c`(538)、`process.c`(486) 是真调度；`mobile.c`(1233)、`mobile_sms`(969)、`enterprise.c`(479)、`packagemanager`(449)、`ai.c`、`gameframework` 等**全部没编进去** |
-| `kernel/kunit/` | 12,827 | 测试 |
-| `kernel/gfx/`、`kernel/fs/`、`kernel/drivers/` 大量文件 | 其余 | 与 `arch/x86_64` 里的同名实现重复，只有一部分被链 |
+| `kernel/arch/x86/`（32 位内核） | 46,162 | **不是死代码**：125 个文件全部被顶层 Makefile 编进 `hepu-kernel.bin`，含它自己的桌面 `desktop_render.c`(4,452)、应用商店、文件管理器、编辑器、播放器。32 位是并行维护的第二套内核（稳定优先） |
+| `kernel/sched/` | 22,968 | 71 个文件里**只有 `scheduler.c` 一个被显式排除**（`Makefile:58` 注明"历史死代码，被 process.c/kernel_core.c 取代"）；`mobile.c`(1,233)、`mobile_sms`(969)、`enterprise.c`(479)、`packagemanager`(449) 全部编进 32 位内核 |
+| `kernel/kunit/` | 12,827 | 测试，编进 32 位 |
+| `kernel/gfx/` | 116,894 | 含 32 位内核的中日韩字库（`fonts/font_cjk.h` 61,172 + `font_default.h` 47,331，被 `gfx_font_manager.c` #include）。与 `arch/x86_64/gfx64.c` 是同名不同实现 |
+| `kernel/fs/`、`kernel/drivers/`、`kernel/net/` 等 | 其余 | 同上：32 位实现，与 `arch/x86_64/` 下的 `*_64.c` 并存 |
 
-**结论一**：谈"内核里有什么"时只看这 136 个文件。目录结构已经和真实内核脱节，这就是为什么之前按目录盘点会得出错误结论。
+**结论一**：谈"64 位内核里有什么"时只看这 136 个文件；谈"32 位内核里有什么"时看顶层 Makefile 的收录范围。
+**不存在"死代码要清理"这回事** —— 目录里没有参与 64 位构建的文件，绝大多数是 32 位内核的本体。
+两套内核的分叉重复（`gfx64` vs `kernel/gfx`、`process64_full` vs `kernel/sched/process.c`、两套 fs）
+才是真实维护成本，收敛手段是 `UNIFIED_SOURCE_TREE.md` 的渐进共享，不是删除任何一侧。
 
 ## 2. 这 89.6k 行的实际构成
 
@@ -94,12 +101,25 @@
    `[DESKOWN] defer from slot=0x5`、`[DESKOWN] deferred handled, ext_requests=0x1`；
    `khouse`/`kstat` 均从 `create_suspended` 改为 `create`，跑在 AP 上，#GP 不再出现
    （§7.1.2 记录的 0xD 异常随之消失）。回归 `-smp 2` 2/2、`-smp 12` 1/1 全绿。
-   仍未收 owner 的：z-order 与焦点（现有 `g_wm_lock` 保护簿记，但语义上仍允许任意
-   核调用 `hs_window_*`；下一步是把这些入口也加 owner 断言）。
-3. **framebuffer 契约**：把"写屏"从 `gfx64` 抽成一个最小接口（map + blit + flip），
+   **进度（2026-11-15）：z-order 与焦点也收了**，但收法是**准入**不是队列 ——
+   置顶（先摘后追）与焦点（先清后置）都是多步簿记，请求位表达不了"从哪置顶"，所以
+   落成 `hpdesk_owner_guard(what)`：owner 放行计数，非 owner 直接拒绝并打一次
+   `[DESKOWN] reject <what> from slot=0xN`，启动期（未认领）放行。接在
+   `hs_window_create/destroy/focus/show/hide/raise_inner/lower_inner` 与
+   `hpdesk_switch_workspace` 九个入口。自检 `[DESKOWN] zorder/focus selftest PASS
+   pass=0x2 reject=0x0`；冷启动 3/3、`-smp 12` 1/1 全绿。
+3. **兼容层出内核**（`DESIGN.md` 约束一，权重最高 —— 该文档明确写"违反视为架构级事故"）：
+   `kernel/compat/`（`binfmt_elf` / `binfmt_pe` / `linux_abi` / `binfmt_macho`）与
+   `syscall64_full.c` 的 `linux_map[350]` 全部编在内核里，没有独立用户态服务。
+   化解路径是 `PHILOSOPHY.md` 7.2 阶段 2（用户态 ELF 加载器 + syscall 翻译）。
+   排序理由：这是唯一被设计文档定性为"架构级事故"的条目，不应排在任何优化之后。
+4. **framebuffer 契约**：把"写屏"从 `gfx64` 抽成一个最小接口（map + blit + flip），
    合成逻辑整体搬到用户态。这一步做完，① 和 ② 一起解决。
-4. **syscall 转发层切分**：把 `syscall64_full.c` 的业务搬进 fs/mm，syscall 只剩分发。
-5. 32 位树与 `kernel/sched` 里的应用层**归档**（不删，移到 `archive/` 下并停止参与任何构建）。
+   （现状：第一层 `display_backend.h` 已落地，lfb + mirror 双后端，等价自检通过。）
+5. **syscall 转发层切分**：把 `syscall64_full.c` 的业务搬进 fs/mm，syscall 只剩分发。
+6. **32 位侧接入 `kernel/shared/`**（**不是归档**，`UNIFIED_SOURCE_TREE.md` P1）：
+   现状是 32 位引用 shared 的文件数 = **0**，64 位已 12+。第一条按文档走：
+   32 位 `sys_mem.c` → `shared/security/user_access.h`。
 
 ## 6. 与当前 SMP 状态的关系
 
