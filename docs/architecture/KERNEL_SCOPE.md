@@ -113,6 +113,19 @@
    `syscall64_full.c` 的 `linux_map[350]` 全部编在内核里，没有独立用户态服务。
    化解路径是 `PHILOSOPHY.md` 7.2 阶段 2（用户态 ELF 加载器 + syscall 翻译）。
    排序理由：这是唯一被设计文档定性为"架构级事故"的条目，不应排在任何优化之后。
+   **进度（2026-11-15，第 1 步）**：先把"要不要翻译、翻译成几号"收成一个网关入口。
+   新增 `compat_gate.c/.h`：`linux_map[350]`（103 个非零映射）从
+   `syscall64_full.c:3094` 整段搬出，`syscall64_full.c` 的翻译分支改为调用
+   `compat_gate_active()` + `compat_gate_translate_nr()`，**内核里再没有一处直接
+   读这张表**。判定条件与表内容一字未改（零行为变化），目的是让"表搬到用户态服务、
+   内核侧改成一次 IPC 查询"这一步将来只动实现、不动调用点。
+   自检 `[COMPATG] linux_map selftest PASS entries=0x67 bad=0x0`（抽查
+   read/write/execve/futex/getdents/exit 六项映射 + 未映射返回 0 两条不变量）；
+   回归 `-smp 2` 3/3，二进制 936,616 B（+64 B）。
+   **未验**：Linux 兼容端到端（静态 glibc 程序实跑）没在这次回归里覆盖，因为
+   `.toolchain/regress.sh` 只跑原生 child；本次的正确性依据是"同表同判定"的等价性，
+   不是实测。下一步搬 `elf64_is_linux_abi()` 与 `user_process.c` 的 Linux 适配分支时，
+   必须补一个 Linux ELF 实跑用例。
 4. **framebuffer 契约**：把"写屏"从 `gfx64` 抽成一个最小接口（map + blit + flip），
    合成逻辑整体搬到用户态。这一步做完，① 和 ② 一起解决。
    （现状：第一层 `display_backend.h` 已落地，lfb + mirror 双后端，等价自检通过。）

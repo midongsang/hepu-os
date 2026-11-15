@@ -407,6 +407,13 @@ void x86_64_kernel_main(void)
      * 所以 full_init 必须排在 test 之前。 */
     vga_puts("[INIT] Initializing 64-bit syscall...\n");
     syscall64_init();
+    /* DESIGN.md 约束一第 1 步: 兼容层网关自检 —— 翻译表已从 syscall64_full.c
+     * 抽出到 compat_gate.c, 这里验证关键映射(read/write/execve/futex/getdents)
+     * 与"未映射返回 0"两条不变量。表错一个, 静态 glibc 就跑不起来。 */
+    {
+        extern int compat_gate_selftest(void);
+        compat_gate_selftest();
+    }
     syscall64_full_init();
     syscall64_test();
 
