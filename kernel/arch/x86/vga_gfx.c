@@ -781,6 +781,15 @@ void gfx_set_invert(int on) { (void)on; }
 
 void gfx_flip(void)
 {
+    /* D-7: bochs dispi 真彩色路径没有 back buffer —— 绘制（gfx_fill_rect 等）
+     * 走 VBE 后端直写 LFB，已经到达显存。此时若还执行下面的"把 back_buffer
+     * 整帧拷到 gfx_fb_addr"，反而会用一块陈旧/未初始化的缓冲**覆盖掉**画好的
+     * 桌面（实测整屏变成单一 0x1A202C）。所以这条路径下 flip 是无操作。 */
+    {
+        extern uint32_t bochs_dispi_fb_phys(void);
+        if (bochs_dispi_fb_phys() != 0) return;
+    }
+
     /* V2.61: 休眠灭屏状态 -> 保持黑屏 */
     extern int pm_is_screen_blanked(void);
     if (pm_is_screen_blanked()) {

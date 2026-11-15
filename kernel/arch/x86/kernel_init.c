@@ -200,6 +200,30 @@ void hepu_sched_init(void)
             gfx_height = (int)bochs_dispi_height();
             gfx_bpp    = (int)bochs_dispi_bpp();
             gfx_fb_addr = (uint8_t *)bochs_dispi_fb_phys();
+            /* 行跨距必须一起改：gfx_pitch 默认是 GFX_WIDTH(320)，那是 8bpp 的老口径。
+             * 真彩色下一行 640*4=2560 字节，凡是按 gfx_pitch 算行偏移的直写路径
+             * （字符、图标符号等不走 backend 的老函数）都会错位 —— 表现就是整屏
+             * 横向条纹。 */
+            /* 单缓冲直写: framebuffer 必须指向 LFB。
+             * 32 位图形有两条并存的绘制路径 —— graphics.h 的 gfx_* 走 backend
+             * 直写 LFB，而 gfx_write_pixel_rgb / gfx_draw_string 这类老 API 写的是
+             * 全局 framebuffer。它默认 = back_buffer（按 8bpp 320x200 分配的数组），
+             * 在 32bpp 640x480 下写就是越界+错位，屏幕表现为整片横向条纹。
+             * 把 framebuffer 指到 LFB 之后两条路一致；gfx_flip() 里已有
+             * "framebuffer == gfx_fb_addr 就 return" 的单缓冲判定。 */
+            {
+                extern uint8_t *framebuffer;
+                framebuffer = (uint8_t *)bochs_dispi_fb_phys();
+                serial_puts(0x3F8, "[GFX] framebuffer -> LFB (single-buffer direct)\n");
+            }
+            {
+                extern int gfx_pitch;
+                gfx_pitch = (int)(bochs_dispi_width() * (bochs_dispi_bpp() / 8));
+                serial_puts(0x3F8, "[GFX] gfx_pitch=");
+                extern void serial_puthex(uint16_t, uint32_t);
+                serial_puthex(0x3F8, (uint32_t)gfx_pitch);
+                serial_puts(0x3F8, "\n");
+            }
             serial_puts(0x3F8, "[GFX] true-color mode applied: ");
             extern void serial_puthex(uint16_t, uint32_t);
             serial_puthex(0x3F8, (uint32_t)gfx_width);

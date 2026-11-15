@@ -3985,6 +3985,21 @@ void elastic_desktop_render(void)
     /* 计算UI缩放因子 */
     calc_ui_scale();
 
+    /* D-7 取证: 确认渲染真的被调用, 并打印它看到的模式 */
+    {
+        static int dbg = 0;
+        if (dbg < 3) {
+            extern void serial_puts(uint16_t, const char *);
+            extern int snprintf(char *, size_t, const char *, ...);
+            extern void serial_puthex(uint16_t, uint32_t);
+            char b[160];
+            snprintf(b, sizeof(b), "[EDR] render w=%d h=%d bpp=%d scale=%d apps=%d\n",
+                     gfx_width, gfx_height, gfx_bpp, ui_scale, (int)APP_COUNT);
+            serial_puts(0x3F8, b);
+            dbg++;
+        }
+    }
+
     /* 绘制扁平化背景 */
     draw_modern_background();
 
@@ -4127,6 +4142,17 @@ void elastic_desktop_main_loop(void)
 {
     extern void serial_puts(uint16_t, const char *);
     serial_puts(0x3F8, "[EDESKTOP] entering main loop with mouse...\n");
+
+    /* D-7: 先画一帧再进循环。
+     * 循环第一件事是 ps2mouse_poll / keyboard_getchar —— 没有输入事件时
+     * 这两条会一直等，于是"进了主循环但一帧都没画"（QEMU -display none 下
+     * 没有任何输入，屏幕就是一片单一颜色）。桌面系统不该等输入才出画面。 */
+    elastic_desktop_render();
+    {
+        extern void gfx_flip(void);
+        gfx_flip();
+    }
+    serial_puts(0x3F8, "[EDESKTOP] first frame rendered\n");
 
     /* 初始化鼠标位置到屏幕中央 */
     desktop_set_mouse(gfx_width / 2, gfx_height / 2);

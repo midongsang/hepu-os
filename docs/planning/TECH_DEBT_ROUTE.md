@@ -364,9 +364,39 @@ fb_addr` 重置成 320×200@8bpp/`0xA0000`，还打出误导性的
 （`draw_modern_background` 的颜色第一次被正确解释），184 色。
 串口 `[EDESKTOP] entering main loop (32-bit path)` + `with mouse...` 都在。
 
-**仍未做（布局层，不是链路层）**：顶栏 / 图标 / 文字还没出现在画面上 ——
-背景画对了但元素没画，属于 `calc_ui_scale()` 在 640×480 下的缩放/定位适配问题。
-链路（真彩色 + 后端 + 主循环）已经通了，这是纯排版问题。
+**又抓出三处（第九、十、十一处）—— 都是"两套绘制路径并存"的后果：**
+
+**⑨ `gfx_flip()` 用后台缓冲覆盖了真彩色画面。**
+`gfx_flip()` 的语义是"把 back_buffer 整帧拷到 gfx_fb_addr"，那是 VGA 双缓冲的
+做法。但 VBE 路径的绘制（`gfx_fill_rect` 等）是**直写 LFB** 的，此时再拷一次
+back_buffer，等于用一块陈旧缓冲盖掉刚画好的桌面 —— 实测整屏变成单一 `0x1A202C`
+（某个早期填充的残留）。修法：`gfx_flip()` 在 dispi 路径下直接 return。
+
+**⑩ `framebuffer` 仍指向 8bpp 的 back_buffer。**
+32 位图形有**两条并存的绘制链**：`graphics.h` 的 `gfx_*` 内联走 backend 直写 LFB；
+而 `gfx_write_pixel_rgb`、`gfx_draw_string` 这类老 API 写的是全局 `framebuffer`，
+它默认 = `back_buffer`（按 8bpp 320×200 分配的数组）。在 640×480@32bpp 下往里写
+就是越界 + 错位。`gfx_pitch` 同理，默认是 `GFX_WIDTH`(320)，真彩色应为 2560。
+修法：dispi 成功后把 `framebuffer` 指到 LFB（`gfx_flip` 里已有
+`framebuffer == gfx_fb_addr` 的单缓冲判定）、`gfx_pitch` 一起改成 `w * bpp/8`。
+
+**⑪ 主循环卡在输入轮询，首帧从未渲染。**
+`elastic_desktop_main_loop()` 进 `while(1)` 后第一件事就是 `ps2mouse_poll` /
+`keyboard_getchar`，没有输入事件时一直等。QEMU `-display none` 下没有任何输入，
+于是"进了主循环但一帧都没画"（`[EDR]` 一次都没打出来）。
+桌面系统不该等输入才出画面 —— 修法：进循环前先 `elastic_desktop_render()` +
+`gfx_flip()` 画一帧。
+
+**现在屏幕上是**：`0x1A202C` 顶栏（0–28 行）+ `0x2D3748` 背景，串口
+`[EDR] render w=640 h=480 bpp=32 scale=75 apps=36` + `[EDESKTOP] first frame rendered`。
+**真彩色链路已经完全打通**：模式、LFB、分页映射、后端选择、绘制路径、首帧，全部就位。
+
+**仍未做（第十二处，已定位未修）**：图标与文字在 32bpp 下渲染成**横条纹块**。
+横条块的数量与 `APP_COUNT`(36) 吻合，说明每个图标被画成了一片横线；
+背景和顶栏（走 `gfx_fill_rect` / backend 直写）完全正确。也就是说错在
+`draw_icon_symbol` 那条路径上（老 `gfx_putpixel` 的 `uint8_t color` 语义、
+或 `gfx_draw_circle` 系列在真彩色下的半径/颜色处理），不是全局性的 pitch 或缓冲问题
+（这两条已经修完）。
 
 **额外发现：32 位启动后进的是 shell，不是 GUI 桌面。**
 `[APPS] 7/7: elastic_desktop_init done!` 之后紧跟 `[SHELL] main started` ——
