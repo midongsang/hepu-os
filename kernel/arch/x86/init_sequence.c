@@ -225,6 +225,20 @@ extern void hepu_ntfs_init(void);
 
 static init_stats_t init_stats;
 
+/* D-7 取证：统计 0xA0000 前 64000 字节里的非零像素数。
+ * flip 写的是全黑，正常应接近 0；读到大量非零说明 flip 之后还有人往显存写。 */
+static void gfx_fb_stats(const char *tag)
+{
+    volatile uint8_t *fb = (volatile uint8_t *)0xA0000;
+    int nz = 0;
+    for (int i = 0; i < 64000; i++) if (fb[i]) nz++;
+    init_serial_puts("[GFX] fb ");
+    init_serial_puts(tag);
+    init_serial_puts(" nonzero=");
+    init_serial_puthex((uint32_t)nz);
+    init_serial_puts("\n");
+}
+
 /* 阶段名称 */
 const char *hepu_init_phase_name(init_phase_t phase)
 {
@@ -411,6 +425,50 @@ int hepu_init_phase(init_phase_t phase)
             enterprise_init(); devtools_init(); compat_init();
             { extern void serial_puts(uint16_t, const char *); serial_puts(0x3F8, "[APPS] 3/7: bt/usb/gfx/camera...\n"); }
             bt2_init(); usb2_init(); gfx2_init();
+
+            /* D-7: pluggable 图形层选完后，如果这台机器并没有真实帧缓冲
+             * （BIOS + multiboot 加载时 multiboot 信息里没有 framebuffer 字段，
+             * 日志就是 "[MB-VBE] no framebuffer info, fallback VGA"），
+             * 那么探测出来的只有文本后端。而桌面（desktop_render /
+             * elastic_desktop）走的是老的 gfx_draw_* 接口，gfx_flip() 会把
+             * back_buffer 刷到 gfx_fb_addr = 0xA0000 —— 文本模式下那里是
+             * **字符显存**，于是整屏字符位图被像素数据覆盖，画面变彩色花屏。
+             *
+             * 所以这里补一次真正的 VGA mode 0x13 设置：没有线性帧缓冲时，
+             * 0x13 是这台机器唯一能出图的方式。 */
+            {
+                extern int gfx_has_vbe_fb(void);
+                extern void vga_gfx_init(void);
+                extern void serial_puts(uint16_t, const char *);
+                if (!gfx_has_vbe_fb()) {
+                    serial_puts(0x3F8, "[GFX] no VBE/GOP framebuffer -> entering VGA mode 0x13\n");
+                    vga_gfx_init();
+                    /* 切完模式必须立刻提交一次：0xA0000 里还留着 SeaBIOS 文本模式
+                     * 的字符位图，在 256 色模式下会被当成像素解释 —— 那就是花屏。
+                     * vga_gfx_init 只清了 back_buffer，没有 flip。 */
+                    {
+                        extern void gfx_flip(void);
+                        gfx_flip();
+                    }
+                    serial_puts(0x3F8, "[GFX] VGA mode 0x13 entered (first flip done)\n");
+                    /* D-7 取证: 读回 CRTC/GC/seq 实值，确认寄存器写入是否真的生效；
+                     * 顺便读 bochs VBE DISPI 的 enable 位 —— QEMU -vga std 若 VBE 处于
+                     * enabled 状态，传统 VGA 寄存器会被 VBE 路径接管。 */
+                    {
+                        extern void vga_dump_regs(void);
+                        vga_dump_regs();
+                        uint16_t dispi;
+                        __asm__ volatile ("outw %0, %%dx" :: "a"((uint16_t)4), "d"((uint16_t)0x1CE));
+                        __asm__ volatile ("inw %%dx, %0" : "=a"(dispi) : "d"((uint16_t)0x1CF));
+                        serial_puts(0x3F8, "[GFX] bochs-dispi index4=");
+                        {
+                            extern void serial_puthex(uint16_t, uint32_t);
+                            serial_puthex(0x3F8, dispi);
+                        }
+                        serial_puts(0x3F8, "\n");
+                    }
+                }
+            }
             camera2_init(); audio2_init(); telecom2_init();
             ai2_init(); carlink_init(); enterprise2_init();
             { extern void serial_puts(uint16_t, const char *); serial_puts(0x3F8, "[APPS] 4/7: kernel/drivers/userland...\n"); }
@@ -468,6 +526,7 @@ int hepu_init_phase(init_phase_t phase)
             {
                 extern void serial_puts(uint16_t, const char *);
                 serial_puts(0x3F8, "[APPS] 7/7: elastic_desktop_init done!\n");
+                gfx_fb_stats("after-desktop-init");
             }
             ai_notification_init(); creator_mode_init();
             onboarding_init(); lowmem_throttle_init();

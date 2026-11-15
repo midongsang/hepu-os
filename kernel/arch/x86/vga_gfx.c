@@ -123,9 +123,12 @@ static const uint8_t crtc_regs[] = {
     0xFF
 };
 
-/* 图形控制器寄存器 (0x3CE/0x3CF) */
+/* 图形控制器寄存器 (0x3CE/0x3CF)
+ * D-7: GC5(Mode Register) 在 256 色模式下必须是 **0x40**（bit6 = Shift256）。
+ * 原表把 GC5 写成 0x00 —— 读取/写入都停在 4 位平面语义，
+ * 逐字节写 0xA0000 的像素就散成了彩色噪声。GC6=0x05 才是 memory map 0xA0000。 */
 static const uint8_t gc_regs[] = {
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x05, 0x0F,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x05, 0x0F,
     0xFF
 };
 
@@ -192,6 +195,15 @@ void vga_dump_regs(void)
 
 /* V3.82: 强制 VGA 0x13 (供 splash/文本恢复场景——VBE LFB 模式下
    vga_gfx_text_mode 的标准VGA寄存器序列无法切回文本, 屏幕花屏) */
+/* D-7: 是否拿到了真实的引导期帧缓冲（VBE/VBE LFB）。
+ * pluggable 图形层用它判断"这台机器到底有没有可用的线性帧缓冲"——
+ * 没有就只能走 VGA 0x13（写 0xA0000），而不是假装有个 GOP。
+ * 注意 vbe_fb 是本文件 static，32 位其它模块只能通过这个函数查。 */
+int gfx_has_vbe_fb(void)
+{
+    return (vbe_fb != NULL) && (vbe_width > 0) && (vbe_height > 0);
+}
+
 void gfx_force_vga13(void)
 {
     vbe_fb = NULL; vbe_width = 0; vbe_height = 0;
@@ -295,7 +307,10 @@ void vga_gfx_init(void)
     outb(0x3C4, 0x01); outb(0x3C5, 0x01);
     outb(0x3C4, 0x02); outb(0x3C5, 0x0F);
     outb(0x3C4, 0x03); outb(0x3C5, 0x00);
-    outb(0x3C4, 0x04); outb(0x3C5, 0x07);   /* SR4=0x07: Chain4 ON */
+    /* D-7: Chain4 是 SR4 的 **bit3**，不是 bit0。
+     * 原来写 0x07（bit3=0）→ chain4 实际没打开，显存按位平面组织，
+     * 256 色线性写帧缓冲就变成整屏花屏。标准 mode 13h 是 0x0E。 */
+    outb(0x3C4, 0x04); outb(0x3C5, 0x0E);   /* SR4=0x0E: Chain4 ON + odd/even off + ext mem */
     outb(0x3C4, 0x00); outb(0x3C5, 0x03);   /* 取消重置, 8-dot */
 
     /* 2. 解锁CRTC寄存器 */
