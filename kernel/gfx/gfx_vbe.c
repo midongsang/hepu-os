@@ -100,6 +100,8 @@ static uint32_t vbe_height = 0;
 static uint32_t vbe_bpp = 0;
 static uint32_t vbe_pitch = 0;
 static uint8_t *vbe_framebuffer = NULL;
+static uint32_t vbe_pitch_prev = 0;
+static uint32_t vbe_width_prev = 0;
 static uint32_t vbe_fb_phys = 0;
 static uint16_t vbe_current_mode = 0;
 
@@ -333,15 +335,20 @@ void gfx_vbe_sync_mode(void)
     vbe_framebuffer = gfx_fb_addr;
     vbe_fb_phys = (uint32_t)(uintptr_t)gfx_fb_addr;
 
-    serial_puts(0x3F8, "[GFX-VBE] sync: ");
-    serial_puthex(0x3F8, vbe_width);
-    serial_puts(0x3F8, "x");
-    serial_puthex(0x3F8, vbe_height);
-    serial_puts(0x3F8, "@");
-    serial_puthex(0x3F8, vbe_bpp);
-    serial_puts(0x3F8, "bpp pitch=");
-    serial_puthex(0x3F8, vbe_pitch);
-    serial_puts(0x3F8, "\n");
+    /* 只在值真的变了才打印, 因为这个函数会在每次渲染前被调用 */
+    if (vbe_pitch != vbe_pitch_prev || vbe_width != vbe_width_prev) {
+        vbe_pitch_prev = vbe_pitch;
+        vbe_width_prev = vbe_width;
+        serial_puts(0x3F8, "[GFX-VBE] sync: ");
+        serial_puthex(0x3F8, vbe_width);
+        serial_puts(0x3F8, "x");
+        serial_puthex(0x3F8, vbe_height);
+        serial_puts(0x3F8, "@");
+        serial_puthex(0x3F8, vbe_bpp);
+        serial_puts(0x3F8, "bpp pitch=");
+        serial_puthex(0x3F8, vbe_pitch);
+        serial_puts(0x3F8, "\n");
+    }
 }
 
 void gfx_vbe_register(void)

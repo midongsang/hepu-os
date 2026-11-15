@@ -104,8 +104,17 @@ static inline void desktop_puts(int x, int y, const char *s, uint8_t color)
     /* V7.56: 使用设置的字号，中文字符需要更大字号才能清晰显示 */
     extern uint16_t font_get_size(void);
     uint16_t fsize = font_get_size();
-    if (fsize < 20) fsize = 20;  /* V7.91: 增大最小字号，确保中文清晰 */
-    if (fsize > 32) fsize = 32;  /* 限制最大字号 */
+    if (fsize < 20) fsize = 20;
+    if (fsize > 32) fsize = 32;
+    /* D-7: 字号必须跟着 UI 缩放走。640x480 下缩放只有 75%, 原来直接拿 20~32
+     * 画, 一个汉字就占 30~60 像素 —— 图标名字会互相压成一团。
+     * 这里不能引用 SCALE/ui_scale (它们在本函数后面才定义), 直接按高度算。 */
+    {
+        int sc = (gfx_height * 100) / 768;
+        if (sc < 75) sc = 75;
+        fsize = (uint16_t)(((int)fsize * sc) / 100);
+        if (fsize < 11) fsize = 11;
+    }
     gfx_draw_string_font((uint32_t)x, (uint32_t)y, s, vga_color_to_rgb(color), fsize);
 }
 
@@ -3982,6 +3991,16 @@ static void draw_all_windows(void)
 
 void elastic_desktop_render(void)
 {
+    /* D-7: 每次渲染前把 VBE 后端的状态对齐回真实模式。
+     * 后端内部会把 gfx_* 快照进自己的静态量, 而这个值在启动过程中会被
+     * 初始化/自检路径改成 1024x768 —— 于是 vbe_pitch=4096 而不是 2560,
+     * vbe_putpixel 写成 fb[y*1024 + x], 物理行号被换算成 y*1.6,
+     * 小面积图形立刻错位(整屏底色则看不出)。放在渲染入口是最靠近使用点的地方。 */
+    {
+        extern void gfx_vbe_sync_mode(void);
+        gfx_vbe_sync_mode();
+    }
+
     /* 计算UI缩放因子 */
     calc_ui_scale();
 
@@ -4002,6 +4021,7 @@ void elastic_desktop_render(void)
 
     /* 绘制扁平化背景 */
     draw_modern_background();
+
 
 
 
@@ -4047,7 +4067,11 @@ void elastic_desktop_render(void)
         if (fsize > 32) fsize = 32;
         int text_width = utf8_string_width(app->name, fsize);
         if (text_width <= 0) text_width = name_len * (fsize / 2);
+        /* D-7: 宽度算大了会把 text_x 推到图标左边甚至屏外, 多个图标的名字
+         * 就叠在同一块区域。这里夹一下。 */
+        if (text_width > icon_size + 24) text_width = icon_size + 24;
         int text_x = ix + (icon_size - text_width) / 2;
+        if (text_x < 0) text_x = 0;
         desktop_puts(text_x, iy + icon_size + 6, app->name, 0x0F);
     }
 
