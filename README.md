@@ -114,7 +114,7 @@ hepu-os/
 | 内存 | **1024 MB**（实测启动到桌面） | **256 MB**（实测启动到桌面）<br>其中 BSS 占 28 MB（4 MB 桌面池 + 24 MB 兜底池） |
 | 显示 | 1920×1080，需要 VBE 线性帧缓冲 | 同左 |
 | 显存 | ≥ 8 MB（1920×1080×4 = 8.3 MB，单缓冲直写） | 同左 |
-| 磁盘 | 镜像 256 MB（GPT + ESP + ext2 根分区 100 MB） | 32 位内核 3.5 MB，可由引导器直接载入 |
+| 磁盘 | 镜像 256 MB（GPT + ESP + ext2 根分区 120 MB） | 32 位内核 3.5 MB，可由引导器直接载入 |
 | 固件 | **UEFI**（见下方"启动方式"） | multiboot（GRUB 或 QEMU `-kernel` 直载） |
 | 输入 | PS/2 键盘 + PS/2 鼠标 | 同左 |
 | 网络 | 可选，RTL8139 / e1000 任一 | 可选 |
@@ -261,11 +261,12 @@ qemu-system-x86_64 \
 
 ```
 LBA 0            保护性 MBR（仅 0xEE 数据项 + 一个 0x83 给内核认分区，无引导代码）
-ESP (FAT32)      /EFI/BOOT/BOOTX64.EFI    UEFI 引导器（hepboot）
+ESP (FAT32)      LBA 2048 起，262144 扇区（128 MB）
+                 /EFI/BOOT/BOOTX64.EFI    UEFI 引导器（hepboot）
                  /KERNEL64.BIN            64 位内核
                  /KERNEL32.BIN            32 位内核（存在 build_v250/hepu-kernel.bin 时才写入）
                  /HEPBOOT.CFG             kernel_arch=64 | 32 切换
-ext2 根分区      LBA 264192 起，204800 扇区（100 MB），/bin 下是各用户程序
+ext2 根分区      LBA 264192 起，245760 扇区（120 MB），/bin 下是各用户程序
 总大小           256 MB
 ```
 
