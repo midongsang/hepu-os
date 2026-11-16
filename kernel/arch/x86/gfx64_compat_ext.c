@@ -124,18 +124,10 @@ void cursor64_set_theme(int t) { (void)t; }
  * 与 draw 里的推进量保持一致, 否则居中/右对齐会偏。 */
 int font64_get_string_width(const char *str, uint16_t size)
 {
-    (void)size;
-    if (!str) return 0;
-    int w = 0;
-    const unsigned char *p = (const unsigned char *)str;
-    while (*p) {
-        if (p[0] < 0x80)              { w += 8;  p += 1; }
-        else if ((p[0] & 0xE0) == 0xC0 && p[1]) { w += 16; p += 2; }
-        else if ((p[0] & 0xF0) == 0xE0 && p[1] && p[2]) { w += 16; p += 3; }
-        else if ((p[0] & 0xF8) == 0xF0 && p[1] && p[2] && p[3]) { w += 16; p += 4; }
-        else                          { w += 8;  p += 1; }
-    }
-    return w;
+    /* 宽度必须和 font32.c 的绘制推进量一致, 否则居中/右对齐会偏。
+     * 原来是固定 8px/字符(与写死的 16 号点阵配套), 现在按 size 缩放。 */
+    extern int f32_string_width(const char *str, uint16_t size);
+    return f32_string_width(str, size);
 }
 
 /* 32 位对应 gfx64.c 的 gfx64_get_info(64 位从自己的全局读, 这里从 32 位全局读)。

@@ -520,61 +520,11 @@ uint32_t gfx64_get_pixel(int x, int y)
 void font64_draw_string(void *fb, int fw, int fh,
                         int x, int y, const char *str, uint32_t color, uint16_t size)
 {
-    extern int font_render_glyph(uint32_t codepoint, uint8_t type, uint16_t size,
-                                 const uint8_t **bitmap, uint16_t *width,
-                                 uint16_t *height, int16_t *advance,
-                                 int16_t *bearing_x, int16_t *bearing_y);
-    (void)fb; (void)fw; (void)fh; (void)size;
-
-    if (!str || gfx_bpp != 32) return;
-    uint32_t v = color | 0xFF000000u;
-    int cur_x = x, cur_y = y;
-
-    while (*str) {
-        uint32_t cp;
-        const unsigned char *p8 = (const unsigned char *)str;
-        if (p8[0] < 0x80) { cp = p8[0]; str += 1; }
-        else if ((p8[0] & 0xE0) == 0xC0 && p8[1]) {
-            cp = ((uint32_t)(p8[0] & 0x1F) << 6) | (p8[1] & 0x3F); str += 2;
-        } else if ((p8[0] & 0xF0) == 0xE0 && p8[1] && p8[2]) {
-            cp = ((uint32_t)(p8[0] & 0x0F) << 12) |
-                 ((uint32_t)(p8[1] & 0x3F) << 6) | (p8[2] & 0x3F); str += 3;
-        } else if ((p8[0] & 0xF8) == 0xF0 && p8[1] && p8[2] && p8[3]) {
-            cp = ((uint32_t)(p8[0] & 0x07) << 18) |
-                 ((uint32_t)(p8[1] & 0x3F) << 12) |
-                 ((uint32_t)(p8[2] & 0x3F) << 6) | (p8[3] & 0x3F); str += 4;
-        } else { cp = p8[0]; str += 1; }
-
-        const uint8_t *bm = 0;
-        uint16_t w = 0, h = 0;
-        int16_t adv = 0, bx = 0, by = 0;
-        if (font_render_glyph(cp, 1 /* BITMAP_8x16 */, 16,
-                              &bm, &w, &h, &adv, &bx, &by) != 0) {
-            cur_x += 8;
-            continue;
-        }
-        /* 防御: 位图尺寸异常直接跳过, 不要画出一片横线 */
-        if (!bm || w == 0 || h == 0 || w > 32 || h > 32) { cur_x += 8; continue; }
-
-        for (uint16_t row = 0; row < h; row++) {
-            int py = cur_y + by + row;
-            if (py < 0 || py >= gfx_height) continue;
-            uint32_t *line = (uint32_t *)(framebuffer + (size_t)py * gfx_pitch);
-            for (uint16_t col = 0; col < w; col++) {
-                uint8_t a = bm[row * w + col];
-                if (!a) continue;
-                int px = cur_x + bx + col;
-                if (px < 0 || px >= gfx_width) continue;
-                if (a == 255) line[px] = v;
-                else {
-                    uint32_t bg = line[px];
-                    int r = (((v >> 16) & 0xFF) * a + ((bg >> 16) & 0xFF) * (255 - a)) / 255;
-                    int g = (((v >> 8) & 0xFF) * a + ((bg >> 8) & 0xFF) * (255 - a)) / 255;
-                    int b = ((v & 0xFF) * a + (bg & 0xFF) * (255 - a)) / 255;
-                    line[px] = (uint32_t)((r << 16) | (g << 8) | b) | 0xFF000000u;
-                }
-            }
-        }
-        cur_x += (adv > 0 && adv < 40) ? adv : (int)w;
-    }
+    /* 转到 font32.c: 点阵 + 按字号缩放 + 抗锯齿。
+     * 原先这里写死 font_render_glyph(cp, 1, 16, ...) 且把 size 参数
+     * (void) 掉, 于是字号设置永远不生效、字形是硬边点阵。
+     * 现在与 64 位同一档: size/16 得 scale, scale==2 时 2x2 超采样。 */
+    extern void f32_draw_string(int x, int y, const char *str, uint32_t color, uint16_t size);
+    (void)fb; (void)fw; (void)fh;
+    f32_draw_string(x, y, str, color, size);
 }
