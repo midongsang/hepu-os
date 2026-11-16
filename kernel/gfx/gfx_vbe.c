@@ -395,6 +395,12 @@ int gfx_backend_present_region(int x, int y, int w, int h)
     return 0;
 }
 
+/* 硬件帧缓冲物理地址（桥接层据此判断有无后端能接管提交） */
+uint32_t gfx_vbe_lfb_phys(void)
+{
+    return vbe_fb_phys;
+}
+
 int gfx_backend_present(void)
 {
     if (vbe_fb_phys < 0x10000000u) return -1;

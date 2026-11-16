@@ -17,6 +17,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include "../../shared/gfx/display_backend.h"
 
 /* ---------- 32 位已有能力 ---------- */
 extern void     gfx_fillrect_rgb(int x, int y, int w, int h, uint32_t rgb);
@@ -447,15 +448,23 @@ void gfx64_present(void)
      * 而不是 gfx_flip: flip 是通用入口, 图形自检/早期文本也在调它,
      * 让那些路径每步都做一次 8.29MB 拷贝会把启动拖到 70 秒以上
      * (实测单次 32.6M 周期), 而它们只需要"画上去了"不需要"已上屏"。 */
-    extern int gfx_backend_present(void);
-    (void)gfx_backend_present();
+    extern const display_backend_t *gfx32_display(void);
+    extern const display_backend_t *gfx32_display_bind(void);
+    /* 走薄接口(32 位 -> display_backend_t 桥接), 不再直接碰 gfx_backend_*。
+     * 这样上游只依赖 present 这一件事, 换后端(VBE/virtio/GOP)不用改这里。 */
+    if (!gfx32_display()) gfx32_display_bind();
+    const display_backend_t *b = gfx32_display();
+    if (b && b->present) b->present();
 }
 void gfx64_present_region(int x, int y, int w, int h)
 {
     /* 与整帧提交同理: 只走后端, 不绕 gfx_flip。
      * 这条路径服务光标擦旧/铺新和拖动窗口这类小矩形。 */
-    extern int gfx_backend_present_region(int, int, int, int);
-    (void)gfx_backend_present_region(x, y, w, h);
+    extern const display_backend_t *gfx32_display(void);
+    extern const display_backend_t *gfx32_display_bind(void);
+    if (!gfx32_display()) gfx32_display_bind();
+    const display_backend_t *b = gfx32_display();
+    if (b && b->present_region) b->present_region(x, y, w, h);
 }
 
 /* ================= 查询 ================= */
