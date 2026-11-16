@@ -9,8 +9,9 @@
  * 能力差距必须说清楚:
  *   真正等价实现的: 矩形/圆/线/多边形/文字/像素读写/裁剪
  *   已补齐的:       双缓冲(3b3f856: 绘制落 back_buffer, present 一次提交;
- *                  局部提交见 5e9ff5c)、渐变(904ce92: 径向真插值)
- *   仍退化的:       抗锯齿圆角(退成普通圆角)、模糊(退成纯覆色)
+ *                  局部提交见 5e9ff5c)、渐变(904ce92: 径向真插值)、
+ *                  抗锯齿圆角(9a2366b: SDF 式四角)
+ *   仍退化的:       模糊(毛玻璃退成纯覆色) —— 只剩这一项
  *   32 位无硬件特性: cursor64_*(stub)、pmm64_*(stub)
  *
  * 退化项会在串口打一次 [COMPAT32] degrade 说明，避免以后误以为"已对齐"。
@@ -70,8 +71,8 @@ static void g32_note_degrade(void)
     g32_degrade_printed = 1;
     /* 双缓冲与渐变已补齐(3b3f856 / 本轮), 只剩两项真退化。
      * 文案必须跟着改, 否则以后会误以为"已经对齐"。 */
-    serial_puts(0x3F8, "[COMPAT32] degrade: aa-round=plain, blur=fill "
-                      "(double-buffer, gradient now supported)\n");
+    serial_puts(0x3F8, "[COMPAT32] degrade: blur=fill "
+                      "(double-buffer, gradient, aa-round now supported)\n");
 }
 
 /* ================= 像素 / 矩形 ================= */
