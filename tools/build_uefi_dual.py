@@ -13,6 +13,29 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from fat32_generator import create_esp_partition
 
 PROJECT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# P3-11: 这个脚本依赖几个宿主机工具。缺了以前会抛 FileNotFoundError 的
+# Python traceback, 看不出到底缺什么。这里提前自检并给出可直接照抄的安装命令。
+_REQUIRED_TOOLS = {
+    "sgdisk":    "gdisk (Debian/Ubuntu: apt install gdisk)",
+    "mkfs.vfat": "dosfstools (apt install dosfstools)",
+    "mkfs.ext2": "e2fsprogs (apt install e2fsprogs)",
+    "mcopy":     "mtools (apt install mtools)",
+}
+
+def _require_tools():
+    import shutil
+    missing = [(n, hint) for n, hint in _REQUIRED_TOOLS.items()
+               if shutil.which(n) is None]
+    if not missing:
+        return
+    sys.stderr.write("[IMAGE] 缺少构建镜像所需的宿主机工具:\n")
+    for name, hint in missing:
+        sys.stderr.write("  - %-10s %s\n" % (name, hint))
+    sys.stderr.write("[IMAGE] 装完后重跑本脚本即可; 这些是造 GPT/FAT32/ext2 的通用工具,\n")
+    sys.stderr.write("[IMAGE] 不属于内核源码, 不进仓库。\n")
+    sys.exit(3)
+
 # 镜像输出路径可用环境变量覆盖（/tmp 会被周期性清理，构建/回归可指到项目目录下）
 IMG_PATH = os.environ.get("HEPU_IMG", "/tmp/hepu_uefi_dual.img")
 IMG_SIZE = 256 * 1024 * 1024  # 256MB
@@ -415,6 +438,7 @@ def _open_img(path):
 
 
 def main():
+    _require_tools()
     print("=== HepuOS 双内核 UEFI 镜像构建 ===")
     with open(IMG_PATH, 'wb') as img:
         img.truncate(IMG_SIZE)

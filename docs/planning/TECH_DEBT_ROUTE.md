@@ -606,7 +606,7 @@ desk_select("mine");       /* 切过去 */
 | P3-8 | §5-6 32 位其余文件接 `shared/` | 引用数 1，才开头 |
 | P3-9 | 32 位缺 12 个 Rust 用户程序（无 cargo） | 需外部环境 |
 | P3-10 | D-1…D-6 剩余 | 见本文档前半 |
-| P3-11 | 三个镜像脚本都不可用：`build_combo.sh` 依赖的 5 个源文件已不在仓库；`build_iso.py` / `build_hybrid_iso.py` 的 `PROJECT` 硬编码到另一个工作区副本 | 2026-11-16 核实。当前唯一可构建产物是 `build_uefi_dual.py` 的 UEFI 镜像。README 与 `guides/INSTALL.md` 已加说明，但脚本本身未修 |
+| P3-11 | ~~三个镜像脚本都不可用~~ **脚本已能自述病因** | **已修**。核实比原记录深一层：`tools/bootloader.S` / `bootloader.ld` **不是"丢了"，是被 `tools/hepboot/` 整体取代**——`hepboot.S` v1.02 基址 `0x8000`（`hepboot.ld` 注释："原 0x7C00 与 MBR 冲突"），LBA 布局随之改变，所以不能简单把路径改指过去。本轮做了三件事：① `build_iso.py` / `build_hybrid_iso.py` 的 `PROJECT` 从另一个会话副本的绝对路径改为 `os.path.dirname(dirname(abspath(__file__)))` 自动推导；② `build_combo.sh` 加前置检查，缺源时直接打印"该布局已被 hepboot 取代 + 当前该走 `build_uefi_dual.py` + 要重建需按 0x8000/HDD 变体重写"，而不是让 gcc 甩一屏报错；③ `build_uefi_dual.py` 加 `_require_tools()` 自检（`sgdisk`/`mkfs.vfat`/`mkfs.ext2`/`mcopy`），缺哪个报哪个并给安装命令，不再抛 Python traceback。**仍未做**：`tools/hepboot/x86_64/stage2_64.S` 有源但没有构建规则产出 `stage2_64.bin`，iso 脚本因此仍跑不完；combo 镜像要不要按 0x8000 重建未定 |
 
 ### 台账外新发现（2026-11-17，尚未排进优先级）
 
