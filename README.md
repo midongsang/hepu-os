@@ -102,12 +102,89 @@ hepu-os/
 └── Makefile                   # 32位内核构建
 ```
 
+## 系统安装所需配置
+
+分两件事：**装到机器上要什么**，和**从源码编出来要什么**。下表数值除标注外均为实测（在 QEMU 里跑通的最小值），不是规格书估算。
+
+### 一、运行环境
+
+| 项 | 64 位（主线） | 32 位（并行第二套内核） |
+|---|---|---|
+| CPU | x86_64，支持长模式 | i386 兼容，能跑 multiboot |
+| 内存 | **1024 MB**（实测启动到桌面） | **256 MB**（实测启动到桌面）<br>其中 BSS 占 28 MB（4 MB 桌面池 + 24 MB 兜底池） |
+| 显示 | 1920×1080，需要 VBE 线性帧缓冲 | 同左 |
+| 显存 | ≥ 8 MB（1920×1080×4 = 8.3 MB，单缓冲直写） | 同左 |
+| 磁盘 | 镜像 256 MB（GPT + ESP + ext2 根分区 100 MB） | 32 位内核 3.5 MB，可由引导器直接载入 |
+| 固件 | **UEFI**（见下方"启动方式"） | multiboot（GRUB 或 QEMU `-kernel` 直载） |
+| 输入 | PS/2 键盘 + PS/2 鼠标 | 同左 |
+| 网络 | 可选，RTL8139 / e1000 任一 | 可选 |
+
+装到 U 盘：≥ 512 MB 的 U 盘即可（镜像本身 256 MB）。
+
+### 二、启动方式（这一条容易踩坑）
+
+当前主线能构建出来的产物只有一种，且**只能 UEFI 启动**：
+
+| 产物 | 构建命令 | 引导程序 | 启动方式 |
+|---|---|---|---|
+| `hepu_uefi_dual.img`（256 MB） | `python3 tools/build_uefi_dual.py` | ESP 分区里的 `/EFI/BOOT/BOOTX64.EFI` | **UEFI** |
+| `build_v250/kernel.elf`（32 位） | `make` | multiboot 头 | QEMU `-kernel` 直载，或 GRUB |
+
+`.img` 的 LBA 0 是**保护性 MBR**：分区表只有一项 `0xEE`（指向整盘），引导代码区 440 字节全为 0。它里面另加了一个 `0x83` 数据项，但那只是给**内核自己**的 IDE 扫描认分区用的（内核只认 MBR 0x83，不读 GPT），**不是 BIOS 引导代码**。所以：
+
+- 写 U 盘用 Rufus 的 **DD 模式**，然后在 BIOS/UEFI 设置里**打开 UEFI 启动、关闭 CSM/Legacy**
+- 反过来设成 Legacy/CSM 会直接"找不到可启动设备"——不是镜像坏了
+
+> **仓库里另外三个镜像脚本当前都不可用**，别被它们误导：
+> - `tools/build_combo.sh`（32 位 MBR/stage2 组合镜像）：脚本在，但它依赖的
+>   `tools/mbr_stub.S`、`tools/bootloader.S`、`tools/bootloader.ld`、
+>   `tools/mbr_legacy.bin`、`build/ext2disk.img` **全都已不在仓库里**，直接跑会立刻退出。
+> - `tools/build_iso.py` / `build_hybrid_iso.py`（ISO + isohybrid）：`PROJECT` 常量
+>   硬编码成另一个工作区路径，**会去构建那份旧副本而不是当前仓库**。
+>
+> `docs/guides/INSTALL.md` 描述的正是上面这条 32 位 MBR/stage2 路径，属于历史文档；
+> 按它操作会找不到对应镜像。装机的当前流程以本节的 `.img` 为准。
+
+QEMU 里验证 UEFI 启动：
+
+```bash
+qemu-system-x86_64 \
+  -drive if=pflash,format=raw,readonly=on,file=OVMF_CODE_4M.fd \
+  -drive if=pflash,format=raw,file=OVMF_VARS_4M.fd \
+  -drive format=raw,file=/tmp/hepu_uefi_dual.img \
+  -m 1024 -smp 2 -vga std -serial file:/tmp/hepu_serial.log
+```
+
+### 三、构建环境（Linux 主机）
+
+不需要交叉编译工具链：**用本机 `gcc` 加 `-m32` / `-m64`**。
+
+| 依赖 | 用途 | 缺了会怎样 |
+|---|---|---|
+| `gcc`（需 multilib，能编 `-m32`） | 编译两个架构的内核与用户程序 | 编不过 |
+| `binutils`（`ld`） | 链接（32 位用 `-m elf_i386`） | 编不过 |
+| `python3` | 构建 ESP / GPT / ext2 与 initrd | 出不了镜像 |
+| `sgdisk`（gdisk 包） | GPT 分区表 | **静默产出空 ESP**（不报错，起不来） |
+| `mtools`（`mcopy`） | 往 ESP 的 FAT32 里放文件 | 同上 |
+| `debugfs`（e2fsprogs） | 往 ext2 根分区写文件 | 根分区是空的 |
+| `qemu-system-x86_64` | 64 位 UEFI 测试 | 测不了 |
+| `qemu-system-i386` | 32 位 multiboot 测试 | 测不了 |
+| OVMF（`OVMF_CODE_4M.fd` / `OVMF_VARS_4M.fd`） | UEFI 固件 | 起不来 |
+
+一条命令检查前四项在不在：
+
+```bash
+for c in gcc ld python3 sgdisk mcopy debugfs; do
+  command -v $c >/dev/null && echo "ok   $c" || echo "MISS $c"
+done
+```
+
 ## 快速开始
 
 ### 编译64位内核（主线）
 ```bash
 make -C kernel/arch/x86_64 -j4
-# 输出: build_x86_64/hepu-kernel64.bin (约807KB)
+# 输出: build_x86_64/hepu-kernel64.bin（当前 947,632 B，上限 1 MB）
 ```
 
 ### 编译用户态程序
@@ -119,7 +196,7 @@ make -C user
 ### 编译32位内核
 ```bash
 make
-# 输出: build_v250/hepu-kernel.bin (4.1MB)
+# 输出: build_v250/kernel.elf（当前 3,534,220 B）+ hepu-kernel.bin
 ```
 
 ### 构建 UEFI 镜像（推荐）
@@ -140,9 +217,10 @@ qemu-system-x86_64 \
 启动到桌面约 50 秒；串口日志混有二进制输出，`grep` 需带 `-a`。
 
 ### 真机启动
-- 使用Rufus **DD模式**写入.img到U盘
-- 或使用balenaEtcher
-- BIOS设置：Legacy模式，USB第一启动
+- 用 Rufus **DD 模式**把 `.img` 写入 U 盘（或 balenaEtcher）
+- 固件设置：**打开 UEFI 启动、关闭 CSM/Legacy**
+- 原因见上方「启动方式」：镜像的 LBA 0 是保护性 MBR，没有 BIOS 引导代码，
+  设成 Legacy 只会"找不到可启动设备"
 
 ## 系统调用（109 个表项，号空间 0–235）
 
@@ -179,20 +257,26 @@ qemu-system-x86_64 \
 
 ## 双内核混合引导
 
-镜像布局：
+当前主线产物（`tools/build_uefi_dual.py`）的实际布局：
+
 ```
-MBR (LBA0) → Stage2 (LBA34-65, 32KB)
-  → 64位内核 (LBA2000+, 最多640KB)
-  → 32位内核 (LBA3400+, 最多4.1MB)
-  → ext2根分区 (LBA13000+, 224MB)
+LBA 0            保护性 MBR（仅 0xEE 数据项 + 一个 0x83 给内核认分区，无引导代码）
+ESP (FAT32)      /EFI/BOOT/BOOTX64.EFI    UEFI 引导器（hepboot）
+                 /KERNEL64.BIN            64 位内核
+                 /KERNEL32.BIN            32 位内核（存在 build_v250/hepu-kernel.bin 时才写入）
+                 /HEPBOOT.CFG             kernel_arch=64 | 32 切换
+ext2 根分区      LBA 264192 起，204800 扇区（100 MB），/bin 下是各用户程序
+总大小           256 MB
 ```
 
-Stage2启动菜单：5秒倒计时，默认64位，可选择32位。
+引导器按 `HEPBOOT.CFG` 的 `kernel_arch` 选内核；默认 64 位。
+
+> 早期版本用过另一种布局（MBR stage2 在 LBA 34-65、内核在 LBA 2000/3400、ext2 在 LBA 13000）。那段描述对应的是 BIOS 路径，与当前 UEFI 产物不是同一套，已按实际产物更正。
 
 ## 开发状态
 
 ### 已完成
-- ✅ 64位内核基础（113个源码模块，约807KB）
+- ✅ 64位内核基础（64 位内核 947,632 B，32 位 3,534,220 B）
 - ✅ SMP多处理器（4核，负载均衡，IPI）
 - ✅ 双内核混合引导（64位+32位）
 - ✅ 三重引导（BIOS+UEFI+CD-ROM）

@@ -8,7 +8,18 @@ source_of_truth: null
 supersedes: null
 ---
 
-> ⚠️ **版本说明**：sys_version 已对齐 0.54.6，但正文口径仍为 v0.13.x ~ v0.33.x 设计稿。源码事实请以 `kernel/arch/x86_64/Makefile` 实际编入为准。
+> ⚠️ **这份文档描述的是 32 位 MBR/stage2 的历史安装路径，当前构建不出来。**
+>
+> 现状（2026-11-16 核实）：
+> - 本文的产物 `hepu-os-v1.02-combo.img` 由 `tools/build_combo.sh` 生成，而该脚本依赖的
+>   `tools/mbr_stub.S`、`tools/bootloader.S`、`tools/bootloader.ld`、`tools/mbr_legacy.bin`、
+>   `build/ext2disk.img` **已全部不在仓库里** —— 脚本会立刻退出，产不出镜像。
+> - 当前**唯一可构建**的产物是 `tools/build_uefi_dual.py` 生成的 256 MB UEFI 镜像，
+>   启动方式是 **UEFI**（LBA 0 是保护性 MBR，没有 BIOS 引导代码）。
+>
+> **装机的当前流程、硬件/软件配置要求，请看仓库根目录 `README.md` 的
+> 「系统安装所需配置」一节。** 本文保留作历史参考（引导日志标记 H1/G0-G3/P0-P2
+> 仍然对应那套 stage2，排查旧镜像时有用）。
 
 
 # 赫普OS 安装与试用指南 (V3.82)

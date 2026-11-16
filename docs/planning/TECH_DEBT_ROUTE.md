@@ -600,6 +600,7 @@ desk_select("mine");       /* 切过去 */
 | P3-8 | §5-6 32 位其余文件接 `shared/` | 引用数 1，才开头 |
 | P3-9 | 32 位缺 12 个 Rust 用户程序（无 cargo） | 需外部环境 |
 | P3-10 | D-1…D-6 剩余 | 见本文档前半 |
+| P3-11 | 三个镜像脚本都不可用：`build_combo.sh` 依赖的 5 个源文件已不在仓库；`build_iso.py` / `build_hybrid_iso.py` 的 `PROJECT` 硬编码到另一个工作区副本 | 2026-11-16 核实。当前唯一可构建产物是 `build_uefi_dual.py` 的 UEFI 镜像。README 与 `guides/INSTALL.md` 已加说明，但脚本本身未修 |
 
 ### 不做的事（明确列出，避免反复讨论）
 
