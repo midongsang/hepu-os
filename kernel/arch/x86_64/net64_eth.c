@@ -92,7 +92,7 @@ void eth64_init(void)
     dev->rx_packets = 0;
     dev->rx_bytes = 0;
 
-    /* 从RTL8139获取MAC地址 */
+    /* 从已初始化的网卡读取MAC（探测结果由 e1000/rtl8139 驱动各自上报） */
     uint8_t mac[6];
     e1000_get_mac(mac);
     /* 检查MAC是否有效（非全0） */
@@ -100,7 +100,7 @@ void eth64_init(void)
     for (int i = 0; i < 6; i++) if (mac[i] != 0) mac_valid = 1;
     if (mac_valid) {
         for (int i = 0; i < 6; i++) dev->mac[i] = mac[i];
-        vga_puts("[ETH64] MAC from RTL8139: ");
+        vga_puts("[ETH64] MAC from NIC: ");
     } else {
         /* 默认MAC */
         dev->mac[0] = 0x00; dev->mac[1] = 0x1A; dev->mac[2] = 0x36;

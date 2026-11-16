@@ -83,9 +83,12 @@ int eth_send(const char *name, const uint8_t *data, uint32_t length)
     if (!dev || !data || length == 0) return -1;
     if (length > ETH_FRAME_MAX) return -1;
 
-    /* V7.96: 调用真实网卡驱动发送 */
+    /* V7.96: 调用真实网卡驱动发送。
+     * 先 RTL8139，不在位再回退 e1000；两者都没有才走模拟实现。 */
     extern int rtl8139_send(const uint8_t *data, int len);
+    extern int e1000_send(const uint8_t *data, int len);
     int ret = rtl8139_send(data, length);
+    if (ret <= 0) ret = e1000_send(data, length);
     if (ret > 0) {
         dev->stats.tx_packets++;
         dev->stats.tx_bytes += ret;
@@ -104,9 +107,11 @@ int eth_receive(const char *name, uint8_t *buffer, uint32_t max_length)
     hepu_eth_device_t *dev = eth_find_device(name);
     if (!dev || !buffer || max_length == 0) return -1;
 
-    /* V7.96: 调用真实网卡驱动接收 */
+    /* V7.96: 调用真实网卡驱动接收。先 RTL8139，不在位再回退 e1000。 */
     extern int rtl8139_recv(uint8_t *buf, int max_len);
+    extern int e1000_recv(uint8_t *buf, int max_len);
     int ret = rtl8139_recv(buffer, max_length);
+    if (ret <= 0) ret = e1000_recv(buffer, max_length);
     if (ret > 0) {
         dev->stats.rx_packets++;
         dev->stats.rx_bytes += ret;

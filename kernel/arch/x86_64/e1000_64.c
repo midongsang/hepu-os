@@ -313,3 +313,9 @@ int e1000_get_mac(uint8_t *mac)
     for (int i = 0; i < 6; i++) mac[i] = e1000_mac[i];
     return 0;
 }
+
+/* HAL/registry 判定 e1000 是否真实在位且初始化成功 */
+int e1000_available(void)
+{
+    return e1000_initialized;
+}

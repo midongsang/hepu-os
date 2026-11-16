@@ -115,4 +115,12 @@ int acpi_init_irq_overrides(void);
 /* 把 ISA IRQ 翻译成实际 GSI；未初始化或越界时回退为恒等映射。 */
 int acpi_irq_to_gsi(int irq);
 
+/* HPET 表探测结果（只读识别，未装 HPET 周期驱动） */
+extern int acpi_hpet_present;
+extern uint32_t acpi_hpet_address;
+extern uint64_t acpi_hpet_base_phys;
+
+/* 遍历 RSDT/XSDT 查找 "HPET" 签名，结果写入上面两个全局并打一行串口。 */
+void acpi_detect_hpet(void);
+
 #endif /* ACPI_H */

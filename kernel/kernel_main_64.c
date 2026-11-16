@@ -1129,13 +1129,15 @@ void x86_64_kernel_main(void)
     vga_puts("[OK] All drivers registered to unified framework\n");
 
     /* V0.13.9: 网卡驱动接线 (协议栈已由上方 net64_init 初始化)
-     * V0.57.0: 这里原本只尝试 e1000_init()，而本机/QEMU 实际网卡是 RTL8139，
-     * 于是永远走到 else → 静态 IP 从未设置 → DHCP 发不出去、天气抓不到、
-     * 网络栈全程 idle。改为先试 RTL8139，再退回 e1000。 */
+     * V0.57.0: 这里原本只尝试 e1000_init()，曾导致部分机型网卡未初始化。
+     * V0.59.x: 顺带修正了两处过时文案 —— 原来无条件打印 "RTL8139"，
+     * 而实际上位的是哪种网卡由本次 init 返回值决定（QEMU 默认 e1000，
+     * 老机型可能是 RTL8139），两者都不在位时才报 no NIC。 */
     extern int e1000_init(void);
     extern int rtl8139_init(void);
     extern int eth64_set_ip(uint32_t ip, uint32_t netmask, uint32_t gateway);
-    int nic_ok = (rtl8139_init() == 0) ? 1 : ((e1000_init() == 0) ? 1 : 0);
+    int nic_rtl = (rtl8139_init() == 0);
+    int nic_ok = nic_rtl ? 1 : ((e1000_init() == 0) ? 1 : 0);
     if (nic_ok) {
         /* V0.13.9: 静态 IP (10.0.2.15/24) — 测试环境无 DHCP 服务器 */
         eth64_set_ip(0x0A00020F, 0xFFFFFF00, 0x0A000202);  /* 10.0.2.15 / 10.0.2.2 */
@@ -1143,8 +1145,13 @@ void x86_64_kernel_main(void)
          * 当时只能拿到全 0 而退化成硬编码 MAC, 会让应答帧被硬件过滤丢掉) */
         extern void eth64_update_mac(void);
         eth64_update_mac();
-        vga_puts("[OK] Network up (RTL8139 + TCP/IP, static 10.0.2.15)\n");
-        klog64_log("[BOOT] network up (RTL8139, static IP)");
+        if (nic_rtl) {
+            vga_puts("[OK] Network up (RTL8139 + TCP/IP, static 10.0.2.15)\n");
+            klog64_log("[BOOT] network up (RTL8139, static IP)");
+        } else {
+            vga_puts("[OK] Network up (E1000 + TCP/IP, static 10.0.2.15)\n");
+            klog64_log("[BOOT] network up (E1000, static IP)");
+        }
     } else {
         vga_puts("[NET] No NIC found, network stack idle\n");
         klog64_log("[BOOT] no NIC found, network idle");

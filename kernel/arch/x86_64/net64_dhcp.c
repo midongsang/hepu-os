@@ -85,6 +85,21 @@ static uint32_t htonl32(uint32_t v) {
 }
 static uint32_t ntohl32(uint32_t v) { return htonl32(v); }
 
+/* 主机序 IP → "a.b.c.d" 字符串（无标准库 sscanf/printf） */
+static void dhcp_format_ip(uint32_t ip, char *out)
+{
+    uint32_t ip_net = htonl32(ip);
+    uint8_t *b = (uint8_t *)&ip_net;
+    int pos = 0;
+    for (int j = 0; j < 4; j++) {
+        if (b[j] >= 100) out[pos++] = '0' + b[j] / 100;
+        if (b[j] >= 10)  out[pos++] = '0' + (b[j] / 10) % 10;
+        out[pos++] = '0' + b[j] % 10;
+        if (j < 3) out[pos++] = '.';
+    }
+    out[pos] = 0;
+}
+
 static int dhcp_state = DHCP_STATE_INIT;
 static uint32_t dhcp_xid = 0x12345678;
 static uint32_t dhcp_offered_ip = 0;
@@ -281,20 +296,20 @@ static int dhcp_handle_ack(const uint8_t *packet, int len)
     eth64_set_ip(assigned_ip, dhcp_netmask, dhcp_gateway);
     dhcp_state = DHCP_STATE_BOUND;
 
-    vga_puts("[DHCP64] IP assigned: ");
     char ipstr[16];
-    uint32_t ip_net2 = htonl32(assigned_ip);
-    uint8_t *ip = (uint8_t*)&ip_net2;
-    int pos = 0;
-    for (int j = 0; j < 4; j++) {
-        if (ip[j] >= 100) ipstr[pos++] = '0' + ip[j]/100;
-        if (ip[j] >= 10) ipstr[pos++] = '0' + (ip[j]/10)%10;
-        ipstr[pos++] = '0' + ip[j]%10;
-        if (j < 3) ipstr[pos++] = '.';
-    }
-    ipstr[pos] = 0;
+    dhcp_format_ip(assigned_ip, ipstr);
+    vga_puts("[DHCP64] IP assigned: ");
     vga_puts(ipstr);
     vga_puts("\n");
+
+    /* 租约分段取证：掩码 / 网关 / DNS 的具体值 */
+    char buf[16];
+    dhcp_format_ip(dhcp_netmask, buf);
+    vga_puts("[DHCP64] netmask: "); vga_puts(buf); vga_puts("\n");
+    dhcp_format_ip(dhcp_gateway, buf);
+    vga_puts("[DHCP64] gateway: "); vga_puts(buf); vga_puts("\n");
+    dhcp_format_ip(dhcp_dns, buf);
+    vga_puts("[DHCP64] DNS: "); vga_puts(buf); vga_puts("\n");
 
     /* V0.13.33: 网络连接通知 */
     {
@@ -406,6 +421,11 @@ int dhcp64_poll(void)
         }
 
         case DHCP_STATE_BOUND:
+            /* 拿到租约后跑一轮端到端探测（ARP/ICMP/TCP 分段取证） */
+            {
+                extern void net64_postup_probe(void);
+                net64_postup_probe();
+            }
             return 1;  /* 已绑定 */
     }
 

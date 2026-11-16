@@ -63,81 +63,107 @@ static inline void outw(uint16_t port, uint16_t val)
     __asm__ volatile("outw %0, %1" : : "a"(val), "Nd"(port));
 }
 
-/* 等待IDE控制器就绪 (V4.02-E47: 忙等让步——每64次pause) */
-static int ide_wait_ready(uint16_t io_base, int timeout)
+/* BUG-13 对齐修复（与 64 位 ide64.c 同一套等待器语义）：
+ *   ① 写完 DRIVE/HEAD 寄存器后必须等 400 ns 建立时间（读 4 次 status），
+ *      否则可能读到切换前那个驱动器留下的旧状态；
+ *   ② 等 DRQ 时 "BSY 已清零、DRQ 尚未置位" 是合法过渡态，继续等，
+ *      不能直接判失败；
+ *   ③ 错误位除 ERR(0x01) 外还要查 DF(0x20) 设备故障位。
+ * 状态语义：0=就绪/就绪可传, -1=超时, -2=ERR/DF 设备报错 */
+
+/* ATA 规范：读 4 次 status 即可满足 400 ns 建立时间 */
+static void ide_delay_400ns(uint16_t io_base)
 {
-    uint8_t status;
+    for (int i = 0; i < 4; i++) {
+        (void)inb(io_base + IDE_REG_STATUS);
+    }
+}
+
+static int ide_status_error(uint8_t status)
+{
+    return (status & (IDE_STATUS_ERR | IDE_STATUS_DF)) ? -2 : 0;
+}
+
+/* 等 BSY 清零（不要求 DRDY，有些老盘 DRDY 滞后置位） */
+static int ide_wait_not_busy(uint16_t io_base, int timeout)
+{
     extern void iopolicy_wait_start(int);
     extern void iopolicy_relax(int);
     iopolicy_wait_start(1);
     while (timeout-- > 0) {
-        status = inb(io_base + IDE_REG_STATUS);
+        uint8_t status = inb(io_base + IDE_REG_STATUS);
         iopolicy_relax(1);
+        if (ide_status_error(status) != 0) return -2;
+        if (!(status & IDE_STATUS_BUSY)) return 0;
+    }
+    return -1;
+}
+
+/* 等 BSY=0 且 DRQ=1（PIO 数据阶段正确判据）；过渡态继续等，超时兜底 */
+static int ide_wait_drq(uint16_t io_base, int timeout)
+{
+    extern void iopolicy_wait_start(int);
+    extern void iopolicy_relax(int);
+    iopolicy_wait_start(1);
+    while (timeout-- > 0) {
+        uint8_t status = inb(io_base + IDE_REG_STATUS);
+        iopolicy_relax(1);
+        if (ide_status_error(status) != 0) return -2;
         if (!(status & IDE_STATUS_BUSY)) {
-            if (status & IDE_STATUS_DRDY) return 0;
-            if (status & IDE_STATUS_ERR) return -1;
+            if (status & IDE_STATUS_DRQ) return 0;
+            /* BSY=0 且 DRQ=0：过渡态，继续等；真失败靠超时兜住 */
         }
     }
     return -1;
 }
 
-/* 等待数据请求 (V4.02-E47: 忙等让步) */
-static int ide_wait_drq(uint16_t io_base, int timeout)
+/* 命令间就绪：先 400 ns 建立时间，再等 BSY 清零（与 64 位 ide64 一致，
+ * 不强制 DRQ 清零——命令由后续 DRQ 等待器逐个数据阶段兜底） */
+static int ide_wait_ready(uint16_t io_base, int timeout)
 {
-    uint8_t status;
-    extern void iopolicy_wait_start(int);
-    extern void iopolicy_relax(int);
-    iopolicy_wait_start(1);
-    while (timeout-- > 0) {
-        status = inb(io_base + IDE_REG_STATUS);
-        iopolicy_relax(1);
-        if (status & IDE_STATUS_DRQ) return 0;
-        if (status & IDE_STATUS_ERR) return -1;
-    }
-    return -1;
+    ide_delay_400ns(io_base);
+    return ide_wait_not_busy(io_base, timeout);
 }
 
-/* 选择驱动器 */
+/* 选择驱动器；写 DRIVE 寄存器后必须等 400 ns 建立时间 */
 static void ide_select_drive(uint16_t io_base, int drive)
 {
     outb(io_base + IDE_REG_DRIVE, 0xA0 | (drive << 4));
+    ide_delay_400ns(io_base);
 }
 
 /* 读取扇区 (PIO)
  * V2.26修复: 多扇区读必须"每扇区等DRQ→读256words", 原实现只等一次DRQ
- * 就连续读count*256 words, 会超前设备就绪读到垃圾 → 大扇区批量读失败. */
-static void ide_read_pio(uint16_t io_base, uint8_t *buffer, uint32_t count)
+ * 就连续读count*256 words, 会超前设备就绪读到垃圾 → 大扇区批量读失败.
+ * 返回 0=成功, -1=本扇区 DRQ/错误位等待失败 */
+static int ide_read_pio(uint16_t io_base, uint8_t *buffer, uint32_t count)
 {
     uint16_t *buf = (uint16_t *)buffer;
     for (uint32_t s = 0; s < count; s++) {
-        /* 等本扇区 DRQ */
-        for (int i = 0; i < 10000; i++) {
-            uint8_t st = inb(io_base + IDE_REG_STATUS);
-            if (st & IDE_STATUS_DRQ) break;
-            if (st & IDE_STATUS_ERR) return;
-        }
+        /* 等本扇区 DRQ（过渡态继续等，ERR/DF 统一判错） */
+        if (ide_wait_drq(io_base, 40000) != 0) return -1;
         for (int w = 0; w < 256; w++) {
             buf[s * 256 + w] = inw(io_base + IDE_REG_DATA);
         }
     }
+    (void)inb(io_base + IDE_REG_STATUS);   /* 读状态清 DRQ/中断 */
+    return 0;
 }
 
 /* 写入扇区 (PIO)
  * V2.26修复: 多扇区写必须"每扇区等DRQ→写256words", 与读对称. */
-static void ide_write_pio(uint16_t io_base, const uint8_t *buffer, uint32_t count)
+static int ide_write_pio(uint16_t io_base, const uint8_t *buffer, uint32_t count)
 {
     const uint16_t *buf = (const uint16_t *)buffer;
     for (uint32_t s = 0; s < count; s++) {
-        /* 等本扇区 DRQ */
-        for (int i = 0; i < 10000; i++) {
-            uint8_t st = inb(io_base + IDE_REG_STATUS);
-            if (st & IDE_STATUS_DRQ) break;
-            if (st & IDE_STATUS_ERR) return;
-        }
+        /* 等本扇区 DRQ（过渡态继续等，ERR/DF 统一判错） */
+        if (ide_wait_drq(io_base, 40000) != 0) return -1;
         for (int w = 0; w < 256; w++) {
             outw(io_base + IDE_REG_DATA, buf[s * 256 + w]);
         }
     }
+    (void)inb(io_base + IDE_REG_STATUS);   /* 读状态清 DRQ/中断 */
+    return 0;
 }
 
 /* IDE识别命令 */
@@ -244,31 +270,41 @@ int ide_read_sectors(uint32_t lba, uint8_t *buffer, uint32_t count)
 
     uint16_t io_base = (drive->channel == 0) ? IDE_PRIMARY_IO : IDE_SECONDARY_IO;
 
-    ide_select_drive(io_base, drive->drive);
-    if (ide_wait_ready(io_base, 40000) != 0) {
-        serial_puts(0x3F8, "[IDE] read: wait_ready FAIL\n");
-        return -1;
+    /* 单命令最多重试 1 次：命令间偶发状态竞争（上一阶段 DRQ 未撤干净）
+     * 重做整条命令，避免半扇区脏数据被当成成功读上去 */
+    int rc = -1;
+    for (int attempt = 0; attempt < 2; attempt++) {
+        ide_select_drive(io_base, drive->drive);
+        if (ide_wait_ready(io_base, 40000) != 0) {
+            serial_puts(0x3F8, "[IDE] read: wait_ready FAIL\n");
+            continue;
+        }
+
+        /* 设置LBA地址 */
+        outb(io_base + IDE_REG_SECCOUNT, count & 0xFF);
+        outb(io_base + IDE_REG_LBA0, lba & 0xFF);
+        outb(io_base + IDE_REG_LBA1, (lba >> 8) & 0xFF);
+        outb(io_base + IDE_REG_LBA2, (lba >> 16) & 0xFF);
+        outb(io_base + IDE_REG_DRIVE, 0xE0 | (drive->drive << 4) | ((lba >> 24) & 0x0F));
+        ide_delay_400ns(io_base);   /* DRIVE 寄存器建立时间 */
+
+        /* 发送读命令 */
+        outb(io_base + IDE_REG_COMMAND, IDE_CMD_READ_PIO);
+
+        if (ide_wait_drq(io_base, 40000) != 0) {
+            serial_puts(0x3F8, "[IDE] read: wait_drq FAIL\n");
+            continue;
+        }
+
+        /* 读取数据 */
+        if (ide_read_pio(io_base, buffer, count) != 0) {
+            serial_puts(0x3F8, "[IDE] read: pio FAIL\n");
+            continue;
+        }
+        rc = (int)count;
+        break;
     }
-
-    /* 设置LBA地址 */
-    outb(io_base + IDE_REG_SECCOUNT, count & 0xFF);
-    outb(io_base + IDE_REG_LBA0, lba & 0xFF);
-    outb(io_base + IDE_REG_LBA1, (lba >> 8) & 0xFF);
-    outb(io_base + IDE_REG_LBA2, (lba >> 16) & 0xFF);
-    outb(io_base + IDE_REG_DRIVE, 0xE0 | (drive->drive << 4) | ((lba >> 24) & 0x0F));
-
-    /* 发送读命令 */
-    outb(io_base + IDE_REG_COMMAND, IDE_CMD_READ_PIO);
-
-    if (ide_wait_drq(io_base, 40000) != 0) {
-        serial_puts(0x3F8, "[IDE] read: wait_drq FAIL\n");
-        return -1;
-    }
-
-    /* 读取数据 */
-    ide_read_pio(io_base, buffer, count);
-
-    return count;
+    return rc;
 }
 
 /* 写入扇区 */
@@ -295,36 +331,44 @@ int ide_write_sectors(uint32_t lba, const uint8_t *buffer, uint32_t count)
 
     uint16_t io_base = (drive->channel == 0) ? IDE_PRIMARY_IO : IDE_SECONDARY_IO;
 
-    ide_select_drive(io_base, drive->drive);
-    if (ide_wait_ready(io_base, 40000) != 0) return -1;
+    int rc = -1;
+    for (int attempt = 0; attempt < 2; attempt++) {
+        ide_select_drive(io_base, drive->drive);
+        if (ide_wait_ready(io_base, 40000) != 0) {
+            serial_puts(0x3F8, "[IDE] write: wait_ready FAIL\n");
+            continue;
+        }
 
-    /* 设置LBA地址 */
-    outb(io_base + IDE_REG_SECCOUNT, count & 0xFF);
-    outb(io_base + IDE_REG_LBA0, lba & 0xFF);
-    outb(io_base + IDE_REG_LBA1, (lba >> 8) & 0xFF);
-    outb(io_base + IDE_REG_LBA2, (lba >> 16) & 0xFF);
-    outb(io_base + IDE_REG_DRIVE, 0xE0 | (drive->drive << 4) | ((lba >> 24) & 0x0F));
+        /* 设置LBA地址 */
+        outb(io_base + IDE_REG_SECCOUNT, count & 0xFF);
+        outb(io_base + IDE_REG_LBA0, lba & 0xFF);
+        outb(io_base + IDE_REG_LBA1, (lba >> 8) & 0xFF);
+        outb(io_base + IDE_REG_LBA2, (lba >> 16) & 0xFF);
+        outb(io_base + IDE_REG_DRIVE, 0xE0 | (drive->drive << 4) | ((lba >> 24) & 0x0F));
+        ide_delay_400ns(io_base);   /* DRIVE 寄存器建立时间 */
 
-    /* 发送写命令 */
-    outb(io_base + IDE_REG_COMMAND, IDE_CMD_WRITE_PIO);
+        /* 发送写命令 */
+        outb(io_base + IDE_REG_COMMAND, IDE_CMD_WRITE_PIO);
 
-    if (ide_wait_drq(io_base, 40000) != 0) return -1;
+        if (ide_wait_drq(io_base, 40000) != 0) {
+            serial_puts(0x3F8, "[IDE] write: wait_drq FAIL\n");
+            continue;
+        }
 
-    /* 写入数据 */
-    ide_write_pio(io_base, buffer, count);
+        /* 写入数据 */
+        if (ide_write_pio(io_base, buffer, count) != 0) {
+            serial_puts(0x3F8, "[IDE] write: pio FAIL\n");
+            continue;
+        }
+        rc = (int)count;
+        break;
+    }
+    if (rc < 0) return -1;
 
     /* 刷新缓存：FLUSH 后只需等待 !BUSY（QEMU 对 FLUSH 的 DRDY 置位时序宽松，强制等 DRDY 会超时） */
     outb(io_base + IDE_REG_COMMAND, IDE_CMD_FLUSH);
-    {
-        int to2 = 100000;
-        uint8_t st;
-        while (to2-- > 0) {
-            st = inb(io_base + IDE_REG_STATUS);
-            if (!(st & IDE_STATUS_BUSY)) break;
-        }
-        if (to2 <= 0 && (inb(io_base + IDE_REG_STATUS) & IDE_STATUS_BUSY)) {
-            return -1;
-        }
+    if (ide_wait_not_busy(io_base, 100000) != 0) {
+        return -1;
     }
 
     return count;

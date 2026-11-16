@@ -1,8 +1,8 @@
 ---
 title: 赫普OS 未关闭问题清单
 status: active
-sys_version: 0.58.0
-updated: 2026-11-13（SEC-19 闭合、OBS-01→BUG-49 关闭、BUG-13 关闭、OPEN-01 实测关闭、SEC-21/SEC-23 复核关闭）
+sys_version: 0.59.2
+updated: 2026-11-17（驱动层整固：新增 BUG-52~56 并逐项给出实测证据；BUG-49「已关闭」更正为不成立；OPEN-02 复现未成功并写明下一步夹具）
 owner: status
 source_of_truth: kernel/arch/x86_64/
 ---
@@ -39,12 +39,17 @@ source_of_truth: kernel/arch/x86_64/
 | 编号 | 问题 | 现状依据 | 状态 |
 |------|------|---------|------|
 | BUG-13 | **ATA PIO 读盘 BSY 恒 1** —— 根因是三处实现缺陷叠加：①写完 DRIVE/HEAD 寄存器立即读 STATUS，缺 ATA 规范要求的 400 ns 建立时间，读到的是切换前驱动留下的旧状态（"BSY 一直是 1"的直接来源）；②等 DRQ 的循环里 `if (!(status \& BSY)) return -1;` 把「BSY 清零、DRQ 尚未置位」这个**合法过渡态**判成失败；③只查 ERR(0x01) 不查 DF(0x20)。**修复（v0.59.1）**：拆成 `ide_delay_400ns()` / `ide_wait_not_busy()` / `ide_wait_drq()` 三个语义清晰的等待器，过渡态继续等、靠超时兜底、ERR/DF 统一判错。**附带优化**：`read_sectors`/`write_sectors` 从逐扇区发命令改成一条命令连续读（SECTOR COUNT=0x1F2），ext2 读文件的命令数从几十条降到 1 条 | `ide64.c`；实测 3 轮 `[IDE64] Drive ready` + `Drive master: 256MB (LBA48)`，读扇区失败 0 次，desk=1 EXC=0 PASS=1 | 已关闭 |
-| BUG-49 | **（由 OBS-01 升级而来）启动期 APIC timer 校准依赖 PIT 中断投递，IOAPIC 未配对时必然失败**。校准窗口靠 `pit64_get_ticks()` 推进，而启动早期已切纯 APIC 模式、IOAPIC 重定向表尚未配置，PIT 的 IRQ0 在部分启动里投不进来 → tick 不走 → 校准失败（回归里 `timercal=N`），回退 ICR 使调度 tick 频率错误。**修复（v0.59.1）**：改用 PIT 通道 2 门控（mode0 计数 + 轮询 0x42，1.193182 MHz 硬件基准），与中断投递彻底解耦；并用 5 ms / 20 ms 两个窗口交叉校验（偏差 >20% 判不可信、退回老路径）。实测 8 轮 `timercal=0`，tick_hz 稳定在 61~63 MHz（≈ 1 GHz/16，与 QEMU LAPIC 量级吻合），ICR≈61 500 → 目标 1 kHz | `apic64.c` `apic64_calibrate_via_pit2()`；串口 `[APIC] timer calibrated` 8/8；`inconsistent` 0 次 | 已关闭 |
+| BUG-49 | **（由 OBS-01 升级而来）启动期 APIC timer 校准依赖 PIT 中断投递，IOAPIC 未配对时必然失败**。校准窗口靠 `pit64_get_ticks()` 推进，而启动早期已切纯 APIC 模式、IOAPIC 重定向表尚未配置，PIT 的 IRQ0 在部分启动里投不进来 → tick 不走 → 校准失败（回归里 `timercal=N`），回退 ICR 使调度 tick 频率错误。**修复（v0.59.1）**：改用 PIT 通道 2 门控（mode0 计数 + 轮询 0x42，1.193182 MHz 硬件基准），与中断投递彻底解耦；并用 5 ms / 20 ms 两个窗口交叉校验（偏差 >20% 判不可信、退回老路径）。实测 8 轮 `timercal=0`，tick_hz 稳定在 61~63 MHz（≈ 1 GHz/16，与 QEMU LAPIC 量级吻合），ICR≈61 500 → 目标 1 kHz | `apic64.c` `apic64_calibrate_via_pit2()`；串口 `[APIC] timer calibrated` 8/8；`inconsistent` 0 次 | **已关闭不成立（v0.59.2 复核，2026-11-17）**：同一份代码实测**每次启动** BSP 与 AP 各打一条 `[APIC] WARN: timer calibration failed, fallback ICR=35000`；原先"8/8 timercal=0"只反映了桌面起来后 `apic64_timer_recalibrate()` 补测成功，**boot 期校准从未成功过**。真实根因与修复见 BUG-52 |
 | BUG-50 | **（AUDIT_R3 R3-1 新发现）sys_readdir 的缓冲边界差一**：条目序列化实际写 `l + 3` 字节（name 的 l 字节 + 结尾 0 + type 1 字节 + 结尾 0），但容量检查用的是 `need = l + 2`（`syscall64_full.c:1789` 起）。当前不越界，是因为 break 条件写成 `used + need >= sizeof(kbuf)`（严格 `>=`），通过检查时 `used + l + 3` 恰好不超过 2048 —— **两个错误互相抵消，不是正确**。任何把 kbuf 尺寸改掉、或把 `>=` 改成 `>` 的改动都会立刻越界 1 字节写栈。修复：`need = l + 3`，一行 | `syscall64_full.c` `sys_readdir`（静态 `names[64][256]` 之后） | **已修（V0.59.21，工作区未提交）**：`need = l + 3` + `used + need > sizeof(kbuf)`，按真实长度判断 |
 | BUG-51 | **（AUDIT_R3 R3-2 新发现）sys_readdir 输出截断被静默**：`if (used > outsz) used = outsz;`（`syscall64_full.c:1796`）在用户缓冲不足时直接截断并返回截断后的长度，调用方（终端 ls / 文件管理器）会以为拿到了全部条目，最后一个条目还可能被切成半截字符串。**这是 SEC-11 已修过的同类模式换了个函数复发** —— SEC-11 的教训是「ext2 读块失败被 `break` 吞掉却仍返回完整 size」。修复方向二选一：返回 `-ENOBUFS` 让调用方换大缓冲，或按 Linux getdents 语义返回已写部分并让调用方反复调用推进。当前两者都不做 | `syscall64_full.c:1796` | **已修（V0.59.21，取第一种）**：缓冲不够直接 `return -1`，不再静默截断；`filemgr.c` 已有失败提示分支，回归 1/1 通过 |
+| BUG-52 | **boot 期 APIC timer 校准从未成功（每次启动必失败）**：根因两层 —— ①`pit2_read_count()` 直接 `inb(0x42)` 连读两次拼 16 位，**没有发 0x80 计数器锁存命令**，低/高字节取自两个时刻的活计数器，跨 256 边界会拼出假 0 提前截短窗口；②QEMU 2.4 i8254 模型的 mode 0 计数到 0 后**按 16 位回卷到 0xFFFF**（不停在 0），只轮询 `count==0` 必然错过终止点。修复：校准基准改为 ACPI 枚举到的 **HPET 自由主计数器**（10 ns/tick，纯 MMIO 轮询，不依赖中断投递），按 HPET→ch2→PIT tick 三级降级且结果带 `src=` 标记；ch2 补 0x80 锁存 + 回卷上跳判定；HPET 换算改为先求 `1e15/period` 频率再乘，避开 `ticks*1e15` 的 2^64 溢出；OVMF 把 32 位基址写在 GAS 地址高 32 位的情况一并兼容。**实测**：5 次启动 `WARN` 0 次、每次出现 `[APIC] timer calibrated ... src=HPET`，tick_hz 62 547 145~62 586 122 Hz（极差 0.062%），ICR=⌊hz/1000⌋ 逐样本自洽 | `apic64.c`、`acpi.c`、`acpi.h` | 已修复（v0.59.2） |
+| BUG-53 | **xHCI 控制器永远探不到**：`pci_find_class_bar0` 只扫 bus 0、且只读 BAR 低 32 位；QEMU `qemu-xhci` 的 BAR0 是 **64 位 MMIO `0x800000000`（低 dword=0）**，遂被判成"无控制器"，桌面 VM 的 usb-kbd/usb-mouse 因此全部退回 PS/2。修复：`pci64.c` 重写为真枚举（递归桥遍历 secondary 0x19/subordinate 0x1A + 访问位图防环、multifunction、header type 取 **0x0E**、64 位 BAR 高低段拼接、非显示类设备 BAR 写全 1 探测大小），旧导出符号签名与语义原样保留；`xhci64.c` 改用新枚举取 64 位安全基址并补写 MEMEN+BME。**关键边界**：显示类（class 0x03）**不做** BAR 写全 1 探测 —— 实测对在役 std-vga 的 LFB 写全 1 会打坏桌面帧缓冲下半屏（NONBLACK 2 073 597→123 195），故显示类只读地址解码，代码内有注释。**实测**：`[XHCI] at bus=0x0 dev=0x4 func=0x0`、`MMIO 0x800000000 slots=0x8 ports=0x8 AC64=0x1`、`[OK] XHCI initialized`，键盘 slot1/proto1、鼠标 slot2/proto2 均 `HID ready`；`sendkey` 后 USB 队列 head/tail 0→1→2 递增而 `g_kbd_irq_count` 全程不变，证明输入走的是 USB 路径 | `pci64.c`、`xhci64.c` | 已修复（v0.59.2） |
+| BUG-54 | **`ahci64.c` 零实测覆盖，且在 QEMU ich9-ahci 上完全不可用**：四处叠加缺陷 —— ①端口结构体 `tfd` 写成 `uint64_t`，令 SIG/SSTS/SCTL/SERR/SACT/CI 等后续寄存器整体错移 4 字节；②PxCMD 的 FRE 误用 0x8000（该位是只读 MPSS），规范是 bit4=0x10；③H2D Register FIS(0x27) 的扇区计数错放在字节 11/12（规范应在 **12/13**，feature 高字节占 11），设备读到 count=0 → 命令立即完成却不搬数据，表现为"写成功、回读全 0、无报错"；④BAR 写死 BAR5、从不发 IDENTIFY（`total_sectors` 恒 0、`disk_present()` 恒 false）。修复：结构体与 PxCMD 位按规范改正、FIS 重排、BAR 扫 0..5 取首个内存型、补 IDENTIFY(0xEC) 填 LBA48/LBA28 容量、命令头首字节显式赋值（cfl=5, W=bit6）、完成等待补查 DF。另补 `storage_hal_raw_write` 的 AHCI 路由（原先读走 AHCI、写却回退 IDE，SATA rootfs 写不进去）。**实测**（`-device ich9-ahci` + SATA 盘）：`Found AHCI at PCI 0:4.0`、`port 1: SATA HDD sectors=0x80000`、LBA0 读出 MBR 签名 `55AA`、末扇区写读回环 `mismatch=0x0` | `ahci64.c`、`storage_hal64.c` | 已修复（v0.59.2） |
+| BUG-55 | **32 位 IDE PIO 缺 BUG-13 的三条修正，且整条链路从未在挂盘条件下验证**：32 位冒烟历来不挂盘，日志恒为 `no drive present, skip` / `no disk, skip` / `VVRAM ... failed to read MBR (IDE not ready)`，于是 `kernel/drivers/ide.c`（被顶层 `find` 自动收录进 32 位内核）缺的 400 ns 建立时间、DF(0x20) 判定、DRQ 过渡态处理一直无人发现。修复：补 `ide_delay_400ns`；拆分 `ide_wait_not_busy` / `ide_wait_drq`（BSY=0 且 DRQ=0 判为合法过渡态继续等，ERR+DF 统一判错，超时兜底）；读写改为每扇区独立等 DRQ、单扇区超时 10 000→40 000；多扇区仍一条命令 `SECCOUNT` 连续读。**实测**（256 MB MBR+ext2 测试盘）：`[IDE] drive found: QEMU HARDDISK`、LBA0 与分区表 `#0 type=0x83 lba=2048 sectors=512000`、`write+readback last-sector PASS`、`[EXT2] read /hello.txt: hello from Hepu OS block-device test disk`、`bigfile(512KB,dbl-indirect) write+readback PASS`、`auto-fsck: OK`，IDE 等待失败 0 次；**不挂盘时三句 skip 原样保留**（挂盘仍是可选项，未变成必需） | `kernel/drivers/ide.c` | 已修复（v0.59.2） |
+| BUG-56 | **NET_HAL 与驱动注册表把实际在位的 e1000 报成 RTL8139**：`network_hal64.c` 无条件 `dev->type = NET_DEV_RTL8139` 并调 rtl8139 init，`drv_register64.c` 也无条件注册 `RTL8139 (ID=6)`，而同一次启动里 e1000 已正确探测到 MMIO 与 MAC —— 上层拿到的是一个不存在设备的 ops 表。32 位 `kernel/drivers/eth.c` 同类：RTL 失败后直接落"模拟实现"，从不接 e1000。修复：两侧改为按 PCI 探测选型（e1000 在位用 e1000 ops，真存在 RTL8139 才用 RTL，都没有则明确报 no NIC 且不伪造 eth0），注册表只登记真实在位设备、ID 槽位不漂移。**实测**：`[DRV] Registered: E1000 (ID=6)`、`[NET_HAL] E1000 initialized (eth0)`；DHCP 10.0.2.15 / 255.255.255.0 / 网关 10.0.2.2 / DNS 10.0.2.3，ARP `resolved 10.0.2.2 -> 52:55:0a:00:02:02`，ICMP `echo reply`，TCP `Connection established`（state=4） | `network_hal64.c`、`drv_register64.c`、`e1000_64.c`、`rtl8139_64.c`、`net64*.c`、`kernel/drivers/eth.c`、`kernel_main_64.c`（仅过时文案） | 已修复（v0.59.2） |
 | BUG-48 | INT13 磁盘重置在关中断下调用 | boot/BOOTLOADER_DEFINITION_PLAN.md, 待 QEMU 验证 | 待验证 |
 | OPEN-01 | **QEMU 高 LBA(P2/P3) 写成功读全 0** —— **实测不复现，关闭（v0.59.1）**。新增 `ide64_selftest_high_lba()`：在独立 slave 测试盘（QEMU `-drive if=ide,index=1`，256MB）上对 LBA `0 / 0x1000 / 0x20000 / 0x3FFFF / 0x7F000` 逐个写入递增 pattern → 读回逐字节比对，外加一段 8 扇区连续读写的多扇区回环。实测 `[ATA] high-lba selftest drive=0x1 cases=0x5 fails=0x0`，多扇区回环无 mismatch。历史现象最可能来自 0.13.57 时期「逐扇区发命令 + 写后未等 FLUSH 完成」，这两点在 v0.59.1 的 BUG-13 修复里已一并处理。注：自检只用 slave 盘，不碰系统盘 | `ide64.c ide64_selftest_high_lba()`；QEMU 双盘实跑；`fails=0x0` | 已关闭 |
-| OPEN-02 | UHCI 写路径时序竞态 | 0.13.42 遗留 | 待解决 |
+| OPEN-02 | UHCI 写路径时序竞态 | 0.13.42 遗留；**v0.59.2 尝试复现未成功**：按约束只挂 `-device piix3-usb-uhci -device usb-kbd`，没有 bulk 设备，BOT 的 CBW/CSW 批量写路径整条未进入；既有缓解（命令级重试、CSW 重读、帧同步重挂 QH、8 深 scratch 轮转）仍在位，HID 中断 IN 两次按键各 1 条队列项、无 TD err/stall。**下一步验证手段**：需要带 usb-storage 夹具的满扇区 bulk 写压测（本域外，未做） | 待解决 |
 | OPEN-03 | ~~QEMU sendkey 不被键盘驱动读取~~ **已关闭（非真 bug，旧测量误解）**。PS/2 与 USB HID 两条键盘链路端到端可用，无需先点击聚焦。四重实测证据（ef3c7cc 内核，PS/2 配置未挂 USB）：① 中断级 `g_kbd_irq_count`（符号地址 0x1f29f4）每次按键 +2（按下/释放各 1 次），键盘环形缓冲 head/tail 同步前移且条目被消费；`sendkey 2` 后计数 11→13、缓冲指针 3→4；② 界面级 `sendkey 2` 使 OOBE 由 1/4 推进到 2/4（截屏像素差 73616 px），账户创建页输入 h/e/p/u，用户名框真实回显 "hepu"；③ USB HID 键盘对照（`-device piix3-usb-uhci -device usb-kbd`）sendkey 改走 USB 队列（此时 PS/2 IRQ1 静默），同样推进向导、回显 hepu、Tab 切换输入框焦点（像素差 3008 px）。**应用层边界（避免再误判）**：OOBE 语言页只绑定数字键 `1`/`2`，Tab/方向键/回车在该页未绑定，属应用设计；旧「按了没反应」源于此，加之此前缺中断级取证，把「界面没变化」误判为「驱动没收到键」 | `g_kbd_irq_count` 中断计数 + 环形缓冲指针；OOBE 页面推进与文本回显；USB HID 对照链路 | 已关闭（非缺陷） |
 | OPEN-04 | 安装器不拷贝系统文件 —— **实测确认仍然成立（AUDIT_R3）**。源码在 `user/apps/install64/install64.c`（280 行；此前台账只写 `install64.c L213-L231` 未给路径，容易被误认为是 kernel 目录下的文件）。完整流程是 `[1/5]` 读分区表 → 打印三区 → `[3/5]` 写三区 MBR → 重启提示即结束，**没有任何把根文件系统内容写入 P1 的步骤**；`[4/5]`/`[5/5]` 的占位也不存在。配合 SEC-04 的 `sys_mkfs` PID 闸可见：安装器能格式化分区，但不会往里放系统，装完的盘是空的 | `user/apps/install64/install64.c`（全文 280 行） | 待解决 |
 | SEC-01 | ~~用户程序可直接读写内核内存~~ **隔离主路径已修复**：私有 PML4/PDPT 默认开（`Makefile:205` `USER_ISOLATION ?= 1`）、SMEP+SMAP 按 CR4 真实状态门控、brk 分页+NX(W^X)；QEMU 512MB 隔离模式到桌面、sec_test 通过。**边界口径（勿与下文混淆）**：物理内存 >1GB 时内核恒等映射覆盖用户窗口，自动退回旧模式（`user_aspace64.c:76-77`）；fork 的 COW 复制已落地（`uaspace_fork_copy`），clone 仍共享父页表，见 SEC-02（部分）。**v0.33.0 补**：用户堆/TLS 预留区搬入用户窗口私有分区（PDPT[1]，原落在内核共享 PDPT[0] 树导致用户态写自己堆 #PF）；大页不可当页表写（新增 vmm64_split_huge_pde）；PMM 显式保留内核栈页（原与用户栈物理重叠） | user_aspace64.c:76-77；user_access64.c/vmm64.c/pmm64.c；Makefile:205；提交 3375fbe | 已关闭（隔离主路径；RAM>1GB 退回旧模式与 fork 复制见 SEC-02） |
@@ -480,3 +485,33 @@ diag1/diag2/move/sb_up/hand），但系统目前只有 4 个形态场景，映�
 
 **下一步**（未定）：可加"窗口下缘亮一档、上方暗一档"的高光边制造分离感，
 或按壁纸亮度自动调 `SH_STRENGTH`。两条都要先和用户确认方向。
+
+## 驱动层现状盘点（v0.59.2，2026-11-17）
+
+本轮只动驱动层，桌面视觉代码（`hpdesk.c` / `gfx64.c` / 兼容层绘制路径）一行未改。
+四条链路从"看起来有、实测没有"变成"实测有据"：
+
+| 域 | 改前实测 | 改后实测 | 台账 |
+|---|---|---|---|
+| 定时器 | 每次启动 2 条 `timer calibration failed`，boot 期 tick 用 ICR=35000 顶着跑；两次"补校准"结果差 1.95 倍 | 5 次启动 WARN 0 次，`calibrated src=HPET`，62.55 MHz 波动 0.062% | BUG-52 |
+| PCI/USB | `[XHCI] Controller not found`，USB HID 全退 PS/2 | xHCI 起、键鼠各一枚 HID 设备、输入经 USB 队列消费 | BUG-53 |
+| 块设备 | 32 位挂盘不可用；64 位 `[AHCI64] No AHCI controller found`（零覆盖） | 32 位跑通 MBR+ext2+512KB 间接块回环；64 位 AHCI 读 LBA0 + 末扇区回环 0 mismatch | BUG-54/55 |
+| 网络 | HAL 把 e1000 报成 RTL8139 | 选型正确，DHCP/ARP/ICMP/TCP 四段齐全 | BUG-56 |
+
+**仍存在的缺口（如实列出，未修，不是遗漏）**
+
+1. **TCP 无真正重传**：`net64_tcp.c` 的定时器只累加重试计数、减半 cwnd，超上限直接关连接，**不重发未确认段**；SYN_SENT 不进定时器。一次握手成功即可，丢包路径无回归。
+2. **DHCP 无续租/重绑定**：未保存 lease time，REQUESTING 超时退回 INIT 重发 Discover 而非重发 Request。
+3. **32 位 e1000 硬件收发不通**：`kernel/drivers/e1000.c:205` 把 MMIO 物理址 FEB80000 直接当指针，32 位分页下未做恒等映射 → MAC 全 0、link down。冒烟自测不依赖真实收发，故未修（这是 32 位 MMIO 映射问题，不是网卡驱动逻辑问题）。
+4. **AHCI 未接中断、未做 FLUSH CACHE**：完成靠轮询 CI；单 PRDT 条目；只扫 bus 0；掉电持久化语义未验证；SERR 统计与端口软复位未做。
+5. **LBA48 只读不写**：两侧 IDE 读写命令仍是 0x20/0x30（LBA28），>128 GB 盘写入不可用；32 位 `total_sectors` 还是 uint32。
+6. **HPET 只有"当基准"**：主计数器用来校准 APIC 频率，**没有装比较器/中断路由**，即没有作为 tick 源。PIT ch0 + APIC 定时器已能提供 1 kHz tick，故属可选缺口而非阻塞。
+7. **串口只出不进**：`uart64.c` 置了 IER_RDI 但没有注册 IRQ4 处理程序，RX 中断路径空挂（TX 控制台不受影响）。
+8. **PCI 枚举只验证过扁平拓扑**：本 QEMU 拓扑里 8086:7113 桥的下游为空，桥递归未真正下钻；真实多级桥拓扑待验证。显示类 BAR 大小探测被有意禁用（写全 1 会打坏 LFB），故 `bar_size=0`。
+9. **OPEN-02 仍未闭环**：见上表该条，缺 usb-storage 满扇区 bulk 写夹具。
+10. **AHCI/真机差异**：只在 QEMU ich9-ahci 上实测；不同厂商控制器的 ABAR 落点与端口复位流程未做硬件验证。
+
+**判据（本轮总验收，均跑在合并后的正式树）**
+
+- 32 位冒烟：`serial=1 initrd=1 net=1 desk=1 fault=0 bound=1`，`== 32 位内核冒烟 PASS`。
+- 64 位内核 `hepu-kernel64.bin` 956 080 字节（上限 1 048 576）；桌面帧缓冲非黑像素 2 073 597 / 2 073 600，与基线一致，无像素回退。

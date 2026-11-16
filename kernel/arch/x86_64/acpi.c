@@ -253,11 +253,90 @@ int acpi_parse_madt(void)
     return 0;
 }
 
+/* HPET 表探测（只读识别，不注册/不驱动）：遍历 RSDT/XSDT 找签名 "HPET"。
+ * 用途是回答"固件到底有没有枚举到 HPET"，为是否需要补 HPET 驱动留证据；
+ * 这里只记录表的存在与地址，不映射 MMIO、不配置定时器。 */
+int acpi_hpet_present = 0;
+uint32_t acpi_hpet_address = 0;
+uint64_t acpi_hpet_base_phys = 0;
+
+static int acpi_check_hpet_header(acpi_header_t *h)
+{
+    if (!h) return 0;
+    if (h->signature[0] == 'H' && h->signature[1] == 'P' &&
+        h->signature[2] == 'E' && h->signature[3] == 'T') {
+        acpi_hpet_present = 1;
+        acpi_hpet_address = (uint32_t)(uintptr_t)h;
+        /* HPET 表：0x24 起为 GAS（地址空间1/位宽1/位偏移1/访问大小1/64位基址）。
+           实测 OVMF 固件把 32 位物理地址写在地址字段的高 32 位（0x2C-0x2F），
+           低 32 位为 0；兼容两种存放：低 32 位非 0 取低，否则取高 32 位。 */
+        uint8_t *base = (uint8_t *)h;
+        uint32_t hpet_lo = (uint32_t)base[0x28]       |
+                           ((uint32_t)base[0x29] << 8)  |
+                           ((uint32_t)base[0x2A] << 16) |
+                           ((uint32_t)base[0x2B] << 24);
+        uint32_t hpet_hi = (uint32_t)base[0x2C]       |
+                           ((uint32_t)base[0x2D] << 8)  |
+                           ((uint32_t)base[0x2E] << 16) |
+                           ((uint32_t)base[0x2F] << 24);
+        acpi_hpet_base_phys = (hpet_lo != 0) ? (uint64_t)hpet_lo : (uint64_t)hpet_hi;
+        vga_puts("[ACPI] HPET table present at ");
+        vga_put_hex(acpi_hpet_address);
+        vga_puts(" len=");
+        vga_put_hex(h->length);
+        vga_puts(" base=");
+        vga_put_hex(acpi_hpet_base_phys);
+        vga_puts("\n");
+        return 1;
+    }
+    return 0;
+}
+
+void acpi_detect_hpet(void)
+{
+    acpi_rsdp_t *rsdp = acpi_find_rsdp();
+    if (!rsdp) {
+        vga_puts("[ACPI] HPET detect: RSDP not found\n");
+        return;
+    }
+
+    extern uint64_t vmm64_phys_to_ptr(uint64_t phys);
+
+    /* RSDT：32 位物理地址条目 */
+    if (rsdp->rsdt_address) {
+        acpi_rsdt_t *rsdt = (acpi_rsdt_t *)vmm64_phys_to_ptr((uint64_t)rsdp->rsdt_address);
+        if (rsdt) {
+            uint32_t n = (rsdt->header.length - sizeof(acpi_header_t)) / 4;
+            for (uint32_t i = 0; i < n; i++) {
+                acpi_header_t *h = (acpi_header_t *)vmm64_phys_to_ptr((uint64_t)rsdt->entry[i]);
+                if (acpi_check_hpet_header(h)) return;
+            }
+        }
+    }
+
+    /* XSDT：64 位条目（RSDP revision >= 2 时才有） */
+    if (rsdp->revision >= 2 && rsdp->xsdt_address) {
+        acpi_header_t *xh = (acpi_header_t *)vmm64_phys_to_ptr(rsdp->xsdt_address);
+        if (xh) {
+            uint32_t n = (xh->length - sizeof(acpi_header_t)) / 8;
+            uint64_t *entries = (uint64_t *)((uint8_t *)xh + sizeof(acpi_header_t));
+            for (uint32_t i = 0; i < n; i++) {
+                acpi_header_t *h = (acpi_header_t *)vmm64_phys_to_ptr(entries[i]);
+                if (acpi_check_hpet_header(h)) return;
+            }
+        }
+    }
+
+    vga_puts("[ACPI] HPET table: not enumerated in RSDT/XSDT\n");
+}
+
 /* ACPI初始化 */
 int acpi_init(void)
 {
     vga_puts("[ACPI] Initializing ACPI...\n");
-    return acpi_parse_madt();
+    int rc = acpi_parse_madt();
+    acpi_detect_hpet();
+    return rc;
 }
 
 /* 仅解析 MADT 中断源覆盖，填充 acpi_isa_gsi。

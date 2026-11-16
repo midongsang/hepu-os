@@ -154,6 +154,16 @@ void arp64_handle(const uint8_t *packet, int length)
     /* 添加发送者到ARP表 (spa 是网络序, 转主机序) */
     arp64_add(arp_htonl(arp->spa), arp->sha);
 
+    /* 解析结果取证: 学到的 SPA -> SHA 映射 */
+    vga_puts("[ARP64] resolved ");
+    vga_put_hex(arp_htonl(arp->spa));
+    vga_puts(" -> ");
+    for (int m = 0; m < 6; m++) {
+        vga_put_hex(arp->sha[m]);
+        if (m < 5) vga_puts(":");
+    }
+    vga_puts("\n");
+
     /* 如果是请求且目标是我，发送应答 */
     if (arp->oper == 0x0100 && arp->tpa == arp_htonl(my_ip)) {
         uint8_t frame[42];

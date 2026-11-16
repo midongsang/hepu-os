@@ -40,6 +40,25 @@ static uint16_t icmp_checksum(const uint8_t *data, int length)
 }
 
 static uint16_t htons16(uint16_t v) { return (v >> 8) | (v << 8); }
+static uint32_t htonl32(uint32_t v) {
+    return ((v & 0xFF) << 24) | ((v & 0xFF00) << 8) |
+           ((v & 0xFF0000) >> 8) | ((v & 0xFF000000) >> 24);
+}
+
+/* 主机序 IP → "a.b.c.d" */
+static void icmp_format_ip(uint32_t ip, char *out)
+{
+    uint32_t ip_net = htonl32(ip);
+    uint8_t *b = (uint8_t *)&ip_net;
+    int pos = 0;
+    for (int j = 0; j < 4; j++) {
+        if (b[j] >= 100) out[pos++] = '0' + b[j] / 100;
+        if (b[j] >= 10)  out[pos++] = '0' + (b[j] / 10) % 10;
+        out[pos++] = '0' + b[j] % 10;
+        if (j < 3) out[pos++] = '.';
+    }
+    out[pos] = 0;
+}
 
 static int icmp_initialized = 0;
 static uint16_t ping_id = 0x1234;
@@ -81,6 +100,7 @@ void icmp64_handle(const uint8_t *packet, int length, uint32_t src_ip)
 
     icmp_header_t *icmp = (icmp_header_t *)packet;
 
+    char ipstr[16];
     if (icmp->type == ICMP_TYPE_ECHO_REQUEST) {
         /* 收到ping请求，发送应答 */
         uint8_t reply[1500];
@@ -94,19 +114,21 @@ void icmp64_handle(const uint8_t *packet, int length, uint32_t src_ip)
 
         ip64_send(src_ip, 1, reply, length);
 
+        icmp_format_ip(src_ip, ipstr);
         vga_puts("[ICMP64] Ping reply sent to ");
-        /* 输出IP地址 */
-        char ipstr[16];
-        uint8_t *ip = (uint8_t*)&src_ip;
-        int pos = 0;
-        for (int i = 0; i < 4; i++) {
-            if (ip[i] >= 100) { ipstr[pos++] = '0' + ip[i]/100; }
-            if (ip[i] >= 10) { ipstr[pos++] = '0' + (ip[i]/10)%10; }
-            ipstr[pos++] = '0' + ip[i]%10;
-            if (i < 3) ipstr[pos++] = '.';
-        }
-        ipstr[pos] = 0;
         vga_puts(ipstr);
+        vga_puts("\n");
+    } else if (icmp->type == ICMP_TYPE_ECHO_REPLY) {
+        /* 收到我方 echo 请求的应答 —— 往返往返取证 */
+        uint16_t id = htons16(icmp->id);
+        uint16_t seq = htons16(icmp->seq);
+        icmp_format_ip(src_ip, ipstr);
+        vga_puts("[ICMP64] echo reply from ");
+        vga_puts(ipstr);
+        vga_puts(" id=");
+        vga_put_hex(id);
+        vga_puts(" seq=");
+        vga_put_hex(seq);
         vga_puts("\n");
     }
 }

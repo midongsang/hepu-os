@@ -28,7 +28,7 @@ typedef struct {
     uint8_t  vendor[0x100-0x60];
 } __attribute__((packed)) ahci_hba_t;
 
-/* AHCI端口寄存器 */
+/* AHCI端口寄存器（偏移对齐 AHCI 规范：PxCLB/FB 64-bit，PxTFD 为 32-bit） */
 typedef struct {
     uint64_t clb;
     uint64_t fb;
@@ -36,7 +36,7 @@ typedef struct {
     uint32_t ie;
     uint32_t cmd;
     uint32_t reserved1;
-    uint64_t tfd;
+    uint32_t tfd;
     uint32_t sig;
     uint32_t ssts;
     uint32_t sctl;
@@ -95,9 +95,15 @@ typedef struct {
     char model[41];
 } ahci_port_info_t;
 
+static int ahci64_exec_cmd(ahci_port_t *port, int port_num,
+                           uint8_t command, uint64_t lba,
+                           uint8_t *buffer, uint32_t count, int is_write);
+
 extern void vga_puts(const char *s);
+extern void vga_put_hex(uint64_t val);
 extern uint64_t pmm64_alloc_page(void);
 extern uint32_t pci_config_read32(uint8_t bus, uint8_t dev, uint8_t func, uint8_t offset);
+extern void pci_config_write32(uint8_t bus, uint8_t dev, uint8_t func, uint8_t offset, uint32_t val);
 
 static ahci_hba_t *ahci_hba = NULL;
 static ahci_port_info_t ahci_ports[AHCI_MAX_PORTS];
@@ -146,19 +152,24 @@ static int ahci_wait_cmd_complete(ahci_port_t *port, int slot, int timeout)
         uint32_t ci = ahci_readl(&port->ci);
         if (!(ci & (1 << slot))) return 0;
         uint32_t tfd = ahci_readl(&port->tfd);
-        if (tfd & 0x01) return -1;
+        /* TFD: bit0=ERR, bit5=DF(设备故障)，统一判错 */
+        if (tfd & (0x01 | 0x20)) return -1;
     }
     return -1;
 }
 
+/* PxCMD 位：bit0=ST, bit4=FRE(命令列表有效) */
+#define AHCI_CMD_ST  0x01
+#define AHCI_CMD_FRE 0x10
+
 static int ahci_stop_cmd_engine(ahci_port_t *port)
 {
     uint32_t cmd = ahci_readl(&port->cmd);
-    cmd &= ~0x01;
+    cmd &= ~AHCI_CMD_ST;
     ahci_writel(&port->cmd, cmd);
     int timeout = 100000;
     while (timeout-- > 0) {
-        if (!(ahci_readl(&port->cmd) & 0x8000)) return 0;
+        if (!(ahci_readl(&port->cmd) & AHCI_CMD_FRE)) return 0;
     }
     return -1;
 }
@@ -166,8 +177,30 @@ static int ahci_stop_cmd_engine(ahci_port_t *port)
 static int ahci_start_cmd_engine(ahci_port_t *port)
 {
     uint32_t cmd = ahci_readl(&port->cmd);
-    cmd |= 0x01;
+    cmd |= AHCI_CMD_ST | AHCI_CMD_FRE;
     ahci_writel(&port->cmd, cmd);
+    /* 等待 FRE 置位：命令列表真正可用后再下发命令 */
+    for (int i = 0; i < 100000; i++) {
+        if (ahci_readl(&port->cmd) & AHCI_CMD_FRE) return 0;
+    }
+    return -1;
+}
+
+/* IDENTIFY DEVICE：读 512B 识别扇区，填充容量（LBA48 优先，回落 LBA28） */
+static int ahci64_identify_port(ahci_port_t *port, int port_num, ahci_port_info_t *info)
+{
+    static uint16_t ident[256];
+    for (int i = 0; i < 256; i++) ident[i] = 0;
+    if (ahci64_exec_cmd(port, port_num, 0xEC, 0, (uint8_t *)ident, 1, 0) != 0)
+        return -1;
+
+    uint32_t lba28 = (uint32_t)ident[60] | ((uint32_t)ident[61] << 16);
+    uint64_t lba48 = 0;
+    if (ident[83] & 0x400) {
+        lba48 = (uint64_t)ident[100] | ((uint64_t)ident[101] << 16) |
+                ((uint64_t)ident[102] << 32) | ((uint64_t)ident[103] << 48);
+    }
+    info->total_sectors = lba48 ? lba48 : lba28;
     return 0;
 }
 
@@ -229,6 +262,14 @@ int ahci64_port_init(ahci_port_t *port, int port_num)
     vga_puts(numstr);
     vga_puts(": ");
     vga_puts(ahci_ports[port_num].model);
+
+    /* IDENTIFY 填充容量；失败时 total_sectors 保持 0，disk_present 不计入 */
+    if (ahci64_identify_port(port, port_num, &ahci_ports[port_num]) != 0) {
+        vga_puts(" [identify FAIL]");
+    } else {
+        vga_puts(" sectors=");
+        vga_put_hex(ahci_ports[port_num].total_sectors);
+    }
     vga_puts("\n");
 
     return 0;
@@ -314,24 +355,32 @@ static int ahci64_exec_cmd(ahci_port_t *port, int port_num,
     ahci_memset(cmd_hdr, 0, sizeof(ahci_cmd_header_t));
     ahci_memset(cmd_tbl, 0, sizeof(ahci_cmd_table_t));
 
-    cmd_hdr->cfl = 5;
-    cmd_hdr->w = is_write ? 1 : 0;
+    /* 头部首字节：cfl=5(bit4:0)；bit6=W，1=写(HBA 从内存读数据写盘)。
+     * 直接写字节，避免位域 ABI 差异导致方向位丢失。 */
+    ((uint8_t *)cmd_hdr)[0] = 0x05 | (is_write ? 0x40 : 0);
     cmd_hdr->prdtl = 1;
     cmd_hdr->ctba = ahci_cmd_table_pages[port_num] + slot * 128;
 
+    /* H2D Register FIS (0x27) 按 SATA 规范排布：
+     * 3=feature 低, 4..6=LBA 低/中/高, 7=device, 8..10=LBA 24..47,
+     * 11=feature 高, 12/13=扇区计数, 14=ICC, 15=control */
     uint8_t *cfis = cmd_tbl->cfis;
     cfis[0] = 0x27;
     cfis[1] = 0x80;
     cfis[2] = command;
-    cfis[3] = (uint8_t)(lba & 0xFF);
-    cfis[4] = (uint8_t)((lba >> 8) & 0xFF);
-    cfis[5] = (uint8_t)((lba >> 16) & 0xFF);
-    cfis[6] = 0x40 | (uint8_t)((lba >> 24) & 0x0F);
-    cfis[7] = (uint8_t)((lba >> 32) & 0xFF);
-    cfis[8] = (uint8_t)((lba >> 40) & 0xFF);
-    cfis[9] = 0;
-    cfis[10] = (uint8_t)(count & 0xFF);
-    cfis[11] = (uint8_t)((count >> 8) & 0xFF);
+    cfis[3] = 0;                                   /* feature */
+    cfis[4] = (uint8_t)(lba & 0xFF);
+    cfis[5] = (uint8_t)((lba >> 8) & 0xFF);
+    cfis[6] = (uint8_t)((lba >> 16) & 0xFF);
+    cfis[7] = 0x40;                                /* device: LBA 模式 */
+    cfis[8] = (uint8_t)((lba >> 24) & 0xFF);
+    cfis[9] = (uint8_t)((lba >> 32) & 0xFF);
+    cfis[10] = (uint8_t)((lba >> 40) & 0xFF);
+    cfis[11] = 0;                                  /* feature 高 8 位 */
+    cfis[12] = (uint8_t)(count & 0xFF);            /* 扇区计数低 8 位 */
+    cfis[13] = (uint8_t)((count >> 8) & 0xFF);    /* 扇区计数高 8 位 */
+    cfis[14] = 0;                                  /* ICC */
+    cfis[15] = 0;                                  /* control */
 
     cmd_tbl->prdt[0].dba = (uint64_t)buffer;
     cmd_tbl->prdt[0].dbc = (count * 512) - 1;
@@ -342,7 +391,7 @@ static int ahci64_exec_cmd(ahci_port_t *port, int port_num,
 
     int result = ahci_wait_cmd_complete(port, slot, 1000000);
     uint32_t tfd = ahci_readl(&port->tfd);
-    if (tfd & 0x01) return -1;
+    if (tfd & (0x01 | 0x20)) return -1;
     return result;
 }
 
@@ -380,6 +429,51 @@ ahci_port_t *ahci64_get_first_port(void)
     return NULL;
 }
 
+/* 启动自检：每个已识别端口读 LBA0，并在末扇区做写-读回环，统计 mismatch 字节数。
+ * 缓冲为静态 .bss（低地址恒等映射，虚拟=物理，可直接作 DMA 地址）。 */
+static void ahci64_selftest(void)
+{
+    static uint8_t rd[512] __attribute__((aligned(16)));
+    static uint8_t wr[512] __attribute__((aligned(16)));
+
+    for (int i = 0; i < AHCI_MAX_PORTS; i++) {
+        if (!ahci_ports[i].present || ahci_ports[i].total_sectors == 0) continue;
+        ahci_port_t *port = ahci_ports[i].regs;
+
+        for (int k = 0; k < 512; k++) rd[k] = 0;
+        if (ahci64_read_sectors(port, 0, rd, 1) != 1) {
+            vga_puts("[AHCI64] selftest port "); vga_put_hex((uint64_t)i);
+            vga_puts(": read LBA0 FAIL\n");
+            continue;
+        }
+        vga_puts("[AHCI64] selftest port "); vga_put_hex((uint64_t)i);
+        vga_puts(" LBA0: ");
+        for (int k = 0; k < 8; k++) { vga_put_hex(rd[k]); vga_puts(" "); }
+        vga_puts(" sig="); vga_put_hex(rd[510]); vga_put_hex(rd[511]);
+        vga_puts("\n");
+
+        if (ahci_ports[i].total_sectors <= 1) continue;
+        uint64_t tlba = ahci_ports[i].total_sectors - 1;
+        for (int k = 0; k < 512; k++) wr[k] = (uint8_t)((k * 13u + 0x5Au) & 0xFF);
+        int wres = ahci64_write_sectors(port, tlba, wr, 1);
+        if (wres != 1) {
+            vga_puts("[AHCI64] selftest: write FAIL\n");
+            continue;
+        }
+        for (int k = 0; k < 512; k++) rd[k] = 0;
+        int rres = ahci64_read_sectors(port, tlba, rd, 1);
+        if (rres != 1) {
+            vga_puts("[AHCI64] selftest: readback FAIL\n");
+            continue;
+        }
+        int mismatch = 0;
+        for (int k = 0; k < 512; k++) if (rd[k] != wr[k]) mismatch++;
+        vga_puts("[AHCI64] selftest loopback lba="); vga_put_hex(tlba);
+        vga_puts(" mismatch="); vga_put_hex((uint64_t)mismatch);
+        vga_puts("\n");
+    }
+}
+
 void ahci64_init(void)
 {
     if (ahci_initialized) return;
@@ -401,9 +495,20 @@ void ahci64_init(void)
             uint8_t base_class = (class_code >> 24) & 0xFF;
             uint8_t sub_class = (class_code >> 16) & 0xFF;
             if (base_class == 0x01 && sub_class == 0x06) {
-                /* 找到AHCI控制器 */
-                uint32_t bar5 = pci_config_read32(0, dev, func, 0x24);
-                hba_phys = bar5 & ~0x0F;
+                /* 使能 Memory Space(bit1) + Bus Master(bit2)，否则 MMIO/ DMA 不通 */
+                uint32_t pcmd = pci_config_read32(0, dev, func, 0x04);
+                pcmd |= 0x07;
+                pci_config_write32(0, dev, func, 0x04, pcmd);
+
+                /* 扫描 BAR0..5，取第一个内存型(bit0=0)非零 BAR 作为 ABAR
+                 * （不再写死 BAR5；不同控制器 ABAR 落点可能不同） */
+                for (int bar_off = 0x10; bar_off <= 0x24; bar_off += 4) {
+                    uint32_t bar_val = pci_config_read32(0, dev, func, bar_off);
+                    if ((bar_val & 0x01) == 0 && (bar_val & ~0x0FU)) {
+                        hba_phys = bar_val & ~0x0FULL;
+                        break;
+                    }
+                }
                 vga_puts("[AHCI64] Found AHCI at PCI 0:");
                 char numstr[8];
                 int n = dev, i = 0;
@@ -459,6 +564,8 @@ void ahci64_init(void)
     } else {
         vga_puts("[AHCI64] No SATA devices found\n");
     }
+
+    ahci64_selftest();
 
     ahci_initialized = 1;
 }

@@ -620,6 +620,8 @@ void apic64_enable_for_ap(void)
 /* 校准结果：LAPIC 定时器在 DCR=16 分频下的实际计数频率（Hz），0=未校准。
    BSP 校准后 AP 核直接复用，无需各自再测。 */
 static uint32_t g_apic_timer_hz = 0;
+/* 校准基准来源：0=未校准 1=HPET 主计数器 2=PIT ch2 门控 3=PIT ch0 tick */
+static int g_calib_source = 0;
 
 /* 启动期校准：用 PIT channel 0 的软件 tick 测量 LAPIC 在 16 分频下的实际
  * 计数频率。替代历史硬编码 ICR=6250——旧魔数假设 100MHz 总线，QEMU 实测
@@ -656,16 +658,139 @@ static int apic64_calibrate_timer(void)
  */
 #define PIT_BASE_HZ 1193182ULL
 
+/* ---- HPET 自由主计数器（首选校准基准）-------------------------------------
+ * ACPI 枚举到 HPET 时（见 acpi.c），用其主计数器做时间基准：CFG_ENABLE 后计数器
+ * 按能力寄存器给出的周期（fs/tick）单调递增，纯 MMIO 轮询，既不依赖中断投递
+ * （启动早期 IOAPIC 重定向未必就绪），也不依赖 PIT ch2 的门控/回卷语义。
+ * 这里只读计数器做校准基准，不安装 HPET 周期定时器驱动。 */
+#define HPET_VBASE        0xF0002000UL
+#define HPET_ID           0x000
+#define HPET_CFG          0x010
+#define HPET_COUNTER      0x0F0
+#define HPET_CFG_ENABLE   0x1
+
+static int      g_hpet_mapped = 0;
+static uint64_t g_hpet_period_fs = 0;
+
+static uint32_t hpet_read32(uint64_t reg)
+{
+    return *(volatile uint32_t *)(uintptr_t)(HPET_VBASE + reg);
+}
+
+static void hpet_write32(uint64_t reg, uint32_t v)
+{
+    *(volatile uint32_t *)(uintptr_t)(HPET_VBASE + reg) = v;
+}
+
+static uint64_t hpet_read_counter(void)
+{
+    uint32_t lo = hpet_read32(HPET_COUNTER);
+    uint32_t hi = hpet_read32(HPET_COUNTER + 4);
+    return (uint64_t)lo | ((uint64_t)hi << 32);
+}
+
+static int hpet_calib_init(void)
+{
+    extern int acpi_hpet_present;
+    extern uint64_t acpi_hpet_base_phys;
+    if (!acpi_hpet_present || !acpi_hpet_base_phys) return -1;
+    if (!g_hpet_mapped) {
+        uint64_t pml4 = vmm64_get_pml4();
+        if (!pml4) return -1;
+        /* MMIO 标记 Uncacheable（PCD=bit4|PWT=bit3），与 APIC/IOAPIC 一致 */
+        if (vmm64_map_page(pml4, HPET_VBASE, acpi_hpet_base_phys,
+                           PAGE_PRESENT | PAGE_WRITABLE | (1 << 4) | (1 << 3)) != 0)
+            return -1;
+        g_hpet_mapped = 1;
+    }
+    /* HPET_ID 高 32 位 = 主计数器时钟周期（飞秒/tick） */
+    g_hpet_period_fs = (uint64_t)hpet_read32(HPET_ID + 4);
+    if (g_hpet_period_fs == 0 || g_hpet_period_fs > 1000000000ULL) return -1;
+    hpet_write32(HPET_CFG, hpet_read32(HPET_CFG) | HPET_CFG_ENABLE);
+    return 0;
+}
+
+/* 用 HPET 主计数器量出 APIC timer 在 window_ms 内的递减量，换算成 Hz。
+ * 返回 0 成功并写 *hz_out；-1 表示 HPET 不可用/计数器停滞/CCR 未递减/数值越界。 */
+static int apic64_calibrate_via_hpet(uint64_t window_ms, uint64_t *hz_out)
+{
+    if (hpet_calib_init() != 0) return -1;
+
+    /* LAPIC 定时器：一次性、最大初值、DCR=16；LVT 屏蔽但 CCR 照常递减 */
+    apic_write(APIC_TIMER_DCR, 0x3);
+    apic_write(APIC_LVT_TIMER, APIC_TIMER_VECTOR | 0x10000);
+    apic_write(APIC_TIMER_ICR, 0xFFFFFFFFu);
+
+    uint64_t c0 = hpet_read_counter();
+    uint32_t ccr_start = apic_read(APIC_TIMER_CCR);
+
+    /* 目标 tick 数：window_ms 毫秒换算成 fs（1ms = 1e12 fs），再除以每 tick 的 fs */
+    uint64_t target = window_ms * 1000000000000ULL / g_hpet_period_fs;
+    if (target < 16ULL) target = 16ULL;
+
+    uint64_t spin = 0, c1 = c0;
+    while (c1 - c0 < target) {
+        c1 = hpet_read_counter();
+        if (++spin > 4000000ULL) {
+            vga_puts("[APIC] hpet: counter stalled w=");
+            vga_put_hex(window_ms);
+            vga_puts("ms\n");
+            return -1;
+        }
+        __asm__ volatile("pause" ::: "memory");
+    }
+
+    uint32_t ccr_end = apic_read(APIC_TIMER_CCR);
+    uint32_t ticks = ccr_start - ccr_end;
+    if (ticks == 0) {
+        vga_puts("[APIC] hpet: CCR no-decay w=");
+        vga_put_hex(window_ms);
+        vga_puts("ms\n");
+        return -1;
+    }
+    uint64_t hpet_hz = 1000000000000000ULL / g_hpet_period_fs;
+    if (hpet_hz == 0) return -1;
+    /* hz = APIC ticks / HPET elapsed seconds = ticks * hpet_hz / hpet_delta。
+       不能先乘 1e15 再除：ticks*1e15 会溢出 64 位。 */
+    uint64_t hz = (uint64_t)ticks * hpet_hz / (c1 - c0);
+    if (hz < 500000ULL || hz > 100000000ULL) {
+        vga_puts("[APIC] hpet: hz-oob w=");
+        vga_put_hex(window_ms);
+        vga_puts(" tgt="); vga_put_hex(target);
+        vga_puts(" c0="); vga_put_hex(c0);
+        vga_puts(" c1="); vga_put_hex(c1);
+        vga_puts(" delta="); vga_put_hex(c1 - c0);
+        vga_puts(" ticks="); vga_put_hex(ticks);
+        vga_puts(" period="); vga_put_hex(g_hpet_period_fs);
+        vga_puts(" hz="); vga_put_hex(hz);
+        vga_puts("\n");
+        return -1;
+    }
+    *hz_out = hz;
+    return 0;
+}
+
+/* 读 PIT ch2 当前计数值（16 位）。
+ *
+ * 8254 规范：读计数器前必须先发「计数器锁存命令」冻结一份快照，再分低/高
+ * 字节读出。控制字格式：通道选择(bit7-6)=10b(ch2)，锁存(bit5-4)=00b → 0x80。
+ * 不发锁存时，低、高字节取自两个不同时刻的活计数器值；当计数恰好在两次读之间
+ * 跨 256 边界（如 0x0100→0x00FF），会拼出假 0x0000。one-shot 等待循环据此
+ * 提前退出，测量窗口被截短，APIC 递减量被高估数倍，校准必然落在合理区间外。 */
 static uint16_t pit2_read_count(void)
 {
     uint8_t lo, hi;
+    __asm__ volatile("outb %0, $0x43" :: "a"((uint8_t)0x80));
     __asm__ volatile("inb $0x42, %0" : "=a"(lo));
     __asm__ volatile("inb $0x42, %0" : "=a"(hi));
     return (uint16_t)((uint16_t)lo | ((uint16_t)hi << 8));
 }
 
 /* 用 ch2 门控量出 APIC timer 在 window_ms 内的递减量，换算成 Hz。
- * 返回 0 成功并写 *hz_out；-1 表示门控没动/计数为 0/数值不合理。 */
+ * 纯端口轮询，不依赖中断投递。注意 QEMU 2.4 的 mode0 模型：计数到 0 后按
+ * 16 位回卷到 0xFFFF（不停在 0），所以终止判定除了 count==0 还要识别
+ * 「计数上跳」（回卷）；只轮询 count==0 会在回卷后永久错过终止点。
+ * 返回 0 成功并写 *hz_out；-1 表示门控停滞/CCR 未递减/数值不合理。 */
 static int apic64_calibrate_via_pit2(uint64_t window_ms, uint64_t *hz_out)
 {
     uint64_t count = (PIT_BASE_HZ * window_ms) / 1000ULL;
@@ -674,21 +799,40 @@ static int apic64_calibrate_via_pit2(uint64_t window_ms, uint64_t *hz_out)
 
     uint8_t p61;
     __asm__ volatile("inb $0x61, %0" : "=a"(p61));
+    /* GATE2(bit0)=1 允许 ch2 计数；SPKR 数据(bit1)=0 不驱动喇叭 */
     __asm__ volatile("outb %0, $0x61" :: "a"((uint8_t)((p61 & (uint8_t)~0x02) | 0x01)));
 
+    /* 通道2, 先低后高, 模式0(一次计数到0停止), 二进制 */
     __asm__ volatile("outb %0, $0x43" :: "a"((uint8_t)0xB0));
     __asm__ volatile("outb %0, $0x42" :: "a"((uint8_t)(count & 0xFFULL)));
     __asm__ volatile("outb %0, $0x42" :: "a"((uint8_t)((count >> 8) & 0xFFULL)));
 
+    /* 等计数装入完成，避免读到装载前的残留值（几轮端口读即足够） */
+    for (int i = 0; i < 8; i++) {
+        uint8_t dummy;
+        __asm__ volatile("inb $0x61, %0" : "=a"(dummy));
+    }
+
+    /* LAPIC 定时器：一次性、最大初值、DCR=16；LVT 屏蔽但 CCR 照常递减 */
     apic_write(APIC_TIMER_DCR, 0x3);
     apic_write(APIC_LVT_TIMER, APIC_TIMER_VECTOR | 0x10000);
     apic_write(APIC_TIMER_ICR, 0xFFFFFFFFu);
     uint32_t ccr_start = apic_read(APIC_TIMER_CCR);
 
+    uint16_t prev = pit2_read_count();
     uint64_t spin = 0;
-    while (pit2_read_count() != 0) {
+    uint16_t cur;
+    for (;;) {
+        cur = pit2_read_count();
+        if (cur == 0 || cur > prev) break;   /* 到 0，或回卷上跳 = 终止计数 */
+        prev = cur;
         if (++spin > 4000000ULL) {
             __asm__ volatile("outb %0, $0x61" :: "a"(p61));
+            vga_puts("[APIC] pit2 gate stalled: window=");
+            vga_put_hex(window_ms);
+            vga_puts("ms spin=");
+            vga_put_hex(spin);
+            vga_puts("\n");
             return -1;
         }
         __asm__ volatile("pause" ::: "memory");
@@ -697,9 +841,25 @@ static int apic64_calibrate_via_pit2(uint64_t window_ms, uint64_t *hz_out)
 
     uint32_t ccr_end = apic_read(APIC_TIMER_CCR);
     uint32_t ticks = ccr_start - ccr_end;
-    if (ticks == 0) return -1;
+    if (ticks == 0) {
+        vga_puts("[APIC] pit2: CCR no-decay w=");
+        vga_put_hex(window_ms);
+        vga_puts(" cnt="); vga_put_hex(cur);
+        vga_puts(" ccr0="); vga_put_hex(ccr_start);
+        vga_puts(" ccr1="); vga_put_hex(ccr_end);
+        vga_puts("\n");
+        return -1;
+    }
     uint64_t hz = (uint64_t)ticks * 1000ULL / window_ms;
-    if (hz < 500000ULL || hz > 100000000ULL) return -1;
+    if (hz < 500000ULL || hz > 100000000ULL) {
+        vga_puts("[APIC] pit2: hz-oob w=");
+        vga_put_hex(window_ms);
+        vga_puts(" cnt="); vga_put_hex(cur);
+        vga_puts(" ticks="); vga_put_hex(ticks);
+        vga_puts(" hz="); vga_put_hex(hz);
+        vga_puts("\n");
+        return -1;
+    }
     *hz_out = hz;
     return 0;
 }
@@ -712,12 +872,29 @@ static int apic64_calibrate_timer_inner(void)
     apic_write(APIC_LVT_TIMER, APIC_TIMER_VECTOR | 0x10000);
     apic_write(APIC_TIMER_ICR, 0xFFFFFFFFu);
 
-    /* OBS-01: 优先用 ch2 门控（不依赖中断投递），成功即可靠；
-       下面基于 tick 的等待只是老路径的兜底。
-       两个不同长度的窗口各测一次：门控是线性的，两次结果应当一致，
-       偏差超过 20% 说明轮询读到的计数值不可信，宁可退回老路径也不
-       拿一个错频率去配置调度 tick（错了会让 tick 快/慢近一倍，
-       表现为时钟漂移和动画变快变慢）。 */
+    /* 基准优先级：HPET 自由计数器（纯 MMIO，不依赖中断与 PIT 门控）→
+       PIT ch2 门控（纯端口轮询）→ PIT ch0 软件 tick（依赖 IRQ0 投递，早期可能不稳）。
+       前两级各用两个不同长度窗口互校：基准是线性的，两次结果应当一致，
+       偏差超过 20% 说明轮询/读数不可信，宁可退回下一级也不拿错频率配置调度 tick。 */
+    {
+        uint64_t hz_a = 0, hz_b = 0;
+        if (apic64_calibrate_via_hpet(10ULL, &hz_a) == 0 &&
+            apic64_calibrate_via_hpet(30ULL, &hz_b) == 0) {
+            uint64_t lo = hz_a < hz_b ? hz_a : hz_b;
+            uint64_t hi = hz_a < hz_b ? hz_b : hz_a;
+            if (hi * 10ULL <= lo * 12ULL) {      /* 两次相差不超过 20% */
+                g_apic_timer_hz = (uint32_t)((hz_a + hz_b) / 2ULL);
+                g_calib_source = 1;
+                return 0;
+            }
+            vga_puts("[APIC] hpet calibration inconsistent: ");
+            vga_put_hex(hz_a);
+            vga_puts(" vs ");
+            vga_put_hex(hz_b);
+            vga_puts("\n");
+        }
+    }
+
     {
         uint64_t hz_a = 0, hz_b = 0;
         if (apic64_calibrate_via_pit2(5ULL, &hz_a) == 0 &&
@@ -726,6 +903,7 @@ static int apic64_calibrate_timer_inner(void)
             uint64_t hi = hz_a < hz_b ? hz_b : hz_a;
             if (hi * 10ULL <= lo * 12ULL) {      /* 两次相差不超过 20% */
                 g_apic_timer_hz = (uint32_t)((hz_a + hz_b) / 2ULL);
+                g_calib_source = 2;
                 return 0;
             }
             vga_puts("[APIC] ch2 calibration inconsistent: ");
@@ -779,6 +957,7 @@ static int apic64_calibrate_timer_inner(void)
     if (hz < 500000ULL || hz > 100000000ULL) return -1;
 
     g_apic_timer_hz = (uint32_t)hz;
+    g_calib_source = 3;
     return 0;
 }
 
@@ -802,17 +981,13 @@ void apic64_init_timer(void)
         apic64_calibrate_timer();
     }
     if (g_apic_timer_hz == 0) {
-        /* V0.58.4: 校准失败回退值从 6250 改为 35000（同实测量级）。
-           6250 对应 100MHz 总线假设，QEMU 实测总线约 400MHz，回退后 tick
-           会快 5 倍多；校准成功时 ICR≈35192（tick_hz 35MHz / 1000Hz）。
-
-           重要：改这个值并没有修好校准失败的启动。已用 20 次回归验证，
-           失败样本行为完全不变（仍 calfail=2、clone FAIL）。这里只是把
-           回退档位调到与真实量级一致，避免再叠加一个额外的频率错误，
-           不代表问题闭环。真正的根因（PIT/APIC timer 中断在部分启动里
-           完全不投递、连用户态都收不到）尚未定位，见
-           FIXES_0_58_0.md §1.99。 */
-        vga_puts("[APIC] WARN: timer calibration failed, fallback ICR=35000\n");
+        /* 降级路径（可观测告警，不是静默兜底）：触发条件 = HPET 主计数器、
+           ch2 门控两次窗口、PIT ch0 tick 三级基准全部被拒（计数器停滞/CCR
+           未递减/hz 越界，或 tick 在有界自旋内没前进）。此时无法拿到真实总线
+           频率，退回与实测量级相同的 ICR=35000（≈35MHz/1000Hz），避免再叠加
+           一个数量级错误；启动到桌面就绪这段 tick 频率可能不准，桌面就绪后由
+           apic64_timer_recalibrate() 补一次精确校准。正常启动不应走到这里。 */
+        vga_puts("[APIC] WARN: timer calibration failed (HPET/ch2/tick all idle), fallback ICR=35000\n");
         icr = 35000;
     } else {
         icr = g_apic_timer_hz / 1000;  /* 目标 1kHz */
@@ -821,6 +996,9 @@ void apic64_init_timer(void)
         vga_put_hex(g_apic_timer_hz);
         vga_puts(" ICR=");
         vga_put_hex(icr);
+        vga_puts(" src=");
+        vga_puts(g_calib_source == 1 ? "HPET" :
+                 g_calib_source == 2 ? "ch2" : "tick");
         vga_puts("\n");
     }
 
@@ -831,7 +1009,7 @@ void apic64_init_timer(void)
     apic_write(APIC_TIMER_ICR, icr);
 }
 
-/*/* V0.57.0: 启动期校准是否失败过(为 0 说明还没拿到真实频率, 值得在桌面就绪后补一次)。 */
+/* V0.57.0: 启动期校准是否失败过(为 0 说明还没拿到真实频率, 值得在桌面就绪后补一次)。 */
 int apic64_timer_needs_recal(void) { return g_apic_timer_hz == 0; }
 
 /* V0.57.0: 运行期重校准。返回 0 成功并更新 ICR; 失败则保持当前 ICR 不动,

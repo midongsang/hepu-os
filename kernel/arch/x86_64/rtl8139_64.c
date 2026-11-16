@@ -301,6 +301,13 @@ void rtl8139_get_mac(uint8_t *mac)
     memcpy(mac, rtl_mac, 6);
 }
 
+/* HAL ops 表用 int 返回型包装 */
+int rtl8139_get_mac_i(uint8_t *mac)
+{
+    rtl8139_get_mac(mac);
+    return 0;
+}
+
 /* 获取统计信息 */
 void rtl8139_get_stats(uint32_t *tx, uint32_t *rx)
 {

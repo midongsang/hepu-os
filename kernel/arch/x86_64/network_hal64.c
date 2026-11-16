@@ -12,7 +12,8 @@ extern void vga_puts(const char *str);
 
 /* 网络设备类型 */
 typedef enum {
-    NET_DEV_RTL8139 = 0,
+    NET_DEV_NONE = 0,
+    NET_DEV_RTL8139,
     NET_DEV_E1000,
     NET_DEV_VIRTIO,
     NET_DEV_TYPE_MAX
@@ -67,26 +68,67 @@ typedef struct {
 
 static net_manager_t net_mgr;
 
-/* 外部网卡驱动函数（RTL8139） */
-extern int eth64_init(void);
-extern int eth64_send(const uint8_t *data, uint32_t length);
-extern int eth64_recv(uint8_t *buffer, uint32_t max_length);
-extern int eth64_get_mac(uint8_t *mac);
-extern int eth64_set_ip(uint32_t ip, uint32_t netmask, uint32_t gateway);
+/* 外部网卡驱动函数 */
 extern void net64_poll(void);
+
+/* RTL8139 原始驱动入口 */
+extern int  rtl8139_available(void);
+extern int  rtl8139_send(const uint8_t *data, uint32_t length);
+extern int  rtl8139_recv(uint8_t *buffer, uint32_t max_length);
+extern int  rtl8139_get_mac_i(uint8_t *mac);
+
+/* E1000 原始驱动入口 */
+extern int  e1000_available(void);
+extern int  e1000_send(const uint8_t *data, uint32_t length);
+extern int  e1000_recv(uint8_t *buffer, uint32_t max_length);
+extern int  e1000_get_mac(uint8_t *mac);
+
+/* PCI 配置空间读取（pci64.c 既有导出，本文件不改 pci64.c） */
+extern uint32_t pci_config_read32(int bus, int dev, int func, int off);
 
 /* RTL8139操作表 */
 static net_dev_ops_t rtl8139_ops = {
-    .init = eth64_init,
-    .send = eth64_send,
-    .recv = eth64_recv,
-    .get_mac = eth64_get_mac,
-    .set_ip = eth64_set_ip,
-    .get_state = NULL,  /* TODO: 实现状态查询 */
+    .init = NULL,
+    .send = rtl8139_send,
+    .recv = rtl8139_recv,
+    .get_mac = rtl8139_get_mac_i,
+    .set_ip = NULL,
+    .get_state = NULL,
     .poll = net64_poll,
 };
 
-/* 初始化网络HAL */
+/* E1000操作表 */
+static net_dev_ops_t e1000_ops = {
+    .init = NULL,
+    .send = e1000_send,
+    .recv = e1000_recv,
+    .get_mac = e1000_get_mac,
+    .set_ip = NULL,
+    .get_state = NULL,
+    .poll = net64_poll,
+};
+
+/* 按 Vendor/Device ID 在 PCI 配置空间扫描网卡是否在位 */
+static int hal_pci_match(uint16_t vendor, const uint16_t *devs, int ndev)
+{
+    for (int bus = 0; bus < 8; bus++) {
+        for (int dev = 0; dev < 32; dev++) {
+            for (int func = 0; func < 8; func++) {
+                uint32_t w = pci_config_read32(bus, dev, func, 0);
+                if (w == 0xFFFFFFFFu) continue;
+                if ((w & 0xFFFFu) != vendor) continue;
+                uint16_t did = (uint16_t)((w >> 16) & 0xFFFFu);
+                for (int k = 0; k < ndev; k++) {
+                    if (devs[k] == did) return 1;
+                }
+            }
+        }
+    }
+    return 0;
+}
+
+/* 初始化网络HAL —— 按 PCI 探测结果绑定真实在位的网卡驱动；
+ * 总线里既没有 E1000 也没有 RTL8139 时，明确上报 no NIC，不伪造 eth0。 */
 int net_hal_init(void)
 {
     vga_puts("[NET_HAL] Initializing network HAL...\n");
@@ -95,30 +137,43 @@ int net_hal_init(void)
     net_mgr.initialized = 1;
     net_mgr.default_device = 0;
 
-    /* 注册RTL8139网卡 */
+    static const uint16_t e1000_ids[] = { 0x100E, 0x100F, 0x1000 };
+    static const uint16_t rtl_ids[]    = { 0x8139 };
+
+    int e1000_pci = hal_pci_match(0x8086, e1000_ids, 3);
+    int rtl_pci   = hal_pci_match(0x10EC, rtl_ids, 1);
+
     net_device_t *dev = &net_mgr.devices[0];
-    dev->name = "eth0";
-    dev->type = NET_DEV_RTL8139;
-    dev->state = NET_DEV_UNINITIALIZED;
-    dev->ops = &rtl8139_ops;
     dev->tx_packets = 0;
     dev->rx_packets = 0;
     dev->tx_bytes = 0;
     dev->rx_bytes = 0;
 
-    /* 初始化RTL8139 */
-    if (dev->ops->init) {
-        if (dev->ops->init() == 0) {
-            dev->state = NET_DEV_INITIALIZED;
-            vga_puts("[NET_HAL] RTL8139 initialized (eth0)\n");
-        } else {
-            dev->state = NET_DEV_ERROR;
-            vga_puts("[NET_HAL] RTL8139 init failed\n");
-        }
+    if (e1000_pci && e1000_available()) {
+        dev->name = "eth0";
+        dev->type = NET_DEV_E1000;
+        dev->state = NET_DEV_INITIALIZED;
+        dev->ops = &e1000_ops;
+        net_mgr.device_count = 1;
+        vga_puts("[NET_HAL] E1000 initialized (eth0)\n");
+    } else if (rtl_pci && rtl8139_available()) {
+        dev->name = "eth0";
+        dev->type = NET_DEV_RTL8139;
+        dev->state = NET_DEV_INITIALIZED;
+        dev->ops = &rtl8139_ops;
+        net_mgr.device_count = 1;
+        vga_puts("[NET_HAL] RTL8139 initialized (eth0)\n");
+    } else {
+        dev->type = NET_DEV_NONE;
+        dev->state = NET_DEV_ERROR;
+        dev->ops = NULL;
+        net_mgr.device_count = 0;
+        vga_puts("[NET_HAL] no NIC found, network HAL idle\n");
     }
 
-    net_mgr.device_count = 1;
-    vga_puts("[NET_HAL] Network HAL initialized: 1 device\n");
+    if (net_mgr.device_count > 0) {
+        vga_puts("[NET_HAL] Network HAL initialized: 1 device\n");
+    }
     return 0;
 }
 

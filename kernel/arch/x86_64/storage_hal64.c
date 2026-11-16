@@ -98,6 +98,13 @@ int storage_hal_raw_write(uint32_t lba, uint8_t count, const uint8_t *buffer)
         return usb_storage_write_sectors(lba, count, buffer);
     }
 
+    /* 与读路径对称：有 AHCI 盘时写也走 AHCI，否则 SATA rootfs 写回退到 IDE */
+    {
+        extern int ahci64_disk_present(void);
+        extern int ahci64_write_disk(uint32_t, uint8_t, const uint8_t *);
+        if (ahci64_disk_present()) return ahci64_write_disk(lba, count, buffer);
+    }
+
     /* 通过驱动框架调用 */
     if (storage_dev.driver_id >= 0) {
         drv_desc_t *drv = drv_get(storage_dev.driver_id);

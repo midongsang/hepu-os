@@ -23,6 +23,29 @@ extern void ahci64_init(void);
 extern void ac97_init(void);
 extern int  usb64_init(void);   /* V0.13.9: USB UHCI 主机控制器 */
 
+/* PCI 配置空间读取（pci64.c 既有导出） */
+extern uint32_t pci_config_read32(int bus, int dev, int func, int off);
+extern void vga_puts(const char *s);
+
+/* 按 Vendor/Device ID 判断网卡是否在 PCI 总线上在位 */
+static int drv_pci_match(uint16_t vendor, const uint16_t *devs, int ndev)
+{
+    for (int bus = 0; bus < 8; bus++) {
+        for (int dev = 0; dev < 32; dev++) {
+            for (int func = 0; func < 8; func++) {
+                uint32_t w = pci_config_read32(bus, dev, func, 0);
+                if (w == 0xFFFFFFFFu) continue;
+                if ((w & 0xFFFFu) != vendor) continue;
+                uint16_t did = (uint16_t)((w >> 16) & 0xFFFFu);
+                for (int k = 0; k < ndev; k++) {
+                    if (devs[k] == did) return 1;
+                }
+            }
+        }
+    }
+    return 0;
+}
+
 /* IDE驱动包装函数（匹配驱动框架签名） */
 static int ide_drv_read(void *private, uint64_t lba, void *buffer, uint32_t size) {
     (void)private;
@@ -119,12 +142,24 @@ static drv_desc_t pci_drv_desc = {
     .id = -1
 };
 
-/* RTL8139驱动描述符 */
+/* RTL8139驱动描述符（仅在 PCI 总线上真实在位时注册） */
 static drv_desc_t rtl8139_drv_desc = {
     .name = "RTL8139",
     .category = DRV_CATEGORY_NETWORK,
     .chipset = "Realtek RTL8139",
     .description = "Fast Ethernet controller",
+    .ops = {0},
+    .private_data = 0,
+    .state = DRV_STATE_UNLOADED,
+    .id = -1
+};
+
+/* E1000 驱动描述符（82540EM/82545EM，仅在 PCI 总线上真实在位时注册） */
+static drv_desc_t e1000_drv_desc = {
+    .name = "E1000",
+    .category = DRV_CATEGORY_NETWORK,
+    .chipset = "Intel 82540EM",
+    .description = "Gigabit Ethernet controller",
     .ops = {0},
     .private_data = 0,
     .state = DRV_STATE_UNLOADED,
@@ -168,7 +203,25 @@ void drv_register_all64(void)
     kbd_drv_desc.id = drv_register(&kbd_drv_desc);
     mouse_drv_desc.id = drv_register(&mouse_drv_desc);
     pci_drv_desc.id = drv_register(&pci_drv_desc);
-    rtl8139_drv_desc.id = drv_register(&rtl8139_drv_desc);
+
+    /* 网络驱动：只登记 PCI 总线上真实在位的网卡。
+     * 槽位顺序保持在 PCI 与 AHCI 之间（原网络驱动 ID=6），有网卡时编号不漂移；
+     * 两种网卡都不在位则跳过网络条目，不向注册表塞一个不存在的设备。 */
+    static const uint16_t e1000_ids[] = { 0x100E, 0x100F, 0x1000 };
+    static const uint16_t rtl_ids[]    = { 0x8139 };
+    drv_desc_t *net_desc = 0;
+    if (drv_pci_match(0x8086, e1000_ids, 3)) {
+        net_desc = &e1000_drv_desc;
+    } else if (drv_pci_match(0x10EC, rtl_ids, 1)) {
+        net_desc = &rtl8139_drv_desc;
+    }
+    if (net_desc) {
+        net_desc->id = drv_register(net_desc);
+        net_desc->state = DRV_STATE_ACTIVE;
+    } else {
+        vga_puts("[DRV] No NIC present, network driver not registered\n");
+    }
+
     ahci_drv_desc.id = drv_register(&ahci_drv_desc);
     usb_drv_desc.id = drv_register(&usb_drv_desc);
     ac97_init();   /* P7-3: AC'97 声卡 (QEMU -soundhw ac97) */
@@ -180,7 +233,6 @@ void drv_register_all64(void)
     kbd_drv_desc.state = DRV_STATE_ACTIVE;
     mouse_drv_desc.state = DRV_STATE_ACTIVE;
     pci_drv_desc.state = DRV_STATE_ACTIVE;
-    rtl8139_drv_desc.state = DRV_STATE_ACTIVE;
     ahci_drv_desc.state = DRV_STATE_ACTIVE;
     usb_drv_desc.state = DRV_STATE_ACTIVE;
 }

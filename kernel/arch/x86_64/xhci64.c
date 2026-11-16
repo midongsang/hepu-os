@@ -227,7 +227,12 @@ int xhci_ctrl_ok = 0;
 
 extern void vga_puts(const char *s);
 extern void vga_put_hex(uint64_t v);
-extern uint32_t pci_find_class_bar0(uint8_t base, uint8_t sub, uint8_t prog);
+/* 新 PCI 枚举 API (64 位 BAR 安全); 旧 pci_find_class_bar0 保留给 EHCI/UHCI 路径 */
+typedef struct pci64_dev_t pci64_dev_t;
+extern const pci64_dev_t *pci64_find_by_class(uint8_t base, uint8_t sub, uint8_t prog);
+extern uint64_t pci64_bar_addr(const pci64_dev_t *d, int idx);
+extern uint32_t pci_config_read32(uint8_t bus, uint8_t dev, uint8_t func, uint8_t off);
+extern void pci_config_write32(uint8_t bus, uint8_t dev, uint8_t func, uint8_t off, uint32_t val);
 extern void *usb64_dma_alloc(uint32_t size);
 
 static inline uint32_t xhci_read32(uint32_t off) { return xhci_op[off / 4]; }
@@ -863,12 +868,32 @@ int xhci64_init(void)
 {
     if (xhci_initialized) return 0;
 
-    uint32_t bar0 = pci_find_class_bar0(0x0C, 0x03, 0x30);
-    if (!bar0) {
+    const pci64_dev_t *pdev = pci64_find_by_class(0x0C, 0x03, 0x30);
+    if (!pdev) {
         vga_puts("[XHCI] Controller not found\n");
         return -1;
     }
-    xhci_mmio_phys = bar0 & 0xFFFFFFF0;
+    uint64_t bar0 = pci64_bar_addr(pdev, 0);
+    if (!bar0) {
+        vga_puts("[XHCI] BAR0 empty\n");
+        return -1;
+    }
+    xhci_mmio_phys = bar0 & ~0xFULL;
+
+    /* 使能 Memory Space + Bus Master (class 路径旧代码从未写命令寄存器) */
+    {
+        extern uint8_t pci64_bus(const pci64_dev_t *d);
+        extern uint8_t pci64_dev(const pci64_dev_t *d);
+        extern uint8_t pci64_func(const pci64_dev_t *d);
+        uint8_t tbus = pci64_bus(pdev), tdev = pci64_dev(pdev), tfunc = pci64_func(pdev);
+        uint32_t cmd = pci_config_read32(tbus, tdev, tfunc, 0x04);
+        cmd |= 0x07;  /* I/O + Memory + Bus Master */
+        pci_config_write32(tbus, tdev, tfunc, 0x04, cmd);
+        vga_puts("[XHCI] at bus="); vga_put_hex(tbus);
+        vga_puts(" dev="); vga_put_hex(tdev);
+        vga_puts(" func="); vga_put_hex(tfunc);
+        vga_puts("\n");
+    }
 
     extern int vmm64_map_page(uint64_t pml4_addr, uint64_t virt, uint64_t phys, uint64_t flags);
     extern uint64_t vmm64_get_pml4(void);
