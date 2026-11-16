@@ -231,12 +231,45 @@ static void vbe_putpixel(uint32_t x, uint32_t y, gfx_color_t color)
     }
 }
 
+/* P1-1: 矩形填充按行批量。
+ *
+ * 原来是逐像素调 vbe_putpixel —— 每次调用都要过一遍边界判断和 bpp 分支。
+ * 1920x1080 整屏填充 = 2,073,600 次函数调用，这是 32 位桌面刷新最贵的一笔，
+ * 也让"多一次 8.3MB 的 present 拷贝"显得更吃亏。
+ *
+ * 32bpp 下每行就是 w 个 uint32，用 rep stosl 一次填完：整屏从 207 万次调用
+ * 降到 1080 次行填充。24/16bpp 保留原路径 —— 那两个色深不是热点，改成
+ * 逐字节/逐字填充反而容易在边界上出错。
+ *
+ * 顺带补了原实现缺的裁剪：原来只有 "i < vbe_width" 作为循环条件，x 超出屏幕
+ * 时会空转 w 次；现在先把 w/h 裁到屏幕内，再填。
+ *
+ * 注意 color 不做 alpha 补全：vbe_putpixel 在 32bpp 下也是直接写 color，
+ * 这里必须保持一致，否则同一个颜色经两条路径画出来会不同。 */
 static void vbe_fill_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h, gfx_color_t color)
 {
-    if (!vbe_framebuffer) return;
+    if (!vbe_framebuffer || w == 0 || h == 0) return;
+    if (x >= vbe_width || y >= vbe_height) return;
 
-    for (uint32_t j = y; j < y + h && j < vbe_height; j++) {
-        for (uint32_t i = x; i < x + w && i < vbe_width; i++) {
+    if (x + w > vbe_width)  w = vbe_width - x;
+    if (y + h > vbe_height) h = vbe_height - y;
+
+    if (vbe_bpp == 32) {
+        uint32_t *base = (uint32_t *)vbe_framebuffer;
+        uint32_t stride = vbe_pitch / 4;
+        for (uint32_t j = 0; j < h; j++) {
+            uint32_t *row = base + (uint32_t)(y + j) * stride + x;
+            uint32_t n = w;
+            __asm__ volatile("cld; rep stosl"
+                             : "+D"(row), "+c"(n)
+                             : "a"((uint32_t)color)
+                             : "memory");
+        }
+        return;
+    }
+
+    for (uint32_t j = y; j < y + h; j++) {
+        for (uint32_t i = x; i < x + w; i++) {
             vbe_putpixel(i, j, color);
         }
     }
