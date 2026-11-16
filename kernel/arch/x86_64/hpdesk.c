@@ -1521,14 +1521,148 @@ void hs_panel_init(hs_panel_t *panel, hs_panel_pos_t pos, int height)
     panel->widget_count = 0;
 }
 
+/* ---------- 面板毛玻璃 (v1: 背景取自壁纸层) ----------
+ * 渲染顺序是 壁纸 -> 面板 -> 窗口 -> 合成, 所以面板绘制时 back buffer 里只有
+ * 壁纸 —— 这正是毛玻璃该透出的东西(顶栏下方是桌面背景, 不是窗口)。
+ *
+ * 背景从 framebuffer 取, 不从 surface 取: 壁纸是直写 framebuffer 的, surface 里
+ * 此时还没有壁纸, 在 surface 里采样只会得到一块黑。
+ *
+ * 模糊用分离式两趟(水平一趟 + 垂直一趟), 滑窗实现, 复杂度 O(像素):
+ * 逐像素邻域平均是 O(像素 x r^2), 1920x40 + r=10 就是 1.6 亿次读, 每帧都算
+ * 会把启动和重绘都拖垮(hpdesk 自己在阴影那段注释里已经否掉了这个写法)。
+ *
+ * 结果按 (w,h) 缓存, 壁纸/分辨率不变就不重算 —— 面板每帧重绘, 但背景每帧不变,
+ * 只有贴图成本。 */
+#define PGLASS_RADIUS 10
+#define PGLASS_TINT_A 200     /* 面板底色覆盖不透明度, 留 55/255 给壁纸透出 */
+static uint32_t *g_pglass_buf;
+static int g_pglass_w, g_pglass_h;
+static int g_pglass_dirty = 1;
+
+static void hs_panel_glass_invalidate(void) { g_pglass_dirty = 1; }
+
+static int hs_panel_glass_build(int w, int h)
+{
+    if (w <= 0 || h <= 0 || w > 4096 || h > 256) return 0;
+    if (hs_get_framebuffer() == 0) return 0;
+
+    extern void *kmalloc(uint64_t size);
+    extern void kfree(void *p);
+
+    if (!g_pglass_buf || g_pglass_w != w || g_pglass_h != h) {
+        if (g_pglass_buf) kfree(g_pglass_buf);
+        g_pglass_buf = (uint32_t *)kmalloc((uint64_t)w * h * 4);
+        if (!g_pglass_buf) { g_pglass_w = g_pglass_h = 0; return 0; }
+        g_pglass_w = w; g_pglass_h = h;
+    }
+
+    uint32_t *fb  = (uint32_t *)hs_get_framebuffer();
+    uint32_t *buf = g_pglass_buf;
+
+    /* 拷贝背景块 */
+    for (int py = 0; py < h; py++)
+        for (int px = 0; px < w; px++)
+            buf[py * w + px] = fb[py * w + px];
+
+    /* 水平一趟。读写必须分离: 写回同一行会让后面滑窗读到已经模糊过的像素,
+     * 结果是一列列的拖影。用一行宽度的临时缓冲承接。 */
+    {
+        uint32_t *tmp = (uint32_t *)kmalloc((uint64_t)w * 4);
+        if (!tmp) return 0;
+        for (int py = 0; py < h; py++) {
+            uint32_t *row = buf + py * w;
+            int rr = 0, gg = 0, bb = 0, n = 0;
+            for (int k = -PGLASS_RADIUS; k <= PGLASS_RADIUS; k++) {
+                int sx = k < 0 ? 0 : (k >= w ? w - 1 : k);
+                uint32_t c = row[sx];
+                rr += (c >> 16) & 0xFF; gg += (c >> 8) & 0xFF; bb += c & 0xFF; n++;
+            }
+            for (int px = 0; px < w; px++) {
+                tmp[px] = (uint32_t)(((rr / n) << 16) | ((gg / n) << 8) | (bb / n));
+                int sxo = px - PGLASS_RADIUS;   if (sxo < 0) sxo = 0; else if (sxo >= w) sxo = w - 1;
+                int sxi = px + PGLASS_RADIUS + 1; if (sxi < 0) sxi = 0; else if (sxi >= w) sxi = w - 1;
+                uint32_t co = row[sxo], ci = row[sxi];
+                rr += (int)((ci >> 16) & 0xFF) - (int)((co >> 16) & 0xFF);
+                gg += (int)((ci >> 8)  & 0xFF) - (int)((co >> 8)  & 0xFF);
+                bb += (int)(ci & 0xFF)         - (int)(co & 0xFF);
+            }
+            for (int px = 0; px < w; px++) row[px] = tmp[px];
+        }
+        kfree(tmp);
+    }
+
+    /* 垂直一趟。列方向没有连续临时缓冲可用(列不连续), 直接用 h 长的临时列。 */
+    {
+        uint32_t *tmp = (uint32_t *)kmalloc((uint64_t)h * 4);
+        if (!tmp) return 0;
+        for (int px = 0; px < w; px++) {
+            int rr = 0, gg = 0, bb = 0, n = 0;
+            for (int k = -PGLASS_RADIUS; k <= PGLASS_RADIUS; k++) {
+                int sy = k < 0 ? 0 : (k >= h ? h - 1 : k);
+                uint32_t c = buf[sy * w + px];
+                rr += (c >> 16) & 0xFF; gg += (c >> 8) & 0xFF; bb += c & 0xFF; n++;
+            }
+            for (int py = 0; py < h; py++) {
+                tmp[py] = (uint32_t)(((rr / n) << 16) | ((gg / n) << 8) | (bb / n));
+                int syo = py - PGLASS_RADIUS;   if (syo < 0) syo = 0; else if (syo >= h) syo = h - 1;
+                int syi = py + PGLASS_RADIUS + 1; if (syi < 0) syi = 0; else if (syi >= h) syi = h - 1;
+                uint32_t co = buf[syo * w + px], ci = buf[syi * w + px];
+                rr += (int)((ci >> 16) & 0xFF) - (int)((co >> 16) & 0xFF);
+                gg += (int)((ci >> 8)  & 0xFF) - (int)((co >> 8)  & 0xFF);
+                bb += (int)(ci & 0xFF)         - (int)(co & 0xFF);
+            }
+            for (int py = 0; py < h; py++) buf[py * w + px] = tmp[py];
+        }
+        kfree(tmp);
+    }
+
+    g_pglass_dirty = 0;
+    return 1;
+}
+
+/* 把模糊底板贴上屏, 并把面板底色按 alpha 混进去。
+ * alpha=200 意味着面板底色仍占主导(用户此前定下的 224 半透明观感), 模糊只在
+ * 剩下的 55/255 里透出来 —— 这也是为什么要真模糊: 55/255 的透出量在小图上
+ * 看不出来, 但在 1920 宽的顶栏上是一整条, 纯色贴上去等于没效果。 */
+static void hs_panel_glass_blit(int x, int y, int w, int h, uint32_t tint, int alpha)
+{
+    if (!g_pglass_buf || g_pglass_w != w || g_pglass_h != h) {
+        hs_fill_rect(x, y, w, h, tint);
+        return;
+    }
+    int tr = (tint >> 16) & 0xFF, tg = (tint >> 8) & 0xFF, tb = tint & 0xFF;
+    for (int py = 0; py < h; py++) {
+        uint32_t *src = g_pglass_buf + py * w;
+        for (int px = 0; px < w; px++) {
+            uint32_t c = src[px];
+            int r = (c >> 16) & 0xFF, g = (c >> 8) & 0xFF, b = c & 0xFF;
+            r = (r * (255 - alpha) + tr * alpha) / 255;
+            g = (g * (255 - alpha) + tg * alpha) / 255;
+            b = (b * (255 - alpha) + tb * alpha) / 255;
+            gfx64_put_pixel(x + px, y + py, (uint32_t)((r << 16) | (g << 8) | b));
+        }
+    }
+}
+
 void hs_panel_render(hs_panel_t *panel)
 {
     int y = (panel->position == HS_PANEL_TOP) ? 0 :
             g_shell.screen_height - panel->height;
 
-    /* 面板背景 */
-    hs_fill_rect(0, y, g_shell.screen_width, panel->height,
-                    g_shell.colors.panel_bg);
+    /* 面板背景: 毛玻璃(背景取自壁纸层 + 面板底色按 alpha 混入)。
+     * build 结果按 (w,h) 缓存, 壁纸不变就不重算; build 失败则退回纯色。 */
+    {
+        int gw = g_shell.screen_width, gh = panel->height;
+        if (g_pglass_dirty || g_pglass_w != gw || g_pglass_h != gh) {
+            if (!hs_panel_glass_build(gw, gh))
+                hs_fill_rect(0, y, gw, gh, g_shell.colors.panel_bg);
+        }
+        if (g_pglass_buf && g_pglass_w == gw && g_pglass_h == gh)
+            hs_panel_glass_blit(0, y, gw, gh, g_shell.colors.panel_bg, PGLASS_TINT_A);
+        else
+            hs_fill_rect(0, y, gw, gh, g_shell.colors.panel_bg);
+    }
 
     /* 面板底部/顶部边框 */
     int border_y = (panel->position == HS_PANEL_TOP) ?
@@ -6852,6 +6986,7 @@ static void hpdesk_render_inner(void)
         g_wallpaper_dirty = 0;
         hs_wallpaper_sample_theme();
     }
+    hs_panel_glass_invalidate();   /* 背景换了, 毛玻璃底板作废 */
 
     /* 通过面板注册表渲染所有启用的面板 */
     { uint64_t p0 = hs_rdtsc();
