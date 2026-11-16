@@ -288,6 +288,34 @@ void hepu_sched_init(void)
     /* V7.17: TrueType字体解析器初始化 */
     extern void tt_font_init(void);
     tt_font_init();
+
+    /* FPU 初始化。
+     * TrueType 光栅化(ttf32.c)用 float 做贝塞尔细分与扫描线求交, 需要硬件
+     * x87。32 位此前从来没有 fninit 过(只有 64 位 arch/x86_64/x86_64.c 有),
+     * 而且 context_switch 不保存 FPU 状态 —— 所以这里必须显式清 CR0.EM/TS。
+     * 当前用户态程序(user/*.c)都不含 float/double, 所以不存在与用户态争用
+     * FPU 上下文的情况; 一旦将来用户态开始用浮点, 就必须在进程切换里
+     * fxsave/fxrstor, 否则状态会串。 */
+    __asm__ volatile("fninit");
+    {
+        uint32_t cr0;
+        __asm__ volatile("mov %%cr0, %0" : "=r"(cr0));
+        cr0 &= ~((1u << 2) | (1u << 3));   /* 清 EM(bit2) 与 TS(bit3) */
+        cr0 |=  (1u << 1);                 /* 置 MP(bit1): 等 WAIT/FWAIT 生效 */
+        __asm__ volatile("mov %0, %%cr0" : : "r"(cr0) : "memory");
+    }
+
+    /* 加载 TTF 字体数据。与 64 位同一份 42KB 的 DejaVuSans-Subset,
+     * 这样两边字形来源一致。失败不致命: font32.c 会退回点阵兜底。 */
+    {
+        extern const unsigned char dejavu_sans_font_data[];
+        extern const unsigned int dejavu_sans_font_data_len;
+        extern int f32_ttf_init(const unsigned char *data, uint32_t size);
+        int rc = f32_ttf_init(dejavu_sans_font_data, dejavu_sans_font_data_len);
+        extern void serial_puts(uint16_t port, const char *s);
+        if (rc == 0) serial_puts(0x3F8, "[FONT32] TrueType loaded\n");
+        else         serial_puts(0x3F8, "[FONT32] TTF load failed, bitmap fallback\n");
+    }
     /* V7.15: 应用字体大小设置 */
     extern int settings_apply_font_size(void);
     settings_apply_font_size();
