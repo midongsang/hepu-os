@@ -6489,9 +6489,20 @@ static void hpdesk_render_inner(void)
 #if defined(__i386__)
     /* P1-4: dispi 切到 1920x1080 后, LFB 最上面几行还留着上一次 VGA 文本模式的
      * 显存内容(y=1 那一行是 16 色调色板的随机彩色)。壁纸 fill 理论上覆盖全屏,
-     * 但实测盖不住最顶 6 行, 这里显式清一次底, 保证从 0 行开始就是桌面。 */
-    gfx64_fill_rect(0, 0, g_shell.screen_width, g_shell.screen_height,
-                    g_shell.colors.bg);
+     * 但实测盖不住最顶 6 行, 这里显式清一次底, 保证从 0 行开始就是桌面。
+     *
+     * 只做一次。原来这段没有开关, 每帧都全屏填 1920x1080 = 8.3MB 内存写入 ——
+     * 32 位是软件填充, 实测一帧 ~170M cycles(按 2GHz 约 85ms), 桌面只有 12fps,
+     * 而且把 CPU 吃满, 连 32 位冒烟里的自检电池都被挤掉 29 行输出。
+     * 顶 6 行的残留只在第一次进桌面时存在, 之后的帧本来就被壁纸盖住了。 */
+    {
+        static int hs_bg_cleared = 0;
+        if (!hs_bg_cleared) {
+            hs_bg_cleared = 1;
+            gfx64_fill_rect(0, 0, g_shell.screen_width, g_shell.screen_height,
+                            g_shell.colors.bg);
+        }
+    }
 #endif
 
     uint64_t __rs0 = hs_rdtsc();

@@ -62,6 +62,54 @@ typedef struct desk_surface {
 
     /* --- 提交 (双缓冲时整帧; 单缓冲可空) --- */
     void (*present)(struct desk_surface *s);
+
+    /* ========================================================================
+     * 以下为可选扩展: 后端不支持时指针为 0, 用之前必须判空。
+     *
+     * 为什么分两层: 上面 12 个是任何桌面的最小集(画矩形/圆角/圆/线/字/提交),
+     * 满足就能出一个能看的桌面。而 hpdesk 实际用到 29 种原语 —— 离屏目标切换、
+     * 裁剪、模糊、亚像素圆角、分块贴图 —— 这些是实现"窗口层缓存 + 毛玻璃"这类
+     * 效果所必需的, 但一个简单桌面用不到。全塞进必须集, 等于要求每个自写桌面
+     * 都实现一遍模糊算法, 那不现实。
+     * ====================================================================== */
+
+    /* --- 直接访问帧缓冲与像素 (批量处理用; hpdesk 用它画窗口层缓存) --- */
+    uint8_t  *(*framebuffer)(struct desk_surface *s);
+    uint32_t  (*get_pixel)(struct desk_surface *s, int x, int y);
+    void      (*blend_pixel)(struct desk_surface *s, int x, int y, uint32_t rgb, int alpha);
+
+    /* --- 离屏绘制目标: 把后续绘制重定向到 buf(带原点偏移) ---
+     * 这是窗口层缓存的基础: 先画到离屏表面, 下次没脏就直接贴回来。 */
+    void (*target_begin)(struct desk_surface *s, void *buf, int w, int h, int ox, int oy);
+    void (*target_end)(struct desk_surface *s);
+    void (*set_target_front)(struct desk_surface *s);
+    void (*set_target_back)(struct desk_surface *s);
+    void (*present_region)(struct desk_surface *s, int x, int y, int w, int h);
+
+    /* --- 更多几何 --- */
+    void (*draw_circle)(struct desk_surface *s, int cx, int cy, int r, uint32_t rgb);
+    void (*draw_arc)(struct desk_surface *s, int cx, int cy, int r,
+                     int a0, int a1, uint32_t rgb);
+    void (*fill_circle_gradient)(struct desk_surface *s, int cx, int cy, int r,
+                                 uint32_t c1, uint32_t c2);
+    void (*fill_round_rect_aa)(struct desk_surface *s, int x, int y, int w, int h,
+                               int r, uint32_t rgb);
+    /* 直接往指定 buf 填圆角矩形(argb 预乘); corners 是四角位掩码 */
+    void (*fill_round_rect_argb)(struct desk_surface *s, void *buf, int bw, int bh,
+                                 int x, int y, int w, int h, int r,
+                                 uint32_t argb, int corners);
+
+    /* --- 分块贴图(图标/岛/通知卡的局部合成都要) --- */
+    void (*blend_image_sub)(struct desk_surface *s, void *src, int sw, int sh,
+                            int sx, int sy, int w, int h, int dx, int dy, int opacity);
+
+    /* --- 效果 --- */
+    void (*blur_region)(struct desk_surface *s, int x, int y, int w, int h,
+                        int radius, uint32_t overlay, int overlay_alpha);
+
+    /* --- 裁剪 --- */
+    void (*clip_set)(struct desk_surface *s, int x, int y, int w, int h);
+    void (*clip_disable)(struct desk_surface *s);
 } desk_surface_t;
 
 /* --- 输入事件 ------------------------------------------------------ */
