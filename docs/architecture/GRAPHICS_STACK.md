@@ -40,6 +40,11 @@ font64.c      字形栅格
 | **第一层：显示后端** | 帧缓冲 / GPU / 后端切换 | **64 位：只有 lfb（+mirror 自检）；32 位：VBE 已接通真双缓冲（`3b3f856`）** | 2026-11-14 新增 `display_backend.h`：3 个入口 `init / present / present_region`，`gfx64` 通过 `g_display` 指针调用，`set_mode` 时注册。现役 `lfb_backend` 是把原来直接写 `front_buffer` 的两段**原样搬进来**，行为零变化（+320 B）。2026-11-14 补第二个实现 `mirror`（`display_mirror.c`，写 RAM 镜像而非显存），用于检验抽象：
 
 > **32 位侧 2026-11-16 更新（`3b3f856`）**：32 位不等同于"没有后端"，它有 4 条探测路径（virtio > GOP > VBE > VGA，`gfx_backend_t` 11 字段厚接口，含 `has_double_buffer` / `get_fb_paddr`）。此前的真问题是 `gfx_fb_addr` 一个变量兼任"硬件基址"与"绘制目标"，双缓冲在这种绑定下不可能成立。现已拆开：新增 `gfx_draw_target`（三条绘制路径统一写它，初值 `back_buffer`），`vbe_fb_phys` 只保留基址语义，`vbe_present` 由空函数改为整帧提交，`vbe_has_double_buffer` 由 0 改 1。单次整帧提交实测 32.6M 周期（8.29MB），因此只挂在桌面帧结束点 `gfx64_present` 上，通用 `gfx_flip`（图形自检也在用）不做整帧拷贝。32 位冒烟 `desk=1 lines=808` 通过。
+>
+> 随后（`5e9ff5c`）补上 `present_region` 的 32 位实现：`vbe_present_region` 按行只拷
+> `[x,y,w,h)`，因为 hpdesk 的局部提交点（`hpdesk.c` 6724/6725 擦旧/铺新光标、6774 拖动窗口）
+> 都是几十像素见方的小矩形，与 8.29 MB 整帧差三个数量级。此前 `gfx64_present_region` 在
+> 32 位是一句空实现，等于光标一动就要整帧拷。
 
 启动时 `gfx64_display_backend_selftest()` 把后台缓冲写同一帧图案，分别经 lfb 与 mirror 提交，
 从显存/镜像缓冲读回算 FNV hash 比对，串口打印 `[GFXDB] backend equivalence PASS`。
