@@ -293,11 +293,46 @@
    0 FAIL。这条缺陷在 `open` 批之后一直存在，但没有任何用户程序同时用过
    `open` 与 `pipe`，所以标准回归一直是绿的。
 
+   **进度（2026-11-16，第 5 批：read / write 切进 `fs_rw_sys.c`，已完成）**
+
+   边界判断（与前四批不同，也和第 5 批前置的设想不同）：原计划补两个窄接口
+   `fs_fd_get_offset` / `fs_fd_add_offset`，真正动手时发现不够 —— read/write 要
+   **同时**用到 path + mode + is_pipe + pipe_buf + offset，分五次去取，中间夹一个
+   并发 close 就会拼出"路径来自 A、offset 来自 B"的缝合快照。所以改成一个
+   `fs_fd_snapshot(fd, fs_fd_info_t*)` 锁内一次取全，加一个 `fs_fd_set_offset`。
+   这其实就是把原本 static 的 `fd_snapshot()` 提升为公开边界并补 offset 字段。
+
+   切分轴：只有"真文件的读与写 + 读位置维护"进了 `fs_rw_sys.c`（112 行）。
+   两类东西**故意留在 syscall 层**：
+   - **fd 0/1/2 的 stdio 特判**：fd 0 从键盘读（阻塞 `hlt` 等中断），fd 1/2 逐字节
+     镜像串口。这是**终端**，不是文件系统。
+   - **管道**：`PIPE_BUF_SIZE` 环形缓冲 + `g_pipe_lock`，是 **IPC**，不是文件分发。
+   按 §5-5 的分层轴"谁定义数据、谁操作它"，两者都不归 fs。
+   分流依据是 syscall 层取好的那一份快照 —— 由它取，是因为"是不是管道"这个判断
+   和随后的语义调用必须看**同一份**视图。
+
+   **这批的容量是负的，如实记下**：`syscall64_full.c` 2,897 → **2,909 行（+12）**，
+   `fs_rw_sys.c` 112 行，二进制 947,632 → **947,952 B（+320）**。
+   原因有两层：搬走的核心逻辑本来就不长（旧实现里 read/write 各自 ~100 行，其中
+   一半是 stdin/管道/串口外壳，不搬）；而新加的边界 API（快照 + offset 回写）是
+   纯增量。**前四批的"减薄"叙事在这批不成立** —— 当被切函数的大部分是外围分流时，
+   切分会让总行数变多。换到的是单文件职责变窄、文件读写语义可以独立测。
+   把它写成负数是故意的：如果只记"又切出去一批"，下一批会误以为切分必然减行数。
+
+   一个明确的取舍写进了 `fs_rw_sys.c` 的头注释：ext2 的 IO 和 `copy_to_user` 都不能在
+   `g_fd_lock` 内做（持锁做 IO 会堵住别的核的 open/close，`copy_to_user` 缺页会把锁
+   带进异常路径），所以流程是"锁外读数据 → 锁内把 offset 推到新值"。代价是两个并发
+   read 同一个 fd 会各自从同一 offset 读到相同内容（与 Linux 语义一致，本就不保证并发
+   read 的原子性），但**不会**丢字节或互相覆盖 offset。
+
    证据：rwprobe 12 项 PASS、statprobe/fdstress/mmprobe 仍 PASS、
-   64 位回归 2/2（`desk=1 EXC=0 PASS=1 FAIL=0`）、二进制 947,632 B（不变）。
-   **诚实缺口**：切分未做，`syscall64_full.c` 行数不变；`fs_fd_get_offset` /
-   `fs_fd_add_offset` 尚未新增；管道是否整体搬出、还是留在 syscall 层而只通过
-   边界 API 访问，方向未定（管道是 IPC 不是文件分发，按 §5-5 的分层轴倾向后者）。
+   64 位回归 2/2（`desk=1 EXC=0 PASS=1 FAIL=0`）、
+   **glibc 端到端 PASS**（`exec=1 hello=1 returned=1 exc=1(handled=1)` —— 这条最有分量：
+   glibc 的 printf/read 全走 syscall 9/10，切分若把 offset 或 copy 路径弄坏，它会先崩）。
+   **诚实缺口**：`ext2_64_write_file` 仍是整文件覆写、不看 offset（这是既有语义，不是
+   这批引入的，但它是"write 之后 offset 前进 n 却写不到 n 位置"这个语义裂缝的来源，
+   属另一条待定技术债）；32 位侧未跑冒烟（B1 agent 正在改 `pmm.c`/`paging.c`/`process.c`，
+   此刻跑 32 位构建拿到的是它的半成品，结果不可信）。
 6. **32 位侧接入 `kernel/shared/`**（**不是归档**，`UNIFIED_SOURCE_TREE.md` P1）：
    现状是 32 位引用 shared 的文件数 = **0**，64 位已 12+。第一条按文档走：
    32 位 `sys_mem.c` → `shared/security/user_access.h`。

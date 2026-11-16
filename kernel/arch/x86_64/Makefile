@@ -34,6 +34,7 @@ C_SOURCES = \
     $(ARCH_DIR)/fs_stat_sys.c \
     $(ARCH_DIR)/fs_open_sys.c \
     $(ARCH_DIR)/fs_mm_sys.c \
+    $(ARCH_DIR)/fs_rw_sys.c \
     $(ARCH_DIR)/seccomp64.c \
     $(ARCH_DIR)/ide64.c \
     $(ARCH_DIR)/keyboard64.c \

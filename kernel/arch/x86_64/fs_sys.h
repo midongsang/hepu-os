@@ -12,6 +12,7 @@
 #define HEPU_FS_SYS_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 /* 从用户态拷路径到内核栈缓冲；返回路径长度，失败 -1。
  * 定义在 syscall64_full.c（§5-5 去 static）。 */
@@ -45,6 +46,33 @@ int fs_fd_get_path(int fd, char *out, size_t outsz);
  * fs_fd_alloc: 锁内找空槽并写 path/mode/offset, 返回 fd; 表满返回 -1。
  *              分配从 3 开始(0/1/2 是 stdio 保留槽位)。
  * fs_fd_release: 锁内置 used=0; 0 = 成功, -1 = 该号本来就没被占用。 */
+/* ---- fd 快照：一个 fd 的"当时样子"，锁内一次取全 ----
+ *
+ * 第 2/3/4 批各要一个字段就够了(path / mode / offset), 于是分别开了
+ * fs_fd_get_path / fs_fd_get_mode 这样的窄接口。read/write 要同时用到
+ * path + mode + is_pipe + pipe_buf + offset —— 如果分五次去取, 中间夹一个
+ * 并发 close 就会拿到"路径来自 A、offset 来自 B"的缝合快照。
+ *
+ * 所以这一批改成一次锁内取全。这不是新概念, 就是把 syscall64_full.c 里
+ * 原本 static 的 fd_snapshot() 提升为公开边界, 并补上 offset 字段。
+ * 表本身仍然不外露: 下标依赖当前用户进程槽位、访问要过 g_fd_lock、锁内还要
+ * 维护 g_fd_lock_holder 诊断变量 —— 让每个切出去的文件都复制一遍这套认知
+ * 才是真正的技术债。 */
+typedef struct {
+    char    path[256];
+    int     mode;       /* 0 = 只读, 1 = 只写, -1 = 未知 */
+    int     is_pipe;
+    int     pipe_buf;   /* 管道在 g_pipes[] 里的下标 */
+    int64_t offset;     /* 文件内读位置 */
+} fs_fd_info_t;
+
+/* 锁内取快照; 0 = 成功, -1 = fd 越界或未占用 */
+int fs_fd_snapshot(int fd, fs_fd_info_t *out);
+
+/* 锁内写回读位置; 0 = 成功, -1 = 失败(含 fd 已关闭 / off < 0)。
+ * offset 的回写必须在锁内完成: 并发读会各自基于旧值累加, 丢字节。 */
+int fs_fd_set_offset(int fd, int64_t off);
+
 /* stdio 保留槽位。
  *
  * 这条约定原来只写在 fs_open_sys.c 里, 结果 sys_pipe 没看见它: 管道从 0 开始
@@ -61,5 +89,18 @@ int64_t fs_do_close(int fd);
 
 int fs_fd_alloc(const char *kpath, int mode);
 int fs_fd_release(int fd);
+
+/* ---- 第 5 批: 文件读写的语义实现 (fs_rw_sys.c) ----
+ *
+ * 只处理"真文件"。两类东西故意不在这里:
+ *   - fd 0/1/2 的 stdio 特判: 那是键盘与串口, 不是文件系统;
+ *   - 管道: 那是 IPC, 不是文件分发(§5-5 分层轴: 谁定义数据谁操作它)。
+ * 两者由 syscall 层分流, 分流依据是调用方传进来的快照。
+ *
+ * 快照由调用方 (syscall 层) 取好再传进来 —— 由它取是因为分流判断
+ * (is_pipe?) 和语义调用要用**同一份**快照, 各取一次会缝合。
+ */
+int64_t fs_do_read(int fd, const fs_fd_info_t *fi, char *ubuf, int count);
+int64_t fs_do_write(int fd, const fs_fd_info_t *fi, const char *ubuf, int count);
 
 #endif

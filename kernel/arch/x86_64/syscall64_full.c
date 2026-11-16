@@ -13,6 +13,7 @@
 #include "seccomp64.h"
 #include "syscall.h"   /* V0.54.6: 统一 syscall 号（唯一真源） */
 #include "spinlock.h"
+#include "fs_sys.h"    /* §5-5 第 5 批: fs_fd_info_t 与 fs_do_read/fs_do_write */
 
 int g_running_linux_elf = 0;  /* V0.20.70: 当前是否在运行Linux ABI ELF */
 
@@ -300,6 +301,56 @@ static int fd_snapshot(int fd, char *path, int *mode, int *is_pipe, int *pipe_bu
     return ok ? 0 : -1;
 }
 
+/* §5-5 第 5 批: fd 快照与 offset 回写（read/write 切出去的边界）。
+ *
+ * 这两件事必须留在 syscall 层, 因为它们碰的是 static 的 sys_files_tbl
+ * 和 g_fd_lock。切出去的文件只拿到一份结构体拷贝, 不拿到表。
+ *
+ * 为什么快照一次取全, 而不是开几个窄接口: 第 2/3/4 批各自只要一个字段,
+ * 分着取没问题; read/write 要同时用 path/mode/is_pipe/pipe_buf/offset,
+ * 分五次去取, 中间夹一个并发 close 就会拼出"路径来自 A、offset 来自 B"
+ * 的缝合快照 —— 那种错误比越界更难查。 */
+int fs_fd_snapshot(int fd, fs_fd_info_t *out)
+{
+    if (fd < 0 || fd >= MAX_FILES || !out) return -1;
+    uint64_t f = spinlock_lock_irqsave(&g_fd_lock);
+    int ti = fd_table_index();
+    g_fd_lock_holder = ti;
+    int ok = 0;
+    if (sys_files_tbl[ti][fd].used) {
+        ok = 1;
+        sys_memcpy(out->path, sys_files_tbl[ti][fd].path, 256);
+        out->path[255] = 0;
+        out->mode    = sys_files_tbl[ti][fd].mode;
+        out->is_pipe = sys_files_tbl[ti][fd].is_pipe;
+        out->pipe_buf = sys_files_tbl[ti][fd].pipe_buf;
+        out->offset  = (int64_t)sys_files_tbl[ti][fd].offset;
+    }
+    g_fd_lock_holder = -1;
+    spinlock_unlock_irqrestore(&g_fd_lock, f);
+    return ok ? 0 : -1;
+}
+
+int fs_fd_set_offset(int fd, int64_t off)
+{
+    if (fd < 0 || fd >= MAX_FILES) return -1;
+    /* 与 sys_lseek 同一口径: 负值与 >2G 一律拒绝。
+     * sys_file_t.offset 是 int, 不校验就直接截断会得到负数, 下次 read
+     * 会从 file_buf 之前的内核内存读出来拷给用户。 */
+    if (off < 0 || off > 0x7FFFFFFF) return -1;
+    uint64_t f = spinlock_lock_irqsave(&g_fd_lock);
+    int ti = fd_table_index();
+    g_fd_lock_holder = ti;
+    int ok = 0;
+    if (sys_files_tbl[ti][fd].used && !sys_files_tbl[ti][fd].is_pipe) {
+        sys_files_tbl[ti][fd].offset = (int)off;
+        ok = 1;
+    }
+    g_fd_lock_holder = -1;
+    spinlock_unlock_irqrestore(&g_fd_lock, f);
+    return ok ? 0 : -1;
+}
+
 /* §5-5 第 2 批: 给 fs_stat_sys.c 的最小 fd → 路径查询。
  *
  * 只暴露"这条 fd 指向哪个路径"这一件事, 不暴露表本身。理由见 fs_sys.h:
@@ -330,29 +381,30 @@ void syscall64_full_init(void)
     vga_puts("[SYSCALL64] Full syscall interface initialized\n");
 }
 
-/* sys_write */
+/* sys_write
+ *
+ * §5-5 第 5 批: 这里只剩分流。真文件的写语义在 fs_rw_sys.c 的 fs_do_write。
+ * 留下的两个分支都不属于文件系统: fd 1/2 是终端(串口镜像), 管道是 IPC。
+ */
 static int64_t sys_write(int fd, const char *buf, int count)
 {
     if (count <= 0) return 0;
     if (count > 4096) count = 4096;  /* 限制单次写入大小 */
 
-    /* SEC-05: 动态分配，消除静态缓冲区重入风险 */
-    extern void *kmalloc(uint32_t size);
-    extern void kfree(void *ptr);
-    uint8_t *kernel_buf = (uint8_t *)kmalloc(count);
-    if (!kernel_buf) return -1;
-    if (copy_from_user(kernel_buf, buf, count) != 0) {
-        kfree(kernel_buf);
-        return -1;
-    }
-
-    if (fd == 1 || fd == 2) {  /* stdout/stderr */
-        /* V0.13.43: 用户态 stdout 同时镜像到串口 (图形模式下 VGA 文本缓冲不可见) */
+    /* stdout/stderr: 逐字节镜像到 VGA 与串口（图形模式下 VGA 文本缓冲不可见） */
+    if (fd == 1 || fd == 2) {
+        extern void *kmalloc(uint32_t size);
+        extern void kfree(void *ptr);
+        uint8_t *kernel_buf = (uint8_t *)kmalloc(count);
+        if (!kernel_buf) return -1;
+        if (copy_from_user(kernel_buf, buf, count) != 0) {
+            kfree(kernel_buf);
+            return -1;
+        }
         for (int i = 0; i < count; i++) {
             uint8_t ch = kernel_buf[i];
             vga_putchar(ch);
             if (ch == '\n') {
-                /* 换行转义 \r\n */
                 extern void syscall_serial_out(uint8_t c);
                 syscall_serial_out('\r');
             }
@@ -363,50 +415,45 @@ static int64_t sys_write(int fd, const char *buf, int count)
         return count;
     }
 
-    /* 文件写入（SB-11: 表访问走快照，IO 在锁外） */
-    {
-        char kpath[256];
-        int fmode = -1, is_pipe = 0, pbuf = -1;
-        if (fd_snapshot(fd, kpath, &fmode, &is_pipe, &pbuf) == 0) {
-            /* V0.20.18: 管道写（锁只保护 head/tail 与缓冲搬运） */
-            if (is_pipe) {
-                if (pbuf < 0 || pbuf >= MAX_PIPES) { kfree(kernel_buf); return -1; }
-                pipe_t *p = &g_pipes[pbuf];
-                uint64_t pf = spinlock_lock_irqsave(&g_pipe_lock);
-                int written = 0;
-                for (int i = 0; i < count; i++) {
-                    int next = (p->tail + 1) % PIPE_BUF_SIZE;
-                    if (next == p->head) break;  /* 满 */
-                    p->data[p->tail] = kernel_buf[i];
-                    p->tail = next;
-                    written++;
-                }
-                spinlock_unlock_irqrestore(&g_pipe_lock, pf);
-                kfree(kernel_buf);
-                return written;
-            }
-            if (fmode == 0) { kfree(kernel_buf); return -1; }  /* 只读打开，禁止写 */
-            ext2_64_write_file(kpath, kernel_buf, count);
-            /* offset 回写必须在锁内：并发写会各自基于旧 offset 累加 */
-            {
-                uint64_t f2 = spinlock_lock_irqsave(&g_fd_lock);
-                int ti = fd_table_index();
-                g_fd_lock_holder = ti;
-                if (sys_files_tbl[ti][fd].used && !sys_files_tbl[ti][fd].is_pipe)
-                    sys_files_tbl[ti][fd].offset += count;
-                g_fd_lock_holder = -1;
-                spinlock_unlock_irqrestore(&g_fd_lock, f2);
-            }
+    /* 一次快照: 分流判断(is_pipe)和随后的语义调用必须看同一份视图 */
+    fs_fd_info_t fi;
+    if (fs_fd_snapshot(fd, &fi) != 0) return -1;
+
+    /* 管道写（锁只保护 head/tail 与缓冲搬运） */
+    if (fi.is_pipe) {
+        if (fi.pipe_buf < 0 || fi.pipe_buf >= MAX_PIPES) return -1;
+        extern void *kmalloc(uint32_t size);
+        extern void kfree(void *ptr);
+        uint8_t *kernel_buf = (uint8_t *)kmalloc(count);
+        if (!kernel_buf) return -1;
+        if (copy_from_user(kernel_buf, buf, count) != 0) {
             kfree(kernel_buf);
-            return count;
+            return -1;
         }
+        pipe_t *p = &g_pipes[fi.pipe_buf];
+        uint64_t pf = spinlock_lock_irqsave(&g_pipe_lock);
+        int written = 0;
+        for (int i = 0; i < count; i++) {
+            int next = (p->tail + 1) % PIPE_BUF_SIZE;
+            if (next == p->head) break;  /* 满 */
+            p->data[p->tail] = kernel_buf[i];
+            p->tail = next;
+            written++;
+        }
+        spinlock_unlock_irqrestore(&g_pipe_lock, pf);
+        kfree(kernel_buf);
+        return written;
     }
 
-    kfree(kernel_buf);
-    return -1;
+    /* 真文件 —— 语义在 fs_rw_sys.c */
+    return fs_do_write(fd, &fi, buf, count);
 }
 
-/* sys_read */
+/* sys_read
+ *
+ * §5-5 第 5 批: 同样只剩分流。真文件的读语义在 fs_rw_sys.c 的 fs_do_read。
+ * stdin(键盘)与管道(IPC)留在这一层。
+ */
 static int64_t sys_read(int fd, char *buf, int count)
 {
     if (count <= 0) return 0;
@@ -435,73 +482,32 @@ static int64_t sys_read(int fd, char *buf, int count)
         return read_count;
     }
 
-    /* 文件读取（SB-11: 表访问走快照，copy_to_user 与 ext2 读都在锁外） */
-    {
-        char kpath[256];
-        int fmode = -1, is_pipe = 0, pbuf = -1;
-        uint64_t foff = 0;
-        if (fd_snapshot(fd, kpath, &fmode, &is_pipe, &pbuf) == 0) {
-            /* V0.20.18: 管道读 —— 锁内搬到本地缓冲，copy_to_user 在锁外 */
-            if (is_pipe) {
-                if (pbuf < 0 || pbuf >= MAX_PIPES) return -1;
-                pipe_t *p = &g_pipes[pbuf];
-                extern void *kmalloc(uint32_t size);
-                extern void kfree(void *ptr);
-                uint8_t *tmp = (uint8_t *)kmalloc((uint32_t)count);
-                if (!tmp) return -1;
-                uint64_t pf = spinlock_lock_irqsave(&g_pipe_lock);
-                int n = 0;
-                while (n < count && p->head != p->tail) {
-                    tmp[n++] = p->data[p->head];
-                    p->head = (p->head + 1) % PIPE_BUF_SIZE;
-                }
-                spinlock_unlock_irqrestore(&g_pipe_lock, pf);
-                int copied = (n > 0 && copy_to_user(buf, tmp, n) == 0) ? n : -1;
-                kfree(tmp);
-                return copied;
-            }
-            if (fmode == 1) return -1;   /* 只写打开，禁止读 */
-            {
-                uint64_t f2 = spinlock_lock_irqsave(&g_fd_lock);
-                int ti = fd_table_index();
-                g_fd_lock_holder = ti;
-                if (sys_files_tbl[ti][fd].used && sys_files_tbl[ti][fd].offset < 0) {
-                    g_fd_lock_holder = -1;
-                    spinlock_unlock_irqrestore(&g_fd_lock, f2);
-                    return -1;          /* 负偏移会让 file_buf+offset 越界 */
-                }
-                foff = (uint64_t)(sys_files_tbl[ti][fd].used ? sys_files_tbl[ti][fd].offset : 0);
-                g_fd_lock_holder = -1;
-                spinlock_unlock_irqrestore(&g_fd_lock, f2);
-            }
-            extern void *kmalloc(uint32_t size);
-            extern void kfree(void *ptr);
-            uint8_t *file_buf = (uint8_t *)kmalloc(4096);
-            if (!file_buf) return -1;
-            /* V0.54.6: 按文件内偏移读，不再「每次只读前 4KB」。 */
-            int len = ext2_64_read_file_offset(kpath, file_buf, (uint32_t)count, (uint32_t)foff);
-            if (len <= 0) { kfree(file_buf); return 0; }
+    /* 一次快照：分流判断与语义调用看同一份视图 */
+    fs_fd_info_t fi;
+    if (fs_fd_snapshot(fd, &fi) != 0) return -1;
 
-            /* 安全：从内核缓冲区复制到用户空间 */
-            if (copy_to_user(buf, file_buf, len) != 0) {
-                kfree(file_buf);
-                return -1;
-            }
-            {
-                uint64_t f3 = spinlock_lock_irqsave(&g_fd_lock);
-                int ti = fd_table_index();
-                g_fd_lock_holder = ti;
-                if (sys_files_tbl[ti][fd].used && !sys_files_tbl[ti][fd].is_pipe)
-                    sys_files_tbl[ti][fd].offset += len;
-                g_fd_lock_holder = -1;
-                spinlock_unlock_irqrestore(&g_fd_lock, f3);
-            }
-            kfree(file_buf);
-            return len;
+    /* 管道读 —— 锁内搬到本地缓冲，copy_to_user 在锁外 */
+    if (fi.is_pipe) {
+        if (fi.pipe_buf < 0 || fi.pipe_buf >= MAX_PIPES) return -1;
+        extern void *kmalloc(uint32_t size);
+        extern void kfree(void *ptr);
+        uint8_t *tmp = (uint8_t *)kmalloc((uint32_t)count);
+        if (!tmp) return -1;
+        pipe_t *p = &g_pipes[fi.pipe_buf];
+        uint64_t pf = spinlock_lock_irqsave(&g_pipe_lock);
+        int n = 0;
+        while (n < count && p->head != p->tail) {
+            tmp[n++] = p->data[p->head];
+            p->head = (p->head + 1) % PIPE_BUF_SIZE;
         }
+        spinlock_unlock_irqrestore(&g_pipe_lock, pf);
+        int copied = (n > 0 && copy_to_user(buf, tmp, n) == 0) ? n : -1;
+        kfree(tmp);
+        return copied;
     }
 
-    return -1;
+    /* 真文件 —— 语义在 fs_rw_sys.c */
+    return fs_do_read(fd, &fi, buf, count);
 }
 
 /* pread64(fd, buf, count, offset)：按偏移读且不改变 fd 的读指针。
