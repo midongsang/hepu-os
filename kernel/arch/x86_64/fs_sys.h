@@ -103,4 +103,13 @@ int fs_fd_release(int fd);
 int64_t fs_do_read(int fd, const fs_fd_info_t *fi, char *ubuf, int count);
 int64_t fs_do_write(int fd, const fs_fd_info_t *fi, const char *ubuf, int count);
 
+/* pread: 按指定偏移读、**不改** fd 的读位置。
+ *
+ * 语义上和 fs_do_read 只差"要不要回写 offset"这一个动作, 但这两者不能合并:
+ * ld.so 正是靠 pread 反复读 ELF 头和 PT_DYNAMIC 而不破坏文件游标, 如果把它
+ * 并进 fs_do_read, 动态链接器的加载顺序会被悄悄改掉 —— 这种错在静态程序上
+ * 完全看不出来, 只有 glibc 端到端能抓到。 */
+int64_t fs_do_pread(int fd, const fs_fd_info_t *fi, char *ubuf, int count,
+                    int64_t offset);
+
 #endif

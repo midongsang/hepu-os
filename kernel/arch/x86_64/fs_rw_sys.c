@@ -73,6 +73,37 @@ int64_t fs_do_write(int fd, const fs_fd_info_t *fi, const char *ubuf, int count)
     return wr;
 }
 
+int64_t fs_do_pread(int fd, const fs_fd_info_t *fi, char *ubuf, int count,
+                    int64_t offset)
+{
+    (void)fd;   /* pread 不回写 offset, 用不到 fd */
+    if (!fi || count <= 0) return 0;
+    if (fi->mode == 1) return -1;        /* 只写打开的文件不能读 */
+    if (offset < 0) return -1;
+    if (offset > 0x7FFFFFFF) return -1;
+
+    int n = count;
+    if (n > FS_RW_MAX_XFER) n = FS_RW_MAX_XFER;
+
+    uint8_t *kbuf = (uint8_t *)kmalloc((uint32_t)n);
+    if (!kbuf) return -1;
+
+    int len = ext2_64_read_file_offset(fi->path, kbuf, (uint32_t)n,
+                                       (uint32_t)offset);
+    if (len <= 0) {
+        kfree(kbuf);
+        return 0;      /* EOF / 读失败都是 0 字节, 与旧实现一致 */
+    }
+
+    if (copy_to_user(ubuf, kbuf, (size_t)len) != 0) {
+        kfree(kbuf);
+        return -1;
+    }
+    kfree(kbuf);
+
+    return len;   /* 关键差别: 这里**没有** fs_fd_set_offset */
+}
+
 int64_t fs_do_read(int fd, const fs_fd_info_t *fi, char *ubuf, int count)
 {
     if (!fi || count <= 0) return 0;

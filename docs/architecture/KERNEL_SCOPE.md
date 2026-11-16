@@ -294,6 +294,37 @@
    `open` 与 `pipe`，所以标准回归一直是绿的。
 
    **进度（2026-11-16，第 5 批：read / write 切进 `fs_rw_sys.c`，已完成）**
+   **进度（2026-11-16，"其余"：pread 切分 + fd 常量归并，已完成，§5-5 收口）**
+
+   这一批只动了两件小事，但它把 §5-5 收成了。原以为"其余"是一堆桩函数
+   （`sys_creat` 直接 `return 3`、`sys_link` `return 0`、socket 系全空），切它们
+   只会重演第 5 批的负容量，所以没动。真正值得切的只有 `sys_pread`——它是**唯一
+   一个和 read 同源、却语义相反**的：按调用方给的 offset 读，读完**不回写** fd 游标。
+   ld.so 就靠这个反复读 ELF 头和 PT_DYNAMIC 而不破坏文件游标。
+
+   **为什么没有并进 `fs_do_read`。** 两者的差别只在一个动作（要不要 `fs_fd_set_offset`），
+   合并成一个函数加 `no_offset_update` 布尔参数是最省的写法，但那个参数一旦被传错，
+   症状是"动态链接器加载顺序悄悄变了"——静态程序上完全看不出来，只有 glibc 端到端
+   能抓到。宁愿多一个函数，也不要在同一个入口里放一个默认值会错的分支。
+
+   **顺手归并了一处"两处真相"。** `syscall64_full.c` 里原本有个
+   `#define FS_FD_ALLOC_START 3`，而第 5 批我在 `fs_sys.h` 立了
+   `FS_FD_STDIO_RESERVED 3` 当唯一来源。同一个值两个名字，正是 `sys_pipe`
+   那次事故的成因（它没看见这条约定，从 0 开始分配，读端拿到 fd 0 → `read` 命中
+   stdin 分支 → 进程永久阻塞在 `hlt`）。现在 `FS_FD_ALLOC_START` 只是
+   `#define FS_FD_ALLOC_START FS_FD_STDIO_RESERVED` 的别名，不再是第二个真相。
+
+   **容量**：`syscall64_full.c` 2,909 → **2,905（-4）**；`fs_rw_sys.c` 112 → **143（+31）**；
+   二进制 947,952 → **947,952 B（不变）**。四个人日里第一次出现"行数减、体积不动"，
+   因为这次是真搬走而不是加边界。
+
+   **验证**：glibc 端到端 PASS（`exec=1 hello=1 returned=1 exc=1(handled=1)`）——
+   这条是 pread 的唯一硬判据，ld.so 读 PT_DYNAMIC 走的就是它；64 位回归 2/2
+   （`desk=1 EXC=0 PASS=1 FAIL=0`）。
+
+   **§5-5 到此收口：6 条收敛顺序全部落地**（目录三件套 / stat+fstat / open+close /
+   mmap 三件套 / read+write / pread+常量归并）。剩下的 fs 函数是桩，不切。
+
 
    边界判断（与前四批不同，也和第 5 批前置的设想不同）：原计划补两个窄接口
    `fs_fd_get_offset` / `fs_fd_add_offset`，真正动手时发现不够 —— read/write 要

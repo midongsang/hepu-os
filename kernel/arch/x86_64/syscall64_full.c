@@ -512,29 +512,23 @@ static int64_t sys_read(int fd, char *buf, int count)
 
 /* pread64(fd, buf, count, offset)：按偏移读且不改变 fd 的读指针。
  * 动态链接器（ld.so）用它在不 mmap 的情况下读 ELF 头和 PT_DYNAMIC。 */
+/* sys_pread
+ *
+ * §5-5 "其余"：语义在 fs_rw_sys.c 的 fs_do_pread。这里只做快照 + 分流。
+ * 和 sys_read 的区别只有一个 —— 传进来的 offset 是调用方指定的，读完不回写，
+ * 所以 by-offset 的读不需要看 fd 的游标，也不更新它。
+ */
 static int64_t sys_pread(int fd, char *buf, int count, int64_t offset)
 {
     if (count <= 0) return 0;
     if (count > 4096) count = 4096;
-    if (offset < 0) return -1;
-    char kpath[256];
-    int fmode = -1;
-    if (fd_snapshot(fd, kpath, &fmode, 0, 0) != 0) return -1;
-    if (fmode == 1) return -1;
 
-    extern void *kmalloc(uint32_t size);
-    extern void kfree(void *ptr);
-    uint8_t *kernel_buf = (uint8_t *)kmalloc((uint32_t)count);
-    if (!kernel_buf) return -1;
-    int len = ext2_64_read_file_offset(kpath, kernel_buf,
-                                      (uint32_t)count, (uint32_t)offset);
-    if (len <= 0) { kfree(kernel_buf); return 0; }
-    if (copy_to_user(buf, kernel_buf, len) != 0) {
-        kfree(kernel_buf);
-        return -1;
-    }
-    kfree(kernel_buf);
-    return len;
+    fs_fd_info_t fi;
+    if (fs_fd_snapshot(fd, &fi) != 0) return -1;
+    /* 管道没有"按偏移读"的含义（数据流没有游标）——按 Linux 语义拒绝 */
+    if (fi.is_pipe) return -1;
+
+    return fs_do_pread(fd, &fi, buf, count, offset);
 }
 
 /* sys_open / sys_close 已搬到 fs_open_sys.c（§5-5 第 3 批）。
@@ -542,10 +536,12 @@ static int64_t sys_pread(int fd, char *buf, int count, int64_t offset)
 extern int64_t fs_do_open(const char *path, int flags, int mode);
 extern int64_t fs_do_close(int fd);
 
-/* fd 分配起点: 0/1/2 是 stdio 保留槽位(见 fs_open_sys.c 里的说明)。
- * 分配从 0 开始的话, 进程第一次 open 就拿到 0, 而 read(0) 被当 stdin —— 
- * "打开文件再读它"会永久阻塞。 */
-#define FS_FD_ALLOC_START 3
+/* fd 分配起点 = stdio 保留槽位。同一件事只留一个来源: fs_sys.h 的
+ * FS_FD_STDIO_RESERVED。这里原来另起名 FS_FD_ALLOC_START, 就是"两处真相"
+ * —— 与 sys_pipe 那次事故同一类(它也是没看见这条约定, 从 0 开始分配)。
+ * 分配从 0 开始的话, 进程第一次 open 就拿到 fd 0, 而 read(0) 被当 stdin，
+ * "打开文件再读它"会永久阻塞在 hlt。 */
+#define FS_FD_ALLOC_START FS_FD_STDIO_RESERVED
 
 int fs_fd_alloc(const char *kpath, int mode)
 {
