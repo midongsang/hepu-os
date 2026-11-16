@@ -595,6 +595,7 @@ desk_select("mine");       /* 切过去 */
 | P3-3 | `mouse64_init(1024,768)` 初始位置偏左上 | **已核实**：只影响光标初始位置，非坐标上限，危害轻微 |
 | P3-4 | 桌面线四项（控制中心位图图标 / `bar_height` 36vs40 / 天气卡 24px / 胶囊居中口径） | 用户已给口径，代码未改 |
 | P3-5 | **§5-5 已收口（6/6）**：目录三件套 / stat+fstat / open+close / mmap 三件套 / read+write / pread+常量归并。剩余 fs 函数是桩，不切 | read/write 那批行数是 **+12**（2,897→2,909），pread 这批是 **-4**（2,909→2,905）、体积不变。同一件事两个方向都有，别拿行数当验收标准 |
+| **P3-13** | **B1 引入的回归：32 位图形桌面黑屏**。同参数同镜像（不挂盘、-m 256、110s）下，`6cfb7d0^` 能出深色桌面（顶栏/时钟/面板/Lavender 卡片），`6cfb7d0` 之后 LFB 只有 **1160 个非黑像素**（底色全黑）。串口证明链路没断：`[EDESKTOP] desk_start on 32-bit`、`[EDESKTOP] first frame via registry, cycles=0xB344923`、`[HPD] panels/windows/wallpaper done` 反复、`presentK=0` 与旧版一致，但 `[GFX] fb after-desktop-init nonzero` 从 **0xBB3F(47935)** 掉到 **0x31F(799)**。**已排除**：位图数组 BSS 膨胀（把 `4096ULL` 改成 `1024ULL` 省下 96 KiB，非黑像素仍是 1160）；GFX 后端注册顺序两版逐行相同；VBE 模式与 pitch 两版相同。**未排除**：`paging_map` 新增的父 PDE `USER/WRITABLE` 提升（`de->writable=1` 是无条件提升，可能让某个原本只读的 PDE 变可写）。下一步应二分这三个改动，只留 pmm 看桌面是否恢复 | 这是本轮最严重的一条：`6cfb7d0` 已推送，仓库当前 HEAD 的 32 位桌面是黑屏。外部程序跑通（8/8 rc=0）与桌面黑屏**同时**发生，不能二选一，必须两个都保 |
 | P3-12 | `ext2_64_write_file` 整文件覆写、不看 offset：write 之后 offset 前进 n，但数据并不落在 n 位置 | 既有语义，非本轮引入。它让"写一段再读回去"在大文件上对不上，是 P3-5 切分时暴露的语义裂缝 |
 | P3-6 | §5-3 加载器适配（`user_process.c:1906-2182`） | 判断为"整块搬用户态"量级 |
 | P3-7 | §5-4 framebuffer 映射 + "前台所有权"定义 | `flags=0` 语义待定 |
