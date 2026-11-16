@@ -31,6 +31,7 @@ C_SOURCES = \
     $(ARCH_DIR)/syscall64_full.c \
     $(ARCH_DIR)/compat_gate.c \
     $(ARCH_DIR)/fs_dir_sys.c \
+    $(ARCH_DIR)/fs_stat_sys.c \
     $(ARCH_DIR)/seccomp64.c \
     $(ARCH_DIR)/ide64.c \
     $(ARCH_DIR)/keyboard64.c \

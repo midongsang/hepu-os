@@ -300,6 +300,18 @@ static int fd_snapshot(int fd, char *path, int *mode, int *is_pipe, int *pipe_bu
     return ok ? 0 : -1;
 }
 
+/* §5-5 第 2 批: 给 fs_stat_sys.c 的最小 fd → 路径查询。
+ *
+ * 只暴露"这条 fd 指向哪个路径"这一件事, 不暴露表本身。理由见 fs_sys.h:
+ * 表下标依赖当前用户进程槽位、访问要过 g_fd_lock、锁内还要维护
+ * g_fd_lock_holder 诊断变量 —— 把表 extern 出去等于让每个切出去的文件
+ * 都复制一遍这套认知。锁在这里取, 返回后调用方拿到的是一份路径拷贝。 */
+int fs_fd_get_path(int fd, char *out, size_t outsz)
+{
+    if (!out || outsz == 0) return -1;
+    return fd_snapshot(fd, out, 0, 0, 0);
+}
+
 static int sys_strlen(const char *s) {
     int i = 0;
     while (s[i]) i++;
@@ -1728,59 +1740,10 @@ static int64_t sys_pipe(int *fds) {
     return 0;
 }
 
-/* sys_stat: 返回 Linux x86_64 兼容 stat 结构 (144字节)
- *
- * 这一版按**字节偏移**填, 不再用结构体 —— 原来那个 struct 把 st_blksize /
- * st_blocks 写成了 int32_t, 而 x86_64 上这两个字段是 8 字节, 于是从 offset 56
- * 开始后面所有字段整体前移 8 字节, 而且 sizeof 只有 128, 拷给用户态后
- * [128..143] 是用户自己 memset 的 0(或残留), 读 st_ctim 得到垃圾。
- *
- * 为什么要和 sys_fstat 写成同一套: 这两条路径填的是**同一个契约**。原来
- * sys_fstat 是对的(逐偏移写 144 字节), sys_stat 是错的(结构体), 同一系统里
- * stat() 和 fstat() 对同一个文件给出不同布局 —— 这种"一对一错"比两个都错更
- * 难查, 因为比对两边会得出"实现方式不同"而不是"有一个是错的"。
- * 参考布局(Linux x86_64 struct stat):
- *   0 st_dev(8) | 8 st_ino(8) | 16 st_nlink(8) | 24 st_mode(4) | 28 st_uid(4)
- *   32 st_gid(4) | 36 __pad0(4) | 40 st_rdev(8) | 48 st_size(8)
- *   56 st_blksize(8) | 64 st_blocks(8) | 72 st_atim(16) | 88 st_mtim(16)
- *   104 st_ctim(16) | 120 __unused(24)
- *
- * st_ino 必须是**真实** inode: ld.so 用 (st_dev, st_ino) 判断"两个路径是不是
- * 同一个已加载对象", 全 0 会让所有文件看起来是同一个, 把 libc.so.6 认成主程序。
- */
-extern int ext2_64_stat(const char *path, uint32_t *size, uint8_t *isdir);
-extern int ext2_64_stat_ino(const char *path, uint32_t *size, uint8_t *isdir,
-                            uint32_t *ino);
-
-#define STAT_BYTES 144
-
-static int64_t sys_stat(const char *path, void *statbuf)
-{
-    char kp[256];
-    if (copy_user_path(kp, sizeof(kp), path) < 0) return -1;
-
-    uint32_t sz = 0; uint8_t id = 0; uint32_t ino = 0;
-    if (ext2_64_stat_ino(kp, &sz, &id, &ino) != 0) return -1;
-
-    uint8_t sb[STAT_BYTES];
-    for (int i = 0; i < STAT_BYTES; i++) sb[i] = 0;
-    *(uint64_t *)(sb + 0)  = 1;                          /* st_dev */
-    *(uint64_t *)(sb + 8)  = ino;                        /* st_ino (真实) */
-    *(uint64_t *)(sb + 16) = 1;                          /* st_nlink */
-    *(uint32_t *)(sb + 24) = id ? 0x41ED : 0x81A4;        /* 0755 dir / 0644 file */
-    *(uint32_t *)(sb + 28) = 0;                          /* st_uid */
-    *(uint32_t *)(sb + 32) = 0;                          /* st_gid */
-    *(uint64_t *)(sb + 40) = 0;                          /* st_rdev */
-    *(uint64_t *)(sb + 48) = sz;                         /* st_size */
-    *(uint64_t *)(sb + 56) = 4096;                       /* st_blksize */
-    *(uint64_t *)(sb + 64) = (sz + 511) / 512;           /* st_blocks */
-    /* st_atim/st_mtim/st_ctim (72/88/104) 全部给 0:
-     * ext2 里读时间戳要额外一趟 inode 解析, 而当前没有任何调用方依赖它。
-     * 给 0 是"如实: 没有这个信息", 不是"假装时间戳是 epoch" —— 两者在
-     * 排序/缓存场景里后果不同, 这里选前者。 */
-    if (statbuf && copy_to_user(statbuf, sb, STAT_BYTES) != 0) return HEPU_EFAULT;
-    return 0;
-}
+/* sys_stat / sys_fstat 已搬到 fs_stat_sys.c（§5-5 第 2 批）。
+ * 这里只留声明: syscall 层负责"号 → 函数"的映射, 语义实现归 fs。 */
+extern int64_t sys_stat(const char *path, void *statbuf);
+extern int64_t sys_fstat(int fd, void *statbuf);
 
 /* sys_readdir: 列目录，写入用户缓冲 outbuf（每项 "name\0type\0"），返回字节数 */
 extern int ext2_64_list_dir_entries(const char *path, char names[][256], uint8_t *types, int max);
@@ -2406,33 +2369,6 @@ static int64_t sys_rename(const char *oldpath, const char *newpath)
     /* 简化：不支持重命名，返回-1 */
     (void)oldpath; (void)newpath;
     return -1;
-}
-
-/* sys_fstat - 获取文件状态 */
-static int64_t sys_fstat(int fd, void *statbuf)
-{
-    if (fd < 0 || fd >= MAX_FILES || !sys_files[fd].used) return -1;
-    if (!statbuf) return HEPU_EFAULT;
-    extern int ext2_64_stat_ino(const char *path, uint32_t *size, uint8_t *isdir,
-                                uint32_t *ino);
-    uint32_t sz = 0; uint8_t isdir = 0; uint32_t ino = 0;
-    if (ext2_64_stat_ino(sys_files[fd].path, &sz, &isdir, &ino) != 0) return HEPU_ENOENT;
-    /* Linux x86_64 struct stat 关键字段：st_dev@0, st_ino@8,
-     * st_nlink@16, st_mode@24, st_size@48, st_blksize@56, st_blocks@64。
-     * ld.so 用 (st_dev, st_ino) 去重「已加载对象」——两者恒 0 会把
-     * libc.so.6 误认成主程序，版本检查与符号查找全部失败。 */
-    uint8_t sbuf[144];
-    for (int i = 0; i < 144; i++) sbuf[i] = 0;
-    *(uint64_t *)(sbuf + 0) = 1;                        /* st_dev */
-    *(uint64_t *)(sbuf + 8) = ino;                      /* st_ino */
-    *(uint64_t *)(sbuf + 16) = 1;                       /* st_nlink */
-    uint32_t mode = isdir ? 0x41ED : 0x81A4;             /* 0755 dir / 0644 file */
-    *(uint32_t *)(sbuf + 24) = mode;
-    *(uint64_t *)(sbuf + 48) = sz;                       /* st_size */
-    *(uint64_t *)(sbuf + 56) = 4096;                     /* st_blksize */
-    *(uint64_t *)(sbuf + 64) = (sz + 511) / 512;         /* st_blocks */
-    if (copy_to_user(statbuf, sbuf, 144) != 0) return HEPU_EFAULT;
-    return 0;
 }
 
 /* sys_getcwd - 获取当前工作目录 */

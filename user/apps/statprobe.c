@@ -124,10 +124,11 @@ int main(void)
 
     /* ---- 2. inode 唯一性: 两个不同文件必须给出不同 st_ino ---- */
     unsigned char sb2[STAT_BYTES];
+    uint64_t ino1 = 0;
     for (int i = 0; i < STAT_BYTES; i++) sb2[i] = 0xAA;
     r = (int)syscall2(24, (uint64_t)"/bin/shell.elf", (uint64_t)sb2);
     if (r == 0) {
-        uint64_t ino1 = rd64(&sb[8]);
+        ino1 = rd64(&sb[8]);
         uint64_t ino2 = rd64(&sb2[8]);
         /* ld.so 用 (st_dev, st_ino) 判断"两个路径是不是同一个文件"。
          * 全 0 会让所有文件看起来是同一个 —— 这正是文档点名的风险。 */
@@ -135,6 +136,31 @@ int main(void)
         fails += check("st_ino differs per file", ino1 != ino2, ino2);
     } else {
         out("  stat(/bin/shell.elf): 跳过(文件不存在)\n");
+    }
+
+    /* ---- 2b. fstat: 走的是**另一条**路径(fd 表), 不是 stat 的别名 ----
+     * 这两条路填同一个契约, 而历史上真的一个对一个错(结构体 vs 逐偏移),
+     * 所以只测 stat 不足以证明 fstat 也对。 */
+    {
+        int fd = (int)syscall2(SYS_OPEN, (uint64_t)"/bin/hello.elf", 0);
+        fails += check("open(/bin/hello.elf) rc", fd >= 0, (uint32_t)fd);
+        if (fd >= 0) {
+            unsigned char sb4[STAT_BYTES];
+            for (int i = 0; i < STAT_BYTES; i++) sb4[i] = 0xAA;
+            int fr = (int)syscall2(SYS_FSTAT, (uint64_t)fd, (uint64_t)sb4);
+            fails += check("fstat rc", fr == 0, (uint32_t)fr);
+            if (fr == 0) {
+                uint64_t fsz = rd64(sb4 + 48);
+                uint64_t fbl = rd64(sb4 + 56);
+                uint64_t fino = rd64(sb4 + 8);
+                fails += check("fstat st_size == stat st_size", fsz == size, fsz);
+                fails += check("fstat st_blksize sane", fbl == 4096, fbl);
+                fails += check("fstat st_ino == stat st_ino", fino == ino1, fino);
+                fails += check("fstat bytes 128..143 written",
+                               sb4[STAT_BYTES - 1] != 0xAA, sb4[STAT_BYTES - 1]);
+            }
+            syscall2(SYS_CLOSE, (uint64_t)fd, 0);
+        }
     }
 
     /* ---- 3. 目录 ---- */
