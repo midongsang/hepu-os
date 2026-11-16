@@ -305,15 +305,19 @@ void x86_64_kernel_main(void)
     vga_put_hex(pml4_addr);
     vga_puts("\n");
     vmm64_init(pml4_addr);
+
     vmm64_load_cr3(pml4_addr);
     vga_puts("[OK] Switched to kernel page tables\n");
+
     vga_puts("[BOOT] step3 done (paging)\n");
 
     /* V0.20.59: 提前装 IDT，防止切页表后到 SMP/APIC 之间任何异常导致 triple fault 回 BIOS */
     vga_puts("[INIT] Early IDT (crash-safe)...\n");
     extern void irq64_init(void);
     irq64_init();
+
     vga_puts("[OK] Early IDT installed\n");
+
 
     /* 阶段2 ③：开 SMEP/SMAP。
      * 此时内核映射(低身份/高半区)均已 U=0，内核只在内核页执行，ring3 用户页不可被内核取指。
