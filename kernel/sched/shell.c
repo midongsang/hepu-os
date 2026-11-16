@@ -304,6 +304,14 @@ void shell_main(void)
         extern void net_poll(void);
         net_poll();
 
+        /* 32 位桌面在这里被驱动。这是主路径: shell 空转时每一圈都会过这里,
+         * 不像 keyboard_getchar 那样依赖"键盘缓冲区恰好为空" —— 实测缓冲区
+         * 有残留时那个 while 根本不进, 桌面就一直是首帧(死帧)。
+         * 节流在 desk_tick_if_due 内部, 与键盘那条路径共用同一个 last_tick。
+         * 例外: 如果 shell 卡在某个命令里(不返回主循环), 桌面还是会停;
+         * 那是命令本身的问题, 不该让桌面去猜。 */
+        { extern int desk_tick_if_due(void); desk_tick_if_due(); }
+
         vga_set_color(VGA_COLOR_GREEN, VGA_COLOR_BLACK);
         vga_puts("hepu@os:~$ ");
         vga_set_color(VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK);        int len = keyboard_readline(buffer, SHELL_BUFFER_SIZE);

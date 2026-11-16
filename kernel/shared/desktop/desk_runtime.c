@@ -99,6 +99,25 @@ int desk_dispatch(const desk_input_t *ev)
     return d->event(&g_surf, ev);
 }
 
+/* 带节流的取帧入口 —— 给"没有自己主循环"的调用方用。
+ *
+ * 32 位没有独立主循环: shell 在 sched/shell.c 里空转、键盘在 keyboard.c 里
+ * 等输入。谁在那儿等, 谁就顺手驱动桌面, 但两边都不能每圈都画(一帧百万级周期)。
+ * 节流放这里而不是各调用方自己写一遍, 是为了两个入口共用同一个 last_tick ——
+ * 否则各算各的, 最坏情况会画出双倍帧。
+ * 用 PIT tick 而不是 rdtsc: 32 位没校准过 TSC, PIT 是唯一可信时间源。
+ * 16 tick(1kHz) ≈ 60fps。 */
+int desk_tick_if_due(void)
+{
+    extern uint32_t pit_get_ticks(void);
+    static uint32_t last_tick;
+    if (!g_running) return -1;
+    uint32_t now = pit_get_ticks();
+    if ((uint32_t)(now - last_tick) < 16) return 0;
+    last_tick = now;
+    return desk_tick();
+}
+
 int desk_is_running(void)
 {
     return g_running;

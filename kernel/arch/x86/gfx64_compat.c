@@ -436,6 +436,11 @@ void gfx64_set_target_front(void) { }
 
 /* ================= 提交 ================= */
 
+/* 性能统计口径, 与 64 位 gfx64.c 里的同名变量对齐。
+ * 32 位没有 rdtsc 校准体系, 这里只做"调用次数"意义上的占位 —— hpdesk 的
+ * 常驻探针会读它算 presentK, 32 位读到恒 0 是如实的(单缓冲直写没有拷贝阶段)。 */
+uint64_t gfx64_prof_present;
+
 void gfx64_present(void) { gfx_flip(); }
 void gfx64_present_region(int x, int y, int w, int h) { (void)x;(void)y;(void)w;(void)h; }
 

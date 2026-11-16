@@ -6913,10 +6913,59 @@ static void hpdesk_render_inner(void)
  * 每 60 帧打印一次(单位: 千周期), 用于定位到底哪一段在吃时间。 */
 void hpdesk_render(void)
 {
+    /* 常驻性能探针: 每 300 帧往串口打一行。
+     *
+     * 三个数各自口径不同, 不能混着看:
+     *   intervalK — 相邻两帧**开始**的间隔, 含主循环等待, 反映实际刷新节奏;
+     *   renderK   — 单帧纯渲染耗时(hpdesk_render_inner 全程);
+     *   presentK  — 其中提交(拷 framebuffer)占的部分。
+     * 只有 renderK 逼近 intervalK 时, 才说明"渲染本身拖累了刷新率";
+     * 否则瓶颈在主循环的节流上, 那是刻意留出的让出时间。
+     * 单位: 千个 TSC 周期。TSC 频率不在这里换算 —— QEMU 的 TSC 不代表真机,
+     * 拿它算绝对 fps 会得出误导性结论(之前就吃过一次亏)。 */
+    static uint64_t pf_t_first;
+    static uint64_t pf_render_sum, pf_pres_sum;
+    static uint32_t pf_n;
+    extern uint64_t gfx64_prof_present;
+
     uint64_t t0 = hs_rdtsc();
+    uint64_t p0 = gfx64_prof_present;
+
     hpdesk_render_inner();
-    g_cyc_panel += hs_rdtsc() - t0;
+
+    uint64_t t1 = hs_rdtsc();
+    uint64_t p1 = gfx64_prof_present;
+    g_cyc_panel += t1 - t0;
     g_prof_frames++;
+
+    if (!pf_t_first) pf_t_first = t0;
+    pf_render_sum += (t1 - t0);
+    pf_pres_sum   += (p1 - p0);
+    pf_n++;
+
+    /* 32 位桌面挂在 keyboard_getchar 的空等循环里, 大部分时间被自检/命令行占着,
+     * 采样窗口要短一些才抓得到; 64 位每 16ms 一帧, 300 帧约 5 秒一行不至于刷屏。 */
+#if defined(__i386__)
+    if (pf_n >= 60) {
+#else
+    if (pf_n >= 300) {
+#endif
+        uint64_t span = t0 - pf_t_first;
+        uint32_t intervalK = (uint32_t)(span / pf_n / 1000);
+        uint32_t renderK   = (uint32_t)(pf_render_sum / pf_n / 1000);
+        uint32_t presentK  = (uint32_t)(pf_pres_sum / pf_n / 1000);
+        extern void serial_puts(uint16_t, const char*);
+        extern void serial_puthex(uint16_t, uint32_t);
+
+        serial_puts(0x3F8, "[PERF] intervalK="); serial_puthex(0x3F8, intervalK);
+        serial_puts(0x3F8, " renderK=");         serial_puthex(0x3F8, renderK);
+        serial_puts(0x3F8, " presentK=");        serial_puthex(0x3F8, presentK);
+        serial_puts(0x3F8, " ratio=");           serial_puthex(0x3F8, intervalK ? (renderK * 100 / intervalK) : 0);
+        serial_puts(0x3F8, "\n");
+
+        pf_t_first = t0;
+        pf_n = 0; pf_render_sum = 0; pf_pres_sum = 0;
+    }
 }
 
 
