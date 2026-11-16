@@ -98,6 +98,7 @@ C_SOURCES = \
     $(KERNEL_DIR)/shared/desktop/desk_surface.c \
     $(KERNEL_DIR)/shared/desktop/desk_hpdesk.c \
     $(KERNEL_DIR)/shared/desktop/desk_runtime.c \
+    $(KERNEL_DIR)/shared/desktop/desk_demo.c \
     $(KERNEL_DIR)/crypto/crypto.c \
     $(KERNEL_DIR)/crypto/aes.c \
     $(KERNEL_DIR)/crypto/aes_gcm.c \

@@ -42,11 +42,31 @@ int desk_start(uint32_t scale_pct)
         /* 注册表还是空的 —— 把内置的 hpdesk 注册进去再取一次。
          * 这样上层不必关心"谁先注册", 拿到的一定是能用的桌面。 */
         desk_register_hpdesk();
+#ifdef HEPU_DESK_DEMO
+        /* 验证"可切换"用: 打开这个宏就多注册一套极简桌面, 并选它。
+         * 平时不定义, 所以默认启动还是 hpdesk。 */
+        { extern int desk_register_demo(void); desk_register_demo(); }
+        desk_select("demo");
+        desk_register_hpdesk();
+#endif
         d = desk_current();
     }
     if (!d) return -2;
 
     if (desk_surface_get(&g_surf, scale_pct) != 0) return -1;
+
+    /* 切桌面之前先把绘制状态归零。
+     *
+     * 为什么必须有这一步: gfx64 的绘制有两条隐藏状态 —— clip 区 和 离屏目标
+     * (g_rt_buf/g_rt_ox/g_rt_oy)。它们不是"每个桌面自己的事", 而是全局的:
+     * 上一个桌面如果停在 target_begin 里(画到某个窗口缓冲), 下一个桌面画的所有
+     * 东西都会被 gfx64_fill_rect 夹进那个缓冲的坐标系。实测就是这样: 第二套
+     * 桌面铺底只铺到 y=456, 下半屏纯黑, 因为全屏矩形被夹进 hpdesk 最后一个
+     * 窗口的 456 行高缓冲里。
+     * 归零放在运行时层而不是让每个桌面自己清 —— 否则"可切换"就成了
+     * "每个实现都必须记得清上一家的烂摊子", 那不叫接口。 */
+    g_surf.target_end(&g_surf);
+    g_surf.clip_disable(&g_surf);
 
     /* 先进入运行态再调 init: 桌面实现内部要拿 surface 画第一帧(比如 hpdesk 在
      * init 里就要建自身控件), 如果 init 期间 desk_active_surface() 还是 0,
