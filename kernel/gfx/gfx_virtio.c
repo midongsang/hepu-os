@@ -483,6 +483,32 @@ static int virtio_gpu_get_display_info(virtio_gpu_resp_display_info_t *info)
  * 后端接口实现
  * ========================================================================== */
 
+/* N-4: 帧缓冲改为运行时按需分配。
+ * 原来是两个函数内 static 数组(fb_mem 3MB + fb_mem_large 8.3MB), 合计 11.3MB,
+ * 只要编译就进 .bss —— 而 32 位实际走 VBE, virtio_gpu_probe() 在
+ * "[GFX-VIRTIO] no virtio-gpu device found" 后就 return -1, 永远走不到分配处,
+ * 这 11.3MB 从开机到关机没被写过一次。
+ * 改成 mm_alloc_pages 按需取; virtio 探测失败时一次都不分配。
+ * 一次性按 1920x1080x32 的上限取, 避免 init 之后再切分辨率时重复分配/泄露小的几块。 */
+#define VIRTIO_FB_MAX_BYTES (1920u * 1080u * 4u)
+static uint8_t *g_virtio_fb_pool = NULL;
+static uint32_t g_virtio_fb_pool_bytes = 0;
+
+static uint8_t *virtio_fb_alloc(uint32_t bytes)
+{
+    if (g_virtio_fb_pool && g_virtio_fb_pool_bytes >= bytes) return g_virtio_fb_pool;
+    if (bytes > VIRTIO_FB_MAX_BYTES) return NULL;
+    {
+        extern uint32_t mm_alloc_pages(uint32_t count);
+        uint32_t pages = (VIRTIO_FB_MAX_BYTES + 4095u) / 4096u;
+        uint8_t *p = (uint8_t *)(uintptr_t)mm_alloc_pages(pages);
+        if (!p) return NULL;
+        g_virtio_fb_pool = p;
+        g_virtio_fb_pool_bytes = pages * 4096u;
+        return p;
+    }
+}
+
 static int virtio_init(void)
 {
     if (virtio_initialized) return 0;
@@ -521,10 +547,16 @@ static int virtio_init(void)
     virtio_height = 768;
     virtio_bpp = 32;
 
-    /* 简化：使用静态帧缓冲 */
-    static uint8_t fb_mem[1024 * 768 * 4] __attribute__((aligned(4096)));
-    virtio_framebuffer = fb_mem;
-    memset(virtio_framebuffer, 0, sizeof(fb_mem));
+    /* N-4: 运行时分配(见 virtio_fb_alloc 注释), 不再占 .bss */
+    {
+        uint8_t *fb = virtio_fb_alloc(1024 * 768 * 4);
+        if (!fb) {
+            serial_puts(0x3F8, "[GFX-VIRTIO] framebuffer alloc failed\n");
+            return -1;
+        }
+        virtio_framebuffer = fb;
+        memset(virtio_framebuffer, 0, 1024 * 768 * 4);
+    }
 
     virtio_initialized = 1;
 
@@ -859,10 +891,16 @@ int virtio_gpu_set_resolution(uint32_t width, uint32_t height)
     virtio_width = width;
     virtio_height = height;
 
-    /* 重新分配帧缓冲 */
-    static uint8_t fb_mem_large[1920 * 1080 * 4] __attribute__((aligned(4096)));
-    virtio_framebuffer = fb_mem_large;
-    memset(virtio_framebuffer, 0, width * height * 4);
+    /* N-4: 运行时分配, 复用同一块池(上限 1920x1080x32) */
+    {
+        uint8_t *fbl = virtio_fb_alloc(width * height * 4);
+        if (!fbl) {
+            serial_puts(0x3F8, "[GFX-VIRTIO] framebuffer realloc failed\n");
+            return -1;
+        }
+        virtio_framebuffer = fbl;
+        memset(virtio_framebuffer, 0, width * height * 4);
+    }
 
     /* 创建新资源 */
     virtio_gpu_create_resource_2d(virtio_resource_id, width, height);

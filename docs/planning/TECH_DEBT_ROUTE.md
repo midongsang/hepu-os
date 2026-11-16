@@ -615,7 +615,7 @@ desk_select("mine");       /* 切过去 */
 | N-1 | **2560x1600 双缓冲放不下** | 缓冲本身已能动态分配（`[GFX] draw target -> heap 16000KB (2560x1600)`，非黑 3,928,481 = 95.9%），但 `hs_wallpaper_build_cache` 按 `w*h*4` 再吃 16 MB，合计 32 MB = 整个 32 MB 堆（256 MB 机器档），后续分配全部失败 → 画面撕裂、壁纸全黑。**修法二选一**：壁纸缓存降精度（存 1920 宽渲染时横向拉伸，省 16 MB）/ 提堆（32→48 MB） | 内存预算 |
 | N-2 | **32 位 `png64_decode` 会卡死** | `[WP32] dec start` 之后没有 `dec ok`，串口行数从 809 掉到 429。五处 `P_ALLOC` 都有 NULL 检查，所以不是简单分配失败；未深挖是 inflate 还是写物理页阶段。当前绕过：壁纸走离线预解码 RGBA 数组（`b3292b5`）。**任何将来要用 PNG 解码的 32 位功能都需先解决这条** | 阻塞项 |
 | N-3 | `kunit_syscall_deep.c:402` 断言 `SYS_MAX == 222` | 实现是 236，**固定 FAIL**，与 P3-1 的 6 个 KUNIT fail 可能同源 | 测试 |
-| N-4 | 20 MB 死内存回收 | 原判断含 `fb_mem*` 11 MB + `back_buffer` 8.3 MB + QUIC/HTTP3 7.3 MB。**`back_buffer` 现已非闲置**（它就是双缓冲的绘制目标），实际可回收量需重算 | 清理 |
+| N-4 | ~~20 MB~~ **11.4 MB 死内存回收** | **已完成**。重算结果：原 20 MB 里 `back_buffer`(8.3 MB) 已非闲置（它是双缓冲绘制目标，不能算死内存），QUIC/HTTP3 那 7.3 MB 未在本轮核实到对应符号。真正可回收的是 `gfx_virtio.c` 两个函数内 static 数组：`fb_mem`(3 MB, 1024×768×4) + `fb_mem_large`(8.3 MB, 1920×1080×4) = 11.3 MB。32 位实际走 VBE，`virtio_gpu_probe()` 在 `[GFX-VIRTIO] no virtio-gpu device found` 后直接 `return -1`，**永远走不到分配处**，这两个数组从开机到关机没被写过一个字节，却整体占着 .bss。改成 `virtio_fb_alloc()` 用 `mm_alloc_pages` 运行时按需取（上限 1920×1080×32，一次取避免切换分辨率时重复分配），virtio 探测失败则一次都不分配。实测 `.bss` 108,522,412 → **97,078,188**（−11,444,224 B），`nm` 里 `fb_mem*` 符号消失，32 位冒烟 PASS，桌面 `NONBLACK=2073600` 无回退 | 清理（已做） |
 | N-5 | `gfx64_blur_region` 32 位仍是纯覆色 | **无调用点的死路径**（`hs_blur_region` 定义了但零调用）。桌面实际用的毛玻璃已走 `hs_panel_glass_*`（`e9e2f99`，32/64 共用），不经过这个函数，保持退化不影响任何画面 | 无需修 |
 
 ### 不做的事（明确列出，避免反复讨论）
