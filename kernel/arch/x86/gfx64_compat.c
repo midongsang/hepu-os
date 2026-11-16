@@ -67,8 +67,10 @@ static void g32_note_degrade(void)
 {
     if (g32_degrade_printed) return;
     g32_degrade_printed = 1;
-    serial_puts(0x3F8, "[COMPAT32] degrade: aa-round=plain, blur=fill, "
-                      "double-buffer=none, gradient=flat\n");
+    /* 双缓冲与渐变已补齐(3b3f856 / 本轮), 只剩两项真退化。
+     * 文案必须跟着改, 否则以后会误以为"已经对齐"。 */
+    serial_puts(0x3F8, "[COMPAT32] degrade: aa-round=plain, blur=fill "
+                      "(double-buffer, gradient now supported)\n");
 }
 
 /* ================= 像素 / 矩形 ================= */
@@ -265,11 +267,37 @@ void gfx64_draw_arc(int cx, int cy, int r, int a0, int a1, uint32_t color)
     }
 }
 
+/* 径向渐变圆: 中心 c1 -> 边缘 c2, 按到圆心距离插值。
+ * 原来是直接 gfx_fillcircle_rgb(cx,cy,r,c1) 画成纯色(c2 被丢弃),
+ * 于是 32 位的"渐变"就等于"渐变第一端的纯色"。实现与 64 位
+ * gfx64_fill_circle_gradient 同构(同样的 255/r 归一化与 >>8 混合),
+ * 差别只在末尾没有 AA 边缘 —— 那是另一档降级, 未补。 */
 void gfx64_fill_circle_gradient(int cx, int cy, int r, uint32_t c1, uint32_t c2)
 {
-    g32_note_degrade();
-    gfx_fillcircle_rgb(cx, cy, r, c1);
-    (void)c2;
+    if (r <= 0) return;
+
+    int r1 = (c1 >> 16) & 0xFF, g1 = (c1 >> 8) & 0xFF, b1 = c1 & 0xFF;
+    int r2 = (c2 >> 16) & 0xFF, g2 = (c2 >> 8) & 0xFF, b2 = c2 & 0xFF;
+    int r2i = r * r;
+
+    for (int dy = -r; dy <= r; dy++) {
+        /* 每行只算一次 dy^2, 内层按 dx 走 */
+        int d2y = dy * dy;
+        int span = 0;
+        /* 求出该行 dx 的上界, 避免逐像素比较 d2 > r2i */
+        while ((span + 1) * (span + 1) + d2y <= r2i) span++;
+
+        for (int dx = -span; dx <= span; dx++) {
+            int d2 = dx * dx + d2y;
+            uint32_t dist = (uint32_t)g32_isqrt(d2);
+            int t = (int)(dist * 255u / (uint32_t)r);
+            int ia = 255 - t;
+            uint8_t rr = (uint8_t)((r1 * ia + r2 * t) >> 8);
+            uint8_t gg = (uint8_t)((g1 * ia + g2 * t) >> 8);
+            uint8_t bb = (uint8_t)((b1 * ia + b2 * t) >> 8);
+            gfx_putpixel(cx + dx, cy + dy, ((uint32_t)rr << 16) | ((uint32_t)gg << 8) | bb);
+        }
+    }
 }
 
 /* ================= 线 / 多边形 ================= */
