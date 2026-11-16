@@ -441,7 +441,15 @@ void gfx64_set_target_front(void) { }
  * 常驻探针会读它算 presentK, 32 位读到恒 0 是如实的(单缓冲直写没有拷贝阶段)。 */
 uint64_t gfx64_prof_present;
 
-void gfx64_present(void) { gfx_flip(); }
+void gfx64_present(void)
+{
+    /* 桌面每帧结束点。这里直接走后端提交(整帧 back_buffer -> LFB),
+     * 而不是 gfx_flip: flip 是通用入口, 图形自检/早期文本也在调它,
+     * 让那些路径每步都做一次 8.29MB 拷贝会把启动拖到 70 秒以上
+     * (实测单次 32.6M 周期), 而它们只需要"画上去了"不需要"已上屏"。 */
+    extern int gfx_backend_present(void);
+    (void)gfx_backend_present();
+}
 void gfx64_present_region(int x, int y, int w, int h) { (void)x;(void)y;(void)w;(void)h; }
 
 /* ================= 查询 ================= */

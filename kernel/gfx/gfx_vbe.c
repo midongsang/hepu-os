@@ -301,9 +301,41 @@ static void vbe_clear(gfx_color_t color)
     vbe_fill_rect(0, 0, vbe_width, vbe_height, color);
 }
 
+/* 把绘制目标整帧提交到硬件 LFB。
+ *
+ * 原来这里是空函数: 绘制全部直写 LFB, "present" 无事可做。代价是单缓冲 ——
+ * 拖动窗口会留残影, 而且"画进缓冲"和"显示出来"是同一件事, 没有任何中间
+ * 状态可供观测 (P3-13 排查时就因此看不到"到底画到哪了")。
+ *
+ * 现在约定: 三条绘制路径(gfx_* 后端 / gfx_write_pixel_rgb 老 API /
+ * hpdesk 的 gfx64_*) 全部写 gfx_draw_target(= back_buffer), 由这里一次
+ * 提交到 vbe_fb_phys(= LFB)。语义与 64 位 lfb_db_present 对齐。 */
 static void vbe_present(void)
 {
-    /* VBE直接写入帧缓冲，无需额外操作 */
+    if (vbe_fb_phys < 0x10000000u) return;
+
+    extern uint8_t *gfx_draw_target;
+    extern int gfx_pitch, gfx_height;
+    if (!gfx_draw_target) return;
+
+    /* 尺寸必须取全局 gfx_pitch/gfx_height, 不能用 vbe_pitch/vbe_height:
+     * 后者是后端自己字段, 实测残留在 1024x768@pitch4096, 而真实模式是
+     * 1920x1080@pitch7680 —— 用后者只提交前 3MB(约 402 行), 桌面下半截
+     * 永远是黑的。 */
+    uint32_t pitch  = (uint32_t)gfx_pitch;
+    uint32_t height = (uint32_t)gfx_height;
+    if (!pitch || !height) return;
+
+    uint8_t *dst = (uint8_t *)(uintptr_t)vbe_fb_phys;
+    const uint8_t *src = gfx_draw_target;
+    if (src == dst) return;   /* 已经是直写模式, 无需提交 */
+
+    uint32_t bytes = pitch * height;
+    uint32_t nw = bytes / 4u;
+    uint32_t *d32 = (uint32_t *)dst;
+    const uint32_t *s32 = (const uint32_t *)src;
+    for (uint32_t i = 0; i < nw; i++) d32[i] = s32[i];
+    for (uint32_t i = nw * 4u; i < bytes; i++) dst[i] = src[i];
 }
 
 static void* vbe_get_fb_vaddr(void)
@@ -316,9 +348,20 @@ static uint32_t vbe_get_fb_paddr(void)
     return vbe_fb_phys;
 }
 
+/* 供 gfx_flip 调用: 有 VBE 在管提交就返回 0, 由通用路径接管则返回 -1 */
+int gfx_backend_present(void)
+{
+    if (vbe_fb_phys < 0x10000000u) return -1;
+    vbe_present();
+    return 0;
+}
+
 static int vbe_has_double_buffer(void)
 {
-    return 0; /* VBE默认单缓冲 */
+    /* 现在有: 绘制落 gfx_draw_target, 由 vbe_present 一次提交。
+     * 前提是 gfx_draw_target 指向一块与 LFB 不同的内存(back_buffer)。 */
+    extern uint8_t *gfx_draw_target;
+    return (gfx_draw_target && vbe_fb_phys >= 0x10000000u) ? 1 : 0;
 }
 
 static void vbe_get_mode(uint32_t *w, uint32_t *h, uint32_t *bpp)
@@ -365,7 +408,11 @@ void gfx_vbe_sync_mode(void)
     vbe_height = (uint32_t)gfx_height;
     vbe_bpp    = (uint32_t)gfx_bpp;
     vbe_pitch  = vbe_width * (vbe_bpp / 8);
-    vbe_framebuffer = gfx_fb_addr;
+    /* 绘制目标与硬件基址拆开了: 原来两者都 = gfx_fb_addr, 于是"往哪画"
+     * 和"往哪提交"绑定成一个值, 双缓冲在这种绑定下不可能成立。
+     * vbe_framebuffer 是绘制目标(可以是 back_buffer), vbe_fb_phys 才是 LFB。 */
+    extern uint8_t *gfx_draw_target;
+    vbe_framebuffer = gfx_draw_target ? gfx_draw_target : gfx_fb_addr;
     vbe_fb_phys = (uint32_t)(uintptr_t)gfx_fb_addr;
 
     /* 只在值真的变了才打印, 因为这个函数会在每次渲染前被调用 */

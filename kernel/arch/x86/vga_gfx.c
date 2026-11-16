@@ -36,6 +36,13 @@ void gfx_set_vbe_info(int w, int h, uint8_t *fb, int pitch, int bpp)
  * 更高分辨率(2K/4K)可动态分配或使用单缓冲直接写帧缓冲 */
 #define GFX_MAX_BUF (1920 * 1080 * 4)
 static uint8_t back_buffer[GFX_MAX_BUF];
+
+/* 绘制目标 —— 三条绘制路径统一写这里, 与"硬件基址"彻底分开。
+ *
+ * 原来是同一个值兼任两职(gfx_fb_addr 既是显存基址又是绘制目标),
+ * 于是"往哪画"和"往哪提交"绑死, 双缓冲在这种绑定下不可能成立。
+ * 现在: 绘制全落这个缓冲, present 时才一次拷到 LFB。 */
+uint8_t *gfx_draw_target = back_buffer;
 uint8_t *framebuffer = back_buffer;  /* V6.60: 导出供抗锯齿字体渲染使用 */
 
 /* V6.50: 24/32bpp真彩色调色板 (VGA 256色→RGB888转换表) */
@@ -239,7 +246,13 @@ void vga_gfx_init(void)
         /* V6.94: 高分辨率支持 - 计算所需缓冲区大小 */
         int bpp_bytes = (gfx_bpp == 8) ? 1 : (gfx_bpp == 24) ? 3 :
                         (gfx_bpp == 64) ? 8 : 4;
-        uint32_t needed_size = gfx_pitch * gfx_height * bpp_bytes;
+        (void)bpp_bytes;
+        /* gfx_pitch 已经是"每行字节数"(= width * bpp/8), 这里再乘一次
+         * bpp_bytes 会得到 1920*4*1080*4 = 33MB 的假需求, 直接超过
+         * GFX_MAX_BUF(8,294,400) 让双缓冲分支永远进不去。
+         * 真实需求 = pitch * height = 1920*4*1080 = 8,294,400, 与
+         * GFX_MAX_BUF 恰好相等 —— 所以是"刚好装下", 没有余量。 */
+        uint32_t needed_size = gfx_pitch * gfx_height;
 
         snprintf(gfx_dbg, sizeof(gfx_dbg),
                  "[GFX-INIT] mode=%dx%d@%dbpp pitch=%d need=%dKB max=%dKB\n",
@@ -781,14 +794,12 @@ void gfx_set_invert(int on) { (void)on; }
 
 void gfx_flip(void)
 {
-    /* D-7: bochs dispi 真彩色路径没有 back buffer —— 绘制（gfx_fill_rect 等）
-     * 走 VBE 后端直写 LFB，已经到达显存。此时若还执行下面的"把 back_buffer
-     * 整帧拷到 gfx_fb_addr"，反而会用一块陈旧/未初始化的缓冲**覆盖掉**画好的
-     * 桌面（实测整屏变成单一 0x1A202C）。所以这条路径下 flip 是无操作。 */
-    {
-        extern uint32_t bochs_dispi_fb_phys(void);
-        if (bochs_dispi_fb_phys() != 0) return;
-    }
+    /* 原来这里有一道 "bochs_dispi_fb_phys() != 0 就 return", 理由是
+     * dispi 真彩色路径是单缓冲直写、再拷会用陈旧 back_buffer 覆盖桌面
+     * (实测整屏变 0x1A202C)。那个理由在"绘制目标 = LFB"的前提下成立;
+     * 现在绘制目标已经搬到 gfx_draw_target(back_buffer), 这条路径必须走
+     * present 才能把画面提交出去 —— 所以那道 return 撤掉。
+     * 单缓冲的安全判断仍由下面 "framebuffer == gfx_fb_addr" 那条兜住。 */
 
     /* V2.61: 休眠灭屏状态 -> 保持黑屏 */
     extern int pm_is_screen_blanked(void);
@@ -797,10 +808,13 @@ void gfx_flip(void)
         return;
     }
 
-    /* V6.94: 单缓冲模式(高分辨率) - 直接写帧缓冲, 无需拷贝 */
+    /* 单缓冲模式: 绘制目标就是硬件帧缓冲, 已经写进去了, 无需拷贝 */
     if (framebuffer == gfx_fb_addr) {
-        return;  /* 已经直接写入硬件帧缓冲 */
+        return;
     }
+
+    /* 提交由桌面入口 gfx64_present 直接调后端完成; 通用 flip 只保留
+     * 下面的继续路径(老 API 的直写场景), 不在这里做整帧拷贝。 */
 
     gfx_wait_vsync();
     int bytes_per_pixel = (gfx_bpp == 8) ? 1 : (gfx_bpp == 24) ? 3 :

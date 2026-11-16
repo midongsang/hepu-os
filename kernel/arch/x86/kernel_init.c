@@ -216,8 +216,13 @@ void hepu_sched_init(void)
              * "framebuffer == gfx_fb_addr 就 return" 的单缓冲判定。 */
             {
                 extern uint8_t *framebuffer;
-                framebuffer = (uint8_t *)bochs_dispi_fb_phys();
-                serial_puts(0x3F8, "[GFX] framebuffer -> LFB (single-buffer direct)\n");
+                extern uint8_t *gfx_draw_target;
+                /* 绘制目标 -> back_buffer, 不再是 LFB。
+                 * 这样三条绘制路径都落在一块内存缓冲, 由 present 一次提交,
+                 * 才有双缓冲(和无残影); 直写 LFB 时"画"和"显示"是同一件事,
+                 * 没有任何中间状态可观测。 */
+                framebuffer = gfx_draw_target;
+                serial_puts(0x3F8, "[GFX] framebuffer -> draw target (double-buffer)\n");
             }
             {
                 extern int gfx_pitch;
