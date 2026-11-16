@@ -41,6 +41,14 @@ font64.c      字形栅格
 
 > **32 位侧 2026-11-16 更新（`3b3f856`）**：32 位不等同于"没有后端"，它有 4 条探测路径（virtio > GOP > VBE > VGA，`gfx_backend_t` 11 字段厚接口，含 `has_double_buffer` / `get_fb_paddr`）。此前的真问题是 `gfx_fb_addr` 一个变量兼任"硬件基址"与"绘制目标"，双缓冲在这种绑定下不可能成立。现已拆开：新增 `gfx_draw_target`（三条绘制路径统一写它，初值 `back_buffer`），`vbe_fb_phys` 只保留基址语义，`vbe_present` 由空函数改为整帧提交，`vbe_has_double_buffer` 由 0 改 1。单次整帧提交实测 32.6M 周期（8.29MB），因此只挂在桌面帧结束点 `gfx64_present` 上，通用 `gfx_flip`（图形自检也在用）不做整帧拷贝。32 位冒烟 `desk=1 lines=808` 通过。
 >
+> 2026-11-16 `5fae0a0` **后端契约已合并**：`display_backend_t` / `fb_desc_t` 从
+> `arch/x86_64/display_backend.h` 拆到 `shared/gfx/display_backend.h`（纯契约，两边共用），
+> 64 位原头文件只剩三项 64 位专属声明。32 位新增 `arch/x86/gfx32_display.c` 桥接层：
+> `vbe32_backend` 把 32 位探测出来的提交能力包成 3 入口薄接口，上游（桌面/合成层）
+> 只依赖"present 这一件事"。**职责划分是刻意的**：探测与能力声明仍归厚接口
+> `gfx_backend_t`（`has_double_buffer` / `get_fb_paddr` / `fill_rect` 是降级链的唯一来源），
+> 提交契约归薄接口；换后端（VBE/virtio/GOP）只改 `gfx32_display.c` 一处。
+>
 > 随后（`5e9ff5c`）补上 `present_region` 的 32 位实现：`vbe_present_region` 按行只拷
 > `[x,y,w,h)`，因为 hpdesk 的局部提交点（`hpdesk.c` 6724/6725 擦旧/铺新光标、6774 拖动窗口）
 > 都是几十像素见方的小矩形，与 8.29 MB 整帧差三个数量级。此前 `gfx64_present_region` 在
