@@ -228,16 +228,34 @@ static init_stats_t init_stats;
 
 /* D-7 取证：统计 0xA0000 前 64000 字节里的非零像素数。
  * flip 写的是全黑，正常应接近 0；读到大量非零说明 flip 之后还有人往显存写。 */
+/* 注意: 这里原来写死 0xA0000（VGA 显存），但 VBE 真彩色模式下帧缓冲在
+ * 0xFD000000，探针读的是一块与桌面完全无关的遗留内存 —— 它报的 nonzero
+ * 涨落和"桌面画了多少"没有关系，曾据此误判过 P3-13。
+ * 改为读当前真实绘制基址，VGA 模式下自然还是 0xA0000，两种模式都对。 */
 static void gfx_fb_stats(const char *tag)
 {
-    volatile uint8_t *fb = (volatile uint8_t *)0xA0000;
+    extern uint8_t *gfx_fb_addr;
+    volatile uint8_t *fb = (volatile uint8_t *)gfx_fb_addr;
     int nz = 0;
     for (int i = 0; i < 64000; i++) if (fb[i]) nz++;
+    /* P3-13 定位: 分块统计整帧, 看"没画"的是哪一段。
+     * 1920x1080x32 = 8,294,400 B, 每块 512KB 抽前 64KB, 共 16 块。
+     * 输出形如 [0]=... [1]=... 便于一眼看出内容分布。 */
+    int blk[16];
+    for (int b = 0; b < 16; b++) {
+        int bz = 0;
+        for (int i = 0; i < 65536; i++) if (fb[b * 524288 + i]) bz++;
+        blk[b] = bz;
+    }
     init_serial_puts("[GFX] fb ");
     init_serial_puts(tag);
     init_serial_puts(" nonzero=");
     init_serial_puthex((uint32_t)nz);
-    init_serial_puts("\n");
+    init_serial_puts(" blk=");
+    for (int b = 0; b < 16; b++) {
+        init_serial_puthex((uint32_t)blk[b]);
+        init_serial_puts(b == 15 ? "\n" : "/");
+    }
 }
 
 /* 阶段名称 */

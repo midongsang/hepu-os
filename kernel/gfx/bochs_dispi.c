@@ -174,5 +174,8 @@ int bochs_dispi_init(uint32_t want_w, uint32_t want_h, uint32_t want_bpp)
      * 真机 LFB 没有这层东西, 保持现状。 */
 
     dputs("[BD-VBE] linear framebuffer ready\n");
+    dputs("[BD-VBE] bd_fb_phys=0x");
+    dputhex(bd_fb_phys);
+    dputs("\n");
     return 0;
 }

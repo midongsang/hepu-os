@@ -227,6 +227,27 @@ void hepu_sched_init(void)
                 serial_puthex(0x3F8, (uint32_t)gfx_pitch);
                 serial_puts(0x3F8, "\n");
             }
+            /* P3-13: 显存到这里才真正存在, 而分页早在 hepu_mem_init 里就开了
+             * （那段 D-7 映射跑在 bochs_dispi_init 之前, 读到的还只是 0）。
+             * 所以 LFB 的映射必须在这里补 —— 错过这一步, 之后所有对
+             * 0xFD000000 的直写都落在未映射地址上, 桌面永远黑。 */
+            {
+                extern page_directory_t *paging_get_kernel_dir(void);
+                extern int paging_map(page_directory_t *, uint32_t, uint32_t, uint32_t);
+                uint32_t lbase = (uint32_t)(uintptr_t)gfx_fb_addr;
+                if (lbase >= 0x10000000u) {
+                    uint32_t lbytes = (uint32_t)gfx_width * (uint32_t)gfx_height * 4u;
+                    int lok = 1;
+                    for (uint32_t off = 0; off < lbytes; off += 4096u) {
+                        if (paging_map(paging_get_kernel_dir(), lbase + off,
+                                       lbase + off, PAGE_PRESENT | PAGE_WRITE) != 0) {
+                            lok = 0; break;
+                        }
+                    }
+                    serial_puts(0x3F8, lok ? "[GFX] LFB mapped (after dispi init)\n"
+                                           : "[GFX] LFB map FAILED (after dispi init)\n");
+                }
+            }
             /* VBE 后端内部状态同样要跟上, 否则它仍按 320x200@8bpp 算行跨距 */
             {
                 extern void gfx_vbe_sync_mode(void);
@@ -369,7 +390,22 @@ void hepu_mem_init(uint32_t mem_kb)
         extern uint32_t bochs_dispi_height(void);
         extern page_directory_t *paging_get_kernel_dir(void);
         extern int paging_map(page_directory_t *, uint32_t, uint32_t, uint32_t);
+        /* P3-13 根因: 这里原来只用 bochs_dispi_fb_phys()，但那个 static
+         * 变量（.bss 里的 bd_fb_phys）会在 dispi init 成功之后、走到这里之前
+         * 被清成 0 —— 函数内部实测是 0xFD000000，到这一行读到 0x00000000。
+         * 结果是 if(fb && ...) 恒为假，8.29MB 的 LFB 从来没被映射过，
+         * 分页开启后所有直写 0xFD000000 的操作都打在未映射地址上。
+         *
+         * 修法: 用实际绘制基址 gfx_fb_addr 兜底 —— 它在 dispi init 成功时
+         * 已被设成同一个物理基址，且是绘制路径真正使用的那一个；两个来源
+         * 任一可用即可映射，不再单点依赖那个会被清零的 static。 */
+        extern uint8_t *gfx_fb_addr;
         uint32_t fb = bochs_dispi_fb_phys();
+        if (!fb && (uint32_t)(uintptr_t)gfx_fb_addr >= 0x10000000u)
+            fb = (uint32_t)(uintptr_t)gfx_fb_addr;
+        serial_puts(0x3F8, "[GFX] LFB phys=0x");
+        { extern void serial_puthex(uint16_t, uint32_t); serial_puthex(0x3F8, fb); }
+        serial_puts(0x3F8, "\n");
         if (fb && fb >= 0x10000000u) {
             uint32_t bytes = bochs_dispi_width() * bochs_dispi_height() * 4u;
             int ok = 1;
