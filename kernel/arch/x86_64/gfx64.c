@@ -1774,25 +1774,34 @@ void gfx64_draw_circle_aa(int cx, int cy, int r, uint32_t color)
 /* ---------- 抗锯齿实心圆（统一 vg64 矢量管线） ---------- */
 void gfx64_fill_circle_aa(int cx, int cy, int r, uint32_t color)
 {
-    if (!gfx_initialized || r < 0) return;
-    vg_fill_circle(cx, cy, r, color);
-    return;
-#if 0
-    int r2 = r * r;
-    int r2_out = (r + 1) * (r + 1);
+    if (!gfx_initialized || r <= 0) return;
+
+    /* SDF 式(与 32 位 gfx64_fill_circle_aa 同一套算法, 保证两边观感一致):
+     * 内部 (r-2)^2 到外部 (r+1)^2 之间按"到圆边的距离"给透明度,
+     * alpha = 255 - |dist-r| * 128。
+     *
+     * 原先是 vg_fill_circle(矢量管线)。但桌面在 surface 渲染上下文里画时,
+     * vg 管线不经过 gfx64_put_pixel, 直接写屏幕缓冲 —— 于是色圆被画到
+     * surface 之外, 8 个圆只剩描边可见(实测回归)。改用 put_pixel/blend_pixel
+     * 这两个"认 surface"的入口, 桌面内外都对。 */
+    int r2i = (r > 2) ? (r - 2) * (r - 2) : 0;
+    int r2o = (r + 1) * (r + 1);
+
     for (int dy = -r - 1; dy <= r + 1; dy++) {
-        for (int dx = -r - 1; dx <= r + 1; dx++) {
-            int d2 = dx * dx + dy * dy;
-            if (d2 < r2 || d2 > r2_out) continue;
+        int d2y = dy * dy;
+        int span = 0;
+        while ((span + 1) * (span + 1) + d2y <= r2o) span++;
+        for (int dx = -span; dx <= span; dx++) {
+            int d2 = dx * dx + d2y;
+            if (d2 <= r2i) { gfx64_put_pixel(cx + dx, cy + dy, color); continue; }
             uint32_t dist = math64_isqrt((uint32_t)d2);
             int delta = (int)dist - r;
-            int alpha = 255 - delta * 128;
+            int alpha = 255 - (delta < 0 ? -delta : delta) * 128;
             if (alpha < 0) alpha = 0;
             if (alpha > 255) alpha = 255;
             gfx64_blend_pixel(cx + dx, cy + dy, color, alpha);
         }
     }
-#endif
 }
 
 /* ---------- 抗锯齿圆弧 V3: 1° 采样点 + Wu 抗锯齿线段连接
