@@ -1059,7 +1059,17 @@ void x86_64_kernel_main(void)
 
     /* 初始化PS/2鼠标 */
     vga_puts("[INIT] Initializing 64-bit PS/2 mouse...\n");
-    mouse64_init(1024, 768);
+    /* 光标初始位置居中于真实分辨率, 不再写死 1024x768。
+     * 写死之后在 1920x1080 上光标从 (512,384) 起步 —— 也就是偏左上, 用户第一眼
+     * 看到的就是"鼠标不在屏幕中间"。mouse64_init 内部只是把坐标设为 (w/2, h/2),
+     * 传真实值即可; 取不到图形信息时退回 1024x768(初始化早期可能还没设模式)。 */
+    {
+        int mw = 0, mh = 0, mbpp = 0;
+        extern void gfx64_get_info(int *w, int *h, int *bpp);
+        gfx64_get_info(&mw, &mh, &mbpp);
+        if (mw <= 0 || mh <= 0) { mw = 1024; mh = 768; }
+        mouse64_init(mw, mh);
+    }
 
     /* 初始化AHCI/SATA */
     vga_puts("[INIT] Initializing 64-bit AHCI/SATA...\n");

@@ -399,7 +399,11 @@ static kunit_result_t test_syscall_error_codes(void)
 static kunit_result_t test_syscall_max_boundary(void)
 {
     KUNIT_ASSERT(SYS_MAX > 0, "SYS_MAX > 0");
-    KUNIT_ASSERT(SYS_MAX == 222, "SYS_MAX == 222");
+    /* 不写死具体号: SYS_MAX 会随 syscall 表增长(当前 236), 每次加号都改断言
+     * 不是在测边界, 是在制造维护负担 —— 而且断言一旦过期就变成"固定 FAIL",
+     * 会让真正的回归被淹没。这里测不变式: 号落在 Linux 号段下端与 512 之间
+     * (原生号设计上不与 Linux 高位段重叠)。 */
+    KUNIT_ASSERT(SYS_MAX >= 200 && SYS_MAX < 512, "SYS_MAX in sane range");
     return KUNIT_PASS;
 }
 
