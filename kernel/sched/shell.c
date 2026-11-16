@@ -181,6 +181,7 @@ void shell_main(void)
 
     extern void serial_puts(unsigned short, const char *);
     serial_puts(0x3F8, "[SHELL] main started\n");
+
     vga_set_color(VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
 
 #ifdef HEPU_BOOT_DEBUG

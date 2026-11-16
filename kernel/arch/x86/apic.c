@@ -169,7 +169,17 @@ static int init_local_apic(uint32_t lapic_addr)
 
     /* 初始化LVT条目 */
     lapic_write(LAPIC_LVT_TIMER, 0x10000);  /* 屏蔽定时器 */
-    lapic_write(LAPIC_LVT_LINT0, 0x10000);  /* 屏蔽LINT0 */
+    /* LINT0 必须保持 ExtINT 直通, 不能屏蔽。
+     *
+     * 根因(本次实测): 8259 PIC 的中断不是直接进 CPU 的, 它通过 LAPIC 的
+     * LINT0 以 ExtINT 投递方式进来。原来这里写 0x10000(屏蔽) 之后, PIT 和
+     * 键盘的中断全部到不了 CPU —— 表现为 pit_ticks 恒 0、shell 读不到输入,
+     * 而且 IF=1 也救不回来(不是 IF 的问题, 是投递路径被掐了)。
+     * 同时 IOAPIC 在 init_io_apic 里被全部屏蔽, 于是两条路都断了。
+     * 按 KERNEL.md 的 "PIC(8259) + Local APIC", 两者是并存的: 8259 走
+     * LINT0/ExtINT, LAPIC 提供 IPI 与自身定时器。所以这里给 ExtINT 模式
+     * (delivery mode 7), 不屏蔽。 */
+    lapic_write(LAPIC_LVT_LINT0, 0x00000700);  /* ExtINT, 不屏蔽 */
     lapic_write(LAPIC_LVT_LINT1, 0x10000);  /* 屏蔽LINT1 */
     lapic_write(LAPIC_LVT_ERROR, 0x10000);  /* 屏蔽错误 */
 
