@@ -338,6 +338,43 @@ static void vbe_present(void)
     for (uint32_t i = nw * 4u; i < bytes; i++) dst[i] = src[i];
 }
 
+/* 局部提交: 只把 [x,y,w,h) 这块从绘制目标拷到 LFB。
+ *
+ * hpdesk 调它的场景是光标擦旧/铺新(6724/6725)和拖动窗口(6774) —— 都是
+ * 几十像素见方的小矩形。整帧提交是 8.29MB/32.6M 周期, 而一个小矩形是
+ * 几百字节, 差三个数量级。没有这条路径, 32 位的双缓冲就只能"每帧全拷",
+ * 光标一动就卡。 */
+void vbe_present_region(int x, int y, int w, int h)
+{
+    if (vbe_fb_phys < 0x10000000u) return;
+    if (w <= 0 || h <= 0) return;
+
+    extern uint8_t *gfx_draw_target;
+    extern int gfx_pitch, gfx_height, gfx_width;
+    if (!gfx_draw_target) return;
+
+    /* 裁剪到屏幕: 光标在边缘时矩形会出界 */
+    if (x < 0) { w += x; x = 0; }
+    if (y < 0) { h += y; y = 0; }
+    if (x + w > gfx_width)  w = gfx_width - x;
+    if (y + h > gfx_height) h = gfx_height - y;
+    if (w <= 0 || h <= 0) return;
+
+    uint32_t stride = (uint32_t)gfx_pitch;
+    uint8_t *dst = (uint8_t *)(uintptr_t)vbe_fb_phys;
+    const uint8_t *src = gfx_draw_target;
+    uint32_t row_bytes = (uint32_t)w * 4u;   /* 当前只有 32bpp 走这条 */
+
+    for (int j = 0; j < h; j++) {
+        uint8_t *d = dst + (uint32_t)(y + j) * stride + (uint32_t)x * 4u;
+        const uint8_t *s2 = src + (uint32_t)(y + j) * stride + (uint32_t)x * 4u;
+        uint32_t nw = row_bytes / 4u;
+        uint32_t *d32 = (uint32_t *)d;
+        const uint32_t *s32 = (const uint32_t *)s2;
+        for (uint32_t i = 0; i < nw; i++) d32[i] = s32[i];
+    }
+}
+
 static void* vbe_get_fb_vaddr(void)
 {
     return vbe_framebuffer;
@@ -349,6 +386,15 @@ static uint32_t vbe_get_fb_paddr(void)
 }
 
 /* 供 gfx_flip 调用: 有 VBE 在管提交就返回 0, 由通用路径接管则返回 -1 */
+/* 供 gfx64_present_region 调用 */
+int gfx_backend_present_region(int x, int y, int w, int h)
+{
+    if (vbe_fb_phys < 0x10000000u) return -1;
+    extern void vbe_present_region(int, int, int, int);
+    vbe_present_region(x, y, w, h);
+    return 0;
+}
+
 int gfx_backend_present(void)
 {
     if (vbe_fb_phys < 0x10000000u) return -1;

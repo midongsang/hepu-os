@@ -450,7 +450,13 @@ void gfx64_present(void)
     extern int gfx_backend_present(void);
     (void)gfx_backend_present();
 }
-void gfx64_present_region(int x, int y, int w, int h) { (void)x;(void)y;(void)w;(void)h; }
+void gfx64_present_region(int x, int y, int w, int h)
+{
+    /* 与整帧提交同理: 只走后端, 不绕 gfx_flip。
+     * 这条路径服务光标擦旧/铺新和拖动窗口这类小矩形。 */
+    extern int gfx_backend_present_region(int, int, int, int);
+    (void)gfx_backend_present_region(x, y, w, h);
+}
 
 /* ================= 查询 ================= */
 
