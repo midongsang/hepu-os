@@ -17,6 +17,7 @@ extern void vga_printf(const char *fmt, ...);
 #include "hs_apps.h"
 #include "hs_systools.h"
 #include "hsinput.h"
+#include "../../shared/desktop/desk_api.h"
 
 /* V0.13.10: 缺失接口恢复 — 切换器渲染前向声明 */
 static void hs_switcher_render(void);
@@ -50,6 +51,110 @@ static int g_sw_count = 0;
 static int g_sw_order[HS_MAX_WINDOWS];
 
 /* 外部函数 */
+/* ============================================================================
+ * 绘制出口: 统一走当前桌面表面(desk_surface_t), 不再直接调 gfx64_*
+ *
+ * 为什么要有这一层: hpdesk 之前直接调 29 种 gfx64_* 函数 —— 那是"64 位自研的
+ * 图形后端", 32 位靠 compat 层同名同签名硬凑。结果是"换一个桌面"必须先有
+ * 另一套 gfx64_*, 用户自己想写个桌面根本接不进来。走 desk_surface_t 之后,
+ * 后端由注册表决定, hpdesk 只是一份"桌面实现", 和其他人写的桌面地位相同。
+ *
+ * 取表面用懒加载: init 阶段(dsk_start 调 backend->init 时)已经置为运行态,
+ * 所以第一次绘制就能拿到。万一拿不到(老路径 hpdesk_init 直调), 兜底回 gfx64_*,
+ * 保证不炸 —— 这些兜底分支在新代码里不会再走到。
+ * ========================================================================== */
+/* 兜底路径要用的后端原语, 先声明再定义包装层(它们的正式 extern 在下面) */
+extern uint32_t gfx64_get_pixel(int x, int y);
+extern void    *gfx64_get_framebuffer(void);
+extern int      gfx64_get_width(void);
+extern int      gfx64_get_height(void);
+
+static desk_surface_t *g_hs_s;
+static desk_surface_t *hs_surf(void)
+{
+    if (!g_hs_s) g_hs_s = desk_active_surface();
+    return g_hs_s;
+}
+
+static void hs_put_pixel(int x, int y, uint32_t c)
+{ desk_surface_t *s = hs_surf(); if (s) s->put_pixel(s, x, y, c); }
+static uint32_t hs_get_pixel(int x, int y)
+{ desk_surface_t *s = hs_surf(); return s ? s->get_pixel(s, x, y) : gfx64_get_pixel(x, y); }
+static void hs_blend_pixel(int x, int y, uint32_t fg, int a)
+{ desk_surface_t *s = hs_surf(); if (s) s->blend_pixel(s, x, y, fg, a); }
+static void hs_fill_rect(int x, int y, int w, int h, uint32_t c)
+{ desk_surface_t *s = hs_surf(); if (s) s->fill_rect(s, x, y, w, h, c); }
+static void hs_draw_rect(int x, int y, int w, int h, uint32_t c)
+{ desk_surface_t *s = hs_surf(); if (s) s->draw_rect(s, x, y, w, h, c); }
+static void hs_fill_rounded_rect(int x, int y, int w, int h, int r, uint32_t c)
+{ desk_surface_t *s = hs_surf(); if (s) s->fill_rounded_rect(s, x, y, w, h, r, c); }
+static void hs_draw_rounded_rect(int x, int y, int w, int h, int r, uint32_t c)
+{ desk_surface_t *s = hs_surf(); if (s) s->draw_rounded_rect(s, x, y, w, h, r, c); }
+static void hs_fill_circle(int cx, int cy, int r, uint32_t c)
+{ desk_surface_t *s = hs_surf(); if (s) s->fill_circle(s, cx, cy, r, c); }
+static void hs_draw_line_aa(int x0, int y0, int x1, int y1, uint32_t c)
+{ desk_surface_t *s = hs_surf(); if (s) s->draw_line_aa(s, x0, y0, x1, y1, c); }
+/* 这里要注意两个签名的差异: hpdesk 侧一直是 gfx64_fill_polygon(xs, ys, n, c)
+ * 传两个数组, 而表面接口用交错数组 pts[2i]/pts[2i+1] —— 因为后端实现
+ * (两个数组) 和调用方 (可以是任意桌面) 各有各的方便, 在接口层统一成一种,
+ * 转换放在这里做一次, 不让每个桌面都写一遍。 */
+static void hs_fill_polygon(const int *xs, const int *ys, int n, uint32_t c)
+{
+    desk_surface_t *s = hs_surf();
+    int pts[64];
+    if (!s || n <= 0) return;
+    if (n > 32) n = 32;
+    for (int i = 0; i < n; i++) { pts[2 * i] = xs[i]; pts[2 * i + 1] = ys[i]; }
+    s->fill_polygon(s, pts, n, c);
+}
+static void hs_fill_round_rect_aa(int x, int y, int w, int h, int r, uint32_t c)
+{ desk_surface_t *s = hs_surf(); if (s) s->fill_round_rect_aa(s, x, y, w, h, r, c); }
+static void hs_fill_round_rect_argb(void *buf, int bw, int bh, int x, int y,
+                                    int w, int h, int r, uint32_t c, int corners)
+{ desk_surface_t *s = hs_surf(); if (s) s->fill_round_rect_argb(s, buf, bw, bh, x, y, w, h, r, c, corners); }
+static void hs_blur_region(int x, int y, int w, int h, int rad, uint32_t ov, int oa)
+{ desk_surface_t *s = hs_surf(); if (s) s->blur_region(s, x, y, w, h, rad, ov, oa); }
+static void hs_fill_circle_gradient(int cx, int cy, int r, uint32_t c1, uint32_t c2)
+{ desk_surface_t *s = hs_surf(); if (s) s->fill_circle_gradient(s, cx, cy, r, c1, c2); }
+static void hs_draw_circle(int cx, int cy, int r, uint32_t c)
+{ desk_surface_t *s = hs_surf(); if (s) s->draw_circle(s, cx, cy, r, c); }
+static void hs_draw_arc(int cx, int cy, int r, int a0, int a1, uint32_t c)
+{ desk_surface_t *s = hs_surf(); if (s) s->draw_arc(s, cx, cy, r, a0, a1, c); }
+static void hs_target_begin(void *buf, int w, int h, int ox, int oy)
+{ desk_surface_t *s = hs_surf(); if (s) s->target_begin(s, buf, w, h, ox, oy); }
+static void hs_target_end(void)
+{ desk_surface_t *s = hs_surf(); if (s) s->target_end(s); }
+static void hs_set_target_front(void)
+{ desk_surface_t *s = hs_surf(); if (s) s->set_target_front(s); }
+static void hs_set_target_back(void)
+{ desk_surface_t *s = hs_surf(); if (s) s->set_target_back(s); }
+static void hs_present(void)
+{ desk_surface_t *s = hs_surf(); if (s) s->present(s); }
+static void hs_present_region(int x, int y, int w, int h)
+{ desk_surface_t *s = hs_surf(); if (s) s->present_region(s, x, y, w, h); }
+static void hs_clip_set(int x, int y, int w, int h)
+{ desk_surface_t *s = hs_surf(); if (s) s->clip_set(s, x, y, w, h); }
+static void hs_clip_disable(void)
+{ desk_surface_t *s = hs_surf(); if (s) s->clip_disable(s); }
+/* 两个签名不一样要当心: hpdesk 侧一直是 gfx64_blend_image(src, sw, sh, dx, dy, op)
+ * (源在前), 而表面接口按"目标在前"排成 (x, y, src, sw, sh, alpha)。这里不是简单
+ * 转发, 是重排 —— 之前 gfx64_blend_image 的转发壳就是因为参数整体错位,
+ * 把 x 当成了 framebuffer 地址, 导致混合被静默跳过(顶栏半透明从来没生效过)。 */
+static void hs_blend_image(void *src, int sw, int sh, int dx, int dy, int op)
+{
+    desk_surface_t *s = hs_surf();
+    if (s) s->blend_image(s, dx, dy, (const uint8_t *)src, sw, sh, op);
+}
+static void hs_blend_image_sub(void *src, int sw, int sh, int sx, int sy,
+                               int w, int h, int dx, int dy, int op)
+{ desk_surface_t *s = hs_surf(); if (s) s->blend_image_sub(s, src, sw, sh, sx, sy, w, h, dx, dy, op); }
+static int hs_get_width(void)
+{ desk_surface_t *s = hs_surf(); return s ? s->width : gfx64_get_width(); }
+static int hs_get_height(void)
+{ desk_surface_t *s = hs_surf(); return s ? s->height : gfx64_get_height(); }
+static uint8_t *hs_get_framebuffer(void)
+{ desk_surface_t *s = hs_surf(); return s ? s->framebuffer(s) : (uint8_t *)gfx64_get_framebuffer(); }
+
 extern void gfx64_fill_rect(int x, int y, int w, int h, uint32_t color);
 extern void gfx64_put_pixel(int x, int y, uint32_t color);
 extern void gfx64_draw_rect(int x, int y, int w, int h, uint32_t color);
@@ -1096,7 +1201,7 @@ static void hs_wallpaper_vgradient(uint32_t c1, uint32_t c2)
         uint32_t c = ((uint32_t)((r1 * ia + r2 * a) >> 8) << 16) |
                      ((uint32_t)((g1 * ia + g2 * a) >> 8) << 8) |
                      (uint32_t)((b1 * ia + b2 * a) >> 8);
-        gfx64_fill_rect(0, y, w, 1, c);
+        hs_fill_rect(0, y, w, 1, c);
     }
 }
 
@@ -1213,7 +1318,7 @@ static void hs_wallpaper_render(void)
         if (!g_wp_cache || g_wp_cache_w != w || g_wp_cache_h != h) {
             if (!hs_wallpaper_build_cache(w, h)) return;   /* 分配失败则不出壁纸 */
         }
-        uint32_t *fb = (uint32_t *)gfx64_get_framebuffer();
+        uint32_t *fb = (uint32_t *)hs_get_framebuffer();
         if (!fb) return;
         for (int y = 0; y < h; y++) {
             uint32_t *dst = fb + (uint64_t)y * w;
@@ -1225,12 +1330,12 @@ static void hs_wallpaper_render(void)
     if (g_wp_sel == 3) {
         /* Dusk: 紫→橙渐变天空 + 径向渐变落日 */
         hs_wallpaper_vgradient(0x2B1B3D, 0xE8834A);
-        gfx64_fill_circle_gradient(w / 2, h * 3 / 4, hs_s(120), 0xFFD680, 0xE85D4A);
+        hs_fill_circle_gradient(w / 2, h * 3 / 4, hs_s(120), 0xFFD680, 0xE85D4A);
     } else if (g_wp_sel == 4) {
         /* Ocean: 青→蓝渐变 */
         hs_wallpaper_vgradient(0x0B3B4F, 0x123E7C);
     } else {
-        gfx64_fill_rect(0, 0, w, h, g_shell.colors.bg);
+        hs_fill_rect(0, 0, w, h, g_shell.colors.bg);
     }
 }
 
@@ -1244,7 +1349,7 @@ static void hs_wallpaper_render_rect(int x, int y, int w, int h)
         hs_wallpaper_render();
         return;
     }
-    uint32_t *fb = (uint32_t *)gfx64_get_framebuffer();
+    uint32_t *fb = (uint32_t *)hs_get_framebuffer();
     if (!fb || !w || !h) return;
     int x0 = x < 0 ? 0 : x, y0 = y < 0 ? 0 : y;
     int x1 = x + w > sw ? sw : x + w, y1 = y + h > sh ? sh : y + h;
@@ -1272,7 +1377,7 @@ static void hs_wallpaper_sample_theme(void)
         for (int gx = 0; gx < 6; gx++) {
             int x = w / 8 + (w * gx) / 8 + w / 16;
             int y = h / 8 + (3 * h * gy) / 16 + (3 * h) / 32;
-            uint32_t px = gfx64_get_pixel(x, y);
+            uint32_t px = hs_get_pixel(x, y);
             int hh, ss, ll;
             rgb_to_hsl(px, &hh, &ss, &ll);
             if (ss > best_s) { best_s = ss; best = px; }
@@ -1326,14 +1431,14 @@ void hs_widget_clock_render(hs_widget_t *w, int x, int y)
     time[3] = '0' + m / 10; time[4] = '0' + m % 10; time[5] = ':';
     time[6] = '0' + s / 10; time[7] = '0' + s % 10; time[8] = 0;
 
-    void *fb = gfx64_get_framebuffer();
+    void *fb = hs_get_framebuffer();
     font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                        x, y + 6, time, g_shell.colors.panel_fg, 14);
 }
 
 void hs_widget_cpu_render(hs_widget_t *w, int x, int y)
 {
-    void *fb = gfx64_get_framebuffer();
+    void *fb = hs_get_framebuffer();
     char buf[32];
     strcpy_hs(buf, "CPU: ");
     char num[8];
@@ -1349,7 +1454,7 @@ void hs_widget_memory_render(hs_widget_t *w, int x, int y)
     uint64_t total, used, free;
     pmm64_get_stats(&total, &used, &free);
 
-    void *fb = gfx64_get_framebuffer();
+    void *fb = hs_get_framebuffer();
     char buf[32];
     strcpy_hs(buf, "MEM: ");
     char num[8];
@@ -1362,7 +1467,7 @@ void hs_widget_memory_render(hs_widget_t *w, int x, int y)
 
 void hs_widget_workspaces_render(hs_widget_t *w, int x, int y)
 {
-    void *fb = gfx64_get_framebuffer();
+    void *fb = hs_get_framebuffer();
     int cx = x;
 
     for (int i = 0; i < HS_MAX_WORKSPACES; i++) {
@@ -1402,13 +1507,13 @@ void hs_panel_render(hs_panel_t *panel)
             g_shell.screen_height - panel->height;
 
     /* 面板背景 */
-    gfx64_fill_rect(0, y, g_shell.screen_width, panel->height,
+    hs_fill_rect(0, y, g_shell.screen_width, panel->height,
                     g_shell.colors.panel_bg);
 
     /* 面板底部/顶部边框 */
     int border_y = (panel->position == HS_PANEL_TOP) ?
                    y + panel->height - 1 : y;
-    gfx64_fill_rect(0, border_y, g_shell.screen_width, 1,
+    hs_fill_rect(0, border_y, g_shell.screen_width, 1,
                     g_shell.colors.border);
 
     /* 渲染小部件（左对齐） */
@@ -1499,14 +1604,14 @@ void hs_launcher_render(void)
     int y = (g_shell.screen_height - h) / 2 - 50;
 
     /* 启动器背景（圆角卡片） */
-    gfx64_fill_rounded_rect(x, y, w, h, 16, g_shell.colors.window_bg);
-    gfx64_draw_rounded_rect(x, y, w, h, 16, g_shell.colors.border);
+    hs_fill_rounded_rect(x, y, w, h, 16, g_shell.colors.window_bg);
+    hs_draw_rounded_rect(x, y, w, h, 16, g_shell.colors.border);
 
     /* 搜索框 */
-    gfx64_fill_rounded_rect(x + 16, y + 16, w - 32, 40, 8, g_shell.colors.panel_bg);
-    gfx64_draw_rounded_rect(x + 16, y + 16, w - 32, 40, 8, g_shell.colors.accent);
+    hs_fill_rounded_rect(x + 16, y + 16, w - 32, 40, 8, g_shell.colors.panel_bg);
+    hs_draw_rounded_rect(x + 16, y + 16, w - 32, 40, 8, g_shell.colors.accent);
 
-    void *fb = gfx64_get_framebuffer();
+    void *fb = hs_get_framebuffer();
 
     /* 搜索图标 */
     font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
@@ -1520,7 +1625,7 @@ void hs_launcher_render(void)
 
     /* 光标 */
     int cursor_x = x + 52 + strlen_hs(g_shell.launcher_input) * 10;
-    gfx64_fill_rect(cursor_x, y + 26, 2, 18, g_shell.colors.accent);
+    hs_fill_rect(cursor_x, y + 26, 2, 18, g_shell.colors.accent);
 
     /* 应用网格 (对齐 Clavis SpotlightAppGrid: 6列, cell≈98x96, 图标44+标签, 滚动) */
     int list_y = y + 68;
@@ -1564,9 +1669,9 @@ void hs_launcher_render(void)
 
             /* 选中高亮: primaryContainer 底 + primary 描边 */
             if (sel) {
-                gfx64_fill_rounded_rect(cx + 2, cy + 2, cell_w - 4, cell_h - 4, 10,
+                hs_fill_rounded_rect(cx + 2, cy + 2, cell_w - 4, cell_h - 4, 10,
                                         g_shell.colors.accent_pressed);
-                gfx64_draw_rounded_rect(cx + 2, cy + 2, cell_w - 4, cell_h - 4, 10,
+                hs_draw_rounded_rect(cx + 2, cy + 2, cell_w - 4, cell_h - 4, 10,
                                         g_shell.colors.accent);
             }
 
@@ -1574,7 +1679,7 @@ void hs_launcher_render(void)
             int isz = hs_s(44);
             int ix = cx + (cell_w - isz) / 2;
             int iy = cy + hs_sy(10);
-            gfx64_fill_rounded_rect(ix, iy, isz, isz, hs_s(10), g_shell.colors.accent);
+            hs_fill_rounded_rect(ix, iy, isz, isz, hs_s(10), g_shell.colors.accent);
             int tl = 0; while (app->icon[tl] && tl < 3) tl++;
             font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                                ix + (isz - tl * hs_sx(9)) / 2, iy + hs_sy(12),
@@ -2420,8 +2525,8 @@ static void hs_window_shadow_analytic(const hs_window_t *w)
     int ybeg = y0 - dmax, xbeg = x0 - dmax;
     if (ybeg < 0) ybeg = 0;
     if (xbeg < 0) xbeg = 0;
-    int ylim = (y1 + dmax < gfx64_get_height()) ? y1 + dmax : gfx64_get_height() - 1;
-    int xlim = (x1 + dmax < gfx64_get_width()) ? x1 + dmax : gfx64_get_width() - 1;
+    int ylim = (y1 + dmax < hs_get_height()) ? y1 + dmax : hs_get_height() - 1;
+    int xlim = (x1 + dmax < hs_get_width()) ? x1 + dmax : hs_get_width() - 1;
     for (int y = ybeg; y <= ylim; y++) {
         for (int x = xbeg; x <= xlim; x++) {
             if (x >= x0 && x <= x1 && y >= y0 && y <= y1) continue;
@@ -2435,7 +2540,7 @@ static void hs_window_shadow_analytic(const hs_window_t *w)
             if (dist < d1) { long u = d1 - dist; a += (int)(u * u * a1 / ((long)d1 * d1)); }
             if (dist < d2) { long u = d2 - dist; a += (int)(u * u * a2 / ((long)d2 * d2)); }
             if (a > 90) a = 90;
-            if (a > 0) gfx64_blend_pixel(x, y, 0x000000, a);
+            if (a > 0) hs_blend_pixel(x, y, 0x000000, a);
         }
     }
 }
@@ -2490,7 +2595,7 @@ static void hs_stroke_round(int x, int y, int w, int h, int r, uint32_t color)
     if (r > h / 2) r = h / 2;
     if (r <= 0) {
         extern void gfx64_draw_rect(int x, int y, int w, int h, uint32_t color);
-        gfx64_draw_rect(x, y, w, h, color);
+        hs_draw_rect(x, y, w, h, color);
         return;
     }
     for (int yy = 0; yy < h; yy++) {
@@ -2499,15 +2604,15 @@ static void hs_stroke_round(int x, int y, int w, int h, int r, uint32_t color)
         else if (yy > h - 1 - r) dy = yy - (h - 1 - r);
         int inset = dy ? hs_round_inset(dy, r) : 0;
         if (w - 2 * inset <= 0) continue;
-        gfx64_put_pixel(x + inset, y + yy, color);
-        gfx64_put_pixel(x + w - 1 - inset, y + yy, color);
+        hs_put_pixel(x + inset, y + yy, color);
+        hs_put_pixel(x + w - 1 - inset, y + yy, color);
     }
     /* 上下两条直边只画中段：圆角区（x < r 或 x > w-1-r）若也按 inset 画，
      * 得到的是从角点出发的 45 度斜线（因为那里边界是圆弧，不是水平线），
      * 会在角外拖出一条斜痕。圆角区的像素已经由上面的逐行左右边界覆盖完了。 */
     for (int xx = r; xx <= w - 1 - r; xx++) {
-        gfx64_put_pixel(x + xx, y, color);
-        gfx64_put_pixel(x + xx, y + h - 1, color);
+        hs_put_pixel(x + xx, y, color);
+        hs_put_pixel(x + xx, y + h - 1, color);
     }
 }
 
@@ -2580,14 +2685,14 @@ static void hs_window_shadow(const hs_window_t *w)
     g_band_reason = s_reason;
     if (s_band) {
         if (s_dx > 0)
-            gfx64_blend_image_sub(sh_argb, sh_mw, sh_mh, sh_mw - s_dx, 0,
+            hs_blend_image_sub(sh_argb, sh_mw, sh_mh, sh_mw - s_dx, 0,
                                   s_dx, sh_mh, mx0 + sh_mw - s_dx, my0, 255);
         else
-            gfx64_blend_image_sub(sh_argb, sh_mw, sh_mh, 0, 0,
+            hs_blend_image_sub(sh_argb, sh_mw, sh_mh, 0, 0,
                                   -s_dx, sh_mh, mx0, my0, 255);
         g_band_blits++;
     } else {
-        gfx64_blend_image(sh_argb, sh_mw, sh_mh, mx0, my0, 255);
+        hs_blend_image(sh_argb, sh_mw, sh_mh, mx0, my0, 255);
     }
     g_shd_ok = 1; g_shd_id = w->id; g_shd_x = w->x; g_shd_y = w->y;
     g_shd_w = w->width; g_shd_h = w->height;
@@ -2789,11 +2894,11 @@ void hs_window_render_all(void)
               }
               if (w_band) {
                   if (w_dx > 0)
-                      gfx64_blend_image_sub(tsurf, w->width, w->height,
+                      hs_blend_image_sub(tsurf, w->width, w->height,
                                             w->width - w_dx, 0, w_dx, w->height,
                                             w->x + w->width - w_dx, w->y, 255);
                   else
-                      gfx64_blend_image_sub(tsurf, w->width, w->height,
+                      hs_blend_image_sub(tsurf, w->width, w->height,
                                             0, 0, -w_dx, w->height,
                                             w->x, w->y, 255);
                   g_band_blits++;
@@ -2812,14 +2917,14 @@ void hs_window_render_all(void)
                           int by0 = oy0 > w->y ? oy0 : w->y;
                           int by1 = oy1 < (w->y + w->height) ? oy1 : (w->y + w->height);
                           if (by1 > by0)
-                              gfx64_blend_image_sub(tsurf, w->width, w->height,
+                              hs_blend_image_sub(tsurf, w->width, w->height,
                                                     bx0 - w->x, by0 - w->y,
                                                     bx1 - bx0, by1 - by0,
                                                     bx0, by0, 255);
                       }
                   }
               } else {
-                  gfx64_blend_image(tsurf, w->width, w->height, w->x, w->y, 255);
+                  hs_blend_image(tsurf, w->width, w->height, w->x, w->y, 255);
               }
               g_wn_ok = 1; g_wn_id = w->id; g_wn_x = w->x; g_wn_y = w->y;
               g_wn_w = w->width; g_wn_h = w->height;
@@ -2832,13 +2937,13 @@ void hs_window_render_all(void)
               memset(tsurf, 0, (size_t)w->width * w->height * 4);
               g_cyc_memset += hs_rdtsc() - m0; }
             { uint64_t b0 = hs_rdtsc();
-              gfx64_fill_round_rect_argb(tsurf, w->width, w->height, 0, 0,
+              hs_fill_round_rect_argb(tsurf, w->width, w->height, 0, 0,
                                        w->width, w->height, wrc, w->bg_color, 15);
               g_cyc_bgfill += hs_rdtsc() - b0; }
-            gfx64_target_begin(tsurf, w->width, w->height, w->x, w->y);
+            hs_target_begin(tsurf, w->width, w->height, w->x, w->y);
         } else {
-            if (wrc > 0) gfx64_fill_round_rect_aa(w->x, w->y, w->width, w->height, wrc, w->bg_color);
-            else gfx64_fill_rect(w->x, w->y, w->width, w->height, w->bg_color);
+            if (wrc > 0) hs_fill_round_rect_aa(w->x, w->y, w->width, w->height, wrc, w->bg_color);
+            else hs_fill_rect(w->x, w->y, w->width, w->height, w->bg_color);
         }
 
         /* 标题栏（浮动窗口） */
@@ -2852,18 +2957,18 @@ void hs_window_render_all(void)
                 int trc = wrc < th ? wrc : th;
                 if (tsurf) {
                     /* 只圆顶部两角(1|2=3), 底部贴内容区保持直角 */
-                    gfx64_fill_round_rect_argb(tsurf, w->width, w->height, 0, 0,
+                    hs_fill_round_rect_argb(tsurf, w->width, w->height, 0, 0,
                                                w->width, th, trc,
                                                g_shell.colors.titlebar_bg, 3);
                 } else {
-                    gfx64_fill_round_rect_aa(w->x, w->y, w->width, th, trc,
+                    hs_fill_round_rect_aa(w->x, w->y, w->width, th, trc,
                                              g_shell.colors.titlebar_bg);
                     if (th > trc)
-                        gfx64_fill_rect(w->x, w->y + trc, w->width, th - trc,
+                        hs_fill_rect(w->x, w->y + trc, w->width, th - trc,
                                         g_shell.colors.titlebar_bg);
                 }
             } else {
-                gfx64_fill_rect(w->x, w->y, w->width, th,
+                hs_fill_rect(w->x, w->y, w->width, th,
                                 g_shell.colors.titlebar_bg);
             }
             /* V0.55: 标题栏前景跟随主题, 深色主题下不再不可见 */
@@ -2882,28 +2987,28 @@ void hs_window_render_all(void)
                            mx >= cclo && mx < cclo + bw24);
             /* 悬停底色(关闭键红色) */
             if (hov_min)
-                gfx64_fill_rounded_rect(cmin, w->y + hs_sy(2), bw24, bh20, hs_sx(4),
+                hs_fill_rounded_rect(cmin, w->y + hs_sy(2), bw24, bh20, hs_sx(4),
                                         g_shell.colors.panel_bg);
             if (hov_max)
-                gfx64_fill_rounded_rect(cmax, w->y + hs_sy(2), bw24, bh20, hs_sx(4),
+                hs_fill_rounded_rect(cmax, w->y + hs_sy(2), bw24, bh20, hs_sx(4),
                                         g_shell.colors.panel_bg);
             if (hov_clo)
-                gfx64_fill_rounded_rect(cclo, w->y + hs_sy(2), bw24, bh20, hs_sx(4), 0xE5484D);
+                hs_fill_rounded_rect(cclo, w->y + hs_sy(2), bw24, bh20, hs_sx(4), 0xE5484D);
             uint32_t btnc = hov_clo ? 0xFFFFFF : tb_fg;
             /* 最小化: 水平粗线 */
-            gfx64_fill_rect(cmin + hs_sx(6), by + hs_sy(6), hs_sx(11), hs_sy(2), btnc);
+            hs_fill_rect(cmin + hs_sx(6), by + hs_sy(6), hs_sx(11), hs_sy(2), btnc);
             /* 最大化: 方框; 已最大化时画双层表示还原 */
-            gfx64_draw_rect(cmax + hs_sx(6), by + hs_sy(2), hs_sx(10), hs_sy(10), btnc);
+            hs_draw_rect(cmax + hs_sx(6), by + hs_sy(2), hs_sx(10), hs_sy(10), btnc);
             if (w->state == HS_WINDOW_STATE_MAXIMIZED) {
-                gfx64_draw_rect(cmax + hs_sx(8), by + hs_sy(4), hs_sx(10), hs_sy(10), btnc);
-                gfx64_draw_rect(cmax + hs_sx(10), by + hs_sy(6), hs_sx(6), hs_sy(6), btnc);
+                hs_draw_rect(cmax + hs_sx(8), by + hs_sy(4), hs_sx(10), hs_sy(10), btnc);
+                hs_draw_rect(cmax + hs_sx(10), by + hs_sy(6), hs_sx(6), hs_sy(6), btnc);
             }
             /* 关闭: ×(硬边对角线, 逐像素) */
             {
                 int xsz = hs_sx(10);
                 for (int i = 0; i <= xsz; i++) {
-                    gfx64_put_pixel(cclo + hs_sx(4) + i, by + hs_sy(2) + i, btnc);
-                    gfx64_put_pixel(cclo + hs_sx(14) - i, by + hs_sy(2) + i, btnc);
+                    hs_put_pixel(cclo + hs_sx(4) + i, by + hs_sy(2) + i, btnc);
+                    hs_put_pixel(cclo + hs_sx(14) - i, by + hs_sy(2) + i, btnc);
                 }
             }
         }
@@ -2916,13 +3021,13 @@ void hs_window_render_all(void)
         if (wrc > 0)
             hs_stroke_round(w->x, w->y, w->width, w->height, wrc, border);
         else
-            gfx64_draw_rect(w->x, w->y, w->width, w->height, border);
+            hs_draw_rect(w->x, w->y, w->width, w->height, border);
         g_cyc_border += hs_rdtsc() - bd0; }
 
         /* 标题（跟随主题前景色） */
         uint64_t tt2 = hs_rdtsc();
         if (w->type != HS_WINDOW_POPUP || w->title[0]) {
-            void *fb = gfx64_get_framebuffer();
+            void *fb = hs_get_framebuffer();
             uint32_t tc = g_shell.colors.window_fg;
             int tx = w->x + 8;
             /* 浮动窗口标题栏左侧应用图标(单色矢量) */
@@ -2971,18 +3076,18 @@ void hs_window_render_all(void)
         if (w->render) {
             /* V0.59.8: 窗口内容统一裁剪到窗口矩形。终端/列表这类"内容比窗口高"的
              * 界面以前会画到窗口外(覆盖下面的壁纸/别的窗口), 现在被裁在这里。 */
-            gfx64_clip_set(w->x, w->y, w->width, w->height);
+            hs_clip_set(w->x, w->y, w->width, w->height);
             { uint64_t c0 = hs_rdtsc();
               w->render(w);
               g_cyc_content += hs_rdtsc() - c0; }
-            gfx64_clip_disable();
+            hs_clip_disable();
         }
 
         /* 合成: surface 贴到屏幕。整体 opacity 255, 透明度由每像素 alpha 决定 */
         if (tsurf) {
-            gfx64_target_end();
+            hs_target_end();
             { uint64_t b0 = hs_rdtsc();
-              gfx64_blend_image(tsurf, w->width, w->height, w->x, w->y, 255);
+              hs_blend_image(tsurf, w->width, w->height, w->x, w->y, 255);
               /* 刚重画了整块 surface, 这一帧是整块贴上去的, 记录位置供下一帧做带 */
               g_wn_ok = 1; g_wn_id = w->id; g_wn_x = w->x; g_wn_y = w->y;
               g_wn_w = w->width; g_wn_h = w->height;
@@ -3025,13 +3130,13 @@ static int g_nav_ready = 0;
 static void hs_settings_nav_paint(hs_ui_box_t *b)
 {
     hs_window_t *w = g_nav_win;    /* SETK 宏需要名为 w 的局部变量 */
-    void *fb = gfx64_get_framebuffer();
+    void *fb = hs_get_framebuffer();
     static const char *menu[5] = {"Appearance", "Panels", "System", "About", "Display"};
     int page = b->tag;
     if (page < 0 || page > 4) return;
     uint32_t bg = (page == g_settings_page) ? g_shell.colors.accent : g_shell.colors.panel_bg;
     uint32_t fg = (page == g_settings_page) ? hs_on_accent() : g_shell.colors.panel_fg;
-    gfx64_fill_rounded_rect(b->x, b->y, b->w, b->h, SETK(6), bg);
+    hs_fill_rounded_rect(b->x, b->y, b->w, b->h, SETK(6), bg);
     font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                        b->x + SETK(10), b->y + SETK(7), menu[page], fg, SETK(13));
 }
@@ -3085,7 +3190,7 @@ static void hs_settings_nav_hit_selftest(void)
 
 static void hs_settings_window_render(hs_window_t *w)
 {
-    void *fb = gfx64_get_framebuffer();
+    void *fb = hs_get_framebuffer();
     int cx = w->x + SETK(16);
     int cy = w->y + SETK(36);  /* 跳过标题栏 */
 
@@ -3129,7 +3234,7 @@ static void hs_settings_window_render(hs_window_t *w)
             int sy = ry;
             /* 当前生效的那一格直接画成 accent 本尊, 而不是预设常量 ——
              * 否则"圈住黄圆"和"界面是另一档金"仍然是两个颜色, 用户照样觉得对不上。 */
-            gfx64_fill_circle(sx + SETK(10), sy + SETK(10), SETK(10),
+            hs_fill_circle(sx + SETK(10), sy + SETK(10), SETK(10),
                               (i == g_accent_nearest_preset) ? g_shell.colors.accent : g_theme_presets[i]);
             /* 当前生效色描边 */
             /* 描边 = "当前生效的强调色"。原来按 theme_source 精确比对, 但主题的
@@ -3139,7 +3244,7 @@ static void hs_settings_window_render(hs_window_t *w)
              * Light 主题的琥珀金(≈40°)同时落在 Orange(27°) 和 Yellow(35°)
              * 的 15° 窗口里, 会一次画出两个圈。 */
             if (i == g_accent_nearest_preset) {
-                gfx64_draw_rounded_rect(sx - SETK(2), sy - SETK(2), SETK(24), SETK(24), SETK(12), g_shell.colors.panel_fg);
+                hs_draw_rounded_rect(sx - SETK(2), sy - SETK(2), SETK(24), SETK(24), SETK(12), g_shell.colors.panel_fg);
             }
         }
         ry += SETK(28);
@@ -3177,10 +3282,10 @@ static void hs_settings_window_render(hs_window_t *w)
              * "Desktop:" 这一行字重叠。64 位 TTF 字身偏上还能看, 32 位的 8x16
              * 点阵在 100% 下正好被压穿。改为落到基线下方。 */
             int by = ry + SETK(6) + (i / 3) * SETK(22);
-            gfx64_fill_rect(bx, by, SETK(16), SETK(16), g_color_presets[i]);
+            hs_fill_rect(bx, by, SETK(16), SETK(16), g_color_presets[i]);
             uint32_t bc = (g_shell.colors.bg == g_color_presets[i])
                         ? g_shell.colors.panel_fg : g_shell.colors.border;
-            gfx64_draw_rounded_rect(bx, by, SETK(16), SETK(16), SETK(3), bc);
+            hs_draw_rounded_rect(bx, by, SETK(16), SETK(16), SETK(3), bc);
         }
     } else if (g_settings_page == 1) {
         /* Panels */
@@ -3232,7 +3337,7 @@ static void hs_settings_window_render(hs_window_t *w)
         }
         /* V0.13.39: 语言切换 + 驱动管理入口 */
         ry += SETK(6) * SETK(24) + SETK(10);
-        gfx64_fill_rect(rx, ry, w->width - SETK(180), 1, g_shell.colors.border);
+        hs_fill_rect(rx, ry, w->width - SETK(180), 1, g_shell.colors.border);
         ry += SETK(8);
         extern int l10n64_get_lang(void);
         extern int drv_get_count(void);
@@ -3263,7 +3368,7 @@ static void hs_settings_window_render(hs_window_t *w)
                            rx, ry, npb, g_shell.colors.panel_fg, SETK(12));
         ry += SETK(24);
         /* V0.13.39: 存储管理区 */
-        gfx64_fill_rect(rx, ry, w->width - SETK(180), 1, g_shell.colors.border);
+        hs_fill_rect(rx, ry, w->width - SETK(180), 1, g_shell.colors.border);
         ry += SETK(8);
         extern int storage_hal_get_device(void);
         extern int usb64_dev_count(void);
@@ -3284,7 +3389,7 @@ static void hs_settings_window_render(hs_window_t *w)
                            rx, ry, sb2, g_shell.colors.accent, SETK(12));
         g_settings_storage_ry = ry;
         ry += SETK(24);
-        gfx64_fill_rect(rx, ry, w->width - SETK(180), 1, g_shell.colors.border);
+        hs_fill_rect(rx, ry, w->width - SETK(180), 1, g_shell.colors.border);
         ry += SETK(8);
         /* V0.13.39: 注册表/文件关联管理 */
         extern int reg64_count(void);
@@ -3373,7 +3478,7 @@ static void hs_settings_window_render(hs_window_t *w)
             char rl[16];
             int q = 0, t4 = 0;
             char t3[8];
-            gfx64_fill_rounded_rect(bx, by2, SETK(HS_DISP_RES_W), SETK(26), SETK(6),
+            hs_fill_rounded_rect(bx, by2, SETK(HS_DISP_RES_W), SETK(26), SETK(6),
                                     on ? g_shell.colors.accent : g_shell.colors.panel_bg);
             itoa_hs(g_disp_res_w[ri], rl);
             while (rl[q]) q++;
@@ -3404,7 +3509,7 @@ static void hs_settings_window_render(hs_window_t *w)
         for (int i = 0; i < 4; i++) {
             int bx = rx + i * SETK(HS_DISP_BTN_GAP);
             int on = (g_disp_scale_pcts[i] == g_ui_scale_pct);
-            gfx64_fill_rounded_rect(bx, ry, SETK(HS_DISP_BTN_W), SETK(28), SETK(6),
+            hs_fill_rounded_rect(bx, ry, SETK(HS_DISP_BTN_W), SETK(28), SETK(6),
                                     on ? g_shell.colors.accent : g_shell.colors.panel_bg);
             char lab[16];
             itoa_hs(g_disp_scale_pcts[i], lab);
@@ -3677,14 +3782,14 @@ static void hs_layer_draw_a(hs_layer_t *L, int x, int y, int w, int h,
     if (!s) { if (fn) fn(); return; }
     if (need_draw) {
         memset(s, 0, (size_t)w * h * 4);
-        gfx64_target_begin(s, w, h, x, y);
+        hs_target_begin(s, w, h, x, y);
         fn();
-        gfx64_target_end();
+        hs_target_end();
         L->valid = 1;
     }
     /* V0.59.28: 整层不透明度 —— 顶栏用它做成半透明, 让壁纸从后面透出来。
      * 表面本身是 memset 0(全透明) 再画的, 所以合成时逐像素 alpha 是干净的。 */
-    gfx64_blend_image(s, w, h, x, y, opacity);
+    hs_blend_image(s, w, h, x, y, opacity);
 }
 
 static void hs_layer_draw(hs_layer_t *L, int x, int y, int w, int h,
@@ -3813,9 +3918,9 @@ static void hs_dynamic_island_render(void)
         if (island_y < bar_top) island_y = bar_top;
     }
 
-    gfx64_fill_rounded_rect(island_x, island_y, island_w, island_h, hs_s(15),
+    hs_fill_rounded_rect(island_x, island_y, island_w, island_h, hs_s(15),
                             g_shell.colors.titlebar_bg);
-    gfx64_draw_rounded_rect(island_x, island_y, island_w, island_h, hs_s(15),
+    hs_draw_rounded_rect(island_x, island_y, island_w, island_h, hs_s(15),
                             g_shell.colors.border);
 
     uint8_t h = rtc64_get_hours();
@@ -3824,7 +3929,7 @@ static void hs_dynamic_island_render(void)
     time[0] = '0' + h / 10; time[1] = '0' + h % 10; time[2] = ':';
     time[3] = '0' + m / 10; time[4] = '0' + m % 10; time[5] = 0;
 
-    void *fb = gfx64_get_framebuffer();
+    void *fb = hs_get_framebuffer();
     int font_size = hs_s(g_shell.ui.island_font_size);
     int text_w = 5 * font_size / 2;
 
@@ -3928,7 +4033,7 @@ static void hs_icon_bmp64(int x, int y, int size, uint32_t color, uint32_t bg,
                     uint32_t c = (run_level >= 3) ? color
                                : (run_level == 2) ? hs_mix_color(bg, color, 62)
                                : hs_mix_color(bg, color, 30);
-                    gfx64_fill_rect(x + run, y + ty, tx - run, 1, c);
+                    hs_fill_rect(x + run, y + ty, tx - run, 1, c);
                 }
                 run = level ? tx : -1;
                 run_level = level;
@@ -3954,7 +4059,7 @@ static void hs_icon_bmp(int x, int y, int size, uint32_t color, const uint32_t *
             int ry1 = y + (py + 1) * size / 32;
             if (rx1 <= rx0) rx1 = rx0 + 1;
             if (ry1 <= ry0) ry1 = ry0 + 1;
-            gfx64_fill_rect(rx0, ry0, rx1 - rx0, ry1 - ry0, color);
+            hs_fill_rect(rx0, ry0, rx1 - rx0, ry1 - ry0, color);
         }
     }
 }
@@ -3996,10 +4101,10 @@ static void hs_icon_settings(int x, int y, int size, uint32_t color)
         int tw = size / 5, th = size / 5;
         int tx = cx + dx * (r + size / 12) - tw / 2;
         int ty = cy + dy * (r + size / 12) - th / 2;
-        gfx64_fill_rect(tx, ty, tw, th, color);
+        hs_fill_rect(tx, ty, tw, th, color);
     }
-    gfx64_fill_circle(cx, cy, r, color);                       /* 齿体圆 */
-    gfx64_fill_circle(cx, cy, size / 5, g_shell.colors.panel_bg); /* 中心孔 */
+    hs_fill_circle(cx, cy, r, color);                       /* 齿体圆 */
+    hs_fill_circle(cx, cy, size / 5, g_shell.colors.panel_bg); /* 中心孔 */
 }
 
 /* 文件夹 */
@@ -4008,37 +4113,37 @@ void hs_icon_folder(int x, int y, int size, uint32_t color)
     int w = size - 2;
     int xs[] = { x, x + w, x + w, x };
     int ys[] = { y + size / 3, y + size / 3, y + size - 2, y + size - 2 };
-    gfx64_fill_polygon(xs, ys, 4, color);                      /* 主体 */
-    gfx64_fill_rect(x, y, size / 3, size / 3 - 2, color);      /* 标签 */
+    hs_fill_polygon(xs, ys, 4, color);                      /* 主体 */
+    hs_fill_rect(x, y, size / 3, size / 3 - 2, color);      /* 标签 */
 }
 
 /* 文档 */
 void hs_icon_doc(int x, int y, int size, uint32_t color)
 {
-    gfx64_fill_rect(x + 2, y, size - 4, size, color);          /* 页体 */
+    hs_fill_rect(x + 2, y, size - 4, size, color);          /* 页体 */
     /* 折角(用面板底色切出) */
     int xs[] = { x + size - 4, x + size - 4, x + size - size / 4 };
     int ys[] = { y + size / 4, y, y };
-    gfx64_fill_polygon(xs, ys, 3, g_shell.colors.panel_bg);
-    gfx64_draw_line_aa(x + size - 4, y + size / 4, x + size - size / 4, y, color);
+    hs_fill_polygon(xs, ys, 3, g_shell.colors.panel_bg);
+    hs_draw_line_aa(x + size - 4, y + size / 4, x + size - size / 4, y, color);
 }
 
 /* 终端: 外框 + ">" 提示符 + 光标 */
 static void hs_icon_terminal(int x, int y, int size, uint32_t color)
 {
-    gfx64_draw_rounded_rect(x, y, size, size, 3, color);
-    gfx64_draw_line_aa(x + 3, y + size / 3, x + size / 2, y + size / 2, color);
-    gfx64_draw_line_aa(x + 3, y + size * 2 / 3, x + size / 2, y + size / 2, color);
-    gfx64_draw_line_aa(x + size * 2 / 3, y + size / 2, x + size - 4, y + size / 2, color);
+    hs_draw_rounded_rect(x, y, size, size, 3, color);
+    hs_draw_line_aa(x + 3, y + size / 3, x + size / 2, y + size / 2, color);
+    hs_draw_line_aa(x + 3, y + size * 2 / 3, x + size / 2, y + size / 2, color);
+    hs_draw_line_aa(x + size * 2 / 3, y + size / 2, x + size - 4, y + size / 2, color);
 }
 
 /* 任务管理器: 3 根柱 + 基线 */
 static void hs_icon_task(int x, int y, int size, uint32_t color)
 {
-    gfx64_fill_rect(x + 2, y + size / 2, size / 5, size / 2 - 2, color);
-    gfx64_fill_rect(x + size * 2 / 5, y + size / 4, size / 5, size * 3 / 4 - 2, color);
-    gfx64_fill_rect(x + size * 4 / 5 - size / 5, y + size / 6, size / 5, size * 5 / 6 - 2, color);
-    gfx64_draw_line_aa(x, y + size - 2, x + size, y + size - 2, color);
+    hs_fill_rect(x + 2, y + size / 2, size / 5, size / 2 - 2, color);
+    hs_fill_rect(x + size * 2 / 5, y + size / 4, size / 5, size * 3 / 4 - 2, color);
+    hs_fill_rect(x + size * 4 / 5 - size / 5, y + size / 6, size / 5, size * 5 / 6 - 2, color);
+    hs_draw_line_aa(x, y + size - 2, x + size, y + size - 2, color);
 }
 
 /* V0.13.15: 应用/文件类型矢量图标 */
@@ -4047,29 +4152,29 @@ static void hs_icon_task(int x, int y, int size, uint32_t color)
 static void hs_icon_browser(int x, int y, int size, uint32_t color)
 {
     int cx = x + size / 2, cy = y + size / 2, r = size / 2 - 2;
-    gfx64_draw_circle(cx, cy, r, color);
-    gfx64_draw_line_aa(cx - r, cy, cx + r, cy, color);          /* 水平线 */
-    gfx64_draw_arc(cx, cy, r, 90, 270, color);                  /* 竖经线(右半) */
-    gfx64_draw_arc(cx, cy, r * 2 / 3, 70, 290, color);          /* 内纬线 */
+    hs_draw_circle(cx, cy, r, color);
+    hs_draw_line_aa(cx - r, cy, cx + r, cy, color);          /* 水平线 */
+    hs_draw_arc(cx, cy, r, 90, 270, color);                  /* 竖经线(右半) */
+    hs_draw_arc(cx, cy, r * 2 / 3, 70, 290, color);          /* 内纬线 */
 }
 
 /* 编辑器: 文档 + 斜笔 */
 static void hs_icon_editor(int x, int y, int size, uint32_t color)
 {
-    gfx64_fill_rect(x + 4, y, size - 8, size, color);
-    gfx64_draw_line_aa(x + size / 3, y + size / 2, x + size - 4, y + size / 8, color);
-    gfx64_draw_line_aa(x + size - 4, y + size / 8, x + size - size / 5, y + size / 5, color);
+    hs_fill_rect(x + 4, y, size - 8, size, color);
+    hs_draw_line_aa(x + size / 3, y + size / 2, x + size - 4, y + size / 8, color);
+    hs_draw_line_aa(x + size - 4, y + size / 8, x + size - size / 5, y + size / 5, color);
 }
 
 /* 计算器: 圆角面板 + 按键格 */
 static void hs_icon_calc(int x, int y, int size, uint32_t color)
 {
-    gfx64_draw_rounded_rect(x, y, size, size, 3, color);
-    gfx64_draw_line_aa(x + 3, y + size / 4, x + size - 3, y + size / 4, color);  /* 屏 */
+    hs_draw_rounded_rect(x, y, size, size, 3, color);
+    hs_draw_line_aa(x + 3, y + size / 4, x + size - 3, y + size / 4, color);  /* 屏 */
     int gx[3] = { x + 4, x + size / 2 - 2, x + size - size / 3 + 1 };
     for (int i = 0; i < 3; i++)
         for (int j = 0; j < 2; j++)
-            gfx64_fill_rect(gx[i], y + size / 4 + 3 + j * (size / 3), size / 3 - 3, size / 3 - 3, color);
+            hs_fill_rect(gx[i], y + size / 4 + 3 + j * (size / 3), size / 3 - 3, size / 3 - 3, color);
 }
 
 /* 应用商店: 购物袋(多边形+提手) */
@@ -4077,16 +4182,16 @@ static void hs_icon_store(int x, int y, int size, uint32_t color)
 {
     int xs[] = { x + size / 6, x + size * 5 / 6, x + size - 2, x + 2 };
     int ys[] = { y + size / 4, y + size / 4, y + size - 2, y + size - 2 };
-    gfx64_fill_polygon(xs, ys, 4, color);
-    gfx64_draw_arc(x + size / 2, y + size / 4, size / 5, 180, 360, color);  /* 提手 */
+    hs_fill_polygon(xs, ys, 4, color);
+    hs_draw_arc(x + size / 2, y + size / 4, size / 5, 180, 360, color);  /* 提手 */
 }
 
 /* 关于: 圆 + i */
 static void hs_icon_info(int x, int y, int size, uint32_t color)
 {
-    gfx64_fill_circle(x + size / 2, y + size / 2, size / 2 - 2, color);
-    gfx64_fill_circle(x + size / 2, y + size / 3, size / 12, 0xFAF6EE);
-    gfx64_fill_rect(x + size / 2 - size / 12, y + size * 2 / 5, size / 6, size / 4, 0xFAF6EE);
+    hs_fill_circle(x + size / 2, y + size / 2, size / 2 - 2, color);
+    hs_fill_circle(x + size / 2, y + size / 3, size / 12, 0xFAF6EE);
+    hs_fill_rect(x + size / 2 - size / 12, y + size * 2 / 5, size / 6, size / 4, 0xFAF6EE);
 }
 
 /* 媒体: 播放三角 + 音符 */
@@ -4094,19 +4199,19 @@ void hs_icon_media(int x, int y, int size, uint32_t color)
 {
     int xs[] = { x + 2, x + size / 3, x + 2 };
     int ys[] = { y + 2, y + size / 2, y + size - 2 };
-    gfx64_fill_polygon(xs, ys, 3, color);
-    gfx64_fill_circle(x + size * 3 / 4, y + size / 3, size / 8, color);
-    gfx64_fill_rect(x + size * 3 / 4 - 1, y + size / 3, 3, size / 3, color);
-    gfx64_fill_circle(x + size * 3 / 4, y + size * 3 / 4, size / 8, color);
+    hs_fill_polygon(xs, ys, 3, color);
+    hs_fill_circle(x + size * 3 / 4, y + size / 3, size / 8, color);
+    hs_fill_rect(x + size * 3 / 4 - 1, y + size / 3, 3, size / 3, color);
+    hs_fill_circle(x + size * 3 / 4, y + size * 3 / 4, size / 8, color);
 }
 
 /* 未知文件: 圆角页 + 问号 */
 void hs_icon_file(int x, int y, int size, uint32_t color)
 {
-    gfx64_draw_rounded_rect(x + 2, y, size - 4, size, 3, color);
-    gfx64_fill_rect(x + size / 3, y + size / 3, size / 3, size / 6, color);
-    gfx64_fill_rect(x + size / 3 + size / 6, y + size / 2, size / 6, size / 8, color);
-    gfx64_fill_rect(x + size / 3, y + size * 3 / 4, size / 3, size / 8, color);
+    hs_draw_rounded_rect(x + 2, y, size - 4, size, 3, color);
+    hs_fill_rect(x + size / 3, y + size / 3, size / 3, size / 6, color);
+    hs_fill_rect(x + size / 3 + size / 6, y + size / 2, size / 6, size / 8, color);
+    hs_fill_rect(x + size / 3, y + size * 3 / 4, size / 3, size / 8, color);
 }
 
 /* 顶部Bar：左侧工作区+右侧状态图标 */
@@ -4118,9 +4223,9 @@ static void hs_top_bar_render(void)
     int bar_h = hs_sy(g_shell.ui.bar_height);
     int bar_w = g_shell.screen_width - 2 * margin;
 
-    gfx64_fill_rounded_rect(margin, bar_top, bar_w, bar_h, hs_s(18),
+    hs_fill_rounded_rect(margin, bar_top, bar_w, bar_h, hs_s(18),
                             g_shell.colors.panel_bg);
-    gfx64_draw_rounded_rect(margin, bar_top, bar_w, bar_h, hs_s(18),
+    hs_draw_rounded_rect(margin, bar_top, bar_w, bar_h, hs_s(18),
                             g_shell.colors.border);
 
     /* 左侧工作区指示 */
@@ -4131,7 +4236,7 @@ static void hs_top_bar_render(void)
         int dot_y = bar_top + (bar_h - dot_h) / 2;
         uint32_t color = (i == g_shell.current_workspace) ?
                          g_shell.colors.accent : g_shell.colors.border;
-        gfx64_fill_rounded_rect(ws_x, dot_y, dot_w, dot_h, hs_s(4), color);
+        hs_fill_rounded_rect(ws_x, dot_y, dot_w, dot_h, hs_s(4), color);
         ws_x += dot_w + hs_sx(12);
     }
 
@@ -4160,7 +4265,7 @@ static void hs_top_bar_render(void)
 /* 桌面大时钟 */
 static void hs_desktop_clock_render(void)
 {
-    void *fb = gfx64_get_framebuffer();
+    void *fb = hs_get_framebuffer();
     int clock_x = hs_sx(g_shell.ui.clock_x);
     int clock_y = hs_sy(g_shell.ui.clock_y);
 
@@ -4215,9 +4320,9 @@ static void hs_weather_widget_render(void)
     int ww = hs_sx(g_shell.ui.weather_width);
     int wh = hs_sy(g_shell.ui.weather_height);
 
-    gfx64_fill_rounded_rect(wx, wy, ww, wh, hs_s(g_shell.ui.corner_radius), g_shell.colors.accent);
+    hs_fill_rounded_rect(wx, wy, ww, wh, hs_s(g_shell.ui.corner_radius), g_shell.colors.accent);
 
-    void *fb = gfx64_get_framebuffer();
+    void *fb = hs_get_framebuffer();
 
     /* V0.56.1: 取数失败/尚未返回时给明确占位。旧实现直接画空字符串,
      * 卡片只剩一块纯色方块, 看不出是"没数据"还是"渲染坏了"。 */
@@ -4247,9 +4352,9 @@ static int g_vkb_visible = 0;  /* V0.13.39: 锁屏虚拟键盘 */
 static void hs_lock_screen_render(void)
 {
     /* 深色半透明背景（模拟模糊效果） */
-    gfx64_fill_rect(0, 0, g_shell.screen_width, g_shell.screen_height, g_shell.colors.bg);
+    hs_fill_rect(0, 0, g_shell.screen_width, g_shell.screen_height, g_shell.colors.bg);
 
-    void *fb = gfx64_get_framebuffer();
+    void *fb = hs_get_framebuffer();
 
     /* 大时钟 */
     int clock_x = g_shell.screen_width / 2 - hs_sx(180);
@@ -4284,16 +4389,16 @@ static void hs_lock_screen_render(void)
 static void hs_login_screen_render(void)
 {
     /* 深色半透明背景 */
-    gfx64_fill_rect(0, 0, g_shell.screen_width, g_shell.screen_height, g_shell.colors.bg);
+    hs_fill_rect(0, 0, g_shell.screen_width, g_shell.screen_height, g_shell.colors.bg);
 
-    void *fb = gfx64_get_framebuffer();
+    void *fb = hs_get_framebuffer();
     int center_x = g_shell.screen_width / 2;
 
     /* 用户头像（圆形） */
     int avatar_size = hs_s(96);
     int avatar_x = center_x - avatar_size / 2;
     int avatar_y = hs_sy(180);
-    gfx64_fill_rounded_rect(avatar_x, avatar_y, avatar_size, avatar_size, hs_s(48), g_shell.colors.accent);
+    hs_fill_rounded_rect(avatar_x, avatar_y, avatar_size, avatar_size, hs_s(48), g_shell.colors.accent);
     /* 头像中的用户图标 */
     font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                        avatar_x + hs_sx(30), avatar_y + hs_sy(25), "U", hs_on_accent(), hs_s(48));
@@ -4310,13 +4415,13 @@ static void hs_login_screen_render(void)
     int input_h = hs_sy(36);
     int input_x = center_x - input_w / 2;
     int input_y = avatar_y + avatar_size + hs_sy(60);
-    gfx64_fill_rounded_rect(input_x, input_y, input_w, input_h, hs_s(8), g_shell.colors.titlebar_bg);
-    gfx64_draw_rounded_rect(input_x, input_y, input_w, input_h, hs_s(8), g_shell.colors.accent);
+    hs_fill_rounded_rect(input_x, input_y, input_w, input_h, hs_s(8), g_shell.colors.titlebar_bg);
+    hs_draw_rounded_rect(input_x, input_y, input_w, input_h, hs_s(8), g_shell.colors.accent);
 
     /* 密码圆点 */
     int dot_y = input_y + (input_h - hs_sy(10)) / 2;
     for (int i = 0; i < g_password_len; i++) {
-        gfx64_fill_rounded_rect(input_x + hs_sx(20) + i * hs_sx(18), dot_y, hs_s(10), hs_s(10), hs_s(5), g_shell.colors.panel_fg);
+        hs_fill_rounded_rect(input_x + hs_sx(20) + i * hs_sx(18), dot_y, hs_s(10), hs_s(10), hs_s(5), g_shell.colors.panel_fg);
     }
 
     /* 登录按钮 */
@@ -4324,7 +4429,7 @@ static void hs_login_screen_render(void)
     int btn_h = hs_sy(32);
     int btn_x = center_x - btn_w / 2;
     int btn_y = input_y + input_h + hs_sy(20);
-    gfx64_fill_rounded_rect(btn_x, btn_y, btn_w, btn_h, hs_s(8), g_shell.colors.accent);
+    hs_fill_rounded_rect(btn_x, btn_y, btn_w, btn_h, hs_s(8), g_shell.colors.accent);
     font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                        btn_x + hs_sx(28), btn_y + hs_sy(8), l10n64_tr(L10N_STR_LOGIN_BTN), hs_on_accent(), hs_s(16));
 
@@ -4337,13 +4442,13 @@ static void hs_login_screen_render(void)
     {
         int kb_x = g_shell.screen_width - hs_sx(200);
         int kb_y = g_shell.screen_height - hs_sy(120);
-        gfx64_fill_rounded_rect(kb_x, kb_y, hs_sx(88), hs_sy(34), hs_s(8), g_shell.colors.titlebar_bg);
-        gfx64_draw_rounded_rect(kb_x, kb_y, hs_sx(88), hs_sy(34), hs_s(8), g_shell.colors.accent);
+        hs_fill_rounded_rect(kb_x, kb_y, hs_sx(88), hs_sy(34), hs_s(8), g_shell.colors.titlebar_bg);
+        hs_draw_rounded_rect(kb_x, kb_y, hs_sx(88), hs_sy(34), hs_s(8), g_shell.colors.accent);
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            kb_x + hs_sx(14), kb_y + hs_sy(8), "VKB", g_shell.colors.panel_fg, hs_s(16));
         int po_x = kb_x + hs_sx(104);
-        gfx64_fill_rounded_rect(po_x, kb_y, hs_sx(88), hs_sy(34), hs_s(8), 0x6E3A3A);
-        gfx64_draw_rounded_rect(po_x, kb_y, hs_sx(88), hs_sy(34), hs_s(8), g_shell.colors.accent);
+        hs_fill_rounded_rect(po_x, kb_y, hs_sx(88), hs_sy(34), hs_s(8), 0x6E3A3A);
+        hs_draw_rounded_rect(po_x, kb_y, hs_sx(88), hs_sy(34), hs_s(8), g_shell.colors.accent);
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            po_x + hs_sx(20), kb_y + hs_sy(8), "PWR", g_shell.colors.panel_fg, hs_s(16));
     }
@@ -4356,14 +4461,14 @@ static void hs_login_screen_render(void)
         int kb_h = hs_sy(4 * 38 + 10);
         int kb_x = center_x - kb_w / 2;
         int kb_y = g_shell.screen_height - kb_h - hs_sy(16);
-        gfx64_fill_rounded_rect(kb_x - hs_sx(6), kb_y - hs_sy(6), kb_w + hs_sx(12), kb_h + hs_sy(12), hs_s(12), 0x22201C);
+        hs_fill_rounded_rect(kb_x - hs_sx(6), kb_y - hs_sy(6), kb_w + hs_sx(12), kb_h + hs_sy(12), hs_s(12), 0x22201C);
         for (int r = 0; r < 4; r++) {
             int key_w = (kb_w - (vkb_row_n[r] - 1) * hs_sx(4)) / vkb_row_n[r];
             int row_x = kb_x + (kb_w - vkb_row_n[r] * key_w - (vkb_row_n[r] - 1) * hs_sx(4)) / 2;
             for (int c = 0; c < vkb_row_n[r]; c++) {
                 int kx = row_x + c * (key_w + hs_sx(4));
                 int ky = kb_y + r * hs_sy(38);
-                gfx64_fill_rounded_rect(kx, ky, key_w, hs_sy(32), hs_s(6), g_shell.colors.titlebar_bg);
+                hs_fill_rounded_rect(kx, ky, key_w, hs_sy(32), hs_s(6), g_shell.colors.titlebar_bg);
                 font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                                    kx + (key_w - hs_sx(14)) / 2, ky + hs_sy(7),
                                    vkb_rows[r] + c, g_shell.colors.panel_fg, hs_s(16));
@@ -4373,7 +4478,7 @@ static void hs_login_screen_render(void)
         int bsw = hs_sx(76);
         int bsx = kb_x + kb_w - bsw;
         int bsy = kb_y + 3 * hs_sy(38);
-        gfx64_fill_rounded_rect(bsx, bsy, bsw, hs_sy(32), hs_s(6), g_shell.colors.accent_pressed);
+        hs_fill_rounded_rect(bsx, bsy, bsw, hs_sy(32), hs_s(6), g_shell.colors.accent_pressed);
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            bsx + hs_sx(8), bsy + hs_sy(7), "DEL", g_shell.colors.panel_fg, hs_s(16));
     }
@@ -4389,10 +4494,10 @@ static void hs_login_screen_render(void)
 void hs_scrollbar_draw(int x, int track_y, int track_h, int offset, int max_scroll)
 {
     if (max_scroll <= 0 || track_h <= 8) return;
-    void *fb = gfx64_get_framebuffer();
+    void *fb = hs_get_framebuffer();
     int W = g_shell.screen_width, H = g_shell.screen_height;
     int bw = hs_sx(3);
-    gfx64_fill_rounded_rect(x, track_y, bw, track_h, hs_s(2), g_shell.colors.border);
+    hs_fill_rounded_rect(x, track_y, bw, track_h, hs_s(2), g_shell.colors.border);
     int thumb_h = track_h * track_h / (track_h + hs_sy(max_scroll));
     int min_h = hs_sy(16);
     if (thumb_h < min_h) thumb_h = min_h;
@@ -4401,7 +4506,7 @@ void hs_scrollbar_draw(int x, int track_y, int track_h, int offset, int max_scro
     int thumb_y = track_y + (max_scroll > 0 ? span * offset / max_scroll : 0);
     if (thumb_y < track_y) thumb_y = track_y;
     if (thumb_y > track_y + span) thumb_y = track_y + span;
-    gfx64_fill_rounded_rect(x, thumb_y, bw, thumb_h, hs_s(2), g_shell.colors.accent);
+    hs_fill_rounded_rect(x, thumb_y, bw, thumb_h, hs_s(2), g_shell.colors.accent);
 }
 
 /* V0.55: 侧栏内容高度(基准单位) — 内容超出可视区的高度即可滚动量 */
@@ -4493,13 +4598,13 @@ static void hs_sidebar_render(void)
     /* 收起态：只画贴左边缘的一条圆角把手（点它展开）。面板本身仍 enabled，
      * 因此不需要动 panel_registry，也不用担心 F7 全隐与折叠两种状态打架。 */
     if (g_sidebar_collapsed) {
-        void *fbc = gfx64_get_framebuffer();
+        void *fbc = hs_get_framebuffer();
         int hw = hs_sx(16), hh = hs_sy(104);
         int hx = sx, hy = sy + sh / 2 - hh / 2;
         /* 把手固定用浅紫：强调色来自壁纸取色，深色壁纸下会被取成近黑，
          * 混白也不够（实测仍只剩一道暗影），所以这里不走主题色。 */
-        gfx64_fill_rounded_rect(hx, hy, hw, hh, hs_s(7), 0xFFE7E3F6u);
-        gfx64_draw_rounded_rect(hx, hy, hw, hh, hs_s(7), 0xFFB9B2D6u);
+        hs_fill_rounded_rect(hx, hy, hw, hh, hs_s(7), 0xFFE7E3F6u);
+        hs_draw_rounded_rect(hx, hy, hw, hh, hs_s(7), 0xFFB9B2D6u);
         font64_draw_string(fbc, g_shell.screen_width, g_shell.screen_height,
                            hx + hs_sx(5), hy + hh / 2 - hs_sy(9), ">",
                            0xFF2A2A33u, hs_s(15));
@@ -4520,10 +4625,10 @@ static void hs_sidebar_render(void)
     }
 
     /* 侧边栏背景（毛玻璃效果） */
-    gfx64_fill_rounded_rect(sx, sy, sw, sh, hs_s(g_shell.ui.corner_radius), g_shell.colors.window_bg);
-    gfx64_draw_rounded_rect(sx, sy, sw, sh, hs_s(g_shell.ui.corner_radius), g_shell.colors.border);
+    hs_fill_rounded_rect(sx, sy, sw, sh, hs_s(g_shell.ui.corner_radius), g_shell.colors.window_bg);
+    hs_draw_rounded_rect(sx, sy, sw, sh, hs_s(g_shell.ui.corner_radius), g_shell.colors.border);
 
-    void *fb = gfx64_get_framebuffer();
+    void *fb = hs_get_framebuffer();
 
     /* 标签栏 */
     int tab_y = sy + hs_sy(12);
@@ -4555,7 +4660,7 @@ static void hs_sidebar_render(void)
         /* 色板里的 accent 是 6 位色(alpha 字节 0), 而 vg 填充走 alpha 混合:
          * alpha=0 被当作全透明, 选中块整块不落像素 —— 文字却按"亮底"选了深色,
          * 结果 150% 下整个 tab 像消失。这里统一补不透明位。 */
-        gfx64_fill_rounded_rect(tx, tab_y, tab_w - hs_sx(4), hs_sy(28), hs_s(8),
+        hs_fill_rounded_rect(tx, tab_y, tab_w - hs_sx(4), hs_sy(28), hs_s(8),
                                 bg | 0xFF000000u);
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            tx + (tab_w - hs_sx(4) - hs_sx(32)) / 2, tab_y + hs_sy(7),
@@ -4569,7 +4674,7 @@ static void hs_sidebar_render(void)
         int byy = tab_y + hs_sy(4);
         int hov = (g_shell.mouse_x >= bx && g_shell.mouse_x < bx + bw &&
                    g_shell.mouse_y >= byy && g_shell.mouse_y < byy + bh);
-        gfx64_fill_rounded_rect(bx, byy, bw, bh, hs_s(6),
+        hs_fill_rounded_rect(bx, byy, bw, bh, hs_s(6),
                                 (hov ? hs_mix_color(g_shell.colors.panel_bg, g_shell.colors.accent, 28)
                                      : g_shell.colors.panel_bg) | 0xFF000000u);
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
@@ -4601,14 +4706,14 @@ static void hs_sidebar_render(void)
             if (g_shell.mouse_x >= ax && g_shell.mouse_x < ax + hs_s(48) &&
                 g_shell.mouse_y >= ay && g_shell.mouse_y < ay + hs_sy(70)) {
                 /* 底座比图标大一圈(每边 6px)并加外描边, 否则底座会被图标完全盖住看不出变化 */
-                gfx64_fill_rounded_rect(ax - hs_s(6), ay - hs_s(6), hs_s(60), hs_s(60),
+                hs_fill_rounded_rect(ax - hs_s(6), ay - hs_s(6), hs_s(60), hs_s(60),
                                         hs_s(14),
                                         hs_mix_color(g_shell.colors.panel_bg, g_shell.colors.accent, 26));
-                gfx64_draw_rounded_rect(ax - hs_s(6), ay - hs_s(6), hs_s(60), hs_s(60),
+                hs_draw_rounded_rect(ax - hs_s(6), ay - hs_s(6), hs_s(60), hs_s(60),
                                         hs_s(14), g_shell.colors.accent);
             }
             /* V0.13.15: 应用矢量图标(白, 透明底) */
-            gfx64_fill_rounded_rect(ax, ay, hs_s(48), hs_s(48), hs_s(10), g_shell.colors.accent);
+            hs_fill_rounded_rect(ax, ay, hs_s(48), hs_s(48), hs_s(10), g_shell.colors.accent);
             uint32_t ic = 0xFDF8EF;
             /* V0.57.0: 改用统一线性图标位图集(hs_icons_data.h)。
              * 映射按语义尽量贴近, 注释写在每行后面 —— 有错配的地方是"造型可用但语义近似",
@@ -4648,10 +4753,10 @@ static void hs_sidebar_render(void)
                 int track_y = clip_top;
                 int track_h = clip_bot - clip_top;
                 int tx = sx + sw - hs_sx(6);
-                gfx64_fill_rounded_rect(tx, track_y, hs_sx(3), track_h, hs_s(2), g_shell.colors.border);
+                hs_fill_rounded_rect(tx, track_y, hs_sx(3), track_h, hs_s(2), g_shell.colors.border);
                 int thumb_h = track_h * track_h / (track_h + hs_sy(maxs));
                 int thumb_y = track_y + (track_h - thumb_h) * g_sidebar_scroll / maxs;
-                gfx64_fill_rounded_rect(tx, thumb_y, hs_sx(3), thumb_h, hs_s(2), g_shell.colors.accent);
+                hs_fill_rounded_rect(tx, thumb_y, hs_sx(3), thumb_h, hs_s(2), g_shell.colors.accent);
             }
         }
     } else {
@@ -4777,7 +4882,7 @@ static void cc_seg(int x0, int y0, int x1, int y1, uint32_t c, int t)
     int n = ax > ay ? ax : ay;
     if (n < 1) n = 1;
     for (int i = 0; i <= n; i++)
-        gfx64_fill_rect(x0 + dx * i / n - t / 2, y0 + dy * i / n - t / 2, t, t, c);
+        hs_fill_rect(x0 + dx * i / n - t / 2, y0 + dy * i / n - t / 2, t, t, c);
 }
 
 /* 控制中心开关图标(简笔手绘, 不依赖位图资源):
@@ -4787,7 +4892,7 @@ static void cc_icon_draw(int kind, int cx, int cy, int r, uint32_t fg, uint32_t 
     int t = hs_s(3);
     switch (kind) {
     case 0: /* WiFi: 底部圆点 + 两道上凸折线 */
-        gfx64_fill_circle(cx, cy + r / 2, t, fg);
+        hs_fill_circle(cx, cy + r / 2, t, fg);
         /* 内层弧(更平缓, 避免看起来像屋顶) */
         cc_seg(cx - r * 3 / 5, cy + r / 3, cx, cy - r / 8, fg, t);
         cc_seg(cx, cy - r / 8, cx + r * 3 / 5, cy + r / 3, fg, t);
@@ -4803,29 +4908,29 @@ static void cc_icon_draw(int kind, int cx, int cy, int r, uint32_t fg, uint32_t 
         cc_seg(cx + r / 2, cy + r / 2, cx, cy + r, fg, t);
         break;
     case 2: /* Air: 三条长短横线 */
-        gfx64_fill_rect(cx - r, cy - r * 2 / 3, r * 2, t, fg);
-        gfx64_fill_rect(cx - r * 3 / 4, cy, r * 3 / 2, t, fg);
-        gfx64_fill_rect(cx - r / 2, cy + r * 2 / 3, r, t, fg);
+        hs_fill_rect(cx - r, cy - r * 2 / 3, r * 2, t, fg);
+        hs_fill_rect(cx - r * 3 / 4, cy, r * 3 / 2, t, fg);
+        hs_fill_rect(cx - r / 2, cy + r * 2 / 3, r, t, fg);
         break;
     case 3: /* DND: 月牙 */
-        gfx64_fill_circle(cx, cy, r, fg);
-        gfx64_fill_circle(cx + r / 2, cy - r / 3, r, bg);
+        hs_fill_circle(cx, cy, r, fg);
+        hs_fill_circle(cx + r / 2, cy - r / 3, r, bg);
         break;
     case 4: /* Loc: 定位针 */
-        gfx64_fill_circle(cx, cy - r / 3, r * 2 / 3, fg);
-        gfx64_fill_circle(cx, cy - r / 3, r / 3, bg);
+        hs_fill_circle(cx, cy - r / 3, r * 2 / 3, fg);
+        hs_fill_circle(cx, cy - r / 3, r / 3, bg);
         {
             int xs[3] = {cx - r * 2 / 3, cx + r * 2 / 3, cx};
             int ys[3] = {cy, cy, cy + r};
-            gfx64_fill_polygon(xs, ys, 3, fg);
+            hs_fill_polygon(xs, ys, 3, fg);
         }
         break;
     case 5: /* Torch: 机身 + 光束 */
-        gfx64_fill_rect(cx - r / 2, cy - r / 2, r, r, fg);
+        hs_fill_rect(cx - r / 2, cy - r / 2, r, r, fg);
         {
             int xs[4] = {cx - r * 3 / 4, cx + r * 3 / 4, cx + r / 2, cx - r / 2};
             int ys[4] = {cy - r, cy - r, cy - r / 2, cy - r / 2};
-            gfx64_fill_polygon(xs, ys, 4, fg);
+            hs_fill_polygon(xs, ys, 4, fg);
         }
         break;
     default:
@@ -4839,8 +4944,8 @@ static void cc_toggle_card(void *fb, int x, int y, int w, int h,
 {
     uint32_t bg = on ? g_shell.colors.accent : g_shell.colors.titlebar_bg;
     uint32_t fg = on ? hs_on_accent() : g_shell.colors.panel_fg;
-    gfx64_fill_rounded_rect(x, y, w, h, hs_s(12), bg);
-    if (!on) gfx64_draw_rounded_rect(x, y, w, h, hs_s(12), g_shell.colors.border);
+    hs_fill_rounded_rect(x, y, w, h, hs_s(12), bg);
+    if (!on) hs_draw_rounded_rect(x, y, w, h, hs_s(12), g_shell.colors.border);
 
     int icx = x + w / 2;
     int icy = y + h / 2 - hs_sy(12);
@@ -4869,8 +4974,8 @@ static void cc_toggle_card(void *fb, int x, int y, int w, int h,
 static void cc_slider_card(void *fb, int x, int y, int w, int h,
                            const char *label, int val)
 {
-    gfx64_fill_rounded_rect(x, y, w, h, hs_s(10), g_shell.colors.titlebar_bg);
-    gfx64_draw_rounded_rect(x, y, w, h, hs_s(10), g_shell.colors.border);
+    hs_fill_rounded_rect(x, y, w, h, hs_s(10), g_shell.colors.titlebar_bg);
+    hs_draw_rounded_rect(x, y, w, h, hs_s(10), g_shell.colors.border);
 
     char vb[8];
     int p = 0;
@@ -4896,10 +5001,10 @@ static void cc_slider_card(void *fb, int x, int y, int w, int h,
     int ty = y + h - hs_sy(22);
     int fill = tw * val / 100;
     int barh = hs_sy(8);
-    gfx64_fill_rounded_rect(tx, ty, tw, barh, hs_s(4), g_shell.colors.border);
+    hs_fill_rounded_rect(tx, ty, tw, barh, hs_s(4), g_shell.colors.border);
     if (fill > hs_sx(8))
-        gfx64_fill_rounded_rect(tx, ty, fill, barh, hs_s(4), g_shell.colors.accent);
-    gfx64_fill_circle(tx + fill - hs_sx(8), ty + barh / 2, hs_s(7),
+        hs_fill_rounded_rect(tx, ty, fill, barh, hs_s(4), g_shell.colors.accent);
+    hs_fill_circle(tx + fill - hs_sx(8), ty + barh / 2, hs_s(7),
                       g_shell.colors.accent);
 }
 
@@ -5019,7 +5124,7 @@ void hs_sh_paint(int slot, int x, int y, int w, int h, int rc, int div)
         if (!hs_shc_build(c, w, h, pad, rc, r, off)) return;
         c->kpk = pk;
     }
-    gfx64_blend_image(c->argb, c->mw, c->mh, x - pad, y - pad, 255);
+    hs_blend_image(c->argb, c->mw, c->mh, x - pad, y - pad, 255);
 }
 
 void hs_cc_shadow_paint(void)
@@ -5044,10 +5149,10 @@ static void hs_control_center_render(void)
      * 亮度逐级加深, 视觉上是柔和的边缘渐变而不是投影块。 */
     /* 阴影由 hs_cc_shadow_paint() 在层合成前画到主 fb(和窗口阴影同一套模糊),
      * 这里不再自己叠暗边, 只保留面板本体 + border。 */
-    gfx64_fill_rounded_rect(cx, cy, cw, ch, hs_s(12), g_shell.colors.window_bg);
-    gfx64_draw_rounded_rect(cx, cy, cw, ch, hs_s(12), g_shell.colors.border);
+    hs_fill_rounded_rect(cx, cy, cw, ch, hs_s(12), g_shell.colors.window_bg);
+    hs_draw_rounded_rect(cx, cy, cw, ch, hs_s(12), g_shell.colors.border);
 
-    void *fb = gfx64_get_framebuffer();
+    void *fb = hs_get_framebuffer();
     int rail_w = hs_sx(CC_RAIL_W);
     int pad = hs_sx(CC_PAD);
 
@@ -5061,9 +5166,9 @@ static void hs_control_center_render(void)
         uint32_t bg = (i == g_cc_page) ? g_shell.colors.accent : g_shell.colors.window_bg;
         uint32_t fg = (i == g_cc_page) ? hs_on_accent() : g_shell.colors.panel_fg;
         if (i != g_cc_page)
-            gfx64_fill_rounded_rect(nx, ny, nw, nh, hs_s(8), g_shell.colors.titlebar_bg);
+            hs_fill_rounded_rect(nx, ny, nw, nh, hs_s(8), g_shell.colors.titlebar_bg);
         else
-            gfx64_fill_rounded_rect(nx, ny, nw, nh, hs_s(8), bg);
+            hs_fill_rounded_rect(nx, ny, nw, nh, hs_s(8), bg);
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            nx + hs_sx(12), ny + hs_sy(12), nav[i], fg, hs_s(13));
     }
@@ -5099,9 +5204,9 @@ static void hs_control_center_render(void)
                            g_shell.colors.panel_fg, hs_s(16));
         for (int i = 0; i < 6; i++) {
             int ry = cy + hs_sy(38) + i * hs_sy(50);
-            gfx64_fill_rounded_rect(rx, ry, rw, hs_sy(44), hs_s(10),
+            hs_fill_rounded_rect(rx, ry, rw, hs_sy(44), hs_s(10),
                                     g_shell.colors.titlebar_bg);
-            gfx64_draw_rounded_rect(rx, ry, rw, hs_sy(44), hs_s(10),
+            hs_draw_rounded_rect(rx, ry, rw, hs_sy(44), hs_s(10),
                                     g_shell.colors.border);
             font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                                rx + hs_sx(14), ry + hs_sy(16), toggles[i],
@@ -5112,7 +5217,7 @@ static void hs_control_center_render(void)
             font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                                rx + rw - hs_sx(44), ry + hs_sy(16), stt, stc,
                                hs_s(12));
-            gfx64_fill_circle(rx + rw - hs_sx(16), ry + hs_sy(24), hs_s(5), stc);
+            hs_fill_circle(rx + rw - hs_sx(16), ry + hs_sy(24), hs_s(5), stc);
         }
     } else {
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
@@ -5251,27 +5356,27 @@ static void hs_color_panel_render(void)
     hs_color_panel_geometry(&x, &y);
     /* P0: 弹出滑入 */
     y += (int)(12 * (100 - hs_ease_out_cubic(g_color_t)) / 100);
-    void *fb = gfx64_get_framebuffer();
+    void *fb = hs_get_framebuffer();
 
-    gfx64_fill_rounded_rect(x, y, HS_COLOR_PANEL_W, HS_COLOR_PANEL_H, 12,
+    hs_fill_rounded_rect(x, y, HS_COLOR_PANEL_W, HS_COLOR_PANEL_H, 12,
                             g_shell.colors.window_bg);
-    gfx64_draw_rounded_rect(x, y, HS_COLOR_PANEL_W, HS_COLOR_PANEL_H, 12,
+    hs_draw_rounded_rect(x, y, HS_COLOR_PANEL_W, HS_COLOR_PANEL_H, 12,
                             g_shell.colors.border);
     font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                        x + 20, y + 18, "Desktop Color", g_shell.colors.window_fg, 18);
 
     /* 当前色小预览 */
-    gfx64_fill_rect(x + HS_COLOR_PANEL_W - 56, y + 16, 36, 20, g_shell.colors.bg);
-    gfx64_draw_rounded_rect(x + HS_COLOR_PANEL_W - 56, y + 16, 36, 20, 3,
+    hs_fill_rect(x + HS_COLOR_PANEL_W - 56, y + 16, 36, 20, g_shell.colors.bg);
+    hs_draw_rounded_rect(x + HS_COLOR_PANEL_W - 56, y + 16, 36, 20, 3,
                             g_shell.colors.border);
 
     for (int i = 0; i < 9; i++) {
         int cx = x + 20 + (i % 3) * 96;
         int cy = y + 56 + (i / 3) * 92;
-        gfx64_fill_rect(cx, cy, 80, 80, g_color_presets[i]);
+        hs_fill_rect(cx, cy, 80, 80, g_color_presets[i]);
         uint32_t bc = (g_shell.colors.bg == g_color_presets[i])
                     ? g_shell.colors.accent : g_shell.colors.border;
-        gfx64_draw_rounded_rect(cx, cy, 80, 80, 6, bc);
+        hs_draw_rounded_rect(cx, cy, 80, 80, 6, bc);
     }
 }
 
@@ -5831,18 +5936,18 @@ static void hs_dock_render(void)
         dock_y -= max_extra;
         dock_h += max_extra;
     }
-    gfx64_fill_rounded_rect(dock_x, dock_y, dock_w, dock_h, hs_s(g_shell.ui.corner_radius), g_shell.colors.window_bg);
-    gfx64_draw_rounded_rect(dock_x, dock_y, dock_w, dock_h, hs_s(g_shell.ui.corner_radius), g_shell.colors.border);
+    hs_fill_rounded_rect(dock_x, dock_y, dock_w, dock_h, hs_s(g_shell.ui.corner_radius), g_shell.colors.window_bg);
+    hs_draw_rounded_rect(dock_x, dock_y, dock_w, dock_h, hs_s(g_shell.ui.corner_radius), g_shell.colors.border);
 
     if (!dock_visible) {
         /* 隐藏状态：只画一个小指示条 */
         int indicator_w = hs_sx(40);
         int indicator_x = dock_x + (dock_w - indicator_w) / 2;
-        gfx64_fill_rounded_rect(indicator_x, dock_y + 1, indicator_w, handle_h - 2, hs_s(2), g_shell.colors.accent);
+        hs_fill_rounded_rect(indicator_x, dock_y + 1, indicator_w, handle_h - 2, hs_s(2), g_shell.colors.accent);
         return;
     }
 
-    void *fb = gfx64_get_framebuffer();
+    void *fb = hs_get_framebuffer();
 
     /* 应用图标 (对齐 Clavis DockSurface: 悬停放大, 线性衰减, 底边对齐) */
     const char *icons[] = {"T", "F", "B", "S", "E", "C", "N", "A"};
@@ -5858,7 +5963,7 @@ static void hs_dock_render(void)
         int iy = baseline - sz;
 
         /* 图标背景 */
-        gfx64_fill_rounded_rect(ix, iy, sz, sz, hs_s(10), g_shell.colors.accent);
+        hs_fill_rounded_rect(ix, iy, sz, sz, hs_s(10), g_shell.colors.accent);
 
         /* 图标符号 (字号随放大) */
         int fs = hs_s(20) * sz / base_size;
@@ -6217,19 +6322,19 @@ static int hs_ctx_hit_item(int x, int y)
 static void hs_ctx_menu_render(void)
 {
     if (!g_ctx.open) return;
-    void *fb = gfx64_get_framebuffer();
+    void *fb = hs_get_framebuffer();
     int W = g_shell.screen_width, H = g_shell.screen_height;
     int ih = hs_ctx_item_h();
     int mx = g_shell.mouse_x, my = g_shell.mouse_y;
     /* 两层暗边做投影(自研管线无模糊, 用叠加半透明矩形近似) */
-    gfx64_fill_rounded_rect(g_ctx.x + hs_s(4), g_ctx.y + hs_sy(6), g_ctx.w, g_ctx.h, hs_s(8), 0x40000000);
-    gfx64_fill_rounded_rect(g_ctx.x, g_ctx.y, g_ctx.w, g_ctx.h, hs_s(8), g_shell.colors.panel_bg);
-    gfx64_draw_rounded_rect(g_ctx.x, g_ctx.y, g_ctx.w, g_ctx.h, hs_s(8), 0x44FFFFFF);
+    hs_fill_rounded_rect(g_ctx.x + hs_s(4), g_ctx.y + hs_sy(6), g_ctx.w, g_ctx.h, hs_s(8), 0x40000000);
+    hs_fill_rounded_rect(g_ctx.x, g_ctx.y, g_ctx.w, g_ctx.h, hs_s(8), g_shell.colors.panel_bg);
+    hs_draw_rounded_rect(g_ctx.x, g_ctx.y, g_ctx.w, g_ctx.h, hs_s(8), 0x44FFFFFF);
     for (int i = 0; i < g_ctx.count; i++) {
         int iy = g_ctx.y + hs_sy(4) + i * ih;
         int hov = (mx > g_ctx.x && mx < g_ctx.x + g_ctx.w && my >= iy && my < iy + ih);
         if (hov)
-            gfx64_fill_rounded_rect(g_ctx.x + hs_s(4), iy, g_ctx.w - hs_s(8), ih, hs_s(4),
+            hs_fill_rounded_rect(g_ctx.x + hs_s(4), iy, g_ctx.w - hs_s(8), ih, hs_s(4),
                                     g_shell.colors.accent);
         font64_draw_string(fb, W, H, g_ctx.x + hs_s(12), iy + hs_sy(5), g_ctx.label[i],
                            hov ? 0xFFFFFF : g_shell.colors.window_fg, hs_s(12));
@@ -6334,8 +6439,8 @@ static int hs_anim_active(void)
 /* 提交一帧: 后台内容→前台, 再在前台叠加光标 */
 static void hs_present_with_cursor(int mx, int my)
 {
-    gfx64_present();
-    gfx64_set_target_front();
+    hs_present();
+    hs_set_target_front();
     hs_cursor_init_once();
     { uint64_t k0 = hs_rdtsc();
       hs_ctx_menu_render();     /* 菜单与光标同为前台叠加层 */
@@ -6499,7 +6604,7 @@ static void hpdesk_render_inner(void)
         static int hs_bg_cleared = 0;
         if (!hs_bg_cleared) {
             hs_bg_cleared = 1;
-            gfx64_fill_rect(0, 0, g_shell.screen_width, g_shell.screen_height,
+            hs_fill_rect(0, 0, g_shell.screen_width, g_shell.screen_height,
                             g_shell.colors.bg);
         }
     }
@@ -6596,9 +6701,9 @@ static void hpdesk_render_inner(void)
         int ox = g_last_mx - cboff, oy = g_last_my - cboff;
         int nx = mx - cboff, ny = my - cboff;
         if (g_last_mx >= 0)
-            gfx64_present_region(ox, oy, curb, curb);   /* 擦旧光标 */
-        gfx64_present_region(nx, ny, curb, curb);       /* 铺新背景 */
-        gfx64_set_target_front();
+            hs_present_region(ox, oy, curb, curb);   /* 擦旧光标 */
+        hs_present_region(nx, ny, curb, curb);       /* 铺新背景 */
+        hs_set_target_front();
         hs_cursor_init_once();
         {
             extern void cursor64_set_kind(int kind);
@@ -6623,7 +6728,7 @@ static void hpdesk_render_inner(void)
     {
         int dx_ = 0, dy_ = 0, dw_ = 0, dh_ = 0;
         if (!g_content_dirty && !animating && hs_dirty_rect(&dx_, &dy_, &dw_, &dh_)) {
-            gfx64_set_target_back();
+            hs_set_target_back();
             g_in_partial_frame = 1; g_partial_frames++;
             g_last_dirty[0] = dx_; g_last_dirty[1] = dy_; g_last_dirty[2] = dw_; g_last_dirty[3] = dh_;
             g_ts1 = hs_rdtsc() - __rs0;
@@ -6646,9 +6751,9 @@ static void hpdesk_render_inner(void)
                               hs_notification_render, !(g_in_partial_frame && g_ly_notify.valid));
             }
             g_ts5 = hs_rdtsc() - __rs0;
-            gfx64_present_region(dx_, dy_, dw_, dh_);
+            hs_present_region(dx_, dy_, dw_, dh_);
             g_ts6 = hs_rdtsc() - __rs0;
-            gfx64_set_target_front();
+            hs_set_target_front();
             hs_cursor_init_once();
             {
                 extern void cursor64_set_kind(int kind);
@@ -6671,7 +6776,7 @@ static void hpdesk_render_inner(void)
     if (g_content_dirty || animating) {
     g_full_frames++;
     hs_png_selfcheck();
-    gfx64_set_target_back();
+    hs_set_target_back();
 
     /* 检测g_shell是否被野指针写入破坏 */
     if (g_shell.canary_start != 0xDEADBEEF || g_shell.canary_end != 0xCAFEBABE) {
@@ -6788,7 +6893,7 @@ static void hpdesk_render_inner(void)
         extern int hs_oobe_active(void);
         extern void hs_oobe_render(void *fb, int w, int h);
         if (hs_oobe_active()) {
-            hs_oobe_render(gfx64_get_framebuffer(),
+            hs_oobe_render(hs_get_framebuffer(),
                            g_shell.screen_width, g_shell.screen_height);
         }
     }
@@ -7233,7 +7338,7 @@ void hs_tray_remove_icon(const char *name)
 
 void hs_tray_render(int x, int y, int max_width)
 {
-    void *fb = gfx64_get_framebuffer();
+    void *fb = hs_get_framebuffer();
     int cur_x = x;
     int icon_width = 24;
 
@@ -7244,7 +7349,7 @@ void hs_tray_render(int x, int y, int max_width)
 
         /* 图标背景 */
         uint32_t bg = ti->active ? g_shell.colors.accent : g_shell.colors.panel_bg;
-        gfx64_fill_rect(cur_x, y + 2, icon_width - 2, HS_PANEL_HEIGHT - 4, bg);
+        hs_fill_rect(cur_x, y + 2, icon_width - 2, HS_PANEL_HEIGHT - 4, bg);
 
         /* 图标文字 */
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
@@ -7344,7 +7449,7 @@ int hs_notification_send(const char *title, const char *body, int urgency, int t
 
 void hs_notification_render(void)
 {
-    void *fb = gfx64_get_framebuffer();
+    void *fb = hs_get_framebuffer();
 
     /* V0.55: Clavis 风格通知卡片栈 (Keystone NotificationContent):
        圆角卡片 + 应用图标圆 + 到期进度条 + 滑入动效, 位置可配置 */
@@ -7408,17 +7513,17 @@ void hs_notification_render(void)
         if (y + h > g_shell.screen_height) y = g_shell.screen_height - h;
 
         /* 卡片底: surfaceContainerHigh + 细描边, 圆角 10 */
-        gfx64_fill_rounded_rect(x, y, w, h, HS_RD_WIN, g_shell.colors.titlebar_bg);
-        gfx64_draw_rounded_rect(x, y, w, h, HS_RD_WIN, g_shell.colors.border);
+        hs_fill_rounded_rect(x, y, w, h, HS_RD_WIN, g_shell.colors.titlebar_bg);
+        hs_draw_rounded_rect(x, y, w, h, HS_RD_WIN, g_shell.colors.border);
 
         /* 图标: 普通=accent 圆形, 紧急=红色圆角方块, 内绘标题首字母 */
         uint32_t icon_bg = (n->urgency == 2) ? 0xE5484D : g_shell.colors.accent;
         uint32_t icon_fg = (n->urgency == 2) ? 0xFFFFFF : hs_on_accent();
         int icx = x + hs_sx(28), icy = y + hs_sy(30), ir = hs_s(15);
         if (n->urgency == 2)
-            gfx64_fill_rounded_rect(icx - ir, icy - ir, ir * 2, ir * 2, hs_s(8), icon_bg);
+            hs_fill_rounded_rect(icx - ir, icy - ir, ir * 2, ir * 2, hs_s(8), icon_bg);
         else
-            gfx64_fill_circle(icx, icy, ir, icon_bg);
+            hs_fill_circle(icx, icy, ir, icon_bg);
         if (n->title[0]) {
             char ch[2] = { n->title[0], 0 };
             if (ch[0] >= 'a' && ch[0] <= 'z') ch[0] -= 32;
@@ -7458,10 +7563,10 @@ void hs_notification_render(void)
         if (n->timeout > 0 && life > 0) {
             int track_w = w - hs_sx(16);
             int remain = (int)((life - age) * track_w / life);
-            gfx64_fill_rounded_rect(x + hs_sx(8), y + h - hs_sy(5), track_w,
+            hs_fill_rounded_rect(x + hs_sx(8), y + h - hs_sy(5), track_w,
                                     hs_sy(2), hs_s(1), g_shell.colors.border);
             if (remain > hs_sx(2))
-                gfx64_fill_rounded_rect(x + hs_sx(8), y + h - hs_sy(5), remain,
+                hs_fill_rounded_rect(x + hs_sx(8), y + h - hs_sy(5), remain,
                                         hs_sy(2), hs_s(1), g_shell.colors.accent);
         }
 
@@ -7475,11 +7580,11 @@ void hs_notification_render(void)
         int cx = g_shell.screen_width - cw - 8;
         int cy = HS_PANEL_HEIGHT + 8;
 
-        gfx64_fill_rect(cx, cy, cw, ch, g_shell.colors.window_bg);
-        gfx64_draw_rect(cx, cy, cw, ch, g_shell.colors.border);
+        hs_fill_rect(cx, cy, cw, ch, g_shell.colors.window_bg);
+        hs_draw_rect(cx, cy, cw, ch, g_shell.colors.border);
 
         /* 标题栏 */
-        gfx64_fill_rect(cx, cy, cw, 28, g_shell.colors.titlebar_bg);
+        hs_fill_rect(cx, cy, cw, 28, g_shell.colors.titlebar_bg);
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            cx + 8, cy + 6, "Notifications",
                            g_shell.colors.window_fg, 12);
@@ -7491,7 +7596,7 @@ void hs_notification_render(void)
             if (!n->visible) continue;
             if (ny + 50 > cy + ch) break;
 
-            gfx64_fill_rect(cx + 4, ny, cw - 8, 46, g_shell.colors.panel_bg);
+            hs_fill_rect(cx + 4, ny, cw - 8, 46, g_shell.colors.panel_bg);
             font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                                cx + 10, ny + 4, n->title,
                                g_shell.colors.window_fg, 11);
@@ -7542,18 +7647,18 @@ void hs_media_init(void)
 
 void hs_media_render(int x, int y)
 {
-    void *fb = gfx64_get_framebuffer();
+    void *fb = hs_get_framebuffer();
     int btn_w = 20;
     int cur_x = x;
 
     /* 上一首 */
-    gfx64_fill_rect(cur_x, y + 4, btn_w, HS_PANEL_HEIGHT - 8, g_shell.colors.panel_bg);
+    hs_fill_rect(cur_x, y + 4, btn_w, HS_PANEL_HEIGHT - 8, g_shell.colors.panel_bg);
     font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                        cur_x + 4, y + 6, "|<", g_shell.colors.panel_fg, 10);
     cur_x += btn_w + 2;
 
     /* 播放/暂停 */
-    gfx64_fill_rect(cur_x, y + 4, btn_w, HS_PANEL_HEIGHT - 8,
+    hs_fill_rect(cur_x, y + 4, btn_w, HS_PANEL_HEIGHT - 8,
                     g_shell.media.playing ? g_shell.colors.accent : g_shell.colors.panel_bg);
     font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                        cur_x + 4, y + 6,
@@ -7562,7 +7667,7 @@ void hs_media_render(int x, int y)
     cur_x += btn_w + 2;
 
     /* 下一首 */
-    gfx64_fill_rect(cur_x, y + 4, btn_w, HS_PANEL_HEIGHT - 8, g_shell.colors.panel_bg);
+    hs_fill_rect(cur_x, y + 4, btn_w, HS_PANEL_HEIGHT - 8, g_shell.colors.panel_bg);
     font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                        cur_x + 4, y + 6, ">|", g_shell.colors.panel_fg, 10);
 }
@@ -7626,7 +7731,7 @@ void hs_status_update(void)
 
 void hs_volume_render(int x, int y, int width)
 {
-    void *fb = gfx64_get_framebuffer();
+    void *fb = hs_get_framebuffer();
 
     /* 音量图标 */
     font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
@@ -7638,14 +7743,14 @@ void hs_volume_render(int x, int y, int width)
     int bar_h = 6;
     int bar_y = y + (HS_PANEL_HEIGHT - bar_h) / 2;
 
-    gfx64_fill_rect(bar_x, bar_y, bar_w, bar_h, g_shell.colors.border);
+    hs_fill_rect(bar_x, bar_y, bar_w, bar_h, g_shell.colors.border);
     int fill_w = (bar_w * g_shell.status.volume) / 100;
-    gfx64_fill_rect(bar_x, bar_y, fill_w, bar_h, g_shell.colors.accent);
+    hs_fill_rect(bar_x, bar_y, fill_w, bar_h, g_shell.colors.accent);
 }
 
 void hs_brightness_render(int x, int y, int width)
 {
-    void *fb = gfx64_get_framebuffer();
+    void *fb = hs_get_framebuffer();
 
     font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                        x, y + 6, "B:", g_shell.colors.panel_fg, 10);
@@ -7655,14 +7760,14 @@ void hs_brightness_render(int x, int y, int width)
     int bar_h = 6;
     int bar_y = y + (HS_PANEL_HEIGHT - bar_h) / 2;
 
-    gfx64_fill_rect(bar_x, bar_y, bar_w, bar_h, g_shell.colors.border);
+    hs_fill_rect(bar_x, bar_y, bar_w, bar_h, g_shell.colors.border);
     int fill_w = (bar_w * g_shell.status.brightness) / 100;
-    gfx64_fill_rect(bar_x, bar_y, fill_w, bar_h, 0xFFCC00);
+    hs_fill_rect(bar_x, bar_y, fill_w, bar_h, 0xFFCC00);
 }
 
 void hs_battery_render(int x, int y)
 {
-    void *fb = gfx64_get_framebuffer();
+    void *fb = hs_get_framebuffer();
     char buf[16];
 
     /* 电池图标 */
@@ -7670,14 +7775,14 @@ void hs_battery_render(int x, int y)
     int bat_h = 12;
     int bat_y = y + (HS_PANEL_HEIGHT - bat_h) / 2;
 
-    gfx64_draw_rect(x, bat_y, bat_w, bat_h, g_shell.colors.panel_fg);
-    gfx64_fill_rect(x + bat_w, bat_y + 3, 2, 6, g_shell.colors.panel_fg);
+    hs_draw_rect(x, bat_y, bat_w, bat_h, g_shell.colors.panel_fg);
+    hs_fill_rect(x + bat_w, bat_y + 3, 2, 6, g_shell.colors.panel_fg);
 
     /* 电量填充 */
     int fill_w = ((bat_w - 2) * g_shell.status.battery_percent) / 100;
     uint32_t color = g_shell.status.battery_percent > 20 ?
                      0x4CAF50 : 0xF44336;
-    gfx64_fill_rect(x + 1, bat_y + 1, fill_w, bat_h - 2, color);
+    hs_fill_rect(x + 1, bat_y + 1, fill_w, bat_h - 2, color);
 
     /* 百分比文字 */
     int n = g_shell.status.battery_percent, i = 0;
@@ -7694,7 +7799,7 @@ void hs_battery_render(int x, int y)
 
 void hs_network_render(int x, int y)
 {
-    void *fb = gfx64_get_framebuffer();
+    void *fb = hs_get_framebuffer();
 
     if (g_shell.status.network_connected) {
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
@@ -7707,7 +7812,7 @@ void hs_network_render(int x, int y)
 
 void hs_tasklist_render(int x, int y, int width)
 {
-    void *fb = gfx64_get_framebuffer();
+    void *fb = hs_get_framebuffer();
     int cur_x = x;
     int btn_h = HS_PANEL_HEIGHT - 4;
 
@@ -7721,7 +7826,7 @@ void hs_tasklist_render(int x, int y, int width)
         if (cur_x + btn_w > x + width) break;
 
         uint32_t bg = w->focus ? g_shell.colors.accent : g_shell.colors.panel_bg;
-        gfx64_fill_rect(cur_x, y + 2, btn_w, btn_h, bg);
+        hs_fill_rect(cur_x, y + 2, btn_w, btn_h, bg);
 
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            cur_x + 4, y + 6, w->title,
@@ -8231,14 +8336,14 @@ void hpdesk_switcher_close(void)
 static void hs_switcher_render(void)
 {
     if (g_sw_count <= 0) return;
-    void *fb = gfx64_get_framebuffer();
+    void *fb = hs_get_framebuffer();
     int W = g_shell.screen_width, H = g_shell.screen_height;
     int card_w = 160, card_h = 56, gap = 12;
     int total = g_sw_count * (card_w + gap) - gap;
     int x0 = (W - total) / 2;
     int y0 = H / 2 - card_h / 2 - 20;
     /* 半透明遮罩 */
-    gfx64_fill_rect(0, 0, W, H, 0x88000000);
+    hs_fill_rect(0, 0, W, H, 0x88000000);
     for (int i = 0; i < g_sw_count; i++) {
         int idx = g_sw_order[i];
         if (idx < 0 || idx >= g_wm.window_count) continue;
@@ -8246,8 +8351,8 @@ static void hs_switcher_render(void)
         int cx = x0 + i * (card_w + gap);
         uint32_t bg = (i == g_sw_sel) ? g_shell.colors.accent : g_shell.colors.panel_bg;
         uint32_t fg = (i == g_sw_sel) ? 0xFFFFFF : g_shell.colors.panel_fg;
-        gfx64_fill_rounded_rect(cx, y0, card_w, card_h, HS_RD_INPUT, bg);
-        gfx64_draw_rounded_rect(cx, y0, card_w, card_h, HS_RD_INPUT, g_shell.colors.border_strong);
+        hs_fill_rounded_rect(cx, y0, card_w, card_h, HS_RD_INPUT, bg);
+        hs_draw_rounded_rect(cx, y0, card_w, card_h, HS_RD_INPUT, g_shell.colors.border_strong);
         font64_draw_string(fb, W, H, cx + 12, y0 + 18, w->title, fg, 12);
     }
     font64_draw_string(fb, W, H, W / 2 - 90, y0 + card_h + 14,
@@ -8325,7 +8430,7 @@ void hpdesk_update_wheel(int wheel)
 static void hs_app_placeholder_render(hs_window_t *w)
 {
     if (!w) return;
-    void *fb = gfx64_get_framebuffer();
+    void *fb = hs_get_framebuffer();
     int W = g_shell.screen_width, H = g_shell.screen_height;
     font64_draw_string(fb, W, H, w->x + 24, w->y + 40, w->title,
                        g_shell.colors.window_fg, 16);

@@ -48,9 +48,16 @@ int desk_start(uint32_t scale_pct)
 
     if (desk_surface_get(&g_surf, scale_pct) != 0) return -1;
 
-    if (d->init && d->init(&g_surf) != 0) return -3;
-
+    /* 先进入运行态再调 init: 桌面实现内部要拿 surface 画第一帧(比如 hpdesk 在
+     * init 里就要建自身控件), 如果 init 期间 desk_active_surface() 还是 0,
+     * 它只能用全局 gfx64_* 兜底 —— 那等于解耦没做成。init 失败再回滚。 */
     g_running = 1;
+
+    if (d->init && d->init(&g_surf) != 0) {
+        g_running = 0;
+        return -3;
+    }
+
     return 0;
 }
 
