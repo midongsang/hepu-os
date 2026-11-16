@@ -225,6 +225,17 @@ int paging_map(page_directory_t *dir, uint32_t virt, uint32_t phys,
     entry->present = (flags & PAGE_PRESENT) ? 1 : 0;
     entry->writable = (flags & PAGE_WRITE) ? 1 : 0;
     entry->user = (flags & PAGE_USER) ? 1 : 0;
+    /* B1: 父 PDE 标志同步。paging_create_dir 复制内核 PDE 后在隔离模式下
+     * 清了 PDE 的 USER 位; 用户态映射复用该 PDE 时, 仅置 PTE USER 不够——
+     * x86 要求 PDE/PTE 两级 USER 同时为 1, 否则 ring3 访问 #PF
+     * (err=present|user, PTE user=1 而 PDE user=0, 实测 ELF 段 0x08049000)。
+     * 这里按 PTE 的 USER/RW 提升父 PDE; 内核 PTE 自身 user=0 的页仍被
+     * PTE 级挡住, 隔离不被穿透。 */
+    {
+        page_dir_entry_t *de = &dir->entries[virt >> 22];
+        if (entry->user) de->user = 1;
+        if (entry->writable) de->writable = 1;
+    }
     return 0;
 }
 

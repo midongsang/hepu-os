@@ -196,6 +196,22 @@ process_t *process_create(const char *name, uint32_t entry,
         }
         proc->page_dir_owned = 1;   /* V3.78: 独占页目录, 退出时归还 */
 
+        /* B1 隔离豁免: 编译进内核的遗留用户进程(init/procb/schtest_a/b)
+         * 入口在 kernel .text/.rodata 恒等映射区(0x100000-0x3fffff)。
+         * paging_create_dir 在隔离模式下清掉了内核 PDE 的 USER 位,
+         * ring3 取指会 #PF(err=present|user, PDE user=0)。这里按入口地址
+         * 识别这类进程, 把低址恒等映射 PDE 的 USER 位从内核目录恢复。
+         * 外部加载应用入口: Linux ELF=0x08048000, PE=0x400000,
+         * Mach-O=0x1000, .hug=0x20000000, 均不在此区间, 隔离保持不变。 */
+        if (memory_isolation_enabled &&
+            entry >= 0x100000u && entry < 0x400000u) {
+            page_directory_t *kdir = paging_get_kernel_dir();
+            if (proc->page_dir->entries[0].present &&
+                kdir->entries[0].user) {
+                proc->page_dir->entries[0].user = 1;
+            }
+        }
+
         /* 分配用户栈 (V3.77: 保存 kheap 原始地址, 供进程退出时释放) */
         proc->user_stack_raw = (uint32_t)kmalloc(USER_STACK_SIZE);
         if (!proc->user_stack_raw) {

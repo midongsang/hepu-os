@@ -17,7 +17,13 @@
  * 位图被清零覆盖 → mm_alloc_pages 扫描异常)。static 数组由链接器分配,
  * 彻底消除固定地址假设。
  * V6.76: 物理内存支持从256MB扩展到4GB (4GB/4KB=1M页, 1M/32=32K uint32=128KB) */
-static uint32_t memory_bitmap_storage[(4096UL * 1024 * 1024 / 4096) / 32 + 8];
+/* B1 修复: 维度常量必须用 ULL —— i386 下 unsigned long 是 32 位,
+ * 4096UL*1024*1024 = 2^32 回绕成 0, 位图数组被压成 8 个字(32B),
+ * mm_init 据此把 total_pages 钳到 256 页(1MiB), 256MB 物理内存只跟踪
+ * 前 1MiB; 启动期保留区/页表占满后 mm_alloc_page 恒返回 0,
+ * 所有新进程的 paging_create_dir 拿不到帧 → process_create NULL →
+ * binfmt 返回 BINFMT_ERR_MEM(-3)。 */
+static uint32_t memory_bitmap_storage[(4096ULL * 1024 * 1024 / 4096) / 32 + 8];
 static uint32_t *memory_bitmap = NULL;
 static uint32_t  total_pages = 0;
 static uint32_t  used_pages = 0;
