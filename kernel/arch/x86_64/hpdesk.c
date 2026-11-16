@@ -1236,6 +1236,26 @@ static int hs_wp_load(int idx)
     g_wp_is_jpeg = 0;
 
     int n = ext2_64_read_file(g_wp_files[idx], wp_raw, sizeof(wp_raw));
+#ifndef __x86_64__
+    /* 32 位兜底: 只以 -kernel 启动时没有文件系统, 读盘必然失败, 桌面就只剩
+     * 一片纯色。此时用内核内置的**预解码 RGBA**填进 g_wp_png, 完全绕开
+     * png64_decode —— 那个解码器在 32 位下会在 inflate/写页阶段卡死。
+     * 读盘成功仍然优先用盘上的, 用户换图不受影响。
+     * 64 位不编这段(它总能读到文件), 也不吃这 324KB。 */
+    if (n <= 8 && idx == 0) {
+        extern const unsigned char hepu_wp_default_rgba[];
+        extern const unsigned int hepu_wp_default_w, hepu_wp_default_h;
+        if (hepu_wp_default_w > 0 && hepu_wp_default_h > 0) {
+            g_wp_png.width  = hepu_wp_default_w;
+            g_wp_png.height = hepu_wp_default_h;
+            g_wp_png.rgba   = (uint8_t *)hepu_wp_default_rgba;
+            g_wp_loaded = idx;
+            vga_printf("[WP32] builtin wallpaper %dx%d\n",
+                       (int)hepu_wp_default_w, (int)hepu_wp_default_h);
+            return 1;
+        }
+    }
+#endif
     if (n > 8 && png64_decode(wp_raw, n, &g_wp_png) == 0 && g_wp_png.rgba) {
         g_wp_loaded = idx;
         vga_printf("[PNG64] wallpaper %d ok read=%d %dx%d\n", idx, n,
