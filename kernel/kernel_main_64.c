@@ -227,6 +227,10 @@ void x86_64_kernel_main(void)
     x86_64_enable_fpu();
 
     /* 初始化物理内存管理（2GB内存，位图使用静态数组） */
+    /* P2-1: 64 位贴 7 个 phase 标签, 名字与 32 位 hepu_init_phase_name() 逐字一致,
+     * 这样两边的启动日志能逐行 diff。32 位的 hepu_init_phase() 不能直接调
+     * (它内部调 vfs_init/devfs_init 等只存在于 32 位的模块)。 */
+    { vga_puts("[INIT] phase:  cores subsystem \n"); }
     vga_puts("[INIT] Initializing physical memory manager (2GB max)...\n");
     /* V0.13.63: 真机内存探测 — stage2(E820)/UEFI(EFI内存图) 写入 0x90100(64位字节)
      * 替代硬编码 2GB: 真机内存 <2GB 时硬编码会分配不存在的物理页 -> 启动即崩 */
@@ -311,6 +315,7 @@ void x86_64_kernel_main(void)
 
     vga_puts("[BOOT] step3 done (paging)\n");
 
+    { vga_puts("[INIT] phase:  HW driver \n"); }
     /* V0.20.59: 提前装 IDT，防止切页表后到 SMP/APIC 之间任何异常导致 triple fault 回 BIOS */
     vga_puts("[INIT] Early IDT (crash-safe)...\n");
     extern void irq64_init(void);
@@ -421,6 +426,7 @@ void x86_64_kernel_main(void)
     syscall64_full_init();
     syscall64_test();
 
+    { vga_puts("[INIT] phase:  security encryption \n"); }
     /* P0-4: seccomp 沙箱状态初始化（全槽位 disabled） */
     extern void seccomp64_init(void);
     seccomp64_init();
@@ -623,6 +629,7 @@ void x86_64_kernel_main(void)
         }
     }
 
+    { vga_puts("[INIT] phase:  fs \n"); }
     /* 初始化ext2文件系统 */
     vga_puts("[INIT] Initializing 64-bit ext2 filesystem...\n");
     ext2_64_init();
@@ -769,6 +776,7 @@ void x86_64_kernel_main(void)
     extern void csprng_init(void);
     csprng_init();
 
+    { vga_puts("[INIT] phase:  net proto \n"); }
     /* 初始化网络协议栈 */
     vga_puts("[INIT] Initializing 64-bit network stack...\n");
     net64_init();
@@ -784,6 +792,7 @@ void x86_64_kernel_main(void)
     vga_puts("[INIT] Initializing 64-bit HTTP client...\n");
     http64_init();
 
+    { vga_puts("[INIT] phase:  system service \n"); }
     /* 初始化进程管理 */
     vga_puts("[INIT] Initializing 64-bit process manager...\n");
     process64_init();
@@ -1227,6 +1236,7 @@ void x86_64_kernel_main(void)
     vga_puts("========================================\n");
 
     /* 尝试启动桌面环境，失败则启动Shell */
+    { vga_puts("[INIT] phase:  app framework \n"); }
     if (desktop64_init() == 0) {
         vga_puts("[INIT] Desktop environment ready\n");
 

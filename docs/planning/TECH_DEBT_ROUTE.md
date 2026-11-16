@@ -587,7 +587,7 @@ desk_select("mine");       /* 切过去 */
 
 | # | 项 | 风险 | 验收 |
 |---|---|---|---|
-| P2-1 | 64 位贴 7 个 phase 标签（复用 `init_phase_t`） | 极低 | 日志逐行 diff 与合并前一致；`regress.sh` 仍 N/N |
+| P2-1 | ~~64 位贴 7 个 phase 标签~~ **已完成** | 在 `kernel_main_64.c` 的 7 个节点各打一行 `[INIT] phase:  <名> `，名字逐字照抄 32 位 `hepu_init_phase_name()`（含原有前后空格）。按真实启动顺序：`cores subsystem`(物理内存) → `HW driver`(早 IDT) → `security encryption`(seccomp) → `fs`(ext2) → `net proto`(net64) → `system service`(process64) → `app framework`(desktop64)。<br>**不调 `hepu_init_phase()` 的原因**：它内部调 `vfs_init`/`devfs_init` 等只存在于 32 位的模块，64 位链接不上。<br>**踩到的坑**：64 位 `vga_puts()` 第一行就是 `serial_puts_local()`（`lib64.c` 的 `vga_puts_nolock`），本来就落串口，第一版再配一个 `serial_puts(0x3F8,...)` 导致每行在 `ser_kill.log` 出现两遍。去掉多余那句后 7 行各出现一次。<br>验证：64 位 949,232 B（+256 B），截图 1920×1080 非黑 2,073,600。 | 已完成（2026-11-17） |
 | P2-2 | `desk_registry` 写入 `DESKTOP_INTERFACE.md` 并标"新增，非既有设计" | 无 | 文档与代码一致 |
 
 ### P3 —— 存量与可增量
