@@ -254,40 +254,6 @@ static void g32_corner_aa(int cx, int cy, int ax0, int ax1, int ay0, int ay1,
     }
 }
 
-/* 抗锯齿实心圆(SDF 式)。与圆角同一套思路: 内部 (r-2)^2 到外部 (r+1)^2
- * 之间按"到圆边的距离"给透明度, alpha = 255 - |dist-r| * 128。
- * 64 位对应实现走矢量管线 vg_fill_circle, 32 位没有 vg, 用 SDF 近似 ——
- * 两者都是 AA, 观感同档; 只给色圆这类大半径(r=10)用, 图标底圆仍走非 AA。 */
-void gfx64_fill_circle_aa(int cx, int cy, int r, uint32_t color)
-{
-    if (r <= 0) return;
-    int r2i = (r > 2) ? (r - 2) * (r - 2) : 0;
-    int r2o = (r + 1) * (r + 1);
-
-    for (int dy = -r - 1; dy <= r + 1; dy++) {
-        int py = cy + dy;
-        if (py < 0 || py >= gfx_height) continue;
-        int d2y = dy * dy;
-        /* 该行 dx 上界: (span+1)^2 + d2y > r2o 即出界 */
-        int span = 0;
-        while ((span + 1) * (span + 1) + d2y <= r2o) span++;
-
-        for (int dx = -span; dx <= span; dx++) {
-            int px = cx + dx;
-            if (px < 0 || px >= gfx_width) continue;
-            int d2 = dx * dx + d2y;
-            if (d2 <= r2i) { gfx_putpixel_rgb(px, py, color); continue; }
-
-            uint32_t dist = (uint32_t)g32_isqrt(d2);
-            int delta = (int)dist - r;
-            int alpha = 255 - (delta < 0 ? -delta : delta) * 128;
-            if (alpha < 0) alpha = 0;
-            if (alpha > 255) alpha = 255;
-            g32_blend_px(px, py, color, alpha);
-        }
-    }
-}
-
 /* 填充圆角矩形(抗锯齿)。原先这里是 g32_note_degrade() + 普通圆角,
  * 即顶栏/窗口/胶囊的四角一直是硬边。现在与 64 位 gfx64_fill_round_rect_aa
  * 同构: 中间竖条 + 左右两条直边用矩形填充, 四个角交给 g32_corner_aa。 */

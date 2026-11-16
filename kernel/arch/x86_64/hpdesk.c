@@ -92,12 +92,6 @@ static void hs_draw_rounded_rect(int x, int y, int w, int h, int r, uint32_t c)
 { desk_surface_t *s = hs_surf(); if (s) s->draw_rounded_rect(s, x, y, w, h, r, c); }
 static void hs_fill_circle(int cx, int cy, int r, uint32_t c)
 { desk_surface_t *s = hs_surf(); if (s) s->fill_circle(s, cx, cy, r, c); }
-/* 抗锯齿圆。只给"色圆"这类需要柔边的圆用, 图标底圆仍走上面的非 AA 版 ——
- * 小图标(r=6~8)加 AA 会显得发糊, 而 r=10 的色圆在 1920x1080 下硬边很明显。
- * 64 位走 gfx64_fill_circle_aa -> vg_fill_circle(矢量管线, 真 AA);
- * 32 位走 gfx64_fill_circle_aa 的 SDF 实现。两边都是 AA, 观感同档。 */
-static void hs_fill_circle_aa(int cx, int cy, int r, uint32_t c)
-{ gfx64_fill_circle_aa(cx, cy, r, c); }
 static void hs_draw_line_aa(int x0, int y0, int x1, int y1, uint32_t c)
 { desk_surface_t *s = hs_surf(); if (s) s->draw_line_aa(s, x0, y0, x1, y1, c); }
 /* 这里要注意两个签名的差异: hpdesk 侧一直是 gfx64_fill_polygon(xs, ys, n, c)
@@ -3280,7 +3274,7 @@ static void hs_settings_window_render(hs_window_t *w)
             int sy = ry;
             /* 当前生效的那一格直接画成 accent 本尊, 而不是预设常量 ——
              * 否则"圈住黄圆"和"界面是另一档金"仍然是两个颜色, 用户照样觉得对不上。 */
-            hs_fill_circle_aa(sx + SETK(10), sy + SETK(10), SETK(10),
+            hs_fill_circle(sx + SETK(10), sy + SETK(10), SETK(10),
                               (i == g_accent_nearest_preset) ? g_shell.colors.accent : g_theme_presets[i]);
             /* 当前生效色描边 */
             /* 描边 = "当前生效的强调色"。原来按 theme_source 精确比对, 但主题的
