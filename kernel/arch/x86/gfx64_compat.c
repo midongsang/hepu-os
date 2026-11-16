@@ -197,10 +197,83 @@ void gfx64_draw_rounded_rect(int x, int y, int w, int h, int radius, uint32_t co
     gfx64_draw_rect(x + w - 1, y + r, 1, h - 2 * r, color);
 }
 
+/* 与目标缓冲做 alpha 混合后写回。alpha>=255 走不透明直写, 其余读背景混合。 */
+static void g32_blend_px(int x, int y, uint32_t color, int alpha)
+{
+    if (alpha <= 0) return;
+    if (alpha >= 255) { gfx_putpixel_rgb(x, y, color); return; }
+    if (gfx_bpp != 32 || !framebuffer) return;
+
+    int pitch_px = gfx_pitch / 4;
+    uint32_t *buf = (uint32_t *)framebuffer;
+    uint32_t bg = buf[y * pitch_px + x];
+    int r = (color >> 16) & 0xFF, g = (color >> 8) & 0xFF, b = color & 0xFF;
+    int br = (bg >> 16) & 0xFF, bg_ = (bg >> 8) & 0xFF, bb = bg & 0xFF;
+    int nr = (r * alpha + br * (255 - alpha)) / 255;
+    int ng = (g * alpha + bg_ * (255 - alpha)) / 255;
+    int nb = (b * alpha + bb * (255 - alpha)) / 255;
+    gfx_putpixel_rgb(x, y, ((uint32_t)nr << 16) | ((uint32_t)ng << 8) | nb);
+}
+
+/* 圆角的一个角, SDF 式抗锯齿。
+ * 与 64 位 rounded_corner_aa 同构: 内部 (r-2)^2 到外部 (r+2)^2(r<=6 时 r+3)
+ * 之间做对称渐变, alpha = 255 - |dist-r| * 128(r<=6 时 96)。
+ * 内部 2px 由背景平滑过渡到纯色, 外部 2px 衰减到 0, 消除硬边。
+ * 64 位用 math64_isqrt, 32 位复用已有的 g32_isqrt(牛顿迭代)。 */
+static void g32_corner_aa(int cx, int cy, int ax0, int ax1, int ay0, int ay1,
+                          int r, uint32_t color, int fill_mode)
+{
+    int r2 = r * r;
+    int r2o = (r <= 6) ? (r + 3) * (r + 3) : (r + 2) * (r + 2);
+    int r2i = (r > 2) ? (r - 2) * (r - 2) : 0;
+    int ak = (r <= 6) ? 96 : 128;
+
+    for (int dy = ay0; dy <= ay1; dy++) {
+        int py = cy + dy;
+        if (py < 0 || py >= gfx_height) continue;
+        for (int dx = ax0; dx <= ax1; dx++) {
+            int px = cx + dx;
+            if (px < 0 || px >= gfx_width) continue;
+
+            int d2 = dx * dx + dy * dy;
+            if (fill_mode) {
+                if (d2 <= r2i) { gfx_putpixel_rgb(px, py, color); continue; }
+                if (d2 > r2o) continue;
+            } else {
+                if (d2 < r2i || d2 > r2o) continue;
+                if (d2 <= r2) { gfx_putpixel_rgb(px, py, color); continue; }
+            }
+            uint32_t dist = (uint32_t)g32_isqrt(d2);
+            int delta = (int)dist - r;
+            int alpha = 255 - (delta < 0 ? -delta : delta) * ak;
+            if (alpha < 0) alpha = 0;
+            if (alpha > 255) alpha = 255;
+            g32_blend_px(px, py, color, alpha);
+        }
+    }
+}
+
+/* 填充圆角矩形(抗锯齿)。原先这里是 g32_note_degrade() + 普通圆角,
+ * 即顶栏/窗口/胶囊的四角一直是硬边。现在与 64 位 gfx64_fill_round_rect_aa
+ * 同构: 中间竖条 + 左右两条直边用矩形填充, 四个角交给 g32_corner_aa。 */
 void gfx64_fill_round_rect_aa(int x, int y, int w, int h, int radius, uint32_t color)
 {
-    g32_note_degrade();
-    gfx64_fill_rounded_rect(x, y, w, h, radius, color);
+    if (w <= 0 || h <= 0) return;
+    if (radius < 0) radius = 0;
+    if (radius > w / 2) radius = w / 2;
+    if (radius > h / 2) radius = h / 2;
+    if (radius == 0) { gfx64_fill_rect(x, y, w, h, color); return; }
+
+    /* 中间竖条 + 左右两条 */
+    gfx64_fill_rect(x + radius, y, w - 2 * radius, h, color);
+    gfx64_fill_rect(x, y + radius, radius, h - 2 * radius, color);
+    gfx64_fill_rect(x + w - radius, y + radius, radius, h - 2 * radius, color);
+
+    /* 四角(以末像素坐标定位圆心, 与描边一致) */
+    g32_corner_aa(x + radius,         y + radius,         -radius - 2, 0, -radius - 2, 0, radius, color, 1);
+    g32_corner_aa(x + w - 1 - radius, y + radius,         0, radius + 2, -radius - 2, 0, radius, color, 1);
+    g32_corner_aa(x + radius,         y + h - 1 - radius, -radius - 2, 0, 0, radius + 2, radius, color, 1);
+    g32_corner_aa(x + w - 1 - radius, y + h - 1 - radius, 0, radius + 2, 0, radius + 2, radius, color, 1);
 }
 
 void gfx64_fill_round_rect_argb(void *buf, int bw, int bh, int x, int y,
