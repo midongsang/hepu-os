@@ -875,6 +875,15 @@ void x86_64_kernel_main(void)
         }
         vga_puts("[FBDESC] returned\n");
 
+        /* TECH_DEBT_ROUTE §5-5 第 2 批前置: struct stat 布局探针。
+         * 切 sys_stat 之前必须先能"看见"字段偏移 —— 偏移错了不会编译报错,
+         * 标准回归也照样全绿, 只有 ld.so 会默默把 libc 认成主程序。 */
+        vga_puts("[STATP] Running /bin/statprobe.elf...\n");
+        if (user_process_exec("/bin/statprobe.elf") < 0) {
+            vga_puts("[STATP] statprobe.elf not available (optional)\n");
+        }
+        vga_puts("[STATP] returned\n");
+
         /* 安全回归：用户地址访问限制（内核地址/未映射地址应被拒绝，不崩溃） */
         vga_puts("[SEC] Running user-address security regression /bin/sec_test.elf...\n");
         if (user_process_exec("/bin/sec_test.elf") < 0) {

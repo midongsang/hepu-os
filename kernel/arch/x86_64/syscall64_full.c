@@ -1728,56 +1728,57 @@ static int64_t sys_pipe(int *fds) {
     return 0;
 }
 
-/* sys_stat: 返回 Linux x86_64 兼容 stat 结构 (144字节) */
-struct linux_stat {
-    uint64_t st_dev;
-    uint64_t st_ino;
-    uint64_t st_nlink;
-    uint32_t st_mode;
-    uint32_t st_uid;
-    uint32_t st_gid;
-    uint32_t __pad0;
-    uint64_t st_rdev;
-    int64_t  st_size;
-    int32_t  st_blksize;
-    int32_t  st_blocks;
-    int64_t  st_atime;
-    uint64_t st_atime_nsec;
-    int64_t  st_mtime;
-    uint64_t st_mtime_nsec;
-    int64_t  st_ctime;
-    uint64_t st_ctime_nsec;
-    int32_t  __unused[3];
-};
-
-#define S_IFDIR  0040000
-#define S_IFREG  0100000
-#define S_IRWXU  00700
-#define S_IRWXG  00070
-#define S_IRWXO  00007
-
+/* sys_stat: 返回 Linux x86_64 兼容 stat 结构 (144字节)
+ *
+ * 这一版按**字节偏移**填, 不再用结构体 —— 原来那个 struct 把 st_blksize /
+ * st_blocks 写成了 int32_t, 而 x86_64 上这两个字段是 8 字节, 于是从 offset 56
+ * 开始后面所有字段整体前移 8 字节, 而且 sizeof 只有 128, 拷给用户态后
+ * [128..143] 是用户自己 memset 的 0(或残留), 读 st_ctim 得到垃圾。
+ *
+ * 为什么要和 sys_fstat 写成同一套: 这两条路径填的是**同一个契约**。原来
+ * sys_fstat 是对的(逐偏移写 144 字节), sys_stat 是错的(结构体), 同一系统里
+ * stat() 和 fstat() 对同一个文件给出不同布局 —— 这种"一对一错"比两个都错更
+ * 难查, 因为比对两边会得出"实现方式不同"而不是"有一个是错的"。
+ * 参考布局(Linux x86_64 struct stat):
+ *   0 st_dev(8) | 8 st_ino(8) | 16 st_nlink(8) | 24 st_mode(4) | 28 st_uid(4)
+ *   32 st_gid(4) | 36 __pad0(4) | 40 st_rdev(8) | 48 st_size(8)
+ *   56 st_blksize(8) | 64 st_blocks(8) | 72 st_atim(16) | 88 st_mtim(16)
+ *   104 st_ctim(16) | 120 __unused(24)
+ *
+ * st_ino 必须是**真实** inode: ld.so 用 (st_dev, st_ino) 判断"两个路径是不是
+ * 同一个已加载对象", 全 0 会让所有文件看起来是同一个, 把 libc.so.6 认成主程序。
+ */
 extern int ext2_64_stat(const char *path, uint32_t *size, uint8_t *isdir);
-static int64_t sys_stat(const char *path, struct linux_stat *st)
+extern int ext2_64_stat_ino(const char *path, uint32_t *size, uint8_t *isdir,
+                            uint32_t *ino);
+
+#define STAT_BYTES 144
+
+static int64_t sys_stat(const char *path, void *statbuf)
 {
     char kp[256];
     if (copy_user_path(kp, sizeof(kp), path) < 0) return -1;
-    uint32_t sz = 0; uint8_t id = 0;
-    int r = ext2_64_stat(kp, &sz, &id);
-    if (r != 0) return -1;
 
-    struct linux_stat ks;
-    for (int i = 0; i < (int)sizeof(ks); i++) ((char*)&ks)[i] = 0;
-    ks.st_dev = 0;
-    ks.st_ino = 0;
-    ks.st_nlink = 1;
-    ks.st_mode = (id ? S_IFDIR : S_IFREG) | S_IRWXU | S_IRWXG | S_IRWXO;
-    ks.st_uid = 0;
-    ks.st_gid = 0;
-    ks.st_rdev = 0;
-    ks.st_size = sz;
-    ks.st_blksize = 512;
-    ks.st_blocks = (sz + 511) / 512;
-    if (st) copy_to_user(st, &ks, sizeof(ks));
+    uint32_t sz = 0; uint8_t id = 0; uint32_t ino = 0;
+    if (ext2_64_stat_ino(kp, &sz, &id, &ino) != 0) return -1;
+
+    uint8_t sb[STAT_BYTES];
+    for (int i = 0; i < STAT_BYTES; i++) sb[i] = 0;
+    *(uint64_t *)(sb + 0)  = 1;                          /* st_dev */
+    *(uint64_t *)(sb + 8)  = ino;                        /* st_ino (真实) */
+    *(uint64_t *)(sb + 16) = 1;                          /* st_nlink */
+    *(uint32_t *)(sb + 24) = id ? 0x41ED : 0x81A4;        /* 0755 dir / 0644 file */
+    *(uint32_t *)(sb + 28) = 0;                          /* st_uid */
+    *(uint32_t *)(sb + 32) = 0;                          /* st_gid */
+    *(uint64_t *)(sb + 40) = 0;                          /* st_rdev */
+    *(uint64_t *)(sb + 48) = sz;                         /* st_size */
+    *(uint64_t *)(sb + 56) = 4096;                       /* st_blksize */
+    *(uint64_t *)(sb + 64) = (sz + 511) / 512;           /* st_blocks */
+    /* st_atim/st_mtim/st_ctim (72/88/104) 全部给 0:
+     * ext2 里读时间戳要额外一趟 inode 解析, 而当前没有任何调用方依赖它。
+     * 给 0 是"如实: 没有这个信息", 不是"假装时间戳是 epoch" —— 两者在
+     * 排序/缓存场景里后果不同, 这里选前者。 */
+    if (statbuf && copy_to_user(statbuf, sb, STAT_BYTES) != 0) return HEPU_EFAULT;
     return 0;
 }
 
