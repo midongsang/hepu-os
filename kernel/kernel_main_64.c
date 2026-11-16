@@ -893,6 +893,15 @@ void x86_64_kernel_main(void)
         }
         vga_puts("[FDSTRESS] returned\n");
 
+        /* §5-5 第 4 批前置: mmap/munmap/mprotect 边界用例。
+         * 测的是"该拒绝的真的拒绝了" —— 校验逻辑散在业务里(5 处窗口校验、
+         * 保留区相交、长度溢出), 搬家时漏一条 if 回归看不出来。 */
+        vga_puts("[MMP] Running /bin/mmprobe.elf...\n");
+        if (user_process_exec("/bin/mmprobe.elf") < 0) {
+            vga_puts("[MMP] mmprobe.elf not available (optional)\n");
+        }
+        vga_puts("[MMP] returned\n");
+
         /* 安全回归：用户地址访问限制（内核地址/未映射地址应被拒绝，不崩溃） */
         vga_puts("[SEC] Running user-address security regression /bin/sec_test.elf...\n");
         if (user_process_exec("/bin/sec_test.elf") < 0) {
