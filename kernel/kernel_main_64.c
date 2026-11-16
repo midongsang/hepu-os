@@ -884,6 +884,15 @@ void x86_64_kernel_main(void)
         }
         vga_puts("[STATP] returned\n");
 
+        /* §5-5 第 3 批前置: fd 表并发复用用例。
+         * 两条真线程(CLONE_VM 共享 fd 表)各跑 400 轮 open→close, 检测
+         * 号越界 / 同 fd 被两线程同时持有 / 结束后泄漏。 */
+        vga_puts("[FDSTRESS] Running /bin/fdstress.elf...\n");
+        if (user_process_exec("/bin/fdstress.elf") < 0) {
+            vga_puts("[FDSTRESS] fdstress.elf not available (optional)\n");
+        }
+        vga_puts("[FDSTRESS] returned\n");
+
         /* 安全回归：用户地址访问限制（内核地址/未映射地址应被拒绝，不崩溃） */
         vga_puts("[SEC] Running user-address security regression /bin/sec_test.elf...\n");
         if (user_process_exec("/bin/sec_test.elf") < 0) {

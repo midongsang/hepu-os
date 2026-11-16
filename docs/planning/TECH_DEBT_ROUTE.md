@@ -199,15 +199,15 @@ tick 不走就退化为轮询次数上限（`DHCP_WAIT_SPINS 400000`）。
 
 ---
 
-## D-5　`syscall64_full.c` 业务未切完（3,114 行）
+## D-5　`syscall64_full.c` 业务未切完（3,104 行）
 
-已切 2 批（目录三件套、stat/fstat）。**每批都必须先补测试再切** —— 见下表"前置条件"。
-剩下 4 批：open/close、mmap、read/write、其余。
+已切 3 批（目录三件套、stat/fstat、open/close）。**每批都必须先补测试再切** —— 见下表"前置条件"。
+剩下 3 批：mmap、read/write、其余。
 
 | 批 | 内容 | 前置条件 |
 |---|---|---|
 | 2 | ~~`sys_stat` / `sys_fstat`~~ **已完成 2026-11-16** | 探针 `statprobe.c` 先跑出 4 个 FAIL（blksize/blocks 类型错、ino=0、少拷 16 字节），修完 15 项全绿 |
-| 3 | `sys_open` / `sys_close`（fd 表加锁） | 需要 fd 复用的并发用例 |
+| 3 | ~~`sys_open` / `sys_close`~~ **已完成 2026-11-16** | 用例 `fdstress.c`：两线程各 400 轮 open→close，0 冲突 0 泄漏 |
 | 4 | `sys_mmap` / `munmap` / `mprotect`（用户地址校验） | 需要越界/未映射地址的拒绝用例 |
 | 5 | `sys_read` / `sys_write`（最热路径） | 性能基线（现在 `[PROF]` 有数） |
 

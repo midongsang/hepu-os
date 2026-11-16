@@ -34,4 +34,22 @@ extern int copy_to_user(void *user_dst, const void *kernel_src, size_t size);
  * irqsave 锁（fd_snapshot 就是锁内快照），所以这批不必先补锁。 */
 int fs_fd_get_path(int fd, char *out, size_t outsz);
 
+/* 第 3 批: fd 的**分配与释放**。和上面的查询不同, 这两个改表, 所以只在
+ * syscall 层实现, 由 fs_open_sys.c 调用。
+ *
+ * 为什么不是"把 sys_files_tbl 暴露出去": 表下标依赖当前用户进程槽位,
+ * 访问要过 g_fd_lock, 锁内还要维护 g_fd_lock_holder 诊断变量, 分配起点是
+ * 3(stdio 保留)。这四件事合起来就是"怎么正确地用这张表" —— 交给切出去的
+ * 文件各自复刻, 迟早有文件漏一条。
+ *
+ * fs_fd_alloc: 锁内找空槽并写 path/mode/offset, 返回 fd; 表满返回 -1。
+ *              分配从 3 开始(0/1/2 是 stdio 保留槽位)。
+ * fs_fd_release: 锁内置 used=0; 0 = 成功, -1 = 该号本来就没被占用。 */
+/* 第 3 批的受理端入口(叫 do_ 不叫 sys_: 内核里的 sys_open 是用户侧发起端) */
+int64_t fs_do_open(const char *path, int flags, int mode);
+int64_t fs_do_close(int fd);
+
+int fs_fd_alloc(const char *kpath, int mode);
+int fs_fd_release(int fd);
+
 #endif

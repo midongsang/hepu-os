@@ -531,64 +531,42 @@ static int64_t sys_pread(int fd, char *buf, int count, int64_t offset)
     return len;
 }
 
-/* sys_open */
-static int64_t sys_open(const char *path, int flags, int mode)
+/* sys_open / sys_close 已搬到 fs_open_sys.c（§5-5 第 3 批）。
+ * 语义在那边, 这里只保留"怎么正确地用 fd 表"两个写操作。 */
+extern int64_t fs_do_open(const char *path, int flags, int mode);
+extern int64_t fs_do_close(int fd);
+
+/* fd 分配起点: 0/1/2 是 stdio 保留槽位(见 fs_open_sys.c 里的说明)。
+ * 分配从 0 开始的话, 进程第一次 open 就拿到 0, 而 read(0) 被当 stdin —— 
+ * "打开文件再读它"会永久阻塞。 */
+#define FS_FD_ALLOC_START 3
+
+int fs_fd_alloc(const char *kpath, int mode)
 {
-    /* 安全：从用户空间复制路径（NUL结尾、拒绝超长；局部缓冲区避免静态缓冲被并发覆盖） */
-    char kernel_path[256];
-    if (copy_user_path(kernel_path, sizeof(kernel_path), path) < 0) {
-        return -1;  /* 用户地址无效或路径过长 */
-    }
-
-    /* V0.33 SEC-16: fd 0/1/2 是**保留的 stdio 槽位**。
-     *
-     * Linux 里 stdin/stdout/stderr 在进程启动时就已打开，open() 永远不会
-     * 分配到这三个号。旧实现从 0 开始找空槽，于是进程的**第一次** open
-     * 就拿到 fd=0；而 sys_read 把 fd==0 一律当 stdin 处理（阻塞等键盘）——
-     * 于是「open 一个文件再 read 它」这种最普通的用法会永久卡在 hlt。
-     *
-     * 现场：hello4.elf（打开 /bin/hello3.elf 再读 64 字节）打开成功拿到
-     * fd=0，紧接着 read(0,...) 走进 stdin 分支 → 整机停在这个进程上，
-     * 启动自检电池直接断在那里。
-     *
-     * 这里改成从 3 开始分配，与 Linux 语义一致。 */
-    /* SB-11: 找空槽 + 写字段整段在锁内，两核 open 不会拿到同一个 fd。
-     * O_CREAT 的 ext2 调用放在锁外（文件系统层自己串行化）。 */
     int fd_out = -1;
-    {
-        uint64_t fflags_fd = spinlock_lock_irqsave(&g_fd_lock);
-        int ti = fd_table_index();
-        g_fd_lock_holder = ti;
-        for (int i = 3; i < MAX_FILES; i++) {
-            if (!sys_files_tbl[ti][i].used) {
-                sys_files_tbl[ti][i].used = 1;
-                int len = sys_strlen(kernel_path);
-                if (len > 255) len = 255;
-                sys_memcpy(sys_files_tbl[ti][i].path, kernel_path, len);
-                sys_files_tbl[ti][i].path[len] = 0;
-                sys_files_tbl[ti][i].offset = 0;
-                sys_files_tbl[ti][i].mode = flags & 3;
-                fd_out = i;
-                break;
-            }
+    uint64_t f = spinlock_lock_irqsave(&g_fd_lock);
+    int ti = fd_table_index();
+    g_fd_lock_holder = ti;
+    for (int i = FS_FD_ALLOC_START; i < MAX_FILES; i++) {
+        if (!sys_files_tbl[ti][i].used) {
+            sys_files_tbl[ti][i].used = 1;
+            int len = sys_strlen(kpath);
+            if (len > 255) len = 255;
+            sys_memcpy(sys_files_tbl[ti][i].path, kpath, len);
+            sys_files_tbl[ti][i].path[len] = 0;
+            sys_files_tbl[ti][i].offset = 0;
+            sys_files_tbl[ti][i].mode = mode;
+            fd_out = i;
+            break;
         }
-        g_fd_lock_holder = -1;
-        spinlock_unlock_irqrestore(&g_fd_lock, fflags_fd);
     }
-    if (fd_out < 0) return -1;
-
-    /* 如果是创建模式，创建文件 */
-    if (flags & 0x40) {  /* O_CREAT */
-        ext2_64_create_file(kernel_path);
-    }
+    g_fd_lock_holder = -1;
+    spinlock_unlock_irqrestore(&g_fd_lock, f);
     return fd_out;
 }
 
-/* sys_close */
-static int64_t sys_close(int fd)
+int fs_fd_release(int fd)
 {
-    if (fd < 0 || fd >= MAX_FILES) return -1;
-    /* SB-11: used=0 在锁内，避免与并发 read/write 的快照撞车 */
     uint64_t f = spinlock_lock_irqsave(&g_fd_lock);
     int ti = fd_table_index();
     g_fd_lock_holder = ti;
@@ -2403,11 +2381,11 @@ static int64_t wrap_pread(int64_t a1, int64_t a2, int64_t a3, int64_t a4, int64_
 }
 static int64_t wrap_open(int64_t a1, int64_t a2, int64_t a3, int64_t a4, int64_t a5, int64_t a6) {
     (void)a4; (void)a5; (void)a6;
-    return sys_open((const char*)a1, (int)a2, (int)a3);
+    return fs_do_open((const char*)a1, (int)a2, (int)a3);
 }
 static int64_t wrap_close(int64_t a1, int64_t a2, int64_t a3, int64_t a4, int64_t a5, int64_t a6) {
     (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
-    return sys_close((int)a1);
+    return fs_do_close((int)a1);
 }
 static int64_t wrap_exit(int64_t a1, int64_t a2, int64_t a3, int64_t a4, int64_t a5, int64_t a6) {
     (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;

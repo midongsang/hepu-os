@@ -215,6 +215,27 @@
    二进制 947,376 B（+128 B）。
    **这一批真正的价值不是"少 75 行"，而是把 stat 契约变成了可判读的**：
    在此之前偏移错了只会安静地错，标准回归不会红。
+   **进度（2026-11-16，第 3 批：open / close）**：这批和第 2 批不同 —— stat 只
+   **读** fd 表，open/close **改**它（找空槽、写 used、清 used）。所以边界不是
+   "加一个查询函数"，而是两个**写操作**：`fs_fd_alloc()`（锁内找空槽 + 写
+   path/mode/offset）、`fs_fd_release()`（锁内置 used=0），都留在 syscall 层；
+   `fs_open_sys.c` 只负责语义（路径拷入、O_CREAT 要不要造文件、非法 fd 报什么）。
+   先补的测试是 `user/apps/fdstress.c`：两条 `CLONE_VM` 真线程共享 fd 表各跑
+   400 轮 open→close，检查三件事 —— 号必须落在 `[3, MAX_FILES)`（0/1/2 是 stdio
+   保留槽位）、同一 fd 不能被两线程同时持有（"锁位置不对"最直接的指纹）、
+   跑完后下一个 open 必须拿到 3（不泄漏）。切之前跑出 `open_fail=0 close_fail=0
+   bad_range=0 conflict=0 leak_probe_fd=3`，切之后逐项不变。
+   **命名冲突（值得记）**：内核里已有一组 `sys_open` / `sys_close`，是
+   `user_lib.c` 的**用户侧** wrapper（把调用转成 syscall）。同名时链接直接
+   `multiple definition`。所以受理端叫 `fs_do_open` / `fs_do_close` ——
+   内置用户库的 `sys_*` 是 syscall 的**发起方**，fs 里的是**受理方**，是相反的
+   两端，名字必须能区分，否则下次看到 `sys_open` 根本不知道是发还是收。
+   证据：fdstress PASS（切前切后一致）、statprobe 15 项仍全绿、64 位回归 2/2、
+   32 位冒烟 668 行 PASS、`syscall64_full.c` 3114 → 3104 行、二进制 947,632 B。
+   **诚实缺口**：`open(O_CREAT)` 是"先占 fd 再建文件"，建文件失败时 fd 仍被占着；
+   这是原有行为，fdstress 测不到（它不建文件）。另外 fdstress 的两线程在 QEMU
+   里不一定真跑在两个物理核上，所以它证明的是"锁把分配与写入罩住了"，
+   不是"SMP 下不会撞"——后者要靠 `-smp 12/16` 的长跑（D-1 那条观测项）。
 6. **32 位侧接入 `kernel/shared/`**（**不是归档**，`UNIFIED_SOURCE_TREE.md` P1）：
    现状是 32 位引用 shared 的文件数 = **0**，64 位已 12+。第一条按文档走：
    32 位 `sys_mem.c` → `shared/security/user_access.h`。
