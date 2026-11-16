@@ -36,7 +36,8 @@ TARGETS := $(BUILD_DIR)/hello.elf $(BUILD_DIR)/shell.elf $(BUILD_DIR)/forktest.e
            $(BUILD_DIR)/clone_test.elf $(BUILD_DIR)/fbdesc.elf \
            $(BUILD_DIR)/statprobe.elf \
            $(BUILD_DIR)/fdstress.elf \
-           $(BUILD_DIR)/mmprobe.elf
+           $(BUILD_DIR)/mmprobe.elf \
+           $(BUILD_DIR)/rwprobe.elf
 
 # 全量构建目标：原生用户程序 + Linux 兼容层 PIE 测试程序 + 历史测试程序（SEC-12）
 # 注意：真正的 all 目标在**文件末尾**定义 —— GNU Make 在**读取规则时**就展开
@@ -156,6 +157,14 @@ $(BUILD_DIR)/mmprobe.o: $(USER_DIR)apps/mmprobe.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 $(BUILD_DIR)/mmprobe.elf: $(BUILD_DIR)/mmprobe.o $(LDSCRIPT)
+	$(LD) $(LDFLAGS) -T $(LDSCRIPT) -o $@ $<
+	@echo "Built user ELF: $@"
+
+# rwprobe：read/write 语义用例（TECH_DEBT_ROUTE §5-5 第 5 批前置）
+$(BUILD_DIR)/rwprobe.o: $(USER_DIR)apps/rwprobe.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD_DIR)/rwprobe.elf: $(BUILD_DIR)/rwprobe.o $(LDSCRIPT)
 	$(LD) $(LDFLAGS) -T $(LDSCRIPT) -o $@ $<
 	@echo "Built user ELF: $@"
 

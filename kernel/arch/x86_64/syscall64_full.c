@@ -1476,9 +1476,15 @@ static int64_t sys_pipe(int *fds) {
     }
     if (pid < 0) return -1;
 
-    /* 找两个空闲fd */
+    /* 找两个空闲fd。
+     *
+     * 必须从 3 开始: 0/1/2 是 stdio 保留槽位(FS_FD_STDIO_RESERVED, 见 fs_sys.h)。
+     * 旧实现从 0 开始, 管道读端拿到 fd 0 -> sys_read 的 `if (fd == 0)` 分支
+     * 把它当 stdin 处理, 阻塞在 hlt 等键盘 -> 进程永久挂死; 写端拿到 fd 1 ->
+     * write 直接把内容镜像到串口, 管道从未被使用。这条缺陷是 rwprobe 用例
+     * 暴露出来的(pipe fds = [0, 1]), 与第 3 批 open 踩的坑是同一个。 */
     int rfd = -1, wfd = -1;
-    for (int i = 0; i < MAX_FILES; i++) {
+    for (int i = 3; i < MAX_FILES; i++) {
         if (!sys_files[i].used) {
             if (rfd < 0) rfd = i;
             else { wfd = i; break; }

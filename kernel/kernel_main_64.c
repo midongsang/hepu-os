@@ -902,6 +902,16 @@ void x86_64_kernel_main(void)
         }
         vga_puts("[MMP] returned\n");
 
+        /* §5-5 第 5 批前置: read/write 语义用例。
+         * 这批切出 fs_rw_sys.c 时牵两样不属于分发层的东西: fd offset 的读改
+         * 回写(必须在 g_fd_lock 内), 和管道 IPC。只测"读一次有数据"证明不了
+         * offset 还在前进, 所以要 seek(0)->读->再读->断言两段不同。 */
+        vga_puts("[RW] Running /bin/rwprobe.elf...\n");
+        if (user_process_exec("/bin/rwprobe.elf") < 0) {
+            vga_puts("[RW] rwprobe.elf not available (optional)\n");
+        }
+        vga_puts("[RW] returned\n");
+
         /* 安全回归：用户地址访问限制（内核地址/未映射地址应被拒绝，不崩溃） */
         vga_puts("[SEC] Running user-address security regression /bin/sec_test.elf...\n");
         if (user_process_exec("/bin/sec_test.elf") < 0) {

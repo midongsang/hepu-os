@@ -256,6 +256,48 @@
    **诚实缺口**：`user_access64.c` 里另有一份 `HEPU_USER_WIN_END`（用户指针访问的
    边界校验），语义相同但字面不同源。这批没合并它 —— 合并要先确认两者真的一致，
    而这属于"用户指针访问"那条路径，不是 mm 分区契约。
+
+   **进度（2026-11-16，第 5 批前置：read / write 的用例与边界勘探）**：这批只做到
+   "用例 + 前置修复"，**切分本身未做**，原因写在下面。
+   和前三批不同，`read`/`write` 不只做分发，它们牵三样不属于分发层的东西：
+   ① **fd offset 的读改回写**（read 之后 `offset += len`，且必须在 `g_fd_lock` 内）；
+   ② **管道 IPC**（`is_pipe` 分支里是 `PIPE_BUF_SIZE` 环形缓冲 + `g_pipe_lock`）；
+   ③ **stdio 特判**（`fd==0` 读键盘阻塞、`fd==1||2` 逐字节镜像串口）。
+   而这三样依赖的全部是 `syscall64_full.c` 里 `static` 的 `sys_files_tbl` / `g_fd_lock`
+   / `fd_snapshot()` / `g_pipes`。所以这批要先补两个边界 API
+   （`fs_fd_get_offset` / `fs_fd_add_offset`，锁内完成）才谈得上搬。
+
+   用例 `user/apps/rwprobe.c` 12 项，关键不是"读一次有数据"，而是 **offset 真的在前进**：
+   `seek(0)` → 读 64 → 再读 64 → 断言两段内容不同；再 `seek(0)` 重读 → 断言与第一段
+   逐字节相同。这两步合起来才能卡住"搬家时把 `+= len` 丢了"—— 那种错误在单次读的
+   回归里完全看不见。其余判据：`count>4096` 截断到 4096、`count==0` 返回 0、
+   只读 fd 上 `write<0`、只写 fd 上 `read<0`、`lseek(-1)` 被拒绝。
+
+   **用例过程里踩到两个自己的错，记下来免得下次重犯**：
+   - 探针里的 syscall 号写成了 Linux 号（read=0 / write=1），而 Hepu 原生是
+     **read=9 / write=10**。症状是内核打 `[SYSCALL64] Unimplemented syscall: 0`
+     并返回 0 —— 看起来像系统坏了，其实是探针自己传错号。
+   - 一开始把「`lseek(-1)` 之后 `read<0`」当判据，跑出来 FAIL。查下去发现
+     `sys_lseek` 在 `newpos<0` 时**直接返回 -1 且不改 offset**，负偏移根本注入不进
+     fd 表；`sys_read` 里那条 `offset<0` 检查是**防御性**的，用户侧构造不出来。
+     判据已改为"失败的 seek 不留副作用"（seek 失败后 offset 仍为 0、read 仍满 64）——
+     这才是可达、且一旦顺序写反就会真出事的那一面。
+
+   **用例查出一个真实缺陷并已修**：`sys_pipe` 分配 fd 从 **0** 开始找空槽，
+   于是管道读端拿到 `fd 0`、写端拿到 `fd 1`（实测 `pipe fds = [0, 1]`）。后果：
+   `read(读端)` 命中 `sys_read` 的 `fd==0` 分支 → 阻塞在 `hlt` 等键盘 → **进程永久挂死**；
+   `write(写端)` 命中 `fd==1` 分支 → 内容直接镜像到串口，**管道从未被使用**。
+   这和**第 3 批 `open` 踩的是同一个坑** —— 那批已经立下 `FS_FD_STDIO_RESERVED 3`
+   这条约定，`pipe` 没看见它。修法：把常量提到 `fs_sys.h`（唯一来源），
+   `sys_pipe` 的分配起点从 3 开始。修后 `pipe fds = [3, 4]`、`[RW] RESULT: PASS`、
+   0 FAIL。这条缺陷在 `open` 批之后一直存在，但没有任何用户程序同时用过
+   `open` 与 `pipe`，所以标准回归一直是绿的。
+
+   证据：rwprobe 12 项 PASS、statprobe/fdstress/mmprobe 仍 PASS、
+   64 位回归 2/2（`desk=1 EXC=0 PASS=1 FAIL=0`）、二进制 947,632 B（不变）。
+   **诚实缺口**：切分未做，`syscall64_full.c` 行数不变；`fs_fd_get_offset` /
+   `fs_fd_add_offset` 尚未新增；管道是否整体搬出、还是留在 syscall 层而只通过
+   边界 API 访问，方向未定（管道是 IPC 不是文件分发，按 §5-5 的分层轴倾向后者）。
 6. **32 位侧接入 `kernel/shared/`**（**不是归档**，`UNIFIED_SOURCE_TREE.md` P1）：
    现状是 32 位引用 shared 的文件数 = **0**，64 位已 12+。第一条按文档走：
    32 位 `sys_mem.c` → `shared/security/user_access.h`。

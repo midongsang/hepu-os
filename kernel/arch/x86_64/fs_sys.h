@@ -45,6 +45,16 @@ int fs_fd_get_path(int fd, char *out, size_t outsz);
  * fs_fd_alloc: 锁内找空槽并写 path/mode/offset, 返回 fd; 表满返回 -1。
  *              分配从 3 开始(0/1/2 是 stdio 保留槽位)。
  * fs_fd_release: 锁内置 used=0; 0 = 成功, -1 = 该号本来就没被占用。 */
+/* stdio 保留槽位。
+ *
+ * 这条约定原来只写在 fs_open_sys.c 里, 结果 sys_pipe 没看见它: 管道从 0 开始
+ * 找空槽, 把读端分到 fd 0、写端分到 fd 1。后果是 read(读端) 命中 sys_read 的
+ * fd==0 分支 -> 阻塞等键盘 -> 进程挂死在 hlt; write(写端) 命中 fd==1 分支 ->
+ * 内容直接打到串口, 管道根本没被用到。
+ *
+ * 提到头文件是为了让所有"分配 fd"的地方(pinp/open/dup)只有一个来源。 */
+#define FS_FD_STDIO_RESERVED  3
+
 /* 第 3 批的受理端入口(叫 do_ 不叫 sys_: 内核里的 sys_open 是用户侧发起端) */
 int64_t fs_do_open(const char *path, int flags, int mode);
 int64_t fs_do_close(int fd);

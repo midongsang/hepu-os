@@ -38,7 +38,7 @@
  * open 就拿到 fd=0，而 sys_read 把 fd==0 一律当 stdin 处理（阻塞等键盘）——
  * 「打开一个文件再 read 它」会永久卡在 hlt。分配起点由 fs_fd_alloc 决定,
  * 这里只是把这条约定写下来, 免得下次有人"顺手改成从 0 开始"。 */
-#define FS_FD_STDIO_RESERVED  3
+/* FS_FD_STDIO_RESERVED 已提到 fs_sys.h（pipe 也要用同一条约定）。 */
 
 int64_t fs_do_open(const char *path, int flags, int mode)
 {
