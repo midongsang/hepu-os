@@ -257,6 +257,16 @@ void hepu_sched_init(void)
             {
                 extern void gfx_vbe_sync_mode(void);
                 gfx_vbe_sync_mode();
+            /* 绘制目标动态扩展 —— 位置有讲究:
+             * 必须在 bochs_dispi_init 之后(此刻 gfx_width/height 才是真实分辨率),
+             * 也必须在 hepu_mem_init 之后(此刻 kmalloc 才可用)。
+             * 之前放在 hepu_mem_init 末尾是错的: 那个函数跑在显卡初始化之前,
+             * 读到的还是 1920x1080, need <= GFX_MAX_BUF, 永远 no-op ——
+             * 实测 2560x1600 下只有前 810 行有内容, 正是"静默退回静态缓冲"。 */
+            {
+                extern int gfx_target_realloc(int w, int h);
+                gfx_target_realloc(gfx_width, gfx_height);
+            }
             }
             serial_puts(0x3F8, "[GFX] true-color mode applied: ");
             extern void serial_puthex(uint16_t, uint32_t);

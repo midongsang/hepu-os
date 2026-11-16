@@ -45,6 +45,60 @@ static uint8_t back_buffer[GFX_MAX_BUF];
 uint8_t *gfx_draw_target = back_buffer;
 uint8_t *framebuffer = back_buffer;  /* V6.60: 导出供抗锯齿字体渲染使用 */
 
+/* 绘制目标动态扩展。
+ *
+ * 为什么需要: 静态 back_buffer 固定 GFX_MAX_BUF = 1920x1080x4, 与 1080p 的
+ * 真实需求(pitch*height = 8,294,400)**恰好相等**, 一点余量都没有 —— 换到
+ * 2560x1600(16.4MB)双缓冲就直接进不去, 静默退回单缓冲。
+ *
+ * 为什么不能一开始就动态分配: 显卡初始化(kernel_init.c:201)比堆初始化
+ * (kheap_init, kernel_init.c:469)早 268 行。决定"绘制目标多大"的那一刻
+ * kmalloc 还不存在, 所以启动阶段只能用静态数组兜底。堆起来之后再调这个
+ * 函数, 把指针切到堆上的更大缓冲。
+ *
+ * 切换必须同步三处, 漏一处就是"下半屏黑"或"整屏错位"(上次双缓冲接通踩过):
+ *   gfx_draw_target —— 三条绘制路径统一写它
+ *   framebuffer      —— 老 API(gfx_write_pixel_rgb 等)写它
+ *   vbe_framebuffer  —— vbe_putpixel 写它, 由 gfx_vbe_sync_mode 重设
+ *
+ * 返回 1 表示切到堆缓冲, 0 表示仍用静态(静态够用 / 分配失败)。 */
+int gfx_target_realloc(int w, int h)
+{
+    extern void *kmalloc(uint64_t size);
+    extern void gfx_vbe_sync_mode(void);
+    extern void serial_puts(uint16_t port, const char *s);
+    extern int snprintf(char *, size_t, const char *, ...);
+
+    if (w <= 0 || h <= 0) return 0;
+
+    uint32_t need = (uint32_t)w * 4u * (uint32_t)h;   /* 32bpp */
+    if (need <= GFX_MAX_BUF) {
+        /* 静态够: 保持 back_buffer, 不让堆白吃一块 */
+        gfx_draw_target = back_buffer;
+        framebuffer = back_buffer;
+        return 0;
+    }
+
+    uint8_t *p = (uint8_t *)kmalloc((uint64_t)need);
+    if (!p) {
+        static const char msg[] = "[GFX] realloc failed, using static buffer\n";
+        serial_puts(0x3F8, msg);
+        return 0;
+    }
+
+    gfx_draw_target = p;
+    framebuffer = p;
+    gfx_vbe_sync_mode();     /* 重设 vbe_framebuffer / vbe_pitch 等 */
+
+    {
+        char dbg[96];
+        snprintf(dbg, sizeof(dbg), "[GFX] draw target -> heap %dKB (%dx%d)\n",
+                 need / 1024, w, h);
+        serial_puts(0x3F8, dbg);
+    }
+    return 1;
+}
+
 /* V6.50: 24/32bpp真彩色调色板 (VGA 256色→RGB888转换表) */
 static uint32_t palette_rgb[256];
 static int palette_inited = 0;
