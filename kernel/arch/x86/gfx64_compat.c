@@ -384,22 +384,41 @@ void gfx64_fill_circle_gradient(int cx, int cy, int r, uint32_t c1, uint32_t c2)
 
 void gfx64_draw_line_aa(int x0, int y0, int x1, int y1, uint32_t color)
 {
-    /* 32 位: 自己的 Bresenham, 不做抗锯齿(退化项已在启动时声明) */
-    {
-        extern void gfx_putpixel(int, int, uint32_t);
-        int dx = x1 > x0 ? x1 - x0 : x0 - x1;
-        int dy = y1 > y0 ? y1 - y0 : y0 - y1;
-        int sx = x0 < x1 ? 1 : -1;
-        int sy = y0 < y1 ? 1 : -1;
-        int err = dx - dy;
-        int guard = 0;
-        while (guard++ < 4096) {
-            gfx_putpixel(x0, y0, color);
-            if (x0 == x1 && y0 == y1) break;
-            int e2 = err * 2;
-            if (e2 > -dy) { err -= dy; x0 += sx; }
-            if (e2 <  dx) { err += dx; y0 += sy; }
+    /* Wu 式抗锯齿, 与 64 位 gfx64.c:1560 同构:
+     * 以 16.16 定点维护纵坐标, 每一列输出上下两个像素, 覆盖率由小数部分决定。
+     * 原来这里是纯 Bresenham(硬边), 而 hpdesk 用它画齿轮齿、箭头这类斜线
+     * (4302/4309/4310), 斜线在 100% 缩放下最刺眼。 */
+    int adx = (x1 > x0) ? (x1 - x0) : (x0 - x1);
+    int ady = (y1 > y0) ? (y1 - y0) : (y0 - y1);
+    int steep = ady > adx;
+
+    if (steep) {
+        int t; t = x0; x0 = y0; y0 = t;
+        t = x1; x1 = y1; y1 = t;
+    }
+    if (x0 > x1) {
+        int t; t = x0; x0 = x1; x1 = t;
+        t = y0; y0 = y1; y1 = t;
+    }
+
+    int dx = x1 - x0;
+    int dy = y1 - y0;
+    if (dx == 0) dx = 1;
+
+    int yfrac = (dy << 16) / dx;      /* 16.16 斜率 */
+    int y = y0;
+    for (int x = x0; x <= x1; x++) {
+        int yi = y >> 16;
+        int frac = (y & 0xFFFF) >> 8;   /* 0..255 覆盖率 */
+        int inv  = 255 - frac;
+        if (steep) {
+            g32_blend_px(x, yi, color, inv);
+            g32_blend_px(x, yi + 1, color, frac);
+        } else {
+            g32_blend_px(yi, x, color, inv);
+            g32_blend_px(yi + 1, x, color, frac);
         }
+        y += yfrac;
     }
 }
 
