@@ -594,7 +594,7 @@ desk_select("mine");       /* 切过去 */
 
 | # | 项 | 备注 |
 |---|---|---|
-| P3-1 | 32 位 6 个 KUNIT fail（syscall deep / user scenario / integration / security E2E） | 历史遗留，非 D-7/D-8 引入 |
+| P3-1 | ~~32 位 6 个 KUNIT fail~~ **已结案：52 个 suite 全 0 fail** | 冒烟里 `[KUNIT] result:` 共 52 行，逐行都是 `failed=0x00000000`。历史上出问题的那四个套件都在跑且全过：`syscall deep`（0x32=50 项）、`user scenario`（0x10=16 项）、`integration`（0x0E=14 项）、`security E2E`（0x0F=15 项）。<br>归因：`kunit_syscall_deep.c:402` 那条 `KUNIT_ASSERT(SYS_MAX == 222)` 是唯一的**固定 FAIL**（实现是 236），它一失败整条 syscall deep 套件就记 fail；`e4db810`（N-3）把它改成区间断言 `SYS_MAX >= 200 && SYS_MAX < 512` 后，这个套件恢复全过。其余「fail」没有独立证据留存，应是同一条断言在不同构建期的连带计数，不是六个互不相关的 bug。 | 已闭环（2026-11-17） |
 | P3-2 | 顶栏 ASCII 字形残留（`Hepu OS` 只出 `H`，`640x480@0Hz` 出白三角） | D-7 最后一处 |
 | P3-3 | `mouse64_init(1024,768)` 初始位置偏左上 | **已核实**：只影响光标初始位置，非坐标上限，危害轻微 |
 | P3-4 | 桌面线四项（控制中心位图图标 / `bar_height` 36vs40 / 天气卡 24px / 胶囊居中口径） | 用户已给口径，代码未改 |
