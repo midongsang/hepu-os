@@ -114,6 +114,16 @@ void desktop64_run(void)
 {
     /* 进主循环前把 owner 身份钉住: 此后只有这个上下文能直接改桌面状态 */
     hpdesk_claim_owner();
+    /* D-3 修复: 窗口管理器的槽位必须先置成"空闲(id=-1)"再跑下面的自检。
+     *
+     * 原来自检直接在 claim_owner 之后调 hs_window_create, 而槽位初始化是在
+     * desktop64_init -> hpdesk_init 里做的。BSS 里 windows[i].id 默认是 0,
+     * 而"空闲"的判据是 id < 0, 于是槽扫描一个空位都找不到, create 直接
+     * return NULL —— 自检里 create_probe=0x0 就是这么来的。窗口系统本身没坏,
+     * 是初始化顺序错了: 在窗口表还是全 0 的状态下就试着建窗口。
+     * 这里提前做一次(幂等, hpdesk_init 里还会再做一次), 让自检面对的是
+     * 一个真实可用的窗口表, 而不是一个还没初始化的全局。 */
+    { extern void hs_window_manager_init(void); hs_window_manager_init(); }
     /* §5-2 第 2 步: z-order / 焦点准入守卫自检(创建/聚焦/销毁一个屏外探针窗口),
      * 在 owner 已认领、主循环未开始的这一刻跑 —— 和 display_backend 等价自检同一位置。 */
     {

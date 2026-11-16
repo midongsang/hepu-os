@@ -1844,9 +1844,11 @@ int hpdesk_owner_guard_selftest(void)
 {
     extern void vga_put_hex(uint64_t v);
     /* 1) owner 上下文里直探一次: 必须放行(pass +1)。
-     * 2) 顺带试一次真实 create(窗口放屏外 1x1), 但**不参与判定** ——
-     *    启动早期窗口系统可能还没就绪(实测这里返回 0), 那是另一个议题,
-     *    不该让准入守卫的自检跟着失败。成功后立刻销毁, 不留槽位。 */
+     * 2) 真的走一次 create + destroy(窗口放屏外 1x1), **参与判定**。
+     *    D-3: 原来这一步失败(create_probe=0)却被判据放过 —— 自检里有个动作
+     *    该成功却失败, 绿灯就成了假绿灯。根因已修(窗口槽位在自检前初始化),
+     *    所以现在能把 created==1 写成硬判据: 以后退化了会立刻报 BAD,
+     *    而不是安静地打印一个 0x0 继续 PASS。 */
     int ok = hpdesk_owner_guard("selftest");
     hs_window_t *w = hs_window_create(HS_WINDOW_FLOATING, "owner-probe", -64, -64, 1, 1);
     int created = 0;
@@ -1854,7 +1856,7 @@ int hpdesk_owner_guard_selftest(void)
     uint32_t rej = 0;
     uint32_t pass = hpdesk_owner_guard_stats(&rej);
     vga_puts("[DESKOWN] zorder/focus selftest ");
-    vga_puts((ok && pass >= 1 && rej == 0) ? "PASS" : "BAD");
+    vga_puts((ok && pass >= 2 && rej == 0 && created) ? "PASS" : "BAD");
     vga_puts(" pass=");
     vga_put_hex((uint64_t)pass);
     vga_puts(" reject=");
@@ -1862,7 +1864,20 @@ int hpdesk_owner_guard_selftest(void)
     vga_puts(" create_probe=");
     vga_put_hex((uint64_t)created);
     vga_puts("\n");
-    return (ok && pass >= 1 && rej == 0) ? 0 : -1;
+    /* 同一结果再走一遍串口: vga_puts 写的是文本模式显存, 图形模式下看不见,
+     * 回归也只能抓到串口。这条自检必须能被自动化验到, 否则 D-3 那种
+     * "绿灯但内部失败"又要靠人眼截图猜。 */
+    {
+        extern void serial_puts(uint16_t, const char*);
+        extern void serial_puthex(uint16_t, uint32_t);
+        serial_puts(0x3F8, "[DESKOWN] selftest ");
+        serial_puts(0x3F8, (ok && pass >= 2 && rej == 0 && created) ? "PASS" : "BAD");
+        serial_puts(0x3F8, " pass=");  serial_puthex(0x3F8, pass);
+        serial_puts(0x3F8, " reject="); serial_puthex(0x3F8, rej);
+        serial_puts(0x3F8, " create_probe="); serial_puthex(0x3F8, (uint32_t)created);
+        serial_puts(0x3F8, "\n");
+    }
+    return (ok && pass >= 2 && rej == 0 && created) ? 0 : -1;
 }
 
 /* 全局窗口管理器 */
