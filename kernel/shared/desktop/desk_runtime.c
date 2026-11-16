@@ -109,12 +109,14 @@ int desk_dispatch(const desk_input_t *ev)
  * 16 tick(1kHz) ≈ 60fps。 */
 int desk_tick_if_due(void)
 {
-    extern uint32_t pit_get_ticks(void);
-    static uint32_t last_tick;
+    /* 用调用计数节流, 不用 PIT —— 32 位实测 PIT 中断没投递(pit_ticks 恒 0,
+     * 串口里 [NET-TEST] diag tick=0 和 KUNIT 的 ticks>0 断言失败都是这个),
+     * 拿 tick 算间隔会永远差 0 < 16, 一帧都不画, 桌面就钉在首帧上。
+     * 计数节流不精确, 但"能刷新"比"精确但不刷新"重要得多。
+     * 8 次一帧: shell 主循环本身不算空(要跑 softirq/net_poll), 8 是个保守值。 */
+    static uint32_t n;
     if (!g_running) return -1;
-    uint32_t now = pit_get_ticks();
-    if ((uint32_t)(now - last_tick) < 16) return 0;
-    last_tick = now;
+    if ((++n & 7u) != 0) return 0;
     return desk_tick();
 }
 

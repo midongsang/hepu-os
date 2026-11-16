@@ -2775,9 +2775,14 @@ static inline uint64_t hs_rdtsc(void)
 
 /* P1-4: 32 位跑 hpdesk 时的阶段打点。64 位为空宏, 行为完全不变。 */
 #if defined(__i386__)
+/* 32 位跑 hpdesk 的阶段打点。这里的诊断价值在"能不能走完一轮渲染",
+ * 前两帧就够看出来了; 32 位去掉 hlt 之后帧率很高, 不限次数会把串口刷成
+ * 一万多行的洪水, 反过来拖慢桌面 —— 诊断本身变成性能问题就本末倒置了。 */
 #define HPD_TRACE(msg) do { \
+    static int _hpd_n; \
+    if (_hpd_n < 6) { _hpd_n++; \
     extern void serial_puts(uint16_t, const char *); \
-    serial_puts(0x3F8, msg); } while (0)
+    serial_puts(0x3F8, msg); } } while (0)
 #else
 #define HPD_TRACE(msg) do { } while (0)
 #endif
@@ -6930,7 +6935,6 @@ void hpdesk_render(void)
 
     uint64_t t0 = hs_rdtsc();
     uint64_t p0 = gfx64_prof_present;
-
     hpdesk_render_inner();
 
     uint64_t t1 = hs_rdtsc();
@@ -6946,7 +6950,11 @@ void hpdesk_render(void)
     /* 32 位桌面挂在 keyboard_getchar 的空等循环里, 大部分时间被自检/命令行占着,
      * 采样窗口要短一些才抓得到; 64 位每 16ms 一帧, 300 帧约 5 秒一行不至于刷屏。 */
 #if defined(__i386__)
-    if (pf_n >= 60) {
+    /* 32 位去掉 hlt 之后帧率不再是 60fps 量级(主循环一转就能画一帧),
+     * 原来 60 帧一行会把串口刷成两万多行的洪水, 反过来拖慢系统。
+     * 改成 2000 帧一行 + 总共最多 20 行: 够看清稳态, 又不会淹没日志。 */
+    static uint32_t pf_lines32;
+    if (pf_n >= 2000 && pf_lines32 < 20) { pf_lines32++;
 #else
     if (pf_n >= 300) {
 #endif

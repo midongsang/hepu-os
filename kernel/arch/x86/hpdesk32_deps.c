@@ -184,10 +184,11 @@ int ext2_64_read_file(const char *path, uint8_t *buffer, uint32_t max_size)
         extern void serial_puts(uint16_t, const char *);
         extern void serial_puthex(uint16_t, uint32_t);
         int n = ide_ext2_read_file(dir, last + 1, (char *)buffer, (int)max_size);
+        { static int _p32n; if (_p32n++ < 6) {
         serial_puts(0x3F8, "[HP32-FS] "); serial_puts(0x3F8, path);
         serial_puts(0x3F8, " dir="); serial_puts(0x3F8, dir);
         serial_puts(0x3F8, " n="); serial_puthex(0x3F8, (uint32_t)(n < 0 ? 0xFFFFFFFFu : (uint32_t)n));
-        serial_puts(0x3F8, "\n");
+        serial_puts(0x3F8, "\n"); } }
         return n;
     }
 }

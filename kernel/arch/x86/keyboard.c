@@ -219,7 +219,12 @@ char keyboard_getchar(void)
             pm_sleep(3);   /* PM_STATE_SUSPEND */
             vga_puts("[PM] resumed after low-battery sleep\n");
         }
-        __asm__ volatile ("hlt");   /* V2.60: 空闲 HLT 省电, PIT 中断唤醒后复查 */
+        /* V2.60 原本是 hlt 省电, 靠 PIT 中断唤醒 —— 但 32 位实测 PIT 中断
+         * 不投递(pit_ticks 恒 0), hlt 让 CPU 永久挂起: 等待循环只转一圈就死,
+         * 桌面因此只剩首帧, shell 也永远读不到输入。这和 pit_sleep 是同一个病。
+         * 改成 pause 忙等: 空闲时烧 CPU, 但保证能继续跑(桌面能刷新、输入能轮询)。
+         * 省电要让位给可用性 —— 中断都没通的时候谈省电没有意义。 */
+        __asm__ volatile ("pause");
     }
     char c = keyboard_buffer[buffer_tail];
     buffer_tail = (buffer_tail + 1) % KEYBOARD_BUFFER_SIZE;
@@ -260,6 +265,12 @@ int keyboard_readline(char *buf, int max_len)
     history_pos = -1;        /* 新命令 */
 
     while (pos < max_len - 1) {
+        /* 桌面驱动放在这里而不是只放 getchar 的空等循环里: 那个 while
+         * 只有缓冲区**恰好为空**时才进, 缓冲区有残留(getchar 立刻返回字符)时
+         * 一圈都不停, 桌面就一直停在首帧。这是 32 位"桌面像假的"的直接原因。
+         * readline 是 shell 真正待着的地方, 每圈都过, 所以放这儿最稳。
+         * 节流在 desk_tick_if_due 内部(8 次调用画一帧), 不会把输入拖慢。 */
+        { extern int desk_tick_if_due(void); desk_tick_if_due(); }
         char c = keyboard_getchar();
 
         if (c == '\n' || c == '\r') {
