@@ -10,9 +10,10 @@ supersedes: null
 
 # USB 与无线输入支持
 
-## 现状（V0.13.62）
+## 现状（0.60.7）
 
-- 主机控制器（64 位）：USB 核心 `usb64.c` + **EHCI（USB 2.0）`ehci64.c`** + **XHCI（USB 3.0）`xhci64.c`**（Makefile:102-104）；`usb64_init()` 先试 EHCI，失败再试 XHCI（`usb64.c:347/357-358`）。UHCI（USB 1.1）仅存于 32 位遗留树 `kernel/drivers/usb/uhci.c`，未编入 64 位构建。
+- 主机控制器（64 位）：`usb64.c` 本身**就是 UHCI（USB 1.1）驱动**，另配 EHCI（USB 2.0）`ehci64.c` 与 XHCI（USB 3.0）`xhci64.c`。`usb64_init()` 的**第一尝试路径是 UHCI**：先按 PIIX3 `0x7020` / PIIX4 `0x7112` 找控制器（`usb64.c:344-346`），找不到才降级 EHCI，再不行才 XHCI。原因是 QEMU 默认的 `piix` 芯片组只提供 UHCI，因此 UHCI 是最常被命中的那条路径。
+- 32 位侧另有独立实现 `kernel/drivers/usb/uhci.c`（遗留树），与 64 位的 `usb64.c` 不是同一份代码。
 - 设备类支持：
   - **HID 输入**（鼠标/键盘/绝对定位平板）
   - **Mass Storage（BOT 批量）**——U 盘挂载/读写
