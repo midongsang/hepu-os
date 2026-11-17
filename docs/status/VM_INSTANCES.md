@@ -106,3 +106,15 @@ mcopy -o -i /tmp/x_menu.img@@1M /tmp/cfg30.cfg ::/HEPBOOT.CFG
 - **没有 KVM**（`/dev/kvm` 不存在），全部走 TCG，所以 20 秒级启动是下限，不是配置问题。
 - `snapshot=on` 下实例跑完**不落盘**。需要保留改动后的镜像就显式 `cp` 出来，别指望 QEMU 帮你保存。
 - 磁盘镜像必须能被多个实例同时以只读打开；如果某个流程需要写镜像（`mkfs`/`mcopy`），**那一步仍应独占**，写完再交给截图脚本。
+
+## 网络取证判据：本构建 e1000 MMC 计数器恒读 0，不能当收包证据（2026-11-17 核实）
+
+- **现象**：QEMU 6.2 构建里 e1000 的 MMC 收包计数器（`PRC`/`MPTC`/`MPC`/`RFC`/`ROC`/
+  `RUC`/`RLEC`/`CRCERR`）在串口诊断 dump 中恒为 `0x00000000`；同期 `RDH` 已从 0 推进到 2、
+  `rx_cur=2`、两帧已上送 UDP（DHCP Offer op=2、xid 匹配、msg_type=2）。
+- **口径**：在本 QEMU 构建里，**MMC 计数器不能作为"硬件是否收到帧"的判据**；PRC=0 不代表
+  网卡没收到包。收包是否成功以 `RDH`/`RDT` 推进、`rx_cur` 增长、帧上送 UDP 与 Offer 字段
+  核对为准。
+- **证据**：`evidence-rxnet-2026-11-17/serial/rxnet-final.log`（RDH=2/rx_cur=2 时 MMC 全 0）、
+  `rxnet-dbg2.log`（Offer 字段）；修前基线 `rxnet-baseline.log` MMC 同样全 0。
+- 下次排查网络收发时，不要因 MMC PRC=0 判"硬件没收到"；先看 RDH/RDT 与上层 UDP 上送记录。
