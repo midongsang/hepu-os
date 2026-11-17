@@ -18,6 +18,11 @@ extern void vga_puts(const char *s);
 extern void vga_putchar(char c);
 extern char keyboard64_getchar(void);
 extern int keyboard64_haschar(void);
+/* USB HID 键盘 (保护/文本模式下与 PS/2 双源合流, 与 hs_input_poll 一致) */
+extern int  usb64_kbd_available(void);
+extern int  usb64_kbd_haschar(void);
+extern int  usb64_kbd_getchar(void);
+extern void usb64_poll(void);
 extern void serial_puts_raw(const char *s);
 extern int  bootopts_nographics(void);
 extern void rtc64_get_time(int *year, int *month, int *day,
@@ -121,8 +126,18 @@ static int shell_read_line(char *buf, int max)
 {
     int pos = 0;
     while (pos < max - 1) {
-        if (keyboard64_haschar()) {
-            char c = keyboard64_getchar();
+        /* 双源合流: USB HID 优先, PS/2 兜底 (与桌面 hs_input_poll 一致)。
+         * 保护模式下桌面初始化被跳过, USB HID 在主流程独立枚举, 这里负责轮询取键。 */
+        usb64_poll();
+        int c;
+        if (usb64_kbd_available() && usb64_kbd_haschar()) {
+            c = usb64_kbd_getchar();
+        } else if (keyboard64_haschar()) {
+            c = keyboard64_getchar();
+        } else {
+            net64_poll();
+            continue;
+        }
             if (c == '\n' || c == '\r') {
                 vga_putchar('\n');
                 buf[pos] = 0;
@@ -208,7 +223,6 @@ static int shell_read_line(char *buf, int max)
                 buf[pos++] = c;
                 vga_putchar(c);
             }
-        }
         net64_poll();
     }
     buf[pos] = 0;

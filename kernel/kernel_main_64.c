@@ -1370,6 +1370,19 @@ void x86_64_kernel_main(void)
         desktop64_run();
     } else {
         vga_puts("[INIT] Falling back to text shell\n");
+        /* 保护模式(hepu.graphics=0)下桌面初始化被跳过, 桌面路径里的 usb64_init()
+         * 不会执行; 这里独立枚举 USB HID 键盘, 供文本 shell 双源合流(USB 优先 PS/2 兜底)。
+         * 不依赖图形后端, 仅初始化主机控制器与 HID 队列。 */
+        if (bootopts_nographics()) {
+            extern int  usb64_init(void);
+            extern void usb64_kbd_flush(void);
+            extern void keyboard64_flush(void);
+            if (usb64_init() == 0) {
+                vga_puts("[INIT] USB HID subsystem ready (protect mode)\n");
+            }
+            keyboard64_flush();
+            usb64_kbd_flush();
+        }
         /* 图形化不可用: 文本模式作为首启向导兜底通道。
          * 保护模式(hepu.graphics=0)下图形化向导整体跳过, 直接进 shell。 */
         if (need_oobe && !bootopts_nographics_forced()) {
