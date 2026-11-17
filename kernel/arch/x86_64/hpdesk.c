@@ -5710,14 +5710,9 @@ void hpdesk_handle_click(int x, int y)
     if (g_files_drag_consumed) { g_files_drag_consumed = 0; return; }
 
     hpdesk_mark_dirty();   /* P0: 交互发生, 内容需重绘 */
-    /* V0.55 P3-GUI: 首启向导模态拦截点击 */
-    {
-        extern int hs_oobe_active(void);
-        extern int hs_oobe_handle_click(int x, int y);
-        if (hs_oobe_active()) { hs_oobe_handle_click(x, y); return; }
-    }
 
-    /* 锁屏: 点击任意位置进入登录页(鼠标解锁路径), 不落到桌面窗口交互 */
+    /* 锁屏: 点击任意位置进入登录页(鼠标解锁路径), 不落到桌面窗口交互。
+     * 优先级: 锁屏/登录态优先于 OOBE —— 向导在这两层既不渲染也不抢点击。 */
     if (g_locked == 1) {
         g_locked = 2;
         g_password_len = 0;
@@ -5725,6 +5720,13 @@ void hpdesk_handle_click(int x, int y)
         g_login_err = 0;
         vga_puts("[LOCK] state: lock -> login (click)\n");
         return;
+    }
+
+    /* 桌面态: 未完成的首启向导模态拦截点击(登录页 g_locked==2 不放行到这里) */
+    if (g_locked == 0) {
+        extern int hs_oobe_active(void);
+        extern int hs_oobe_handle_click(int x, int y);
+        if (hs_oobe_active()) { hs_oobe_handle_click(x, y); return; }
     }
 
     /* 右键菜单开着: 无论点哪儿都先归菜单, 点空白则关闭 */
@@ -6339,10 +6341,10 @@ void hpdesk_update_mouse(int x, int y)
 /* 鼠标按下：检测窗口标题栏启动拖拽 */
 void hpdesk_mouse_down(int x, int y)
 {
-    /* V0.55 P3-GUI: 首启向导期间禁止拖拽桌面窗口 */
+    /* V0.55 P3-GUI: 首启向导期间禁止拖拽桌面窗口(仅桌面态; 锁屏/登录不拦截) */
     {
         extern int hs_oobe_active(void);
-        if (hs_oobe_active()) return;
+        if (g_locked == 0 && hs_oobe_active()) return;
     }
     /* 顶栏右上角齿轮 = 控制中心开关。齿轮是从右数第二个图标(power 最右)。
      * 命中区必须跟 hs_top_bar_render 里同一套几何算, 否则缩放后点不中。 */
@@ -6690,7 +6692,7 @@ static int hs_cursor_kind_at(int x, int y)
     if (g_ctx.open && hs_ctx_hit_item(x, y) >= 0) return CUR_LINK;
     {
         extern int hs_oobe_active(void);
-        if (hs_oobe_active()) return CUR_LINK;
+        if (g_locked == 0 && hs_oobe_active()) return CUR_LINK;
     }
     {
         extern int hs_files_cursor_kind(int x, int y);
@@ -7198,11 +7200,13 @@ static void hpdesk_render_inner(void)
         hs_switcher_render();
     }
 
-    /* V0.55 P3-GUI: 首启图形向导覆盖在桌面之上 (模态, 独占输入) */
+    /* V0.55 P3-GUI: 首启图形向导覆盖在桌面之上 (模态, 独占输入)。
+     * 优先级规则: 只在桌面态(g_locked==0)渲染。锁屏/登录帧在上面的分支已提前
+     * return, 走不到这里; 向导与桌面内容同画在后台缓冲, 帧末 present 整屏提交。 */
     {
         extern int hs_oobe_active(void);
         extern void hs_oobe_render(void *fb, int w, int h);
-        if (hs_oobe_active()) {
+        if (g_locked == 0 && hs_oobe_active()) {
             hs_oobe_render(hs_get_framebuffer(),
                            g_shell.screen_width, g_shell.screen_height);
         }
@@ -7289,14 +7293,10 @@ void hpdesk_render(void)
 void hpdesk_handle_key(int key)
 {
     hpdesk_mark_dirty();   /* P0: 交互发生, 内容需重绘 */
-    /* V0.55 P3-GUI: 首启向导优先消费全部按键 */
-    {
-        extern int hs_oobe_active(void);
-        extern int hs_oobe_handle_key(int key);
-        if (hs_oobe_active()) { hs_oobe_handle_key(key); return; }
-    }
 
-    /* 锁屏状态：任意键进入登录界面 */
+    /* 锁屏状态：任意键进入登录界面。
+     * 优先级: 锁屏/登录态优先于 OOBE —— 向导在这两层不抢按键, 否则解锁键被
+     * 向导吞掉, 锁屏进不去登录页, 向导自己也画不出来, 两层互相抵消。 */
     if (g_locked == 1) {
         g_locked = 2;
         g_password_len = 0;
@@ -7335,6 +7335,13 @@ void hpdesk_handle_key(int key)
             g_password[g_password_len] = 0;
         }
         return;
+    }
+
+    /* 桌面态: 未完成的首启向导模态独占键盘(登录页已在上面放行/拦截完毕) */
+    if (g_locked == 0) {
+        extern int hs_oobe_active(void);
+        extern int hs_oobe_handle_key(int key);
+        if (hs_oobe_active()) { hs_oobe_handle_key(key); return; }
     }
 
     if (g_shell.launcher_visible) {
