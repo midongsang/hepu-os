@@ -37,6 +37,33 @@ const char *binfmt_get_cmdline(void)
     return g_cmdline_dirty ? g_cmdline : NULL;
 }
 
+/* UPROC ABI: 结构化 argv 通道（单任务模型全局缓冲，与 g_cmdline 同生命周期） */
+static int g_hepu_argc = 0;
+static const char *g_hepu_argv[8] = { 0 };
+
+void binfmt_set_argv(int argc, const char *const argv[])
+{
+    g_hepu_argc = 0;
+    for (int i = 0; i < 8; i++) g_hepu_argv[i] = 0;
+    if (argc > 8) argc = 8;
+    if (argc > 0 && argv) {
+        for (int i = 0; i < argc; i++) g_hepu_argv[i] = argv[i];
+        g_hepu_argc = argc;
+    }
+}
+
+int binfmt_get_argv(int *argc_out, const char ***argv_out)
+{
+    if (argc_out) *argc_out = g_hepu_argc;
+    if (argv_out) *argv_out = g_hepu_argv;
+    return g_hepu_argc;
+}
+
+/* 最近一次成功建槽的 pid（加载器在 process_create 成功后登记） */
+static int g_binfmt_pid = 0;
+void binfmt_record_pid(int pid) { g_binfmt_pid = pid; }
+int  binfmt_last_pid(void)      { return g_binfmt_pid; }
+
 /* ELF32 魔数: 0x7F 'E' 'L' 'F' */
 static const uint8_t magic_elf32[4] = { 0x7F, 'E', 'L', 'F' };
 
@@ -130,6 +157,7 @@ uint32_t binfmt_probe(const uint8_t *buf, uint32_t len)
 int binfmt_exec(const char *path, const uint8_t *data, uint32_t size)
 {
     if (!data || size == 0) return BINFMT_ERR_IO;
+    g_binfmt_pid = 0;   /* 本次 exec 的 pid 由加载器建槽后重新登记 */
     uint32_t id = binfmt_probe(data, size);
     for (uint32_t i = 0; i < fmt_count; i++) {
         if (formats[i].id == id) {

@@ -218,10 +218,14 @@ void shell_main(void)
         serial_puts(0x3F8, "[AUTO] linuxbrk start\n");
         cmd_run_auto("linuxbrk");
         serial_puts(0x3F8, "[AUTO] linuxbrk done\n");
-        vga_puts(" [SHELL] auto-test: run linuxcrt (envp/auxv+runtime)...\n");
+        vga_puts(" [SHELL] auto-test: run linuxcrt (envp/auxv+runtime, argv probe)...\n");
         serial_puts(0x3F8, "[AUTO] linuxcrt start\n");
-        cmd_run_auto("linuxcrt");
+        cmd_run_auto("linuxcrt uproc1 uproc2");
         serial_puts(0x3F8, "[AUTO] linuxcrt done\n");
+        /* UPROC ABI 取证: 不存在路径必须返回 HEPU_E_NOENT(-2)，两侧同口径 */
+        serial_puts(0x3F8, "[AUTO] noent probe start\n");
+        cmd_run_auto("no_such_uproc");
+        serial_puts(0x3F8, "[AUTO] noent probe done\n");
         vga_puts(" [SHELL] auto-test: run winhello (PE32 console)...\n");
         serial_puts(0x3F8, "[AUTO] winhello.exe start\n");
         cmd_run_auto("winhello.exe");

@@ -49,6 +49,16 @@ int binfmt_exec(const char *path, const uint8_t *data, uint32_t size);
 void binfmt_set_cmdline(const char *cmdline);
 const char *binfmt_get_cmdline(void);
 
+/* UPROC ABI: 结构化 argv 通道（hepu_exec → binfmt 加载器）。
+ * argc/argv 由内核在用户栈上按 SysV 布局写入；未设置时加载器回退为
+ * argc=1、argv[0]=程序名。argc 上限见 uproc.h HEPU_EXEC_MAX_ARGC。 */
+void binfmt_set_argv(int argc, const char *const argv[]);
+int  binfmt_get_argv(int *argc_out, const char ***argv_out);
+
+/* 记录最近一次成功建槽的进程 pid（hepu_exec 据此把 BINFMT_OK 翻译成 pid）。 */
+void binfmt_record_pid(int pid);
+int  binfmt_last_pid(void);
+
 /* 初始化: 注册内置格式 */
 void binfmt_init(void);
 

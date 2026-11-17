@@ -91,6 +91,7 @@ int binfmt_pe_load(const char *path, const uint8_t *data, uint32_t size)
 
     process_t *proc = process_create(pname, entry, PRIV_USER, 100);
     if (!proc) return BINFMT_ERR_MEM;
+    binfmt_record_pid(proc->pid);
     proc->compat_abi = 2;   /* Win32 ABI: 沙箱生效, syscall 不经 Linux 翻译 */
     proc->is_app = 1;       /* 可超时回收 */
 

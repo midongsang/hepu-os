@@ -18,6 +18,7 @@ extern void serial_puts(unsigned short, const char *);
 #include "kheap.h"
 #include "sched.h"
 #include "process.h"
+#include "uproc.h"
 #include "syscall.h"
 #include "hal.h"
 #include "ipc.h"
@@ -710,14 +711,15 @@ void hepu_kernel_main(uint32_t magic, multiboot_info_t *mb_info)
         vga_puts("[BOOT] safe/recovery mode: touchscreen disabled\n");
     }
 
-    /* ---- 创建用户态进程并进入 ---- */
+    /* ---- 创建用户态进程并进入（统一走 hepu_exec_static 旁路 ABI） ---- */
     vga_puts("=== user processes ===\n");
-    process_t *proc1 = process_create("init",
-                                       (uint32_t)user_init_start,
-                                       PRIV_USER, 1 /* E1: NORM */);
-    process_t *proc2 = process_create("procb",
-                                       (uint32_t)procb_start,
-                                       PRIV_USER, 1 /* E1: NORM */);
+    int pid1 = hepu_exec_static("init", user_init_start);
+    int pid2 = hepu_exec_static("procb", procb_start);
+    process_t *proc1 = NULL, *proc2 = NULL;
+    for (int i = 0; i < MAX_PROCESSES; i++) {
+        if (proc_table[i].pid == pid1) proc1 = &proc_table[i];
+        if (proc_table[i].pid == pid2) proc2 = &proc_table[i];
+    }
     if (proc1 && proc2) {
         vga_set_color(VGA_COLOR_GREEN, VGA_COLOR_BLACK);
         vga_printf("[PROC] init (PID=%d), procb (PID=%d)\n", proc1->pid, proc2->pid);

@@ -23,83 +23,47 @@
 #include "appreg.h"
 #include "touch.h"
 #include "touch_hw.h"
+#include "uproc.h"
+
 int cmd_run_auto(const char *args)
 {
-    extern int binfmt_exec(const char *, const uint8_t *, uint32_t);
-    extern void binfmt_set_cmdline(const char *);
     if (!args || *args == '\0') {
         vga_puts(" Usage: run < elf file >\n");
-        return -1;
+        return HEPU_E_ARG;
     }
     if (!initrd_ready()) {
         vga_puts(" error: initrd not load \n");
-        return -1;
+        return HEPU_E_NOENT;
     }
-    /* V3.87 B-3: 真实命令行传参——args 完整命令串 "prog arg1 arg2...",
-     * 第一个 token 为文件名, 剩余参数原样传给 binfmt 加载器 (PE argv 注入) */
-    char fname[64];
-    const char *sp = args;
-    int fn = 0;
-    while (*sp && *sp != ' ' && *sp != '\t' && fn < 62) fname[fn++] = *sp++;
-    fname[fn] = 0;
-    binfmt_set_cmdline(args);   /* 完整命令行 "prog arg1 arg2" 交给加载器分词 */
 
-    /* V3.87 阶段B-2: 支持 /app/xxx 路径 (VFS 已挂载) → 剥前缀取文件名,
-     * 与裸文件名同走 initrd 读取; 保持 APK 式应用区语义 */
-    const char *app_name = fname;
-    if (fname[0] == '/') {
-        const char *last = fname;
-        for (const char *p = fname; *p; p++) {
-            if (*p == '/') last = p + 1;
-        }
-        if (last != fname) app_name = last;
+    /* 分词: token0=程序名(argv[0]), 其余=argv[1..]；整串拷到本地缓冲再切 */
+    char line[128];
+    strncpy(line, args, sizeof(line) - 1);
+    line[sizeof(line) - 1] = 0;
+    const char *argv[HEPU_EXEC_MAX_ARGC];
+    int argc = 0;
+    char *q = line;
+    while (*q && argc < HEPU_EXEC_MAX_ARGC) {
+        while (*q == ' ' || *q == '\t') q++;
+        if (!*q) break;
+        argv[argc++] = q;
+        while (*q && *q != ' ' && *q != '\t') q++;
+        if (*q) { *q = 0; q++; }
     }
-    /* 无后缀时: 先试原名, 再补 .elf */
-    char full[64];
-    const char *dot = 0;
-    for (const char *p = app_name; *p; p++) if (*p == '.') dot = p;
-    if (!dot) {
-        int len = 0;
-        while (app_name[len] && len < 48) { full[len] = app_name[len]; len++; }
-        full[len] = 0;
-        int fd0 = initrd_open(full);
-        if (fd0 < 0) {
-            /* 补 .elf 再试 */
-            int l2 = len;
-            if (l2 < 56) {
-                full[l2++] = '.'; full[l2++] = 'e';
-                full[l2++] = 'l'; full[l2++] = 'f';
-            }
-            full[l2] = 0;
-        } else {
-            initrd_close(fd0);
-        }
-    } else {
-        int len = 0;
-        while (app_name[len] && len < 63) { full[len] = app_name[len]; len++; }
-        full[len] = 0;
+    if (argc == 0) {
+        vga_puts(" Usage: run < elf file >\n");
+        return HEPU_E_ARG;
     }
-    int fd = initrd_open(full);
-    if (fd < 0) {
-        vga_printf(" error: file not found %s\n", full);
-        return -1;
-    }
-    int size = initrd_size(fd);
-    int index = initrd_find(full);
-    initrd_close(fd);
-    if (index < 0 || size <= 0) {
-        vga_puts(" error: initrd entry fail\n");
-        return -1;
-    }
-    uint8_t *data = (uint8_t *)initrd_get_data(index);
-    int rc = binfmt_exec(full, data, (uint32_t)size);
-    vga_printf(" run %s -> rc=%d\n", full, rc);
+
+    int rc = hepu_exec(argv[0], argc, argv);
+    vga_printf(" run %s -> rc=%d\n", argv[0], rc);
+    if (rc < 0) vga_printf(" error: %s\n", hepu_exec_errstr(rc));
     /* V6.60: 串口输出返回值，用于调试Rust用户态程序 */
     {
         extern void serial_puts(uint16_t, const char *);
         extern void serial_puthex(uint16_t, uint32_t);
         serial_puts(0x3F8, "[RUN] ");
-        serial_puts(0x3F8, full);
+        serial_puts(0x3F8, argv[0]);
         serial_puts(0x3F8, " -> rc=");
         serial_puthex(0x3F8, (uint32_t)rc);
         serial_puts(0x3F8, "\n");

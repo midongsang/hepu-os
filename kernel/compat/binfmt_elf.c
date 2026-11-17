@@ -24,6 +24,7 @@
 #include "process.h"
 #include "vfs.h"
 #include "vga.h"
+#include "uproc.h"
 
 /* V3.87: ELF 主线保存点 (noinline 包装, 定义见文件尾) */
 /* V3.87-E10: 下一 ELF 进程的 CPU 限额(tick@100Hz, 0=不限)——shell `setappcpu` 设置 */
@@ -248,6 +249,7 @@ int binfmt_elf_load(const char *path, const uint8_t *data, uint32_t size)
 
     process_t *proc = process_create(pname, eh.e_entry, PRIV_USER, 100);
     if (!proc) return BINFMT_ERR_MEM;
+    binfmt_record_pid(proc->pid);
     proc->compat_abi = 1;   /* Linux i386 ABI: syscall 号翻译 */
     proc->is_app = 1;       /* 可超时回收 */
 
@@ -412,16 +414,34 @@ int binfmt_elf_load(const char *path, const uint8_t *data, uint32_t size)
          * → sys_brk 返回被污染值 0x0A051000 / linuxcrt 静默超时.) */
         uint32_t frame_top = stack_phys + PAGE_SIZE;
 
-        /* ---- 1. 字符串区 (帧顶向下, 预留 256B 足够) ---- */
+        /* ---- 1. 字符串区 (帧顶向下, 预留 512B: argv×8 + envp + random) ---- */
         static const char *envs[2] = { "HEPU=1", "TERM=hepu" };
-        char *pstr = (char *)frame_top - 256;
 
-        char *arg0 = pstr;
+        /* UPROC ABI: 结构化 argv 通道；未设置时回退 argc=1, argv[0]=pname */
+        int hepu_argc = 1;
+        const char **hepu_argv = 0;
+        (void)binfmt_get_argv(&hepu_argc, &hepu_argv);
+        if (hepu_argc < 1 || !hepu_argv || !hepu_argv[0]) {
+            hepu_argc = 1;
+            hepu_argv = 0;
+        }
+        if (hepu_argc > HEPU_EXEC_MAX_ARGC) hepu_argc = HEPU_EXEC_MAX_ARGC;
+
+        char *pstr = (char *)frame_top - 512;
+        uint32_t argv_virt[HEPU_EXEC_MAX_ARGC];
         uint32_t i = 0;
-        while (pname[i] && i < 40) { arg0[i] = pname[i]; i++; }
-        arg0[i] = 0;
-        uint32_t arg0_virt = stack_page + ((uint32_t)arg0 - stack_phys);
-        pstr += i + 1;
+
+        for (int a = 0; a < hepu_argc; a++) {
+            const char *src = hepu_argv ? hepu_argv[a] : 0;
+            if (!src) src = pname;
+            char *slot = pstr;
+            uint32_t k = 0;
+            while (src[k] && k < 31) { slot[k] = src[k]; k++; }
+            slot[k] = 0;
+            argv_virt[a] = stack_page + ((uint32_t)slot - stack_phys);
+            pstr += k + 1;
+        }
+        uint32_t arg0_virt = argv_virt[0];
 
         char *env0 = pstr;
         i = 0;
@@ -482,13 +502,37 @@ int binfmt_elf_load(const char *path, const uint8_t *data, uint32_t size)
         sp--;  *sp = env0_virt;     /* envp[0] */
 
         /* ---- 4. argv 指针数组 + NULL ---- */
-        sp--;  *sp = 0;             /* argv[1] = NULL */
-        sp--;  *sp = arg0_virt;     /* argv[0] */
+        sp--;  *sp = 0;             /* argv[argc] = NULL */
+        for (int a = hepu_argc - 1; a >= 0; a--) {
+            sp--;  *sp = argv_virt[a];
+        }
 
         /* ---- 5. argc ---- */
-        sp--;  *sp = 1;
+        sp--;  *sp = (uint32_t)hepu_argc;
 
         proc->user_stack = stack_page + ((uint32_t)sp - stack_phys);
+
+        /* UPROC ABI 取证: 物理帧回读 argc/argv 向量并解引用字符串，
+         * 证明内核已按 SysV 栈顶布局写好（32 位 esp 顶 = argc）。 */
+        {
+            extern void serial_puts(uint16_t, const char *);
+            extern void serial_puthex(uint16_t, uint32_t);
+            uint32_t n = *sp;
+            serial_puts(0x3F8, "[UPROC] stack argc=");
+            serial_puthex(0x3F8, n);
+            serial_puts(0x3F8, "\n");
+            for (uint32_t a = 0; a < n && a < HEPU_EXEC_MAX_ARGC; a++) {
+                uint32_t vp = sp[1 + a];
+                const char *src = (hepu_argv && hepu_argv[a]) ? hepu_argv[a] : pname;
+                serial_puts(0x3F8, "[UPROC] argv[");
+                serial_puthex(0x3F8, a);
+                serial_puts(0x3F8, "] vp=");
+                serial_puthex(0x3F8, vp);
+                serial_puts(0x3F8, " src=");
+                serial_puts(0x3F8, src ? src : "(null)");
+                serial_puts(0x3F8, "\n");
+            }
+        }
 
         /* V3.87 修复: process_create 构造中断帧时 user_esp 写的是旧栈顶
          * (0x40010000, 恰在用户栈映射区外 1 字节). 启动栈布局完成后必须
