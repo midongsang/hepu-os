@@ -1319,6 +1319,13 @@ static const char *hs_wp_sel_name(void)
 static uint32_t *g_wp_cache;
 static int g_wp_cache_w = -1, g_wp_cache_h = -1;
 
+/* N-1 内存预算: 缓存宽度封顶 1920, 高度仍按屏幕全高(纵向不降精度, 避免二次
+ * 失真)。高分辨率(2560x1600)下整屏缓存 = 宽*高*4 字节从内核堆分配, 一张
+ * 就是 16.38MB, 把 32MB 内核堆压到只剩 ~8MB; 限宽后缓存横向采样分辨率降到
+ * 1920, 渲染时再横向均匀放大到屏幕宽度。源壁纸本身仅 512x288, 横向再降一档
+ * 肉眼几乎不可辨, 但堆占用明显下降, 且不动内核静态大数组、不额外占物理内存。 */
+#define WP_CACHE_MAX_W 1920
+
 static int hs_wallpaper_build_cache(int w, int h)
 {
     uint8_t *src_px = g_wp_is_jpeg ? g_wp_jpg.rgba : g_wp_png.rgba;
@@ -1326,38 +1333,45 @@ static int hs_wallpaper_build_cache(int w, int h)
     int sh = (int)(g_wp_is_jpeg ? g_wp_jpg.height : g_wp_png.height);
     if (!src_px || sw <= 0 || sh <= 0) return 0;
 
+    /* 缓存宽封顶 WP_CACHE_MAX_W; 高度保持屏幕全高, 纵向 1:1 不降精度。 */
+    int cw = w < WP_CACHE_MAX_W ? w : WP_CACHE_MAX_W;
+
+    /* cover-fit 的裁剪/居中几何仍按屏幕宽高 (w,h) 计算, 与整屏缓存保持一致,
+     * 只是横向采样分辨率降到 cw; 渲染时再把 cw 横向均匀放大回 w, 不会错位或
+     * 改变宽高比。 */
     int dw = w, dh = (int)((long)sh * w / (long)sw);
     if (dh < h) { dh = h; dw = (int)((long)sw * h / (long)sh); }
     int dx = (w - dw) / 2, dy = (h - dh) / 2;
 
     static int xmap_buf[4096];
-    if (w > 4096) return 0;
-    for (int x = 0; x < w; x++) {
-        int sx = (x - dx) * sw / dw;
-        xmap_buf[x] = (sx < 0 || sx >= sw) ? -1 : sx;
+    if (cw > 4096) return 0;
+    for (int cx = 0; cx < cw; cx++) {
+        int sx_screen = cx * w / cw;                 /* 缓存列 -> 屏幕 x */
+        int sx = (sx_screen - dx) * sw / dw;
+        xmap_buf[cx] = (sx < 0 || sx >= sw) ? -1 : sx;
     }
 
     extern void *kmalloc(uint64_t size);
-    uint32_t *c = (uint32_t *)kmalloc((uint64_t)w * h * 4);
+    uint32_t *c = (uint32_t *)kmalloc((uint64_t)cw * h * 4);
     if (!c) return 0;
 
     for (int y = 0; y < h; y++) {
         int sy = (y - dy) * sh / dh;
-        uint32_t *out = c + (uint64_t)y * w;
+        uint32_t *out = c + (uint64_t)y * cw;
         if (sy < 0 || sy >= sh) {
-            for (int x = 0; x < w; x++) out[x] = 0;
+            for (int cx = 0; cx < cw; cx++) out[cx] = 0;
             continue;
         }
         const uint8_t *row = src_px + (uint64_t)sy * sw * 4;
-        for (int x = 0; x < w; x++) {
-            int sx = xmap_buf[x];
-            if (sx < 0) { out[x] = 0; continue; }
+        for (int cx = 0; cx < cw; cx++) {
+            int sx = xmap_buf[cx];
+            if (sx < 0) { out[cx] = 0; continue; }
             const uint8_t *p = row + sx * 4;
-            out[x] = ((uint32_t)p[0] << 16) | ((uint32_t)p[1] << 8) | p[2];
+            out[cx] = ((uint32_t)p[0] << 16) | ((uint32_t)p[1] << 8) | p[2];
         }
     }
     g_wp_cache = c;
-    g_wp_cache_w = w;
+    g_wp_cache_w = cw;
     g_wp_cache_h = h;
     return 1;
 }
@@ -1365,16 +1379,21 @@ static int hs_wallpaper_build_cache(int w, int h)
 static void hs_wallpaper_render(void)
 {
     int w = g_shell.screen_width, h = g_shell.screen_height;
+    int cw = w < WP_CACHE_MAX_W ? w : WP_CACHE_MAX_W;
     if (hs_wallpaper_png()) {
-        if (!g_wp_cache || g_wp_cache_w != w || g_wp_cache_h != h) {
+        if (!g_wp_cache || g_wp_cache_w != cw || g_wp_cache_h != h) {
             if (!hs_wallpaper_build_cache(w, h)) return;   /* 分配失败则不出壁纸 */
         }
         uint32_t *fb = (uint32_t *)hs_get_framebuffer();
         if (!fb) return;
+        int ccw = g_wp_cache_w;
         for (int y = 0; y < h; y++) {
             uint32_t *dst = fb + (uint64_t)y * w;
-            const uint32_t *src = g_wp_cache + (uint64_t)y * w;
-            for (int x = 0; x < w; x++) dst[x] = src[x];
+            const uint32_t *src = g_wp_cache + (uint64_t)y * ccw;
+            for (int x = 0; x < w; x++) {
+                int cx = x * ccw / w;   /* 缓存横向放大到屏幕宽, 纵向 1:1 */
+                dst[x] = src[cx];
+            }
         }
         return;
     }
@@ -1395,20 +1414,24 @@ static void hs_wallpaper_render(void)
 static void hs_wallpaper_render_rect(int x, int y, int w, int h)
 {
     int sw = g_shell.screen_width, sh = g_shell.screen_height;
+    int cw = sw < WP_CACHE_MAX_W ? sw : WP_CACHE_MAX_W;
     /* 非 PNG 壁纸(渐变/纯色)或缓存尺寸不符时退回整屏: 正确性优先 */
-    if (!hs_wallpaper_png() || !g_wp_cache || g_wp_cache_w != sw || g_wp_cache_h != sh) {
+    if (!hs_wallpaper_png() || !g_wp_cache || g_wp_cache_w != cw || g_wp_cache_h != sh) {
         hs_wallpaper_render();
         return;
     }
     uint32_t *fb = (uint32_t *)hs_get_framebuffer();
     if (!fb || !w || !h) return;
+    int ccw = g_wp_cache_w;
     int x0 = x < 0 ? 0 : x, y0 = y < 0 ? 0 : y;
     int x1 = x + w > sw ? sw : x + w, y1 = y + h > sh ? sh : y + h;
     for (int j = y0; j < y1; j++) {
         uint32_t *dst = fb + (uint64_t)j * sw + x0;
-        const uint32_t *src = g_wp_cache + (uint64_t)j * sw + x0;
-        int n = x1 - x0;
-        for (int i = 0; i < n; i++) dst[i] = src[i];
+        const uint32_t *src = g_wp_cache + (uint64_t)j * ccw;
+        for (int i = x0; i < x1; i++) {
+            int cx = i * ccw / sw;   /* 与整屏渲染一致的横向放大映射 */
+            dst[i - x0] = src[cx];
+        }
     }
 }
 
