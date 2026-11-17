@@ -70,10 +70,19 @@ HP_DESK_DEPS = $(HP_DESK_SHARED) \
                $(KERNEL_DIR)/arch/x86_64/png64.c
 C_SRCS = $(filter-out $(KERNEL_DIR)/sched/scheduler.c $(KERNEL_DIR)/arch/x86_64/%,$(shell find $(KERNEL_DIR) -name "*.c")) $(HP_DESK_DEPS)
 
+# 兼容层（binfmt/ELF/PE/Mach-O/Darwin/Linux ABI）
+# 已从 kernel/ 迁出到 services/compat/：它原本靠 `find kernel -name *.c` 被顺带编进
+# 32 位内核，任何人改内核都会误以为它是内核的一部分。搬出后 kernel/ 是纯内核树，
+# 兼容层作为独立构建单元显式列在这里（当前仍编入 32 位内核，行为不变）。
+# 后续若要真正做"内核外服务化"（IPC 化），改这里即可，不必再动内核目录结构。
+COMPAT_DIR  = services/compat
+COMPAT_SRCS = $(shell find $(COMPAT_DIR) -name "*.c" 2>/dev/null)
+COMPAT_OBJS = $(patsubst $(COMPAT_DIR)/%.c,$(BUILD_DIR)/$(COMPAT_DIR)/%.o,$(COMPAT_SRCS))
+
 # 目标文件
 ASM_OBJS = $(patsubst $(KERNEL_DIR)/%.S,$(BUILD_DIR)/%.o,$(ASM_SRCS))
 C_OBJS   = $(patsubst $(KERNEL_DIR)/%.c,$(BUILD_DIR)/%.o,$(C_SRCS))
-OBJS     = $(ASM_OBJS) $(C_OBJS) $(USER_INIT_OBJ) $(USER_PROCB_OBJ) \
+OBJS     = $(ASM_OBJS) $(C_OBJS) $(COMPAT_OBJS) $(USER_INIT_OBJ) $(USER_PROCB_OBJ) \
            $(USER_SCHA_OBJ) $(USER_SCHB_OBJ) $(INITRD_OBJ)
 
 # 输出
@@ -145,6 +154,12 @@ $(BUILD_DIR)/drivers/nvme.o: $(KERNEL_DIR)/drivers/nvme.c
 
 # 编译C
 $(BUILD_DIR)/%.o: $(KERNEL_DIR)/%.c
+	@mkdir -p $(dir $@)
+	@echo "  CC  $<"
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+# 兼容层（services/compat/）—— 不在 kernel/ 下，需要自己的模式规则
+$(BUILD_DIR)/$(COMPAT_DIR)/%.o: $(COMPAT_DIR)/%.c
 	@mkdir -p $(dir $@)
 	@echo "  CC  $<"
 	@$(CC) $(CFLAGS) -c $< -o $@
