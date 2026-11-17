@@ -13,7 +13,10 @@ supersedes: null
 > 现状（2026-11-16 核实）：
 > - 本文的产物 `hepu-os-v1.02-combo.img` 由 `tools/build_combo.sh` 生成，而该脚本依赖的
 >   `tools/mbr_stub.S`、`tools/bootloader.S`、`tools/bootloader.ld`、`tools/mbr_legacy.bin`、
->   `build/ext2disk.img` **已全部不在仓库里** —— 脚本会立刻退出，产不出镜像。
+>   `build/ext2disk.img` **已全部不在仓库里** —— 那套布局基于 `0x7C00` 基址，已被
+>   `tools/hepboot/`（`0x8000` 基址）整体取代，两代引导器的 LBA 布局都不同，
+>   不能简单把路径改指过去。现在脚本会先做前置检查、缺源时打印指引并以 `exit 2`
+>   退出，**不会**跑到一半产出半成品。
 > - 当前**唯一可构建**的产物是 `tools/build_uefi_dual.py` 生成的 256 MB UEFI 镜像，
 >   启动方式是 **UEFI**（LBA 0 是保护性 MBR，没有 BIOS 引导代码）。
 >

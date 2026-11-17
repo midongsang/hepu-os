@@ -111,15 +111,45 @@ hepu-os/
 | 项 | 64 位（主线） | 32 位（并行第二套内核） |
 |---|---|---|
 | CPU | x86_64，支持长模式 | i386 兼容，能跑 multiboot |
-| 内存 | **1024 MB**（实测启动到桌面） | **256 MB**（实测启动到桌面）<br>其中 BSS 占 28 MB（4 MB 桌面池 + 24 MB 兜底池） |
+| 内存 | **1024 MB**（实测启动到桌面）<br>BSS 约 38.7 MB | **256 MB**（实测启动到桌面）<br>BSS 约 92.6 MB，见下方说明 |
 | 显示 | 1920×1080，需要 VBE 线性帧缓冲 | 同左 |
 | 显存 | ≥ 8 MB（1920×1080×4 = 8.3 MB，单缓冲直写） | 同左 |
-| 磁盘 | 镜像 256 MB（GPT + ESP + ext2 根分区 120 MB） | 32 位内核 3.5 MB，可由引导器直接载入 |
+| 磁盘 | 镜像 256 MB（GPT + ESP + ext2 根分区 120 MB） | 32 位内核 3.75 MB，可由引导器直接载入 |
 | 固件 | **UEFI**（见下方"启动方式"） | multiboot（GRUB 或 QEMU `-kernel` 直载） |
-| 输入 | PS/2 键盘 + PS/2 鼠标 | 同左 |
-| 网络 | 可选，RTL8139 / e1000 任一 | 可选 |
+| 输入 | PS/2 键盘 + PS/2 鼠标；USB 键鼠经 xHCI 亦可用（见下方"输入设备"） | 同左 |
+| 网络 | 可选；e1000 已端到端验证（DHCP/ARP/ICMP/TCP），RTL8139 为回退路径 | 可选；RTL8139 |
 
 装到 U 盘：≥ 512 MB 的 U 盘即可（镜像本身 256 MB）。
+
+**关于 BSS**（这两个数是 `size -A` 实测，不是规格书估算）：
+
+- 64 位：`.text` 620,840 / `.data` 12,272 / `.bss` 40,559,872（约 38.7 MB）
+- 32 位：`.text` 860,676 / `.data` 24,876 / `.bss` 97,078,188（约 92.6 MB）
+
+32 位的 92.6 MB 里排前几位的静态缓冲：`kf_pool` 24 MB（内核帧兜底池）、
+`htpl` 8.8 MB、`back_buffer` 7.9 MB（双缓冲绘制目标）、`connections` 4 MB、
+`s_hpd32_pool` 4 MB（桌面对象池）、`ht` 3.3 MB、`art` 2.7 MB、`store` 2.6 MB、
+`eco` 2.5 MB、`queues` 2.1 MB、`wp_raw` 2 MB（壁纸读取缓冲）。
+
+所以 32 位"256 MB 能跑"里，光 BSS 就占掉 92.6 MB —— 真正留给页分配器的
+没有想象中多。这也是 `N-1`（2560×1600 双缓冲 + 壁纸缓存共需 32 MB）卡在
+内存预算上的原因。**要往上加分辨率，先看这张表，别只看总内存。**
+
+顺带记一条已回收的：`gfx_virtio.c` 里两个函数内 static 数组
+（`fb_mem` 3.1 MB + `fb_mem_large` 8.3 MB）曾无条件下进 `.bss`，但 virtio-gpu
+探测失败时 `virtio_init()` 直接 return，这两块内存从开机到关机一次都没被写过。
+已改成运行时按需分配，`.bss` 因此少了 11.4 MB。
+
+**关于输入设备**：PS/2 与 USB HID 两条链路都可用，不是"二选一"。
+
+- PS/2：`ps2` 控制器初始化后由 IRQ1/IRQ12 投递，`g_kbd_irq_count` 递增
+- USB：xHCI 起控制器后枚举 port，键鼠各占一个 slot，事件从完成环取；
+  `sendkey` 实测 USB 队列 head/tail 前进而 `g_kbd_irq_count` 不变，
+  证明事件确实走 USB 而非 PS/2 转发
+
+早期 `pci_find_class_bar0` 只扫 bus 0 且只读 BAR 低 32 位，而 `qemu-xhci` 的
+BAR0 是 64 位 MMIO `0x800000000`（低 dword 为 0），于是被判成"无控制器"、
+USB 键鼠全部退化成 PS/2 —— 这条已修。
 
 ### 二、启动方式（这一条容易踩坑）
 
@@ -135,15 +165,21 @@ hepu-os/
 - 写 U 盘用 Rufus 的 **DD 模式**，然后在 BIOS/UEFI 设置里**打开 UEFI 启动、关闭 CSM/Legacy**
 - 反过来设成 Legacy/CSM 会直接"找不到可启动设备"——不是镜像坏了
 
-> **仓库里另外三个镜像脚本当前都不可用**，别被它们误导：
-> - `tools/build_combo.sh`（32 位 MBR/stage2 组合镜像）：脚本在，但它依赖的
+> **另外三个镜像脚本的状态**（已改成"出错就说清原因"，不再是静默失败）：
+> - `tools/build_combo.sh`（32 位 MBR/stage2 组合镜像）：它依赖的
 >   `tools/mbr_stub.S`、`tools/bootloader.S`、`tools/bootloader.ld`、
->   `tools/mbr_legacy.bin`、`build/ext2disk.img` **全都已不在仓库里**，直接跑会立刻退出。
-> - `tools/build_iso.py` / `build_hybrid_iso.py`（ISO + isohybrid）：`PROJECT` 常量
->   硬编码成另一个工作区路径，**会去构建那份旧副本而不是当前仓库**。
+>   `tools/mbr_legacy.bin`、`build/ext2disk.img` 已不在仓库里 —— 那套布局基于
+>   `0x7C00` 基址，已被 `tools/hepboot/`（`0x8000` 基址）整体取代。现在脚本会
+>   先检查源文件，缺了就打印四条指引并以 `exit 2` 退出，**不会**跑到一半产出半成品。
+> - `tools/build_iso.py` / `build_hybrid_iso.py`（ISO + isohybrid）：`PROJECT`
+>   常量已从硬编码的旧工作区路径改为按脚本自身位置自动推导，不会再构建另一份副本。
+>   但它们仍缺一条构建规则 —— `tools/hepboot/x86_64/stage2_64.S` 有源码、没产出
+>   `stage2_64.bin` 的规则，所以完整 ISO 还跑不到底。
+> - `tools/build_uefi_dual.py` 会先自检 `sgdisk` / `mkfs.vfat` / `mkfs.ext2` / `mcopy`，
+>   缺哪个报哪个并给出 `apt install` 命令，`exit 3`。
 >
-> `docs/guides/INSTALL.md` 描述的正是上面这条 32 位 MBR/stage2 路径，属于历史文档；
-> 按它操作会找不到对应镜像。装机的当前流程以本节的 `.img` 为准。
+> `docs/guides/INSTALL.md` 描述的是 32 位 MBR/stage2 那条历史路径，按它操作会
+> 找不到对应镜像。**装机的当前流程以本节的 `.img` 为准。**
 
 QEMU 里验证 UEFI 启动：
 
@@ -184,7 +220,7 @@ done
 ### 编译64位内核（主线）
 ```bash
 make -C kernel/arch/x86_64 -j4
-# 输出: build_x86_64/hepu-kernel64.bin（当前 947,952 B，上限 1 MB）
+# 输出: build_x86_64/hepu-kernel64.bin（当前 957,360 B，上限 1 MB）
 ```
 
 ### 编译用户态程序
@@ -196,7 +232,7 @@ make -C user
 ### 编译32位内核
 ```bash
 make
-# 输出: build_v250/kernel.elf（当前 3,534,124 B）+ hepu-kernel.bin
+# 输出: build_v250/kernel.elf（当前 3,927,888 B）+ hepu-kernel.bin
 ```
 
 ### 构建 UEFI 镜像（推荐）
@@ -222,7 +258,7 @@ qemu-system-x86_64 \
 - 原因见上方「启动方式」：镜像的 LBA 0 是保护性 MBR，没有 BIOS 引导代码，
   设成 Legacy 只会"找不到可启动设备"
 
-## 系统调用（109 个表项，号空间 0–235）
+## 系统调用（号空间 0–235，`SYS_MAX = 236`）
 
 系统调用 ABI 由 `tools/gen_syscall_doc.py` 从源码 `kernel/arch/x86_64/syscall64_full.c` 自动生成，完整列表见 [`docs/specs/SYSCALL_ABI.md`](docs/specs/SYSCALL_ABI.md)。
 
