@@ -22,6 +22,7 @@
  * ========================================================================== */
 #include <stdint.h>
 #include <stddef.h>
+#include "uproc.h"
 
 /* auxv 类型号（Linux x86-64） */
 #define AT_NULL   0
@@ -99,10 +100,20 @@ uint64_t hepu_build_initial_stack(const uint64_t *stack_phys, const char *path,
                                    uint64_t entry_va, uint64_t phdr_va,
                                    uint32_t phnum, uint32_t phent,
                                    uint64_t user_pml4,
-                                   uint64_t at_entry_va, uint64_t interp_base)
+                                   uint64_t at_entry_va, uint64_t interp_base,
+                                   int argc, const char *const argv[])
 {
     (void)entry_va;
     if (!stack_phys || !stack_phys[0]) return 0;
+
+    /* ---- UPROC ABI: 结构化 argv；未设置时回退 argc=1, argv[0]=path ---- */
+    int hepu_argc = argc;
+    const char *const *hepu_argv = argv;
+    if (hepu_argc < 1 || !hepu_argv || !hepu_argv[0]) {
+        hepu_argc = 1;
+        hepu_argv = 0;
+    }
+    if (hepu_argc > HEPU_EXEC_MAX_ARGC) hepu_argc = HEPU_EXEC_MAX_ARGC;
 
     /* ---- 1. 在内核缓冲里拼出初始栈内容 ----
      * 布局（从低地址往高）：向量区 → 字符串区。
@@ -115,8 +126,19 @@ uint64_t hepu_build_initial_stack(const uint64_t *stack_phys, const char *path,
     /* 字符串区放在向量区后面（高地址），先算好各字符串的虚拟地址。
      * 字符串区基址 = 栈顶 - 字符串总长（向下生长）。 */
     const char *p0 = path ? path : "/bin/hello";
-    uint32_t len_p0 = 0;
-    while (p0[len_p0]) len_p0++;
+    if (hepu_argv && hepu_argv[0]) p0 = hepu_argv[0];
+    uint32_t argv_len[HEPU_EXEC_MAX_ARGC];
+    uint32_t argv_off[HEPU_EXEC_MAX_ARGC];
+    uint32_t argv_strings = 0;
+    for (int a = 0; a < hepu_argc; a++) {
+        const char *s = hepu_argv ? hepu_argv[a] : 0;
+        if (!s) s = p0;
+        uint32_t l = 0;
+        while (s[l]) l++;
+        argv_len[a] = l;
+        argv_off[a] = argv_strings;
+        argv_strings += l + 1;
+    }
     const char *plat = "Hepu";
     uint32_t len_plat = 5;
     uint32_t rand_len = 16;
@@ -126,18 +148,20 @@ uint64_t hepu_build_initial_stack(const uint64_t *stack_phys, const char *path,
     uint32_t len_denv = 0;
     if (denv) { while (denv[len_denv]) len_denv++; }
 
-    uint32_t strings_len = (len_p0 + 1) + len_plat + rand_len + (len_denv ? len_denv + 1 : 0);
+    uint32_t plat_off = argv_strings;
+    uint32_t rand_off = plat_off + len_plat;
+    uint32_t denv_off = rand_off + rand_len;
+
+    uint32_t strings_len = argv_strings + len_plat + rand_len + (len_denv ? len_denv + 1 : 0);
     /* 16 字节对齐 */
     strings_len = (strings_len + 15) & ~15u;
     uint64_t str_base = HEPU_USER_STACK_TOP - strings_len;
 
-    /* 向量区大小：argc + argv[0] + NULL + envp NULL + auxv 对 + AT_NULL */
+    /* 向量区大小：argc + argv[0..argc-1] + NULL + envp NULL + auxv 对 + AT_NULL */
     /* auxv 项数：PHDR,PHENT,PHNUM,PAGESZ,BASE,FLAGS,ENTRY,UID,EUID,GID,EGID,
      *             HWCAP,CLKTCK,SECURE,RANDOM,EXECFN,NULL = 17 项 */
     uint64_t auxv_count = 17;
-    uint64_t vec_len = 8              /* argc */
-                    + 8              /* argv[0] */
-                    + 8              /* argv NULL */
+    uint64_t vec_len = 8 * (1 + (uint64_t)hepu_argc + 1)  /* argc, argv[], NULL */
                     + (denv ? 16 : 8) /* envp[0] + envp NULL / envp NULL */
                     + auxv_count * 16;
     vec_len = (vec_len + 15) & ~15ULL;
@@ -177,10 +201,12 @@ uint64_t hepu_build_initial_stack(const uint64_t *stack_phys, const char *path,
     uint64_t *vec = (uint64_t *)buf;
     uint64_t vi = 0;
 
-    vec[vi++] = 1;                                   /* argc = 1 */
-    vec[vi++] = str_base;                            /* argv[0] → 路径字符串 */
+    vec[vi++] = (uint64_t)hepu_argc;                 /* argc */
+    for (int a = 0; a < hepu_argc; a++) {
+        vec[vi++] = str_base + argv_off[a];          /* argv[a] → 参数字符串 */
+    }
     vec[vi++] = 0;                                   /* argv NULL */
-    uint64_t envp0_va = str_base + len_p0 + 1 + len_plat + rand_len;
+    uint64_t envp0_va = str_base + denv_off;
     if (denv) {
         vec[vi++] = envp0_va;                        /* envp[0] → LD_DEBUG=libs */
         vec[vi++] = 0;                               /* envp NULL */
@@ -202,8 +228,8 @@ uint64_t hepu_build_initial_stack(const uint64_t *stack_phys, const char *path,
     vec[vi++] = AT_HWCAP;  vec[vi++] = 0;
     vec[vi++] = AT_CLKTCK; vec[vi++] = 100;
     vec[vi++] = AT_SECURE; vec[vi++] = 0;
-    vec[vi++] = AT_RANDOM; vec[vi++] = str_base + len_p0 + 1 + len_plat;
-    vec[vi++] = AT_EXECFN; vec[vi++] = str_base;
+    vec[vi++] = AT_RANDOM; vec[vi++] = str_base + rand_off;
+    vec[vi++] = AT_EXECFN; vec[vi++] = str_base + argv_off[0];
     vec[vi++] = AT_NULL;   vec[vi++] = 0;
 
 #ifdef HEPU_TRACE_LINUX_SYSCALL
@@ -237,7 +263,11 @@ uint64_t hepu_build_initial_stack(const uint64_t *stack_phys, const char *path,
         return 0;
     }
     uint32_t off = 0;
-    for (uint32_t i = 0; i <= len_p0; i++) strbuf[off++] = (uint8_t)p0[i];
+    for (int a = 0; a < hepu_argc; a++) {
+        const char *s = hepu_argv ? hepu_argv[a] : 0;
+        if (!s) s = p0;
+        for (uint32_t i = 0; i <= argv_len[a]; i++) strbuf[off++] = (uint8_t)(i < argv_len[a] ? s[i] : 0);
+    }
     for (uint32_t i = 0; i < len_plat; i++) strbuf[off++] = (uint8_t)plat[i];
     /* AT_RANDOM 的 16 字节：栈保护随机数。这里用内核 tick 派生，
      * 目的是让「每次启动不同」，不是密码学用途（内核目前没有 CSPRNG 接入）。 */
@@ -312,6 +342,23 @@ uint64_t hepu_build_initial_stack(const uint64_t *stack_phys, const char *path,
         vga_puts("\n");
     }
 #endif
+
+    /* UPROC ABI 取证（常开，不受 trace 开关影响）: 从用户栈页读回 argc/argv
+     * 向量并逐条解引用字符串，证明内核已按 SysV 栈顶布局写好（rsp 顶 = argc）。 */
+    {
+        uint64_t *q = (uint64_t *)hepu_user_virt_to_ptr(user_pml4, rsp);
+        vga_puts("[UPROC] stack readback q="); vga_put_hex((uint64_t)q); vga_puts("\n");
+        if (q) {
+            uint64_t n = q[0];
+            vga_puts("[UPROC] stack argc="); vga_put_hex(n); vga_puts("\n");
+            for (uint64_t a = 0; a < n && a < HEPU_EXEC_MAX_ARGC; a++) {
+                char *s = (char *)hepu_user_virt_to_ptr(user_pml4, q[1 + a]);
+                vga_puts("[UPROC] argv["); vga_put_hex(a); vga_puts("]=");
+                if (s) vga_puts(s); else vga_puts("(null)");
+                vga_puts("\n");
+            }
+        }
+    }
 
     return rsp;
 }

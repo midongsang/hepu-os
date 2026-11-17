@@ -9,6 +9,7 @@
 #include "elf64.h"
 #include "domain64.h"
 #include "spinlock.h"
+#include "uproc.h"
 
 /* V0.13.43: 与 GDT Linux 标准布局一致 (0x18=用户数据, 0x20=用户代码) */
 #define USER_CS 0x20  /* 用户代码段选择子 */
@@ -673,7 +674,8 @@ static int hepu_apply_irelative(user_process_t *proc, const uint8_t *elf, uint64
 int user_process_create_elf(const char *name, void *code_data, uint64_t code_size,
                             uint64_t code_vaddr, uint64_t entry_vaddr,
                             void *raw_elf, uint64_t raw_elf_size,
-                            int env_type, uint64_t at_entry_va, uint64_t interp_base)
+                            int env_type, uint64_t at_entry_va, uint64_t interp_base,
+                            int argc, const char *const argv[])
 {
     if (!user_proc_initialized) return -1;
 
@@ -727,7 +729,8 @@ int user_process_create_elf(const char *name, void *code_data, uint64_t code_siz
                                                  uint64_t entry_va, uint64_t phdr_va,
                                                  uint32_t phnum, uint32_t phent,
                                                  uint64_t user_pml4,
-                                                 uint64_t at_entry_va, uint64_t interp_base);
+                                                 uint64_t at_entry_va, uint64_t interp_base,
+                                                 int argc, const char *const argv[]);
         uint64_t phdr_va = 0;
         uint32_t phnum = 0, phent = 0;
         if (raw_elf && raw_elf != code_data) {
@@ -745,7 +748,7 @@ int user_process_create_elf(const char *name, void *code_data, uint64_t code_siz
                                                 entry_vaddr, phdr_va, phnum, phent,
                                                 proc->page_table,
                                                 at_entry_va ? at_entry_va : entry_vaddr,
-                                                interp_base);
+                                                interp_base, argc, argv);
         if (!rsp) {
             vga_puts("[USER64] Failed to build initial stack\n");
             proc->active = 0;
@@ -1903,7 +1906,7 @@ extern void *elf64_load(void *elf_data, uint64_t size);
 extern int ext2_64_read_file(const char *path, uint8_t *buf, int max_size);
 
 /* 从ext2加载ELF用户程序并执行 */
-int user_process_exec(const char *path)
+static int uproc_exec_impl(const char *path, int argc, const char *const argv[])
 {
     /* V0.33: ABI 不再是全局开关。
      * 旧实现无条件置 g_running_linux_elf=1，于是**所有**用户程序（包括 Hepu
@@ -1932,7 +1935,7 @@ int user_process_exec(const char *path)
     int hdr_size = ext2_64_read_file(path, elf_hdr, sizeof(elf_hdr));
     if (hdr_size < 64) {
         vga_puts("[USER64] exec ERROR: Cannot read file\n");
-        return -1;
+        return HEPU_E_NOENT;
     }
     /* 取文件真实大小（stat 拿不到就退回一个保守上限） */
     uint32_t file_size_hint = 0;
@@ -1948,7 +1951,7 @@ int user_process_exec(const char *path)
     uint8_t *elf_buffer = (uint8_t *)kmalloc(elf_size);
     if (!elf_buffer) {
         vga_puts("[USER64] exec ERROR: kmalloc failed\n");
-        return -1;
+        return HEPU_E_NOMEM;
     }
     /* 把已读的头拷进去 */
     for (int i = 0; i < hdr_size; i++) elf_buffer[i] = elf_hdr[i];
@@ -1956,7 +1959,7 @@ int user_process_exec(const char *path)
     if (file_size < 64) {
         vga_puts("[USER64] exec ERROR: Cannot read file\n");
         kfree(elf_buffer);
-        return -1;
+        return HEPU_E_NOENT;
     }
 
     vga_puts("[USER64] exec: read ");
@@ -1974,7 +1977,7 @@ int user_process_exec(const char *path)
     if (elf64_verify(elf_buffer) != 0) {
         vga_puts("[USER64] exec ERROR: Invalid ELF64\n");
         kfree(elf_buffer);   /* V0.33: 补漏（原来这条路径泄漏整个缓冲区） */
-        return -1;
+        return HEPU_E_LOAD;
     }
 
     /* 3. 获取入口点 */
@@ -2027,7 +2030,7 @@ int user_process_exec(const char *path)
         if (!interp_path || interp_path[0] != '/') {
             vga_puts("[USER64] exec ERROR: PT_INTERP path missing/invalid\n");
             kfree(elf_buffer);
-            return -1;
+            return HEPU_E_LOAD;
         }
         vga_puts("[USER64] exec: dynamic ELF, interpreter=");
         vga_puts(interp_path);
@@ -2044,7 +2047,7 @@ int user_process_exec(const char *path)
             vga_puts("[USER64]   ET_EXEC absolute addresses are baked in - cannot be rebased.\n");
             vga_puts("[USER64]   Rebuild as PIE (-fPIE / -static-pie) to run on Hepu.\n");
             kfree(elf_buffer);
-            return -1;
+            return HEPU_E_LOAD;
         }
     }
 
@@ -2054,13 +2057,13 @@ int user_process_exec(const char *path)
         if (!need) {
             vga_puts("[USER64] exec ERROR: bad PIE layout\n");
             kfree(elf_buffer);
-            return -1;
+            return HEPU_E_LOAD;
         }
         map_base = va_alloc_in(VA_OWNER_PENDING, VA_COMPAT_BASE, VA_COMPAT_END, need);
         if (!map_base) {
             vga_puts("[USER64] exec ERROR: no VA space for PIE image\n");
             kfree(elf_buffer);
-            return -1;
+            return HEPU_E_NOMEM;
         }
         vga_puts("[USER64] PIE load bias: base=");
         vga_put_hex(map_base);
@@ -2075,7 +2078,7 @@ int user_process_exec(const char *path)
         vga_puts("[USER64] exec ERROR: ELF load failed\n");
         if (map_base) va_free(VA_OWNER_PENDING, map_base);
         kfree(elf_buffer);
-        return -1;
+        return HEPU_E_LOAD;
     }
     /* V0.20.80: elf_buffer保留到重定位完成后再free */
 
@@ -2120,7 +2123,7 @@ int user_process_exec(const char *path)
             if (map_base) va_free(VA_OWNER_PENDING, map_base);
             kfree(loaded);
             kfree(elf_buffer);
-            return -1;
+            return HEPU_E_NOENT;
         }
         uint8_t *ibuf = (uint8_t *)kmalloc(isize);
         if (!ibuf) {
@@ -2128,7 +2131,7 @@ int user_process_exec(const char *path)
             if (map_base) va_free(VA_OWNER_PENDING, map_base);
             kfree(loaded);
             kfree(elf_buffer);
-            return -1;
+            return HEPU_E_NOMEM;
         }
         int got = ext2_64_read_file(interp_path, ibuf, (int)isize);
         if (got < 64 || elf64_verify(ibuf) != 0) {
@@ -2137,7 +2140,7 @@ int user_process_exec(const char *path)
             if (map_base) va_free(VA_OWNER_PENDING, map_base);
             kfree(loaded);
             kfree(elf_buffer);
-            return -1;
+            return HEPU_E_LOAD;
         }
         uint64_t need = elf64_image_size(ibuf, (uint64_t)got);
         if (!need) {
@@ -2146,7 +2149,7 @@ int user_process_exec(const char *path)
             if (map_base) va_free(VA_OWNER_PENDING, map_base);
             kfree(loaded);
             kfree(elf_buffer);
-            return -1;
+            return HEPU_E_LOAD;
         }
         interp_code_vaddr = va_alloc_in(VA_OWNER_PENDING, VA_LIB_BASE, VA_LIB_END, need);
         if (!interp_code_vaddr) {
@@ -2155,7 +2158,7 @@ int user_process_exec(const char *path)
             if (map_base) va_free(VA_OWNER_PENDING, map_base);
             kfree(loaded);
             kfree(elf_buffer);
-            return -1;
+            return HEPU_E_NOMEM;
         }
         interp_loaded = elf64_load_biased(ibuf, (uint64_t)got, interp_code_vaddr);
         if (!interp_loaded) {
@@ -2165,7 +2168,7 @@ int user_process_exec(const char *path)
             if (map_base) va_free(VA_OWNER_PENDING, map_base);
             kfree(loaded);
             kfree(elf_buffer);
-            return -1;
+            return HEPU_E_LOAD;
         }
         interp_load_size = g_elf_last_load_size;
         interp_entry_vaddr = g_elf_last_entry;
@@ -2186,13 +2189,14 @@ int user_process_exec(const char *path)
 
     int pid = user_process_create_elf(path, loaded, exec_code_size, code_vaddr, entry_vaddr, elf_buffer,
                                        (uint64_t)file_size, is_linux_abi ? ENV_LINUX_COMPAT : ENV_NATIVE,
-                                       at_entry_vaddr, has_interp ? interp_code_vaddr : 0);
+                                       at_entry_vaddr, has_interp ? interp_code_vaddr : 0,
+                                       argc, argv);
     kfree(loaded);   /* 代码已复制进用户页；旧版每次 exec 泄漏最多 16MB 内核堆 */
     if (pid < 0) {
         vga_puts("[USER64] exec ERROR: Failed to create ELF process\n");
         if (map_base) va_free(VA_OWNER_PENDING, map_base);   /* P1: 释放 PIE 预留 */
         kfree(elf_buffer);   /* V0.33: 补漏（原来这条路径泄漏整个缓冲区） */
-        return -1;
+        return HEPU_E_NOMEM;
     }
     /* OPEN-04: 可执行文件名精确匹配安装器时，授予高危操作白名单（一次性登记 PID）。 */
     if (installer_name_match(path)) {
@@ -2214,7 +2218,7 @@ int user_process_exec(const char *path)
             vga_puts("[USER64] exec ERROR: failed to map interpreter pages\n");
             kfree(interp_loaded);
             kfree(elf_buffer);
-            return -1;
+            return HEPU_E_LOAD;
         }
         kfree(interp_loaded);
         interp_loaded = NULL;
@@ -2248,6 +2252,67 @@ int user_process_exec(const char *path)
     user_process_switch(pid);
 
     return pid;
+}
+
+/* ---- UPROC 统一 ABI 对外入口（32/64 同一套契约，见 kernel/include/uproc.h） ---- */
+
+/* 十进制有符号数打印（64 位 vga_puts 镜像 COM1，即串口取证通道） */
+static void uproc64_put_dec(int v)
+{
+    char buf[12];
+    int n = 0;
+    if (v < 0) { buf[n++] = '-'; v = -v; }
+    char tmp[10];
+    int t = 0;
+    if (v == 0) tmp[t++] = '0';
+    while (v) { tmp[t++] = (char)('0' + v % 10); v /= 10; }
+    while (t) buf[n++] = tmp[--t];
+    buf[n] = 0;
+    vga_puts(buf);
+}
+
+int hepu_exec(const char *path, int argc, const char *const argv[])
+{
+    /* ---- 参数校验 ---- */
+    if (!path || !path[0]) return HEPU_E_ARG;
+    if (argc < 1) return HEPU_E_ARG;
+    if (argc > HEPU_EXEC_MAX_ARGC) return HEPU_E_ARG;
+    if (!argv) return HEPU_E_ARG;
+    for (int i = 0; i < argc; i++) {
+        if (!argv[i]) return HEPU_E_ARG;
+    }
+
+    int rc = uproc_exec_impl(path, argc, argv);
+
+    vga_puts("[UPROC] exec path=");
+    vga_puts(path);
+    vga_puts(" rc=");
+    uproc64_put_dec(rc);
+    vga_puts("\n");
+    return rc;
+}
+
+/* 旧入口薄壳保留：无 argv 入参，argv[0]=path，失败口径由 hepu_exec 统一映射 */
+int user_process_exec(const char *path)
+{
+    const char *argv[1];
+    argv[0] = path;
+    return hepu_exec(path, 1, argv);
+}
+
+int hepu_exec_static(const char *name, void (*entry)(void))
+{
+    if (!name || !name[0] || !entry) return HEPU_E_ARG;
+
+    int pid = user_process_create(name, entry);
+    int rc = (pid > 0) ? pid : HEPU_E_NOMEM;
+
+    vga_puts("[UPROC] exec-static name=");
+    vga_puts(name);
+    vga_puts(" rc=");
+    uproc64_put_dec(rc);
+    vga_puts("\n");
+    return rc;
 }
 
 /* V0.55.1: 这里曾有一个 16KB 的静态 user_stack, 但无任何代码引用它

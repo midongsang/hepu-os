@@ -5,6 +5,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include "uproc.h"
 
 /* V0.54.8: COM1 serial (headless CI boot test) */
 extern int uart64_init(int com);
@@ -872,8 +873,8 @@ void x86_64_kernel_main(void)
 #if defined(HEPU_USER_ISOLATION) && HEPU_USER_ISOLATION
     vga_puts("[USER64] isolation mode: skip built-in legacy hello self-test\n");
 #else
-    /* 只创建进程，不切换（切换在所有初始化完成后） */
-    user_process_create("hello", user_program_hello);
+    /* 只创建进程，不切换（切换在所有初始化完成后）；内置静态程序走 hepu_exec_static 旁路 */
+    hepu_exec_static("hello", user_program_hello);
 #endif
 
     /* ------------------------------------------------------------------
@@ -1329,7 +1330,6 @@ void x86_64_kernel_main(void)
          * 无条件跑 —— 它们会在启动阶段占用较长时间。
          * --------------------------------------------------------------- */
         {
-            extern int user_process_exec(const char *path);
             /* V0.58.3: ps 已修好并放回 autorun。
              * 修了三处：① 缺 _start 导致入口退化成段首 put_int 的地址；
              * ② sys_ps 自己 typedef 的 process_t 与真实结构字段顺序不符，
@@ -1343,9 +1343,10 @@ void x86_64_kernel_main(void)
             };
             vga_puts("[REG] user programs registered, starting autorun set...\n");
             for (unsigned i = 0; i < sizeof(autorun) / sizeof(autorun[0]); i++) {
+                const char *av[1] = { autorun[i] };
                 vga_puts("[REG] exec ");
                 vga_puts(autorun[i]);
-                int pid = user_process_exec(autorun[i]);
+                int pid = hepu_exec(autorun[i], 1, av);
                 if (pid < 0) {
                     vga_puts(" -> not found\n");
                 } else {
@@ -1355,6 +1356,18 @@ void x86_64_kernel_main(void)
                 }
             }
             vga_puts("[REG] autorun done\n");
+
+            /* UPROC ABI 取证探针（不改变上面四条 autorun 清单）：
+             * ① 不存在路径 → HEPU_E_NOENT(-2)；② 带 argv 的现有程序 → 栈回读 argv[1..]。 */
+            {
+                static const char *const noent_argv[] = { "/bin/no_such_uproc.elf" };
+                vga_puts("[REG] uproc noent probe /bin/no_such_uproc.elf\n");
+                hepu_exec("/bin/no_such_uproc.elf", 1, noent_argv);
+
+                static const char *const argv_probe[] = { "/bin/comptest.elf", "uproc1", "uproc2" };
+                vga_puts("[REG] uproc argv probe /bin/comptest.elf uproc1 uproc2\n");
+                hepu_exec("/bin/comptest.elf", 3, argv_probe);
+            }
         }
 
         /* SB-08: BSP 侧浮点自检一次(AP 侧由 kstat 持续跑) */

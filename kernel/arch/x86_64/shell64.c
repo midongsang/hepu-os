@@ -10,6 +10,7 @@ extern void vga_put_hex(uint64_t val);   /* V0.55.1: 提前原型, 消除隐式�
 #include "domain64.h"
 #include "capability64.h"
 #include "shared/ai/hepu_ai.h"
+#include "uproc.h"
 
 #define SHELL_BUF_SIZE 256
 #define SHELL_MAX_ARGS 8
@@ -294,20 +295,21 @@ static void shell_cmd_apic(int argc, char **argv)
     vga_puts("  switch - switch to pure APIC mode\n");
 }
 
-/* exec命令：加载并执行ELFuser程序 */
-extern int user_process_exec(const char *path);
+/* exec命令：加载并执行ELFuser程序（统一走 hepu_exec ABI） */
 static void shell_cmd_exec(int argc, char **argv)
 {
     if (argc < 2) {
-        vga_puts("Usage: exec <elf_file>\n");
+        vga_puts("Usage: exec <elf_file> [args...]\n");
         return;
     }
     vga_puts("[EXEC] Loading ");
     vga_puts(argv[1]);
     vga_puts("\n");
-    int pid = user_process_exec(argv[1]);
+    int pid = hepu_exec(argv[1], argc - 1, (const char *const *)&argv[1]);
     if (pid < 0) {
-        vga_puts("[EXEC] Failed to execute\n");
+        vga_puts("[EXEC] Failed: ");
+        vga_puts(hepu_exec_errstr(pid));
+        vga_puts("\n");
     }
 }
 
@@ -3425,13 +3427,12 @@ void shell_execute(char *line)
         }
     }
 
-    /* 尝试作为外部程序执行 */
-    extern int user_process_exec(const char *path);
+    /* 尝试作为外部程序执行（统一走 hepu_exec ABI） */
     if (args[0][0] == '/') {
-        int ret = user_process_exec(args[0]);
+        int ret = hepu_exec(args[0], argc, (const char *const *)args);
         if (ret < 0) {
             vga_puts("exec failed: ");
-            vga_puts(args[0]);
+            vga_puts(hepu_exec_errstr(ret));
             vga_putchar('\n');
         }
         return;
@@ -3455,8 +3456,12 @@ void shell64_run(void)
     vga_puts("\n");
 
     /* 自动启动user态程序（尝试执行/bin/hello.elf） */
+    static const char *const aut_hello[]  = { "/bin/hello.elf" };
+    static const char *const aut_sec[]   = { "/bin/sec_test.elf" };
+    static const char *const aut_fork[]  = { "/bin/forktest.elf" };
+    static const char *const aut_comp[]  = { "/bin/comptest.elf" };
     vga_puts("[AUTOSTART] Trying /bin/hello.elf...\n");
-    int autostart_ret = user_process_exec("/bin/hello.elf");
+    int autostart_ret = hepu_exec("/bin/hello.elf", 1, aut_hello);
     if (autostart_ret < 0) {
         vga_puts("[AUTOSTART] No user program found, starting shell\n");
     } else {
@@ -3466,21 +3471,21 @@ void shell64_run(void)
 
     /* 安全回归：useraddressaccessed限制（kerneladdress/未映射address应被拒绝） */
     vga_puts("[AUTOSTART] Running /bin/sec_test.elf security regression...\n");
-    if (user_process_exec("/bin/sec_test.elf") < 0) {
+    if (hepu_exec("/bin/sec_test.elf", 1, aut_sec) < 0) {
         vga_puts("[AUTOSTART] sec_test not found (optional)\n");
     }
     vga_puts("\n");
 
     /* fork 端到端测试 */
     vga_puts("[AUTOSTART] Running /bin/forktest.elf...\n");
-    if (user_process_exec("/bin/forktest.elf") < 0) {
+    if (hepu_exec("/bin/forktest.elf", 1, aut_fork) < 0) {
         vga_puts("[AUTOSTART] forktest not found (optional)\n");
     }
     vga_puts("\n");
 
     /* V0.20.54: Compatibility Layer测试 */
     vga_puts("[AUTOSTART] Running /bin/comptest.elf...\n");
-    user_process_exec("/bin/comptest.elf");
+    hepu_exec("/bin/comptest.elf", 1, aut_comp);
     vga_puts("\n");
 
     /* 网络轮询count器 */

@@ -37,6 +37,7 @@ extern int g_pending_app;
 
 /* V0.13.5: 统一输入抽象层 (USB/PS2 归一化) */
 #include "hsinput.h"
+#include "uproc.h"
 
 /* USB HID 鼠标 */
 extern int usb64_init(void);
@@ -198,10 +199,10 @@ void desktop64_run(void)
      * 4KB，是 SEC-19 的原始复现程序。跑到 = 跨栈页正常；崩 = 会打 #PF
      * 现场。探测完照常进桌面主循环。 */
     {
-        extern int user_process_exec(const char *path);
         extern void vga_put_hex(uint64_t);
+        static const char *const sec19_argv[] = { "/bin/ps.elf" };
         vga_puts("[SEC19] probe exec /bin/ps.elf\n");
-        int pr = user_process_exec("/bin/ps.elf");
+        int pr = hepu_exec("/bin/ps.elf", 1, sec19_argv);
         vga_puts("[SEC19] probe done ret=");
         vga_put_hex((uint64_t)pr);
         vga_puts("\n");

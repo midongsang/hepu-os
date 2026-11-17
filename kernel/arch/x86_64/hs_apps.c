@@ -8,6 +8,7 @@
 #include "png64.h"
 #include "jpeg64.h"
 #include "hs_apps.h"
+#include "uproc.h"
 #include "hsservices.h"
 #include "hsinput.h"   /* KEY_EXT_* 扩展键统一码 */
 #include "../../shared/drivers/driver_framework.h"
@@ -405,8 +406,9 @@ static void t_exec(const char *line)
             if (fl > 0 && full[fl - 1] != '/') { full[fl++] = '/'; full[fl] = 0; }
             hs_strcpyn(full + fl, arg, 130);
         }
-        extern int user_process_exec(const char *path);
-        int pid = user_process_exec(full);
+        const char *run_argv[1];
+        run_argv[0] = full;
+        int pid = hepu_exec(full, 1, run_argv);
         if (pid < 0) { t_put("run: failed to execute"); return; }
         char rbuf[48];
         strcpy(rbuf, "ok: PID ");
