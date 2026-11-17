@@ -7522,7 +7522,11 @@ int hpdesk_init(int width, int height)
     g_shell.ui.cc_y = 108;
     g_shell.ui.cc_width = 280;
     g_shell.ui.cc_height = 440;
-    g_shell.ui.bar_height = 40;
+    /* bar_height 的唯一真源是 UI 配置串（默认 36，见 hs_ui 默认配置里的
+     * "bar_height: 36"）与 hsqml_get_number(..., "bar_height", 36)。
+     * 这里原来写 40，是第二个默认值：配置缺这个键时两边各给一个数，
+     * 顶栏高度就取决于哪条路径先跑。统一成 36，只留一处真源。 */
+    g_shell.ui.bar_height = 36;
     g_shell.ui.island_width = 120;
     g_shell.ui.island_height = 28;
     g_shell.ui.island_y = 6;
