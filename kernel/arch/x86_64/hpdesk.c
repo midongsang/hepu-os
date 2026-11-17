@@ -4739,7 +4739,7 @@ static void hs_login_screen_render(void)
         hs_fill_rounded_rect(kb_x, kb_y, hs_sx(88), hs_sy(34), hs_s(8), g_shell.colors.titlebar_bg);
         hs_draw_rounded_rect(kb_x, kb_y, hs_sx(88), hs_sy(34), hs_s(8), g_shell.colors.accent);
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           kb_x + hs_sx(14), kb_y + hs_sy(8), "VKB", g_shell.colors.panel_fg, hs_s(16));
+                           kb_x + hs_sx(14), kb_y + hs_sy(8), l10n64_tr(L10N_STR_VKB_BTN), g_shell.colors.panel_fg, hs_s(16));
         int po_x = kb_x + hs_sx(104);
         hs_fill_rounded_rect(po_x, kb_y, hs_sx(88), hs_sy(34), hs_s(8), 0x6E3A3A);
         hs_draw_rounded_rect(po_x, kb_y, hs_sx(88), hs_sy(34), hs_s(8), g_shell.colors.accent);

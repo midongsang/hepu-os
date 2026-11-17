@@ -58,6 +58,7 @@ static const char *g_str[2][L10N_STR_COUNT] = {
         "ESC to lock",
         "%02d:%02d %04d-%02d-%02d",
         "Wrong password, please try again",
+        "VKB",
     }
 };
 
