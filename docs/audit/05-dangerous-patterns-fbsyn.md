@@ -1,6 +1,11 @@
 # 5. 危险模式、静默成功假实现，以及 fbsyn 事故机制复盘
 
-基线：`5f93c2d`。
+- 审计基线：`5f93c2d`；行号为该基线编号。
+- main 复核状态：基线之后 main 已前进到 `3d0bd23`。本报告在相关条目后标注 main 上的修复状态与提交哈希：
+  - `0202461` 关掉两处常驻验收探针（桌面循环 SB-08、文本 shell autostart 四程序）；
+  - `0de2133` 32 位三处认证假实现改为显式告警/声明未实现；
+  - `3d0bd23` 安全启动三处空桩改为返回 `SB_ERR_NOT_IMPLEMENTED(-2)`。
+  - 未被上述提交触及的条目，状态仍为基线结论。
 
 ## 5.1 判定口径
 
@@ -58,30 +63,44 @@
 - `sys_fb_acquire` `:57`：`if (!phys) return 0;`
 - `:60`：`if (!virt) return 0;`——映射失败返回 0；32 位返回口径里 0 同时被"无 fb/失败"使用，调用方难区分。
 
-## 5.4 认证 / 安全启动假实现（已确认，最高优先级）
+## 5.4 认证 / 安全启动假实现
 
 ### 5.4.1 32 位登录/解锁忽略密码
 
-| 函数 | 行号 | 行为 |
-|------|------|------|
+基线（`5f93c2d`）行为：
+
+| 函数 | 基线行号 | 基线行为 |
+|------|----------|----------|
 | `login_authenticate` | `kernel/arch/x86/login.c:76-91` | `(void)password;`；只要用户名存在即 `return 0`（认证通过）；默认 `auto_login=1`（`:29`）、`require_password=0`（`:32`） |
 | `login_unlock_screen` | `login.c:151-168` | `(void)password;`；任意口令解锁 |
-| `mu_private_unlock` | `kernel/arch/x86/multi_user.c:230-232` | `(void)password;`，私钥保护解锁不校验 |
+| `mu_private_unlock` | `kernel/arch/x86/multi_user.c:230-232` | `(void)password;`，私密空间解锁不校验 |
 
-`login_authenticate` 被登录路径调用：`login.c:291`。即 32 位登录界面接的是这个空桩。
+`login_authenticate` 被登录路径调用：`login.c:291`。
+
+**main 状态（`0de2133`，复核于 `3d0bd23`）：已改为显式告警、声明未实现，真实校验仍未做。**
+- 改动性质是"诚实化"而非"实现"：三处仍保留"未设密码即放行"的既有行为（32 位冒烟口径 `desk=1` 依赖它），但每次调用打一行 `[LOGIN]/[MULTI_USER] WARNING: ... NOT implemented`，不再静默假装成功。
+- main 行号：`login.c:85`（`login_authenticate`，告警 `:88`）、`login.c:164`（`login_unlock_screen`，告警 `:167`）、`multi_user.c:232`（`mu_private_unlock`，告警 `:235`）。
+- 缺口根因（提交说明）：32 位 `mu_user_t` 结构里没有密码/hash 字段，`multi_user` 全模块没有密码存储与持久化；硬接校验只会变成另一种伪装。真要实现，需先给用户结构加 hash 字段 + 持久化，属独立工程。
+- 严重度调整：不再是"静默假成功"（调用方/用户能看到未实现告警），但**认证仍然不存在**，任何口令都能进入；未达到可接受状态。
 
 ### 5.4.2 安全启动验签/验哈希为空桩，且未接启动链路
 
-`kernel/arch/x86/secure_boot.c`：
+基线（`5f93c2d`）行为，`kernel/arch/x86/secure_boot.c`：
 
-| 函数 | 行号 | 行为 |
-|------|------|------|
+| 函数 | 基线行号 | 基线行为 |
+|------|----------|----------|
 | `sb_verify_stage` | `:49-63` | `:56` 硬编码 `SB_VERIFY_OK`，注释"简化: 所有阶段验证通过"；`result` 不可能不等于 OK，`boot_failed` 分支不可达 |
 | `sb_verify_signature` | `:85-92` | `(void)data; (void)size; (void)signature;`；只查 key slot 是否存在/未吊销，**不验证签名**；key 在位即返回 0 |
 | `sb_verify_hash` | `:94-99` | 忽略 data/size/expected_hash/algo，无条件 `return 0`（哈希匹配） |
 | `sb_verify_certificate` | `:101-106` | 只查证书槽位 trusted/revoked |
 
-调用点核查：`sb_verify_stage` / `sb_verify_signature` / `sb_verify_hash` / `sb_verify_certificate` / `sb_start_boot` / `sb_complete_boot` 在 `kernel/` 内除本文件外**无调用方**（grep 无命中）。当前是休眠框架 + 空验证两层叠加：即使将来接线，现有实现也会对任意输入放行。
+调用点核查：`sb_verify_stage` / `sb_verify_signature` / `sb_verify_hash` / `sb_verify_certificate` / `sb_start_boot` / `sb_complete_boot` 在 `kernel/` 内除本文件外**无调用方**（grep 无命中）。基线状态是休眠框架 + 空验证两层叠加：即使将来接线，现有实现也会对任意输入放行。
+
+**main 状态（`3d0bd23`，复核于 `3d0bd23`）：三处空桩改为显式返回未实现，真实验签/验哈希仍未做。**
+- 新增 `#define SB_ERR_NOT_IMPLEMENTED (-2)`（`secure_boot.c:49`），"接口存在但算法未实现，绝不返回 0 冒充通过"。
+- `sb_verify_signature`（main `:93`）、`sb_verify_hash`（main `:105`）：打 `[SECBOOT] WARNING` 后返回 `SB_ERR_NOT_IMPLEMENTED`（`:102`、`:111`），不再返回 0 冒充通过。
+- `sb_verify_stage`（main `:51`）：度量（`sb_measure`）仍真做；非严格模式警告后继续启动（返回 0，不改变现有启动行为），严格模式置 `boot_failed=1` 并返回 `-2`（`:62-68`）。
+- 缺口仍在：模块没有任何签名/哈希算法实现；`sb_verify_certificate` 未在本次改动范围内。框架目前仍无外部调用方，接上链路前必须先补真实验证。
 
 ## 5.5 映射/分配失败处理复核（未发现"随机页当成功"）
 
@@ -125,15 +144,43 @@
 6. **电池汇总只统计异常计数，不看视觉/输出判据**：`:1084-1095` 汇总只累加 `g_user_exception_count` 中的非预期异常；探针把屏幕画花不属于异常，不进入任何计数。
 7. **退出后无显存回读/断言**：release 路径与桌面首帧之间没有"显存应等于启动底色"的校验步骤；任何用户态残留都依赖桌面首帧碰巧整屏覆盖。
 
-### 5.7.2 同类残留仍在当前代码中的位置
+### 5.7.2 探针/测试程序在启动路径上的状态（含 main 复核）
 
-- `desktop64.c:296-314`：桌面主循环每 5 帧跑一次 `sb08_fpu_probe()`，每 200 轮打印 ok/fail；注释 `:295` 自述"验收结束后可以删掉"。
-- `kernel_main_64.c:1339-1342`：autorun 无条件跑 `hello/sec_test/clone_test/ps`；`sec_test` 在电池与 autorun 重复执行。
-- `shell64.c:3464-3488`：文本兜底路径连跑 `hello/sec_test/forktest/comptest`，`comptest` 返回值未判（`:3488`）。
-- 电池内 19 个 ELF 在 `BOOT_SELFTEST=1` 构建下仍会整批自动执行（报告 01 §1.2）。
+**已关闭（`0202461`，复核于 `3d0bd23`）：**
+
+- 桌面主循环常驻浮点探针：基线 `desktop64.c:296-314` 每 5 帧跑一次 `sb08_fpu_probe()`、每 200 轮打印 ok/fail；main 改为 `if (0)` 默认关闭（`desktop64.c:298`），复核 SB-08 时把 0 改 1。
+- 文本 shell 兜底 autostart：基线 `shell64.c:3464-3488` 每次进 shell 连跑 `hello/sec_test/forktest/comptest`；main 改为 `const int autostart_selftest = 0; if (autostart_selftest) { … }`（`shell64.c:3463-3464`），程序本体与命令保留，需要时手动执行。
+
+**仍在启动路径上（基线与 main `3d0bd23` 均未关闭）：**
+
+- `kernel_main_64.c:1339-1342`：autorun 清单无条件跑 `hello/sec_test/clone_test/ps`；`sec_test` 在电池与 autorun 重复执行。
+- `kernel_main_64.c:1365`：`/bin/no_such_uproc.elf` noent 取证探针；`:1369`：`/bin/comptest.elf` argv 取证探针。
+
+**编译期开关、默认关闭（非默认运行）：**
+
+- 自检电池内 19 个 ELF（fbdesc/fbsyn/statprobe/fdstress/mmprobe/rwprobe/sec_test/hello_linux/dynhello/dynhello2/hello_static/crash_jump/glibc_test/hello2-4/hello_c2/pie_probe/linux_pie_demo/forktest）整段包在 `#if defined(HEPU_BOOT_SELFTEST) && HEPU_BOOT_SELFTEST` 内；宏只在 `make BOOT_SELFTEST=1` 时由 `kernel/arch/x86_64/Makefile:230-232` 定义，默认不定义。quiet 实例串口日志实测 `PIEPROBE/FBSYN/FBDESC/STATP` 命中数 = 0。
+- 注意：开关默认值只在 Makefile 里，源码注释又写"默认关"，两处来源分散、容易被误读为默认开；建议在 Makefile 该行补注释说明默认值来源（不影响代码行为）。
+
+**不属于持续负载、不列入待修：**
+
+- `kernel_main_64.c:1374-1378` 的 BSP 浮点自检只在启动期跑一次，是 SMP/FXSAVE 可用证据；AP 侧由 kstat 探针并发对照。`0202461` 明确保留这一处，不构成常驻负载。
 
 ## 5.8 待验证项
 
 1. 上述空桩 syscall 是否有用户态程序实际调用并依赖返回成功：需对照 `user/apps/` 调用点与 syscall 号表，跑一次回归看是否有静默失效的功能。
 2. 64 位 `MAP_PHYS` 建表路径是否可被用户态 syscall 触发（帧缓冲映射是否只对 owner 开放）：需读 `wrap_fb_acquire` 与 mmap `MAP_PHYS` 的权限检查链确认。
 3. fbsyn 关闭后，release→桌面首帧之间的显存残留窗口在当前留屏 magic 流程下是否还会暴露：需 QEMU 录制 boot 全流程复核。
+
+## 5.9 必须马上修（按严重度，含 main `3d0bd23` 复核状态）
+
+| 序 | 问题 | 基线证据 | main 状态 | 剩余动作 |
+|----|------|----------|-----------|----------|
+| 1 | **64 位登录/锁屏未接密码校验**：`auth64_verify_password` 只被提权 `elevate` 调用；进入桌面不校验，持久化角色被直接信任 | `auth64.c:321,357`；`desktop64.c:242-246` | **未修**（`3d0bd23` 复核：verify 仍只有 elevate 一个内部调用方，无外部登录调用） | 把校验接入会话建立/锁屏解锁路径；补 hash 持久化与失败锁定策略 |
+| 2 | **32 位认证无真实校验**：登录/解锁/私密空间三处忽略密码 | `login.c:76-91,151-168`；`multi_user.c:230-232` | **已改为显式告警/声明未实现（`0de2133`）**；返回仍放行，真实校验未实现 | 给 `mu_user_t` 加 hash 字段 + 持久化，再接真校验；在此之前告警必须保留，不得回退成静默 return 0 |
+| 3 | **安全启动无真实验签/验哈希**：空桩曾恒返回通过 | `secure_boot.c:49-99` | **已改为显式失败（`3d0bd23`）**：签名/哈希返回 `-2`，stage 严格模式返回 `-2`；算法仍未实现 | 接入真实签名/哈希算法；`sb_verify_certificate` 同样待核；接线前不得认为有启动完整性保护 |
+| 4 | **生产启动路径仍跑测试程序**：autorun 四程序 + 两个 uproc 取证探针 | `kernel_main_64.c:1339-1342,1365,1369` | **未关闭**（`3d0bd23` 复核仍在无条件 autorun 块内） | 移入 `HEPU_BOOT_SELFTEST` 类编译期/运行时开关，或仅在诊断镜像执行；去掉重复的 `sec_test` |
+| 5 | **一批 syscall 空桩返回成功**：mremap/prlimit64/fcntl/clock_nanosleep/epoll_*/link/vfork/… | `syscall64_full.c:795-1448`；32 位 `sys_fs.c:274-342` | **未修** | 未实现桩应返回 `-ENOSYS`（或对应负错误码），不得 `return 0`；修 `wrap_*` 丢失参数问题 |
+| 6 | **fb release 不清显存**：探针像素残留到桌面首帧 | `syscall64_full.c:2620-2628` | **未修** | release 或桌面首帧前加显存回读/清屏断言 |
+| 7 | **能力句柄只增不减**：`cap_revoke`/`cap_list_domain` 不可达 | `capability.c:111,193`；`capability64.c:117,146` | **未修** | 补设备回收时的能力撤销路径，或明确标注不支持并从接口移除 |
+
+已排除出清单：桌面循环 SB-08 常驻探针、shell autostart 四程序（`0202461` 已默认关闭）；启动期一次性 BSP 浮点自检（保留，属 SMP/FXSAVE 证据，非持续负载）。

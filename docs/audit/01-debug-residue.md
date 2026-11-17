@@ -1,11 +1,13 @@
 # 1. 调试残留清查：自检程序与开机自动 exec 调用点
 
-基线：`5f93c2d`。所有行号均可直接打开复核。
+- 审计基线：`5f93c2d`；行号为该基线编号。
+- main 复核状态：基线之后 main 已到 `3d0bd23`。其中 (D) 桌面循环常驻探针、(F) 文本 shell autostart 已由 `0202461` 默认关闭；其余条目状态见 §1.2、§1.6。
 
 ## 1.1 结论速览
 
-- **已确认**：64 位内核存在三条开机自动执行通道——(A) 内置静态进程；(B) `HEPU_BOOT_SELFTEST` 自检电池（默认关）；(C) 桌面成功后的无条件 autorun；另有 (D) 桌面循环内常驻内核态探针、(E) 可选宏探针、(F) 文本 shell 兜底 autostart。
-- **已确认（纠正任务前提）**：`fbsyn.elf` 在 5f93c2d 上已被 `if (0)` 关闭（`kernel/kernel_main_64.c:918`）；`pie_probe.elf` 位于电池宏内（`kernel/kernel_main_64.c:1061-1065`），**默认发布构建不跑**，仅 `make BOOT_SELFTEST=1` 时编译进电池运行。任务前提中"pie_probe 仍在自动跑"与代码不符；是否有发布镜像打开了该宏，见 1.6 待验证项。
+- **已确认**：64 位内核存在三类开机自动执行通道——(A) 内置静态进程；(B) `HEPU_BOOT_SELFTEST` 自检电池（编译期开关，默认关）；(C) 桌面成功后的无条件 autorun；另有 (D) 桌面循环内核态探针、(E) 可选宏探针、(F) 文本 shell 兜底 autostart。
+- **已确认（纠正任务前提）**：`fbsyn.elf` 在基线已被 `if (0)` 关闭（`kernel/kernel_main_64.c:918`）；`pie_probe.elf` 位于电池宏内（`kernel/kernel_main_64.c:1061-1065`），**默认发布构建不跑**，仅 `make BOOT_SELFTEST=1` 时编译进电池运行。任务前提中"pie_probe 仍在自动跑"与代码不符。quiet 实例串口日志实测 `PIEPROBE/FBSYN/FBDESC/STATP` 命中数 = 0。
+- **开关可读性问题（非运行缺陷）**：电池已有编译期开关且默认关闭，但默认值只写在 Makefile 里，源码注释又写"默认关"，两处来源分散、容易被误读为默认开；建议在 Makefile 该行补注释说明默认值来源。
 - **已确认**：32 位内核开机自动创建 `init`、`procb` 两个静态进程，并在初始化流程中串跑一串内核态 `*_selftest()`；其中 IDE 两个自测由 `HEPU_BOOT_DEBUG` 控制，而该宏在 32 位顶层 Makefile 中**默认开启**（`Makefile:25`）。
 
 ## 1.2 64 位开机自动执行通道
@@ -17,7 +19,7 @@
 | `kernel/kernel_main_64.c:877` | `hepu_exec_static("hello", user_program_hello)` | 内置 hello 静态自测 | `#if defined(HEPU_USER_ISOLATION) && HEPU_USER_ISOLATION` 时跳过（`:873-878`） |
 
 通道 (B)：自检电池，整体在 `#if defined(HEPU_BOOT_SELFTEST) && HEPU_BOOT_SELFTEST` 内（`kernel/kernel_main_64.c:895`，`#else` 提示在 `:1097-1099`）。
-宏定义点：`kernel/arch/x86_64/Makefile:230-232`，仅 `BOOT_SELFTEST=1` 时 `CFLAGS += -DHEPU_BOOT_SELFTEST`，默认关。
+宏定义点：`kernel/arch/x86_64/Makefile:230-232`，仅 `BOOT_SELFTEST=1` 时 `CFLAGS += -DHEPU_BOOT_SELFTEST`，**编译期开关、默认不定义**。注意默认值只存在于 Makefile，源码注释另写"默认关"，两处来源分散；建议在 Makefile 该行补注释写清默认值来源，避免被误读成默认开。
 
 | 行号 | ELF | 程序用途（据源码头注释） |
 |------|-----|--------------------------|
@@ -55,14 +57,14 @@
 | `:1365` | `/bin/no_such_uproc.elf` | noent 取证探针：不存在路径应返回 `HEPU_E_NOENT(-2)`（`:1360-1366`） |
 | `:1369` | `/bin/comptest.elf` | argv 栈回读取证探针（`:1367-1369`） |
 
-通道 (D)：桌面初始化/主循环内的内核态探针（不在电池宏内，默认编译运行）。
+通道 (D)：桌面初始化/主循环内的内核态探针（不在电池宏内）。
 
-| 行号 | 调用 | 性质 |
-|------|------|------|
-| `kernel/kernel_main_64.c:1291` | `lua64_selftest()` | Lua 解释器一次性自检（`lua64.c:67`） |
-| `kernel/kernel_main_64.c:1375` | `sb08_fpu_probe()` | BSP 侧浮点自检一次性 |
+| 基线行号 | 调用 | 性质与 main 状态 |
+|----------|------|------------------|
+| `kernel/kernel_main_64.c:1291` | `lua64_selftest()` | Lua 解释器一次性自检（`lua64.c:67`），启动期一次 |
+| `kernel/kernel_main_64.c:1375` | `sb08_fpu_probe()` | BSP 侧浮点自检，启动期一次；**保留**，是 SMP/FXSAVE 可用证据，不构成持续负载（`0202461` 明确保留） |
 | `kernel/kernel_main_64.c:1381` | `gfx64_display_backend_selftest()` | 显示后端等价性一次性自检 |
-| `kernel/arch/x86_64/desktop64.c:296-314` | 每 5 帧调 `sb08_fpu_probe()`，每 200 轮打印 ok/fail | **常驻桌面循环的验收负载**；注释 `:295` 自述"验收结束后可以删掉" |
+| `kernel/arch/x86_64/desktop64.c:296-314` | 每 5 帧调 `sb08_fpu_probe()`，每 200 轮打印 ok/fail | **常驻桌面循环的验收负载**。main `0202461` 已改为 `if (0)` 默认关闭（`desktop64.c:298`），复核时改 1 |
 
 通道 (E)：可选宏探针（默认不编译；宏在 64 位 Makefile 中均未定义）。
 
@@ -72,14 +74,14 @@
 | `kernel/arch/x86_64/desktop64.c:189-195` | `HEPU_FS_STRESS` | `fs64_stress_run(8)` 大负载写入演练 |
 | `kernel/arch/x86_64/desktop64.c:197-210` | `HEPU_SEC19_PROBE` | exec `/bin/ps.elf` 跨栈页复现 |
 
-通道 (F)：文本 shell 兜底路径 autostart（`shell64_run`，仅桌面初始化失败回退时进入）。
+通道 (F)：文本 shell 兜底路径 autostart（`shell64_run`，仅桌面初始化失败回退时进入）。main `0202461` 已包进 `autostart_selftest` 开关、默认 0（`shell64.c:3463-3464`）；程序本体与命令保留，可手动执行。
 
-| 行号 | ELF |
-|------|-----|
+| 基线行号 | ELF |
+|----------|-----|
 | `kernel/arch/x86_64/shell64.c:3464` | `/bin/hello.elf` |
 | `:3474` | `/bin/sec_test.elf` |
 | `:3481` | `/bin/forktest.elf` |
-| `:3488` | `/bin/comptest.elf`（返回值未判） |
+| `:3488` | `/bin/comptest.elf`（基线返回值未判） |
 
 ## 1.3 32 位开机自动执行通道
 
@@ -157,6 +159,6 @@
 
 ## 1.6 待验证项
 
-1. **发布镜像是否带 `HEPU_BOOT_SELFTEST`**：静态构建脚本默认不传 `BOOT_SELFTEST=1`（`x86_64/Makefile:230`），但镜像打包脚本 `tools/build_uefi_dual.py:281-301` 把 `user/build`、`user/build/legacy` 下全部 `.elf` 扁平化写入 `/bin`。验证方法：检查实际构建命令行是否含 `BOOT_SELFTEST=1`；在 QEMU 串口日志中搜 `[PIEPROBE]`、`[STATP]` 等电池标签。
+1. **发布镜像是否带 `HEPU_BOOT_SELFTEST`**：静态构建脚本默认不传 `BOOT_SELFTEST=1`（`x86_64/Makefile:230`）；quiet 实例串口日志实测 `PIEPROBE/FBSYN/FBDESC/STATP` 命中数 = 0，与"默认关"一致。仍需核对的是：镜像打包脚本 `tools/build_uefi_dual.py:281-301` 把 `user/build`、`user/build/legacy` 下全部 `.elf` 扁平化写入 `/bin`，若某条发布命令打开了 `BOOT_SELFTEST=1`，电池程序即可在镜像里找到。验证方法：检查实际构建命令行是否含 `BOOT_SELFTEST=1`；在 QEMU 串口日志中搜 `[PIEPROBE]`、`[STATP]`、`[FBDESC]`、`[FBSYN]` 等电池标签。
 2. **未列目标的应用目录是否经 initrd/hug 打包**：`tools/mkinitrd.py`、`tools/mkhug.py` 的输入清单需逐目录核对；当前仅静态判断未进 `user/Makefile`。
 3. **`gdbstub.c`/`kdbg_gdb.c`/`kdebug.c` 是否被链接进 32 位内核**：顶层 Makefile 用 `--gc-sections`（`Makefile:27`），无引用的目标文件会被丢弃；需一次 32 位链接产物（`kernel.elf` 符号表）确认是否保留这些调试入口。

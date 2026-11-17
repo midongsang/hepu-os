@@ -24,6 +24,7 @@
 | 会话/登录路径 | 无。开机后只调 `auth64_is_configured()` 判是否首启（`kernel/arch/x86_64/desktop64.c:242-246`）；已配置账号直接进入桌面，不弹密码；`g_role` 由 `auth64_init()` 从配置直接加载（`auth64.c:255-274`） |
 | 判定 | **预留接口（提权路径已接，登录/锁屏路径未接）**。密码只在提权时校验，开机进入桌面不校验 |
 | 影响 | 拿到会话即可使用持久化账号角色；`deelevate`（`:372`）无密码回退保护 |
+| main 复核 | `3d0bd23` 上仍未接登录/锁屏路径：`auth64_verify_password` 唯一调用方仍是 `auth64_elevate`（`auth64.c:357`）；函数签名在 main 上为 `(const char *pass)`（基线为 `(user, password)`）。状态未修，见报告 05 §5.9 第 1 项 |
 
 其余 auth64 可达性：`auth64_create_account`（`:311`）由 OOBE 调用（`oobe64.c:137` 写配置）；`auth64_write_config/read_config`（`:124,173`）OOBE/l10n 使用；`auth64_deelevate`（`:372`）、`auth64_current_user/current_role`（`:380`）有桌面/提权面板调用。
 
