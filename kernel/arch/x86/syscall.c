@@ -48,6 +48,8 @@ extern uint32_t sys_kill(uint32_t, uint32_t, uint32_t, uint32_t);
 extern uint32_t sys_signal(uint32_t, uint32_t, uint32_t, uint32_t);
 extern uint32_t sys_brk(uint32_t, uint32_t, uint32_t, uint32_t);
 extern uint32_t sys_gfx_init(uint32_t, uint32_t, uint32_t, uint32_t);
+extern uint32_t sys_fb_acquire(uint32_t, uint32_t, uint32_t, uint32_t);
+extern uint32_t sys_fb_release(uint32_t, uint32_t, uint32_t, uint32_t);
 extern uint32_t sys_fb_desc(uint32_t, uint32_t, uint32_t, uint32_t);   /* DESKTOP_INTERFACE */
 extern uint32_t sys_gfx_text(uint32_t, uint32_t, uint32_t, uint32_t);
 extern uint32_t sys_gfx_flip(uint32_t, uint32_t, uint32_t, uint32_t);
@@ -214,6 +216,8 @@ static syscall_fn_t syscall_table[SYS_MAX] = {
     [SYS_GETEGID]        = sys_getegid,
     [SYS_BRK]            = sys_brk,
     [SYS_FB_DESC]        = sys_fb_desc,       /* DESKTOP_INTERFACE: 显存描述 */
+    [SYS_FB_ACQUIRE]     = sys_fb_acquire,    /* §5-4 附: 取前台所有权 (冲突 -EBUSY) */
+    [SYS_FB_RELEASE]     = sys_fb_release,    /* §5-4 附: 交还前台所有权 */
     [SYS_GFX_INIT]       = sys_gfx_init,
     [SYS_GFX_TEXT]       = sys_gfx_text,
     [SYS_GFX_FLIP]       = sys_gfx_flip,

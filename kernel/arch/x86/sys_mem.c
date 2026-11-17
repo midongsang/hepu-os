@@ -536,20 +536,48 @@ void sys_mmap_selftest(void)
     /* 内核态 current 通常是空的, 而 sys_mmap 的第一句就要求有 current 和 page_dir
      * (它本来只服务用户进程)。所以这里造一个临时进程结构来"扮演调用者" ——
      * 不这么做测到的只是"内核态没人调 mmap", 什么也证明不了。 */
-    static process_t fake_proc;
+    extern void *kmalloc(unsigned);
+    process_t *fake = (process_t *)kmalloc((unsigned)sizeof(process_t));
+    if (!fake) { extern void serial_puts(uint16_t, const char *); serial_puts(0x3F8, "[MMAPTEST] no mem\n"); return; }
     process_t *save_cur = current;
     page_directory_t *save_dir = current ? current->page_dir : 0;
     uint32_t save_next = current ? current->mmap_next : 0;
 
-    memset(&fake_proc, 0, sizeof(fake_proc));
-    fake_proc.page_dir = tmp;
+    memset(fake, 0, (unsigned)sizeof(process_t));
+    fake->page_dir = tmp;
+    fake->pid = 7;   /* 扮演一个用户进程, 而不是内核上下文 */
 
     paging_switch_dir(tmp);
-    current = &fake_proc;
+    current = fake;
 
     uint32_t v = sys_mmap(0x100000u, PAGE_SIZE, 0, MAP_PHYS);
     uint32_t probe = 0;
     if (v) probe = *(volatile uint32_t *)(uintptr_t)v;
+
+    /* §5-4 附: 所有权语义实测 —— 同一时刻只许一个 owner, 冲突 -EBUSY 且不排队。
+     * 必须留在临时目录还活着的时候跑: sys_fb_acquire 内部会经 sys_mmap 建映射,
+     * 用的就是 fake_proc.page_dir。放到 paging_free_dir 之后就是 use-after-free。 */
+    {
+        extern uint32_t sys_fb_acquire(uint32_t, uint32_t, uint32_t, uint32_t);
+        extern uint32_t sys_fb_release(uint32_t, uint32_t, uint32_t, uint32_t);
+        extern int desk_fb_owner_pid(void);
+        extern void serial_puts(uint16_t, const char *);
+
+        current = fake;      /* release 里要读 current->pid, 先放回去 */
+        uint32_t a1 = sys_fb_acquire(PAGE_SIZE, 0, 0, 0);
+        uint32_t a2 = sys_fb_acquire(0, 0, 0, 0);
+        int busy_ok = (a1 != 0) && (a2 == (uint32_t)-16) && (desk_fb_owner_pid() == 7);
+        sys_fb_release(0, 0, 0, 0);
+        int rel_ok = (desk_fb_owner_pid() == -1);
+        uint32_t a3 = sys_fb_acquire(PAGE_SIZE, 0, 0, 0);
+        int re_ok = (a3 != 0);
+        sys_fb_release(0, 0, 0, 0);
+        (void)a3;
+
+        serial_puts(0x3F8, busy_ok ? "[FBOWN] 2nd acquire=-EBUSY ok" : "[FBOWN] busy check FAILED");
+        serial_puts(0x3F8, rel_ok  ? ", release clears owner ok" : ", release FAILED");
+        serial_puts(0x3F8, re_ok   ? ", re-acquire after release ok\n" : ", re-acquire FAILED\n");
+    }
 
     current = save_cur;
     if (save_cur) { save_cur->page_dir = save_dir; save_cur->mmap_next = save_next; }

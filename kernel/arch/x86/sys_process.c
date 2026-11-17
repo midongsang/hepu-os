@@ -46,6 +46,17 @@ u32 sys_exit(u32 code, u32 arg2,
                          u32 arg3, u32 arg4)
 {
     (void)arg2; (void)arg3; (void)arg4;
+
+    /* §5-4 附 第 3 条: owner 退出必须自动回收, 不依赖用户态主动 release。
+     * 桌面进程崩了如果不回收, 前台就永远停在"被一个已死的进程持有"的状态,
+     * 内核 present 一直被暂停 —— 屏幕永久冻结, 而那恰恰是最需要看错误信息的时候。
+     * 放在函数最前面: 后面那条路径会切页目录、冻结进程, 越晚取 pid 越容易取错。 */
+    {
+        extern uint32_t sched_current_pid(void);
+        extern void desk_fb_owner_release(int);
+        desk_fb_owner_release((int)sched_current_pid());
+    }
+
     vga_printf("[SYSCALL] proc exit(code=%d)\n", code);
     if (!shell_launched) {
         shell_launched = 1;

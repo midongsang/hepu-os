@@ -27,6 +27,22 @@ desk_surface_t *desk_active_surface(void)
     return g_running ? &g_surf : 0;
 }
 
+/* --------------------------------------------------------------------------
+ * 前台所有权 (KERNEL_SCOPE §5-4 附)
+ *
+ * 状态放这里而不是放 sys_fb.c, 原因很实际: sys_fb.c 只有 32 位有, 而 hpdesk.c
+ * 是 32/64 共用 —— 把状态放 32 位专属文件里, 64 位编译 hpdesk 时就链接不到。
+ *
+ * 语义(四条见文档): 同一时刻只有一个 owner; 申请即接管; 不排队(冲突返回 -1);
+ * owner 退出由内核强制回收, 不依赖用户态主动 release。
+ * -1 表示前台在内核手里, 这是常态: 此时下面那行判断不会进, 绘制路径与以前逐字节一致。
+ * ------------------------------------------------------------------------ */
+static int g_fb_owner_pid = -1;
+
+int  desk_fb_owner_pid(void)        { return g_fb_owner_pid; }
+int  desk_fb_owner_acquire(int pid){ if (pid < 0) return -1; if (g_fb_owner_pid >= 0) return -1; g_fb_owner_pid = pid; return 0; }
+void desk_fb_owner_release(int pid){ if (g_fb_owner_pid >= 0 && (pid < 0 || pid == g_fb_owner_pid)) g_fb_owner_pid = -1; }
+
 /* 启动当前选中的桌面。返回:
  *   0  成功
  *  -1  表面不可用(没有帧缓冲 / 分辨率未知)

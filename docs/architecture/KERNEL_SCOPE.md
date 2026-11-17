@@ -242,9 +242,49 @@
 **顺序剩下的三格**：fb map（桌面把 `sys_fb_desc` 的 phys 用 `MAP_PHYS` 映射进自己）
 → 所有权（上面四条）→ 合成搬用户态。现在第一格的地基通了。
 
-**为什么仍不做所有权本身**：地基通了不等于可以开闸。上面四条里第 2 条（暂停内核
-present）和第 3 条（owner 退出自动回收）都还没写代码 —— 此刻如果直接让桌面 map
-并开始写，内核那边的 `hs_present` 还在跑，就正好是两个写者。顺序不能省。
+**fb map + 所有权已实现（2026-11-17 同批）**
+
+顺序走到第二、三格。接口：
+
+| syscall | 号 | 行为 |
+|---|---|---|
+| `SYS_FB_ACQUIRE` | 230 | 经 `sys_mmap(MAP_PHYS)` 把显存映射进调用者地址空间，返回可写虚拟地址；同时把前台提交权交给该进程。冲突返回 `-EBUSY(0xFFFFFFF0)`，**不排队** |
+| `SYS_FB_RELEASE` | 231 | 交还所有权，内核恢复提交 |
+
+- **暂停位置**：`hpdesk.c` 的 `hs_present` / `hs_present_region` 入口各加一句
+  `if (desk_fb_owner_pid() >= 0) return;`。检查放函数入口而不是散布到调用点 ——
+  present 的调用点很多，散着改迟早漏一处。
+- **状态放哪**：`shared/desktop/desk_runtime.c` 而不是 `sys_fb.c`。原因很实际：
+  `sys_fb.c` 只有 32 位有，而 `hpdesk.c` 是 32/64 共用，状态放 32 位专属文件里
+  64 位编译 hpdesk 时就链接不到。
+- **退出回收**：`sys_exit` 最前面调 `desk_fb_owner_release(sched_current_pid())`。
+  放最前面是因为后面那条路径会切页目录、冻结进程，越晚取 pid 越容易取错。
+  不依赖用户态主动 release 的理由见第 3 条语义。
+
+**实测（开机自检 `sys_mmap_selftest`，串口实录）**
+
+```
+[MMAP] phys=0x00100000 virt=0x60000000 len=0x00001000
+[MMAP] phys=0xfd000000 virt=0x60001000 len=0x00001000     <- 显存 0xfd000000 映射成功
+[FB] owner acquired by pid, kernel present paused
+[FB] owner released, kernel present resumed
+[MMAPTEST] phys->virt ok, read=0x1badb002                  <- Multiboot 魔数
+[FBOWN] 2nd acquire=-EBUSY ok, release clears owner ok, re-acquire after release ok
+```
+
+四条验收判据中 3 条已实测：第二个 `acquire` 返回 `-EBUSY` ✓、release 清 owner ✓、
+release 后可重新 acquire ✓；暂停/恢复各一次串口计数 ✓（那两行 `[FB]`）。
+**仍未测的两条**：owner 被强杀后屏幕能否继续刷（需要真实 kill 一个持有 owner 的
+进程，当前没有用户态桌面调用者，所以造不出这个场景）；单/双缓冲各跑一次（32 位
+只有单缓冲 `flags=0`，双缓冲要等 64 位接这条接口）。
+
+**一个必须记住的教训：32 位 BSS 已经贴到边界**
+
+自检第一版用 `static process_t fake_proc` 存临时进程结构，只多占约 1 KB BSS，
+32 位就**稳定启动失败**（`lines=193`、`initrd/net/desk` 全 0，崩在
+`klog_capture_boot` 之前），改 `kmalloc` 分配后立刻恢复（`lines=817` PASS）。
+这条与 N-1（2560×1600）卡在内存预算的判断互相印证：**BSS 97 MB 不是"还有余量"，
+是"再加几百字节就可能炸"**。以后往 32 位加静态缓冲之前必须先算这条账。
 
 **将来实现时的验收判据（先写下来，避免又变成"改完看着还是假"）**
 

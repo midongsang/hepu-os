@@ -135,6 +135,11 @@
 #define SYS_HEPU_PS         227   /* 进程快照查询 */
 #define SYS_HEPU_THREAD_EXIT 235  /* V0.57.8: 结束当前用户线程（不终止整进程） */
 #define SYS_FB_DESC         229   /* framebuffer 契约: 查询可映射描述 (KERNEL_SCOPE §5-4) */
+/* KERNEL_SCOPE §5-4 附: 前台所有权。acquire 把前台提交权交给调用进程并暂停
+ * 内核 present, 返回可写的虚拟地址; 冲突返回 -EBUSY (0xFFFFFFF0), 不排队。
+ * release 交还。owner 进程退出时内核强制回收, 不依赖用户态主动调。 */
+#define SYS_FB_ACQUIRE      230
+#define SYS_FB_RELEASE      231
 #define SYS_EXIT_GROUP      228   /* 进程组退出 */
 /* ---- 原有 syscall 保持不变（用 #ifdef 保护，若已定义则跳过） ---- */
 #define SYS_GFX_INIT       200   /* 初始化VGA图形模式 (V4.02: gfxtest支持) */

@@ -128,10 +128,14 @@ static void hs_set_target_front(void)
 { desk_surface_t *s = hs_surf(); if (s) s->set_target_front(s); }
 static void hs_set_target_back(void)
 { desk_surface_t *s = hs_surf(); if (s) s->set_target_back(s); }
+/* §5-4 附: 前台已交给用户进程时, 内核不再提交任何像素 —— 否则就是两个写者。
+ * owner 为 -1 表示前台在内核手里(常态), 这一行判断为假, 绘制路径与以前逐字节一致。
+ * 检查放函数入口而不是散布到调用点: present 的调用点很多, 散着改迟早漏一处。 */
+extern int desk_fb_owner_pid(void);
 static void hs_present(void)
-{ desk_surface_t *s = hs_surf(); if (s) s->present(s); }
+{ if (desk_fb_owner_pid() >= 0) return; desk_surface_t *s = hs_surf(); if (s) s->present(s); }
 static void hs_present_region(int x, int y, int w, int h)
-{ desk_surface_t *s = hs_surf(); if (s) s->present_region(s, x, y, w, h); }
+{ if (desk_fb_owner_pid() >= 0) return; desk_surface_t *s = hs_surf(); if (s) s->present_region(s, x, y, w, h); }
 static void hs_clip_set(int x, int y, int w, int h)
 { desk_surface_t *s = hs_surf(); if (s) s->clip_set(s, x, y, w, h); }
 static void hs_clip_disable(void)
