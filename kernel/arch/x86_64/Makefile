@@ -236,6 +236,12 @@ ifeq ($(BOOT_SELFTEST),1)
 CFLAGS += -DHEPU_BOOT_SELFTEST
 endif
 
+# ATA 高 LBA 写读回环自检（desktop64.c 内 #ifdef HEPU_ATA_HILBA_TEST）。
+# 发布构建默认关闭；挂独立 slave 测试盘复验时： make ATA_HILBA_TEST=1
+ifeq ($(ATA_HILBA_TEST),1)
+CFLAGS += -DHEPU_ATA_HILBA_TEST
+endif
+
 # Linux 兼容进程的 syscall 跟踪（调试用，默认关）。
 # 打开： make HEPU_TRACE_LINUX_SYSCALL=1
 ifeq ($(HEPU_TRACE_LINUX_SYSCALL),1)
