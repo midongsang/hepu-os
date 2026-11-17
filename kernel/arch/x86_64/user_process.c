@@ -112,6 +112,11 @@ static int g_clone_thr_n[MAX_USER_PROCS];
 static int g_last_isolated;                        /* 最近一次创建页表实际使用的模式 */
 static void user_free_aspace(int idx);
 int current_user_proc = -1;
+
+/* OPEN-04: 安装器白名单（定义见 user_process_get_current_pid 之后） */
+static int installer_name_match(const char *path);
+void user_process_grant_installer(int pid);
+int user_process_is_installer(void);
 static int user_proc_initialized = 0;
 
 /* SB-10: 用户进程表锁（表级粗锁，irqsave 版）。
@@ -2188,6 +2193,17 @@ int user_process_exec(const char *path)
         kfree(elf_buffer);   /* V0.33: 补漏（原来这条路径泄漏整个缓冲区） */
         return -1;
     }
+    /* OPEN-04: 可执行文件名精确匹配安装器时，授予高危操作白名单（一次性登记 PID）。 */
+    if (installer_name_match(path)) {
+        char ipid[8]; int ii = pid, ij = 7;
+        ipid[7] = 0;
+        user_process_grant_installer(pid);
+        do { ipid[--ij] = ii % 10 + '0'; } while ((ii /= 10) > 0);
+        vga_puts("[USER64] installer whitelist granted PID=");
+        vga_puts(&ipid[ij]);
+        vga_puts("\n");
+    }
+
     /* P1: 进程槽位已建立，把 exec 期间预留的 PIE 区间移交给该进程 */
     if (map_base) user_va_adopt_pending(pid);
 
@@ -2420,6 +2436,50 @@ int user_process_get_current_pid(void)
         return user_procs[current_user_proc].pid;
     }
     return -1;
+}
+
+/* OPEN-04 / SEC-04: 安装器最小授权白名单。
+ * 裸盘读写 / mkfs / reboot 高危闸口原本只放行 PID==0（内核上下文）。安装器是
+ * 用户态唯一需要这些操作的程序: exec 时按可执行文件名精确匹配，把其 PID 记入
+ * 本白名单；闸口复核时同时校验 PID 与进程名，避免槽位复用后误授权。不拆闸、不做
+ * 全局 capability 放宽。 */
+#define INSTALLER_ELF_NAME "install64.elf"
+static int g_installer_pid = -1;
+
+static int installer_name_match(const char *path)
+{
+    if (!path) return 0;
+    const char *base = path;
+    for (const char *p = path; *p; p++) {
+        if (*p == '/') base = p + 1;
+    }
+    const char *n = INSTALLER_ELF_NAME;
+    while (*n) {
+        if (*base != *n) return 0;
+        base++; n++;
+    }
+    return *base == 0;
+}
+
+void user_process_grant_installer(int pid) { g_installer_pid = pid; }
+
+int user_process_is_installer(void)
+{
+    int idx = current_user_proc;
+    if (idx < 0 || !user_procs[idx].active) return 0;
+    if (user_procs[idx].pid != g_installer_pid) return 0;
+    return installer_name_match(user_procs[idx].name);
+}
+
+/* OPEN-04: 协作式长任务心跳。看门狗按「距上次调度切换的连续时长」判未响应;
+ * 安装器做整盘扇区拷贝是合法的长任务, 每批主动让出 CPU 时调本接口刷新计时,
+ * 避免被误判成死循环。纯死循环(不发任何让出/系统调用)仍会被看门狗兜住。 */
+void user_process_heartbeat(void)
+{
+    extern uint64_t g_kernel_tick64;
+    if (current_user_proc < 0 || current_user_proc >= MAX_USER_PROCS) return;
+    user_process_t *proc = &user_procs[current_user_proc];
+    if (proc->active) proc->start_tick = g_kernel_tick64;
 }
 
 /* 用户进程数（active槽位数，供任务管理器） */
