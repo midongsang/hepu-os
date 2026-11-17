@@ -59,6 +59,7 @@ source_of_truth: frontmatter of docs/*
 - [Hepu 完整开发路线图](planning/FULL_ROADMAP.md)
 - [内核优化与兼容预埋路线（KERNEL_OPT_PLAN）](planning/KERNEL_OPT_PLAN.md)
 - [模块化设计准则（MODULARITY）](planning/MODULARITY.md)
+- [MULTIARCH_PORT_EVALUATION](planning/MULTIARCH_PORT_EVALUATION.md)
 - [组合B：SMP 硬化包实施计划（PLAN_SMP_HARDENING_R5）](planning/PLAN_SMP_HARDENING_R5.md)
 - [赫普OS 开发路线图（唯一优先级来源）](planning/ROADMAP.md)
 - [RUST](planning/RUST.md)
