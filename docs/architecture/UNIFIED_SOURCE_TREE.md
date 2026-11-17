@@ -285,3 +285,90 @@ grep 不到 —— 这类"查不到就当没有"的误判会让人重做已经�
 补上去就是一个没有调用方的接口 —— 正是这份文档第 185 行警告的"假接口"。
 要补的正确时机是 §5-4 把合成搬进用户态那一步，届时 64 位的 `sys_mmap` 还得先支持
 `MAP_PHYS`（现在只做匿名页分配，`fs_mm_sys.c` 里没有物理映射路径）。
+
+## 三个"编了但调用方为 0"的 shared 模块：逐条结论（2026-11-17 实测）
+
+> 本节接在上一节"为什么剩下的接不上"之后，对三个模块逐条给结论与依据，不改动上面
+> 已有的判断。核实方法：`find kernel/shared` 列文件 + 两侧构建规则核对是否真编入 +
+> 全仓 grep 导出符号与头文件 include，区分"真实代码引用"与注释 / 头文件守卫名命中。
+> 结论三选一：接上 / 标注废弃 / 保留给将来。
+
+### 结论一览
+
+| 模块 | 结论 | 真实调用方 | 编入 | 替代者 / 等待条件 |
+|---|---|---|---|---|
+| `shared/gfx/gfx_algo.c` | 保留给将来（不接、暂不废弃） | 0 | 32/64 都编 | 现行 `desk_surface_t` + `gfx64_*`；等统一图形算法层或新后端 |
+| `shared/lib/lib_shared.c` | 保留给将来用户态服务；内核热路径不接 | 64 位 3 个薄包装 / 5 处调用点；32 位 0 | 32/64 都编 | 32 位 `kernel/lib/string.c`；64 位 `lib64.c` 同名函数 |
+| `shared/debug/debug_shared.c` | 标注废弃（现状未启用） | 0 | 32/64 都编（未引用弱符号被 gc-sections 丢弃） | `assert.h` 的 `ASSERT` → `assert.c` 的 `assert_fail`；vga/serial 输出 |
+
+### 1. `shared/gfx/gfx_algo.c` —— 保留给将来
+
+**依据（实测）**
+
+- 导出 17 个 `gfx_algo_*` 函数（颜色插值、alpha 混合、矩形、直线、圆角、三向渐变、
+  alpha 位图、8x16 字体、矩形判定、裁剪、clamp），首参统一是
+  `gfx_algo_backend_t *ops` 操作表。
+- 调用方搜索：文件外 `gfx_algo_*` 真实代码引用 **0**；`gfx_algo_backend_t` 类型在
+  文件外 **0 处定义 / 使用**。`gfx64_compat.c` 两处命中均为注释，记录 P1-4 曾因参数
+  错位卡死、逐像素圆角过慢而放弃复用。
+- 头文件：无配对 `.h`；自身 include `gfx_shared.h`。`gfx_shared.h` 被 64 位
+  `gfx64.c` include，但只取 `gfx_framebuffer_t` 等结构体与颜色定义，不调 algo。
+- 编入：64 位 `arch/x86_64/Makefile` 显式列出；32 位根 Makefile 的
+  `find kernel -name "*.c"` 全量收编。
+- 与现行实现的对应：现行桌面走 `desk_surface_t`（12 核心 + 17 可选原语，
+  `desk_api.h`），表面层接 `gfx64_*`；32 位由 `gfx64_compat*.c` 凑同名实现，圆角
+  按行扫描 + `rep stosl`，不走逐像素 algo。
+
+**结论与代价**：**保留给将来**，现在不接、也不删。
+
+- 接上的路径只有两条：要么让 `desk_surface_t` 包一张 `gfx_algo_backend_t` 操作表把
+  两代抽象对上；要么新后端直接基于 ops 表写。
+- 代价：全部绘制调用点要重画 / 重接；algo 的圆角 / 渐变是逐像素路径，32 位 compat
+  已实测过性能问题（一个 260x40 胶囊上万次单像素调用）。
+- 等待条件：决定统一跨架构图形算法层，或引入不依赖 `gfx64_*` 的新后端时再评估。
+
+### 2. `shared/lib/lib_shared.c` —— 保留给将来用户态服务，内核热路径不接
+
+**依据（实测）**
+
+- 头文件声明 15 个 `shared_*` 函数（8 字符串 + 5 内存 + atoi/itoa），`.c` 全部实现，
+  均为逐字节 / 逐字符循环，无 `rep movs` / `rep stos`。
+- 调用方搜索：仅 64 位 `kernel/arch/x86_64/lib64.c` 三处薄包装、共 5 处调用点：
+  - `memcmp()` → `shared_memcmp`（lib64.c 内 `memcmp` 包装，1 处）
+  - `vga_printf()` → `shared_itoa`（`%d` / `%u` / `%x` 共 3 处）
+  - `strncpy()` → `shared_strncpy`（lib64.c 内 `strncpy` 包装，1 处）
+  - 其余 12 个函数：**0 调用方**；32 位全仓 **0 调用方**。
+- 没有任何文件 `#include "lib_shared.h"`；lib64.c 用本地 `extern` 声明。
+- 编入：64 位 Makefile 显式列出；32 位 find 全量收编。
+- 与现行实现的对应：32 位自有全套在 `kernel/lib/string.c`（memcpy/memset/memmove/
+  memcmp/strlen/strcpy/strncpy/strcmp/strncmp/strcat/strchr/strrchr/memchr/atoi…）；
+  64 位自有 memset/memcpy/strlen/strcpy/strcmp/strncmp/strchr/strrchr 在 `lib64.c`。
+  注意：两侧自有 memcpy/memset **同样是逐字节循环**，shared 版并不带来速度优势，
+  它只是一份架构无关的平行命名空间。
+- 对上一节"调用方为 0"口径的修正：严格说不是全模块 0 调用方，而是 15 个函数里
+  12 个 0 调用方；64 位现存 3 个薄包装属非热路径，统计时不要重复算作"已接通"。
+
+**结论与代价**：**保留给将来用户态服务**（用户态 libhepu / 新服务可复用一份架构
+无关实现）；**内核侧不接**——不要用 `shared_memcpy` / `shared_memset` 替换内核同名
+热路径。现存 3 个 64 位包装属格式化输出与薄包装，可保留观察；若要清理，直接回落
+`lib64.c` / `string.c` 同名实现即可，无迁移成本。
+
+### 3. `shared/debug/debug_shared.c` —— 标注废弃（现状未启用）
+
+**依据（实测）**
+
+- 内容：弱符号 `hepu_debug_assert_fail`；弱空桩 `hepu_debug_puts` /
+  `hepu_debug_put_hex` / `hepu_debug_put_dec`；头文件宏 `HEPU_ASSERT` /
+  `HEPU_DEBUG_INFO/ERROR/WARN` / `HEPU_FUNC_ENTER/EXIT` 与 inline `hepu_strerror`。
+- 调用方搜索：文件外真实引用 **0**；全仓无人 `#include "debug_shared.h"`；弱桩输出
+  函数也没有架构侧覆盖实现（arch/sched 下 grep 为 0）。`kernel/include/assert.h`
+  命中的 `HEPU_ASSERT_H` 只是头文件守卫宏名，与本模块无关。
+- 编入：64 位 Makefile 显式列出；32 位 find 全量收编；未被引用的弱符号经链接器
+  `--gc-sections` 实际不进镜像。
+- 现行替代者：断言走 `kernel/include/assert.h` 的 `ASSERT(cond)` →
+  `assert_fail`（定义在 `kernel/sched/assert.c`）；诊断输出走两边各自的
+  `vga_puts` / `serial_puts`。
+
+**结论与等待条件**：**标注废弃（现状未启用）**，新代码不要 include
+`debug_shared.h`。将来若要做跨架构统一诊断面（含用户态服务共用同一套调试宏），
+再把这套宏与输出桩复活；在此之前它是设计残留，不是"已完成的统一调试接口"。

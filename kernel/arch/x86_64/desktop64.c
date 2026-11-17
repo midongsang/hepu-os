@@ -114,21 +114,41 @@ void desktop64_run(void)
 {
     /* 进主循环前把 owner 身份钉住: 此后只有这个上下文能直接改桌面状态 */
     hpdesk_claim_owner();
-    /* D-3 修复: 窗口管理器的槽位必须先置成"空闲(id=-1)"再跑下面的自检。
+    /* D-3 修复(初始化顺序) + 实测证据: 窗口管理器槽位必须先置成"空闲(id=-1)"
+     * 再跑下面的自检。
      *
-     * 原来自检直接在 claim_owner 之后调 hs_window_create, 而槽位初始化是在
-     * desktop64_init -> hpdesk_init 里做的。BSS 里 windows[i].id 默认是 0,
-     * 而"空闲"的判据是 id < 0, 于是槽扫描一个空位都找不到, create 直接
-     * return NULL —— 自检里 create_probe=0x0 就是这么来的。窗口系统本身没坏,
-     * 是初始化顺序错了: 在窗口表还是全 0 的状态下就试着建窗口。
-     * 这里提前做一次(幂等, hpdesk_init 里还会再做一次), 让自检面对的是
-     * 一个真实可用的窗口表, 而不是一个还没初始化的全局。 */
+     * 根因(已由实测确认, 不再是猜测): 原来自检直接在 claim_owner 之后调
+     * hs_window_create, 而槽位初始化是在 desktop64_init -> hpdesk_init 里做的。
+     * BSS 里 windows[i].id 默认是 0, 而"空闲"的判据是 id < 0, 于是槽扫描一个
+     * 空位都找不到, create 直接 return NULL —— 自检里 create_probe=0x0 就是
+     * 这么来的。窗口系统本身没坏, 是初始化顺序错了: 在窗口表还是全 0 的状态
+     * 下就试着建窗口。这里提前做一次(幂等, hpdesk_init 里还会再做一次), 让
+     * 自检面对的是一个真实可用的窗口表, 而不是一个还没初始化的全局。
+     *
+     * 2026-11-17 64 位 UEFI/OVMF 实测(tag d3probe-2026-11-17, 串口
+     * devrun/logs/d3probe-2026-11-17/ser64.log):
+     *   [DESKOWN] owner slot=0x0 (dirty+zorder+focus armed)
+     *   [WM] create owner-probe 200x120
+     *   [DESKOWN] selftest PASS pass=00000003 reject=00000000 create_probe=00000001
+     * 台账 D-3 旧描述(创建返回 0 被静默吞掉)已被此修复推翻。 */
     { extern void hs_window_manager_init(void); hs_window_manager_init(); }
-    /* §5-2 第 2 步: z-order / 焦点准入守卫自检(创建/聚焦/销毁一个屏外探针窗口),
-     * 在 owner 已认领、主循环未开始的这一刻跑 —— 和 display_backend 等价自检同一位置。 */
+    /* §5-2 第 2 步: z-order / 焦点准入守卫自检(创建/聚焦/销毁一个探针窗口),
+     * 在 owner 已认领、主循环未开始的这一刻跑 —— 和 display_backend 等价自检同一位置。
+     * 返回值必须被调用方感知: 失败时自检内部已打 FAIL 行 + fail_code, 这里再补
+     * 一条调用方侧的显式失败行, 不允许自检返回 -1 被忽略。 */
     {
         extern int hpdesk_owner_guard_selftest(void);
-        hpdesk_owner_guard_selftest();
+        int st_rc = hpdesk_owner_guard_selftest();
+        if (st_rc != 0) {
+            vga_puts("[DESKOWN] owner-guard selftest FAILED rc=");
+            { extern void vga_put_hex(uint64_t); vga_put_hex((uint64_t)(unsigned)st_rc); }
+            vga_puts("\n");
+            { extern void serial_puts(uint16_t, const char *);
+              extern void serial_puthex(uint16_t, uint32_t);
+              serial_puts(0x3F8, "[DESKOWN] owner-guard selftest FAILED rc=");
+              serial_puthex(0x3F8, (uint32_t)(unsigned)st_rc);
+              serial_puts(0x3F8, "\n"); }
+        }
     }
     if (!desktop_initialized) {
         if (desktop64_init() != 0) {

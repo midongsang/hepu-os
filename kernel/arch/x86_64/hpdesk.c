@@ -2003,31 +2003,54 @@ uint32_t hpdesk_owner_guard_stats(uint32_t *rejects)
 
 /* §5-2 第 2 步自检: 在 owner 上下文里真的走一遍 create -> focus -> destroy,
  * 而不是只计数 —— 启动时桌面上本来没有窗口, 光看 pass 恒为 0 证明不了接线。
- * 窗口放在屏外、1x1、立刻销毁, 不进可见状态也不留槽位。
- * 判据: pass >= 2 且 reject == 0。 */
+ * 探针请求屏外 1x1、立刻销毁; 注意 WM 几何钳制会把它放大到最小 200x120 并
+ * 拉回屏内(见 hs_window_create_inner), 但它在首帧渲染前就销毁, 不留可见窗口。
+ *
+ * 判据(显式期望, 不允许静默吞掉):
+ *   ok == 1       owner 上下文直探放行
+ *   pass >= 2     守卫至少放行 selftest 与 create 两次
+ *   reject == 0   无非 owner 调用被误放/误拒
+ *   created == 1  探针窗口真的建起来了(旧台账 D-3: 这一步返回 0 却被放过)
+ * 任一不满足都打 FAIL 行, fail_code 位掩码给出可观测原因:
+ *   0x1 守卫直探被拒 / 0x2 pass 不足 2 / 0x4 存在 reject / 0x8 探针未建成。
+ *
+ * D-3 实测(2026-11-17, 64 位 UEFI/OVMF, devrun tag d3probe-2026-11-17,
+ * 原始串口 devrun/logs/d3probe-2026-11-17/ser64.log):
+ *   [DESKOWN] owner slot=0x0 (dirty+zorder+focus armed)
+ *   [WM] create owner-probe 200x120
+ *   [DESKOWN] selftest PASS pass=00000003 reject=00000000 create_probe=00000001
+ * 台账旧描述("create 返回 0, 判据 pass>=1 && reject==0 静默吞掉")已被上一轮
+ * 初始化顺序修复推翻: 根因是 BSS 槽位 id=0 而空闲判据 id<0, 自检前窗口表还没
+ * 初始化; 现 desktop64_run 在自检前显式调 hs_window_manager_init()。 */
 int hpdesk_owner_guard_selftest(void)
 {
     extern void vga_put_hex(uint64_t v);
     /* 1) owner 上下文里直探一次: 必须放行(pass +1)。
-     * 2) 真的走一次 create + destroy(窗口放屏外 1x1), **参与判定**。
-     *    D-3: 原来这一步失败(create_probe=0)却被判据放过 —— 自检里有个动作
-     *    该成功却失败, 绿灯就成了假绿灯。根因已修(窗口槽位在自检前初始化),
-     *    所以现在能把 created==1 写成硬判据: 以后退化了会立刻报 BAD,
-     *    而不是安静地打印一个 0x0 继续 PASS。 */
+     * 2) 真的走一次 create + destroy(探针窗口), **参与判定**。 */
     int ok = hpdesk_owner_guard("selftest");
     hs_window_t *w = hs_window_create(HS_WINDOW_FLOATING, "owner-probe", -64, -64, 1, 1);
     int created = 0;
     if (w) { created = 1; hs_window_destroy(w); }
     uint32_t rej = 0;
     uint32_t pass = hpdesk_owner_guard_stats(&rej);
+
+    unsigned fail = 0;
+    if (!ok)      fail |= 0x1;
+    if (pass < 2) fail |= 0x2;
+    if (rej != 0) fail |= 0x4;
+    if (!created) fail |= 0x8;
+    const char *verdict = (fail == 0) ? "PASS" : "FAIL";
+
     vga_puts("[DESKOWN] zorder/focus selftest ");
-    vga_puts((ok && pass >= 2 && rej == 0 && created) ? "PASS" : "BAD");
+    vga_puts(verdict);
     vga_puts(" pass=");
     vga_put_hex((uint64_t)pass);
     vga_puts(" reject=");
     vga_put_hex((uint64_t)rej);
     vga_puts(" create_probe=");
     vga_put_hex((uint64_t)created);
+    vga_puts(" fail_code=");
+    vga_put_hex((uint64_t)fail);
     vga_puts("\n");
     /* 同一结果再走一遍串口: vga_puts 写的是文本模式显存, 图形模式下看不见,
      * 回归也只能抓到串口。这条自检必须能被自动化验到, 否则 D-3 那种
@@ -2036,13 +2059,14 @@ int hpdesk_owner_guard_selftest(void)
         extern void serial_puts(uint16_t, const char*);
         extern void serial_puthex(uint16_t, uint32_t);
         serial_puts(0x3F8, "[DESKOWN] selftest ");
-        serial_puts(0x3F8, (ok && pass >= 2 && rej == 0 && created) ? "PASS" : "BAD");
+        serial_puts(0x3F8, verdict);
         serial_puts(0x3F8, " pass=");  serial_puthex(0x3F8, pass);
         serial_puts(0x3F8, " reject="); serial_puthex(0x3F8, rej);
         serial_puts(0x3F8, " create_probe="); serial_puthex(0x3F8, (uint32_t)created);
+        serial_puts(0x3F8, " fail_code="); serial_puthex(0x3F8, fail);
         serial_puts(0x3F8, "\n");
     }
-    return (ok && pass >= 2 && rej == 0 && created) ? 0 : -1;
+    return (fail == 0) ? 0 : -1;
 }
 
 /* 全局窗口管理器 */

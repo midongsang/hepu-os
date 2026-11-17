@@ -174,7 +174,14 @@ void syscall64_init_for_cpu(int cpu, uint64_t kstack_top)
 
     percpu_data[cpu].kernel_stack = kstack_top;
     percpu_data[cpu].user_stack = 0;
-    for (int i = 0; i < 6; i++) percpu_data[cpu].reserved[i] = 0;
+    /* reserved 是 5 项填充槽(0x18..0x38, 正好把 64 字节 per-cpu 槽补齐)。
+     * 旧循环上界写成 6: i=5 越界写到 reserved 之后 8 字节, 即下一个 CPU 槽的
+     * kernel_stack 字段 —— 初始化 N 核时把 N+1 核的内核栈槽清成 0, 属跨核踩内存
+     * ([-Waggressive-loop-optimizations] / [-Warray-bounds] 报的就是这一步)。
+     * 上界按数组长度推导, 以后加字段不会再错位。 */
+    int resv_n = (int)(sizeof(percpu_data[cpu].reserved) /
+                       sizeof(percpu_data[cpu].reserved[0]));
+    for (int i = 0; i < resv_n; i++) percpu_data[cpu].reserved[i] = 0;
 
     x86_64_write_msr(MSR_KERNEL_GS_BASE, (uint64_t)&percpu_data[cpu]);
 }

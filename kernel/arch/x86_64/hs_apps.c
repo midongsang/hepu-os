@@ -2203,28 +2203,32 @@ static void f_render(hs_window_t *w)
 
     /* 属性浮层 */
     if (f_props) {
-        int px = px + FS(10), py = cy + FS(30), pw = pw - FS(20), ph = FS(96);
+        /* 浮层在右栏列表矩形(外层 px/pw)上缩进: 左/右各留 FS(10)/FS(10)。
+         * 旧写法 `int px = px + ..., pw = pw - ...` 在同一声明里用新变量自身
+         * 初始化自身, RHS 读到的是未初始化栈值([-Wmaybe-uninitialized]), 属
+         * 未定义行为; 这里改用不冲突的局部名 ppx/ppw, 从外层 px/pw 取值。 */
+        int ppx = px + FS(10), py = cy + FS(30), ppw = pw - FS(20), ph = FS(96);
         char pb[120];
-        gfx64_fill_rounded_rect(px, py, pw, ph, FS(8), g_shell.colors.panel_bg);
-        gfx64_draw_rounded_rect(px, py, pw, ph, FS(8), g_shell.colors.accent);
-        font64_draw_string(fb, W, H, px + FS(10), py + FS(8), "Properties",
+        gfx64_fill_rounded_rect(ppx, py, ppw, ph, FS(8), g_shell.colors.panel_bg);
+        gfx64_draw_rounded_rect(ppx, py, ppw, ph, FS(8), g_shell.colors.accent);
+        font64_draw_string(fb, W, H, ppx + FS(10), py + FS(8), "Properties",
                            g_shell.colors.accent, FS(14));
-        font64_draw_string(fb, W, H, px + pw - FS(108), py + FS(8),
+        font64_draw_string(fb, W, H, ppx + ppw - FS(108), py + FS(8),
                            "any key = close", g_shell.colors.text_secondary, FS(10));
         strcpy(pb, "Name: ");
         hs_strcpyn(pb + hs_strlen(pb), f_props_name, 40);
-        font64_draw_string(fb, W, H, px + FS(10), py + FS(30), pb, g_shell.colors.panel_fg, FS(12));
+        font64_draw_string(fb, W, H, ppx + FS(10), py + FS(30), pb, g_shell.colors.panel_fg, FS(12));
         strcpy(pb, "Type: ");
         strcpy(pb + hs_strlen(pb), f_props_isdir ? "Folder" : "File");
-        font64_draw_string(fb, W, H, px + FS(10), py + FS(46), pb, g_shell.colors.panel_fg, FS(12));
+        font64_draw_string(fb, W, H, ppx + FS(10), py + FS(46), pb, g_shell.colors.panel_fg, FS(12));
         strcpy(pb, "Size: ");
         char szb[20];
         f_fmt_size(f_props_size, szb);
         strcpy(pb + hs_strlen(pb), szb);
-        font64_draw_string(fb, W, H, px + FS(10), py + FS(62), pb, g_shell.colors.panel_fg, FS(12));
+        font64_draw_string(fb, W, H, ppx + FS(10), py + FS(62), pb, g_shell.colors.panel_fg, FS(12));
         strcpy(pb, "Path: ");
         hs_strcpyn(pb + hs_strlen(pb), f_props_path, 45);
-        font64_draw_string(fb, W, H, px + FS(10), py + FS(78), pb,
+        font64_draw_string(fb, W, H, ppx + FS(10), py + FS(78), pb,
                            g_shell.colors.text_secondary, FS(11));
     }
 

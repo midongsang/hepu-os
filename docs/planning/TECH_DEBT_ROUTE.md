@@ -211,16 +211,33 @@ tick 不走就退化为轮询次数上限（`DHCP_WAIT_SPINS 400000`）。
 
 ---
 
-## D-3　`hpdesk_owner_guard_selftest()` 的 `create_probe=0x0` 未查
+## D-3　`hpdesk_owner_guard_selftest()` 的 `create_probe=0x0` 未查（已关闭 2026-11-17）
 
-**现状**：`desktop64_run()` 入口的屏外 1×1 探针窗口创建返回 0（失败），
+**旧现状（台账原记录，已被实测推翻）**：`desktop64_run()` 入口的屏外 1×1 探针窗口创建返回 0（失败），
 自检仍判 PASS（判据是 `pass>=1 && reject==0`），所以这个失败被**静默吞掉**了。
 
-**为什么算债**：自检里有一个"本该成功却失败"的动作，而判据把它放过。
-这类"绿灯但有异常"的自检比没有自检更危险。
+**实测结论（2026-11-17，64 位 UEFI/OVMF，devrun tag `d3probe-2026-11-17`，串口
+`devrun/logs/d3probe-2026-11-17/ser64.log`）**：探针窗口已能建成，自检 PASS：
 
-**第一步**：查 `hs_window_create` 在 `desktop64_run()` 入口为何失败（窗口表满？屏外坐标被裁剪拒绝？）。
-**验收**：`create_probe` 变成非 0；或明确记录"屏外窗口按设计被拒"并把判据改成显式期望。
+```
+[DESKOWN] owner slot=0x0 (dirty+zorder+focus armed)
+[WM] create owner-probe 200x120
+[DESKOWN] selftest PASS pass=00000003 reject=00000000 create_probe=00000001
+```
+
+**真实根因（上一轮修复）**：不是窗口表满、也不是屏外坐标被裁剪拒绝，而是**初始化顺序**——
+自检在 `claim_owner` 之后直接 `hs_window_create`，槽位初始化要到 `desktop64_init → hpdesk_init`
+才做；BSS 里 `windows[i].id` 默认 0，而空闲判据是 `id < 0`，槽扫描找不到空位，create 直接
+返回 NULL。修法：`desktop64_run` 在自检前显式 `hs_window_manager_init()`（幂等，`hpdesk_init`
+里还会再做一次）。
+
+**判据显式化（本轮）**：失败不再被放过——`created==1` 是硬判据；失败打 FAIL 行并给
+`fail_code` 位掩码（0x1 直探被拒 / 0x2 pass 不足 2 / 0x4 存在 reject / 0x8 探针未建成），
+vga 与串口双路输出；调用方检查返回值并补打失败行。
+
+**遗留观察（不算 D-3 失败）**：探针请求 1×1 屏外坐标 `(-64,-64)`，但 WM 几何钳制会把最小
+窗口放大到 200×120 并拉回屏内；窗口在首帧渲染前销毁，不留可见窗口。若要严格做到屏外 1×1，
+需另给探针一条绕过最小尺寸钳制的路径，单列后续项。
 
 ---
 
@@ -662,3 +679,16 @@ desk_select("mine");       /* 切过去 */
 | 给 32 位补 pmm/vmm 分离 | 简单内存模型是 32 位稳定基础 |
 | 把两套内核合成一个 | 违反 `UNIFIED_SOURCE_TREE.md`（两套内核、一棵源码树） |
 | 为对齐 phase 而移动初始化调用 | 硬依赖会断 |
+
+---
+
+### 本轮证据截图（2026-11-17）
+
+**D-3 探针自检通过**（64 位 UEFI/OVMF，1920×1080，NONBLACK=2073597；
+3 个纯黑像素是光标箭头核心像素，不是黑屏回退区域）：
+
+![D-3 探针自检](docs/assets/d3-probe-selftest-0.60.7.jpg)
+
+**64 位三条真 bug 修复后的桌面**（同一份二进制，1920×1080）：
+
+![warn64 真 bug 修复](docs/assets/warn64-realbugs-0.60.7.jpg)
