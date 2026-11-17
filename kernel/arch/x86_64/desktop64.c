@@ -290,10 +290,12 @@ void desktop64_run(void)
 
         { uint64_t __t = desktop64_rdtsc(); hs_input_poll(); g_cyc_input += desktop64_rdtsc() - __t; }
 
-        /* SB-08 验收: BSP 侧持续浮点负载 —— 与 AP 上 kstat 的探针并发,
-         * 两核各自的中断要在各自的 FXSAVE 槽里保存/恢复, 这里的结果是判据。
-         * 验收结束后可以删掉(每 20 帧一次, 开销微秒级)。 */
-        {
+        /* SB-08 验收探针，默认关闭。
+         * 当初用它证明 BSP/AP 两核各自在 FXSAVE 槽里保存浮点状态，验收已通过；
+         * 但它是"每 5 帧跑一次浮点负载"的验收代码，不该常驻桌面主循环 ——
+         * 每一帧都在给渲染路径加一份与产品功能无关的负载。
+         * 复核 SB-08 时把下面的 0 改成 1，串口每 200 次探针打一行 [SB08]。 */
+        if (0) {
             static int sbt = 0, sbc = 0;
             static uint32_t sb_ok = 0, sb_fail = 0;
             extern int sb08_fpu_probe(void);

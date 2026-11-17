@@ -3455,6 +3455,13 @@ void shell64_run(void)
     vga_put_hex(g_kbd_irq_count);
     vga_puts("\n");
 
+    /* 文本 shell 的 autostart 自检序列，默认关闭。
+     * 这四个程序(hello / sec_test / forktest / comptest)原本每次进文本 shell
+     * 都会先跑一遍，属于交付前的一次性验收；用户进保护模式是想用命令行，
+     * 不是等四个测试程序跑完。复核这段时把 0 改成 1。
+     * 注意：关掉的是"自动跑"，程序本身和命令都还在，需要时手动执行即可。 */
+    const int autostart_selftest = 0;
+    if (autostart_selftest) {
     /* 自动启动user态程序（尝试执行/bin/hello.elf） */
     static const char *const aut_hello[]  = { "/bin/hello.elf" };
     static const char *const aut_sec[]   = { "/bin/sec_test.elf" };
@@ -3487,6 +3494,7 @@ void shell64_run(void)
     vga_puts("[AUTOSTART] Running /bin/comptest.elf...\n");
     hepu_exec("/bin/comptest.elf", 1, aut_comp);
     vga_puts("\n");
+    }   /* autostart_selftest */
 
     /* 网络轮询count器 */
     int net_poll_counter = 0;
