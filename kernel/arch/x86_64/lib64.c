@@ -529,6 +529,12 @@ static void irq_handler_64_body(uint64_t *stack_frame)
         extern void smp_timer_tick(void);
         smp_timer_tick();  /* SMP调度tick */
         apic64_timer_eoi();  /* 发送EOI到Local APIC */
+    } else if (vector == 0x41) {
+        /* AHCI/SATA 控制器 PCI 中断（IOAPIC 路由，级别触发） */
+        extern void ahci64_irq_handler(void);
+        ahci64_irq_handler();
+        extern void apic64_send_eoi(void);
+        apic64_send_eoi();
     } else if (vector == 0x50) {
         /* IPI核间中断 */
         extern void apic64_timer_eoi(void);

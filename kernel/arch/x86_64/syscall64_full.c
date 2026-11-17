@@ -2664,6 +2664,12 @@ static int64_t sys_reboot(void)
        直接调用不经过本分发，不受影响。OPEN-04: 安装器白名单一并放行。 */
     if (!syscall_installer_allowed()) return -1;
     vga_puts("[SYSCALL] Rebooting system...\n");
+    /* 重启前把 SATA/AHCI 写缓存落盘（FLUSH CACHE EXT，等 BSY/DRDY 干净），
+     * 避免复位脉冲打断设备内部写缓存导致刚写的扇区丢失。 */
+    {
+        extern void ahci64_sync_flush(void);
+        ahci64_sync_flush();
+    }
     /* 8042 键盘控制器复位脉冲 */
     __asm__ volatile("outb %0, %1" : : "a"((uint8_t)0xFE), "Nd"((uint16_t)0x64));
     for (;;) { __asm__ volatile("hlt"); }
