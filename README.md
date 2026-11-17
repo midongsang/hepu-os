@@ -6,7 +6,7 @@
 [![Release](https://github.com/midongsang/hepu-os/actions/workflows/release.yml/badge.svg)](https://github.com/midongsang/hepu-os/actions/workflows/release.yml)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPLv3-blue.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/version-v0.60.7-brightgreen.svg)](#当前版本)
-[![Kernel size](https://img.shields.io/badge/kernel-937KB-blue.svg)](#当前版本)
+[![Kernel size](https://img.shields.io/badge/kernel-945KB-blue.svg)](#当前版本)
 [![glibc 动态链接](https://img.shields.io/badge/glibc-✓-brightgreen.svg)](#核心特性)
 [![ext2](https://img.shields.io/badge/ext2-✓-brightgreen.svg)](#核心特性)
 [![SMP](https://img.shields.io/badge/SMP-4core-green.svg)](#核心特性)
@@ -16,6 +16,56 @@
 （`kernel/shared/desktop/` 注册表契约，视觉以 64 位实现为准），支持 SMP 多处理器、
 双内核混合引导、ext2 文件系统和 TCP/IP 网络协议栈，用户态已具备真正的线程能力
 （`clone` 共享地址空间 + 独立线程退出）。
+
+## 启动链路
+
+从固件到桌面是一条固定链路，四个阶段都能看到画面，中间没有黑屏空档。
+
+<table>
+<tr>
+<td align="center"><img src="docs/assets/boot-menu-0.60.7.jpg" width="400"><br><sub>引导菜单：三个模式 + 倒计时</sub></td>
+<td align="center"><img src="docs/assets/boot-loading-0.60.7.jpg" width="400"><br><sub>加载屏：底圈在转，状态与百分比同步推进</sub></td>
+</tr>
+<tr>
+<td align="center"><img src="docs/assets/lock-screen-0.60.7.jpg" width="400"><br><sub>锁屏：大时钟 + 日期 + 解锁提示</sub></td>
+<td align="center"><img src="docs/assets/desktop-64-0.60.7.jpg" width="400"><br><sub>登录后进入桌面</sub></td>
+</tr>
+</table>
+
+### 三个模式
+
+菜单里只有三个选项。第一次选完就成为默认（`HepuBootDefaultMode`，存在 UEFI 变量里）：
+
+| 模式 | 进去是什么 | 什么时候用 |
+|---|---|---|
+| `Hepu OS 64-bit` | 64 位内核 → 图形桌面 | 默认 |
+| `Hepu OS 32-bit` | 32 位内核 → **同一份**图形桌面 | 验证双架构一致 |
+| `Protection Mode` | 只进文本终端，完全不碰图形 | 图形起不来时的兜底 |
+
+连续启动失败记在 `HepuBootFailCount`：**失败 3 次自动落到保护模式**，不会在显卡问题上
+无限重启。机器本身不支持 64 位时，64 位那一项变灰、选不中。
+
+### 加载屏的圈不是装饰
+
+底部转圈每推进一帧，都挂在一段真实工作上，不是画完再 `Stall` 的假进度：
+
+| 状态行 | 对应真实动作 | 帧数 |
+|---|---|---|
+| `Loading kernel image` | 从 ESP 把内核镜像读进内存 | 前后各 8 |
+| `Verifying kernel image` | CRC32 覆盖整幅镜像 | 前后各 4 |
+| `Preheating kernel pages` | 逐段触碰镜像每一页，把页表建起来 | 24 |
+| `Preparing to hand off` | 跳转前最后准备 | 6 |
+
+架构选完才开始读对应那支内核 —— 选 32 位或保护模式时，不会先把 64 位镜像白读一遍。
+
+交接时引导器在 `0x6010` 写一个 magic `0x484C4459`（ASCII `HLDY`）。内核看到它就
+不再把早期文本日志画进帧缓冲、只写串口，于是加载屏能一路留到桌面第一帧，中间不闪屏。
+
+### 锁屏与登录
+
+开机无条件停在锁屏。设定完成前系统还没有可校验的凭据，登录页直接放行；
+一旦 `/account.conf` 里有账号，就该走 SHA-256 校验 —— `auth64_verify_password` 已经实现，
+把它接进登录路径是下一步。
 
 ## 支持平台与硬件
 
@@ -29,7 +79,7 @@
 | 内存 | 实测 1 GB 到桌面；`.bss` 约 38.7 MB | 实测 256 MB 到桌面；`.bss` 约 92.6 MB |
 | 显示 | VBE 线性帧缓冲，1920×1080，显存 ≥ 8 MB | 同左（同一份桌面代码） |
 | 磁盘 | AHCI/SATA → ext2 读写；USB 存储（BOT 批量，可挂 ext2） | IDE PIO → ext2 读写（含 LBA48 读） |
-| 网络 | e1000（DHCP/ARP/ICMP/TCP 端到端验证）；RTL8139 为回退 | RTL8139（e1000 的 MMIO 真映射待做） |
+| 网络 | e1000（DHCP/ARP/ICMP/TCP 端到端验证）；RTL8139 为回退 | e1000 MMIO 已接通（BAR0 页级映射 + volatile/屏障），`RCTL.BSIZE` 位段已修正；RX 端到端验证进行中，RTL8139 为回退 |
 | 输入 | PS/2 键盘鼠标 + USB 键鼠（UHCI 优先，EHCI/XHCI 备；两条链路可同时可用） | PS/2 |
 | 中断 | APIC / IOAPIC / HPET / PIT，SMP 4 核 | PIC / PIT |
 | 串口 | 16550 UART（IRQ4 已接） | 16550 UART |
@@ -65,6 +115,20 @@ AHCI 厂商实现差异（ABAR 与端口复位流程）。
 驱动四域实测闭环（xHCI 枚举键鼠、AHCI 读 LBA0 签名 `55AA` 且末扇区回环
 `mismatch=0x0`、E1000 注册并 DHCP 通、boot 期 APIC 校准改用 HPET 基准
 5 次启动零告警）；`uart64` IRQ4 与 DHCP T1 续租打通。
+
+### 启动链路（0.60.7 之后陆续合入）
+
+0.60.7 之后的主线是**启动链路体验**：一条从固件到桌面、中间不留黑屏的固定路径。
+
+| 提交 | 内容 |
+|---|---|
+| `5d890c4` | 菜单与内核之间加系统加载屏，底部转圈期间真的在加载（读镜像 / CRC32 / 预热页） |
+| `57aba61` | 加载屏留到桌面第一帧：`0x6010` 写 `HLDY` magic，内核据此只把早期日志写串口 |
+| `ebf3e05` | 开机进锁屏 —— 之前 `g_locked` 只有按 `L` 才置位，正式启动里等于没有锁屏 |
+| `9d39038` | 保护模式按实际内核架构跳转，修掉"把 64 位镜像当 32 位解码"导致的重启 |
+| `5f93c2d` | 32 位 `RCTL.BSIZE` 位段修正：原值写在 bit17:16，实际在 bit9:8，接收缓冲只有 256 B |
+
+四个阶段都在 1920×1080 下实拍过；32 位走到的是同一张锁屏、同一份桌面代码。
 
 ### 64 位桌面（1920×1080）
 
@@ -359,7 +423,8 @@ ext2 根分区      LBA 264192 起，245760 扇区（120 MB），/bin 下是各�
 ## 开发状态
 
 ### 已完成
-- ✅ 64位内核基础（64 位内核 947,952 B，32 位 3,534,124 B）
+- ✅ 32/64 位双架构内核（尺寸随构建变化，最新值见 [当前版本](#当前版本)）
+- ✅ 启动链路（三模式菜单 → 加载屏 → 锁屏 → 登录 → 桌面，四阶段实拍验证）
 - ✅ SMP多处理器（4核，负载均衡，IPI）
 - ✅ 双内核混合引导（64位+32位）
 - ✅ 三重引导（BIOS+UEFI+CD-ROM）
