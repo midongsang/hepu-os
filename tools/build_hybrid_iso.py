@@ -4,15 +4,23 @@ HepuOS 混合ISO构建器
 生成ISO 9660文件系统后，在固定LBA位置写入MBR+stage2+内核，
 使ISO可同时作为CD-ROM（El Torito）和硬盘（MBR）引导。
 """
-import pycdlib
 import os
 import struct
 import subprocess
+import sys
+
+try:
+    import pycdlib
+except ImportError:
+    sys.stderr.write("[HYBRID-ISO] 缺少 Python 依赖 pycdlib（pip install pycdlib）。\n")
+    sys.exit(2)
 
 # P3-11: 原来是另一个会话副本的绝对路径(38448056008342018), 换机器/换会话后
 # 必然失效。改为从脚本自身位置推导: tools/<this>.py 的上一级就是仓库根。
 import os as _os
 PROJECT = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+from stage2_builder import ensure_stage2
 OUTPUT = "/tmp/hepu64.iso"
 TMP_ISO = "/tmp/hepu64_tmp.iso"
 
@@ -31,10 +39,10 @@ def main():
             pub_ident_str='HepuOS',
             preparer_ident_str='HepuOS Build System')
 
-    # 添加引导文件（stage2）- El Torito加载到0x8000
+    # 添加引导文件（stage2）- El Torito加载到0x8000；缺产物时先由
+    # ensure_stage2 调 make 构建，工具缺失/汇编失败/超预留扇区明确报错非零退出。
     print("[2/4] 添加引导文件...")
-    stage2_path = f"{PROJECT}/tools/hepboot/x86_64/stage2_64.bin"
-    stage2_size = os.path.getsize(stage2_path)
+    stage2_path, stage2_size = ensure_stage2(PROJECT)
     iso.add_fp(open(stage2_path, 'rb'), stage2_size,
                '/STAGE2.SYS;1',
                rr_name='stage2.sys',

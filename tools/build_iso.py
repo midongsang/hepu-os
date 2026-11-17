@@ -3,14 +3,22 @@
 HepuOS ISO镜像构建器
 创建isohybrid混合镜像（MBR+ISO），支持Rufus ISO模式和DD模式
 """
-import pycdlib
 import os
 import struct
+import sys
+
+try:
+    import pycdlib
+except ImportError:
+    sys.stderr.write("[ISO] 缺少 Python 依赖 pycdlib（pip install pycdlib）。\n")
+    sys.exit(2)
 
 # P3-11: 原来是另一个会话副本的绝对路径(38448056008342018), 换机器/换会话后
 # 必然失效。改为从脚本自身位置推导: tools/<this>.py 的上一级就是仓库根。
 import os as _os
 PROJECT = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+from stage2_builder import ensure_stage2
 OUTPUT = "/tmp/hepu64.iso"
 
 def main():
@@ -23,10 +31,10 @@ def main():
             pub_ident_str='HepuOS',
             preparer_ident_str='HepuOS Build System')
 
-    # 添加引导文件（stage2）
+    # 添加引导文件（stage2）；缺产物时先由 ensure_stage2 调 make 构建，
+    # 工具缺失/汇编失败/超预留扇区都会明确报错并非零退出。
     print("[2/5] 添加引导文件...")
-    stage2_path = f"{PROJECT}/tools/hepboot/x86_64/stage2_64.bin"
-    stage2_size = os.path.getsize(stage2_path)
+    stage2_path, stage2_size = ensure_stage2(PROJECT)
     iso.add_fp(open(stage2_path, 'rb'), stage2_size,
                '/STAGE2.SYS;1',
                rr_name='stage2.sys',
