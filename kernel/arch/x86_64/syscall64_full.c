@@ -14,6 +14,7 @@
 #include "syscall.h"   /* V0.54.6: 统一 syscall 号（唯一真源） */
 #include "spinlock.h"
 #include "fs_sys.h"    /* §5-5 第 5 批: fs_fd_info_t 与 fs_do_read/fs_do_write */
+#include "display_backend.h"  /* §5-4: fb_desc_t（前台所有权按真实 pitch 算映射长度） */
 
 int g_running_linux_elf = 0;  /* V0.20.70: 当前是否在运行Linux ABI ELF */
 
@@ -2521,12 +2522,65 @@ static int64_t wrap_futex(int64_t a1, int64_t a2, int64_t a3, int64_t a4, int64_
  * 用户态拿到这份描述之后才有资格谈"自己映射、自己合成"。 */
 static int64_t wrap_fb_desc(int64_t a1, int64_t a2, int64_t a3, int64_t a4, int64_t a5, int64_t a6) {
     extern int copy_to_user(void *user_dst, const void *kernel_src, size_t size);
-    extern const void *gfx64_fb_desc(void);
+    extern const fb_desc_t *gfx64_fb_desc(void);
     (void)a2;(void)a3;(void)a4;(void)a5;(void)a6;
-    const void *d = gfx64_fb_desc();
+    const void *d = (const void *)gfx64_fb_desc();
     if (!d || !a1) return -1;
     return copy_to_user((void*)a1, d, sizeof(uint64_t) + 6 * sizeof(uint32_t)) ? -1 : 0;
 }
+/* KERNEL_SCOPE §5-4 第 2 步: 前台所有权。
+ *
+ * §5-4 的完整语义是「用户态自己映射 LFB、自己合成、内核停止提交」。这里把
+ * 前两件事一次性做完: MAP_PHYS 映射显存 + 把前台提交权交给调用进程; 内核
+ * 侧的 hs_present 看到 owner 已存在就直接返回, 不再往屏幕上画。
+ *
+ * 冲突返回 -EBUSY(-16) 而**不排队** —— 前台只能有一个 owner, 排队等于让旧
+ * owner 无限期占着屏幕。调用方拿到 -EBUSY 自己决定等还是放弃。
+ *
+ * 为什么必须映射和所有权一起给: 只给所有权不给映射, 调用者拿着「我拥有前台」
+ * 的凭证却写不进任何像素 —— 那正是这个仓库反复出现过的假接口。
+ *
+ * 与 32 位 sys_fb_acquire 的三处对齐: ①内核上下文(pid 0)不参与, 返回 0;
+ * ②已有 owner 返回 -16; ③映射失败则不授予所有权。 */
+static int64_t wrap_fb_acquire(int64_t a1, int64_t a2, int64_t a3, int64_t a4, int64_t a5, int64_t a6) {
+    (void)a2;(void)a3;(void)a4;(void)a5;(void)a6;
+    extern int64_t sys_mmap(uint64_t, uint64_t, int, int, int, int64_t);
+    extern int desk_fb_owner_acquire(int);
+    extern int desk_fb_owner_pid(void);
+    extern int user_process_get_current_pid(void);
+
+    int pid = user_process_get_current_pid();
+    if (pid <= 0) return 0;                       /* 内核上下文不参与前台所有权 */
+    if (desk_fb_owner_pid() >= 0) return -16;     /* -EBUSY, 不排队 */
+
+    const fb_desc_t *dp = gfx64_fb_desc();
+    if (!dp) return -1;
+    const fb_desc_t *d = dp;
+    if (!d->phys) return -1;                      /* 显存还没出现(boot 早期) */
+
+    uint64_t total = (uint64_t)d->pitch * (uint64_t)d->height;
+    if (total == 0) total = (uint64_t)d->width * d->height * (d->bpp / 8);
+    if (total == 0) return -1;
+    if (a1 > 0 && (uint64_t)a1 < total) total = (uint64_t)a1;
+
+    /* prot = READ|WRITE(3), flags = MAP_PHYS(0x1000), fd/off 不用 */
+    int64_t virt = sys_mmap((uint64_t)d->phys, total, 3, 0x1000, -1, 0);
+    if (virt <= 0) return -1;                     /* 映射失败就不给所有权 */
+
+    if (desk_fb_owner_acquire(pid) != 0) return -16;
+    return virt;
+}
+
+static int64_t wrap_fb_release(int64_t a1, int64_t a2, int64_t a3, int64_t a4, int64_t a5, int64_t a6) {
+    (void)a1;(void)a2;(void)a3;(void)a4;(void)a5;(void)a6;
+    extern void desk_fb_owner_release(int);
+    extern int user_process_get_current_pid(void);
+    int pid = user_process_get_current_pid();
+    if (pid <= 0) return 0;
+    desk_fb_owner_release(pid);                   /* 非 owner 调用时 shared 侧自行忽略 */
+    return 0;
+}
+
 static int64_t wrap_getrandom(int64_t a1, int64_t a2, int64_t a3, int64_t a4, int64_t a5, int64_t a6) {
     (void)a4;(void)a5;(void)a6; return sys_getrandom((uint64_t)a1, a2, (uint64_t)a3);
 }
@@ -2799,6 +2853,8 @@ static syscall_fn_t syscall_table[SYSCALL_MAX] = {
     [SYSCALL_CLOCK_NANOSLEEP] = wrap_clock_nanosleep,
     [SYSCALL_NEWFSTATAT] = wrap_newfstatat,
     [SYS_FB_DESC]       = wrap_fb_desc,
+    [SYS_FB_ACQUIRE]    = wrap_fb_acquire,
+    [SYS_FB_RELEASE]    = wrap_fb_release,
 };
 
 /* 安全修复：旧实现用 char tmp[8]/buf[8] 打印调用号，用户传入 rax=2147483647
