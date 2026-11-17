@@ -169,9 +169,9 @@ int net_tools_refresh(void)
 
 void net_tools_draw_ui(int x, int y, int width, int height)
 {
-    gfx_color_t bg={25,30,40,255}, fg={220,220,220,255}, accent={100,180,255,255};
-    gfx_color_t green={100,220,100,255}, red={220,100,100,255};
-    gfx_color_t yellow={220,200,100,255}, gray={130,130,130,255};
+    gfx_color_t bg = GFX_RGB(25, 30, 40), fg = GFX_RGB(220, 220, 220), accent = GFX_RGB(100, 180, 255);
+    gfx_color_t green = GFX_RGB(100, 220, 100), red = GFX_RGB(220, 100, 100);
+    gfx_color_t yellow = GFX_RGB(220, 200, 100), gray = GFX_RGB(130, 130, 130);
     gfx_fill_rect(x, y, width, height, bg);
     const char *tn[] = {"Ping","Traceroute","端口扫描","网络配置"};
     char title[64];
@@ -182,9 +182,9 @@ void net_tools_draw_ui(int x, int y, int width, int height)
         int tx = x+10+i*80;
         if (i == nt.current_tool) {
             gfx_fill_rect(tx, tab_y, 75, 22, accent);
-            gfx_draw_string_font(tx+8, tab_y+5, tn[i], (gfx_color_t){0,0,0,255}, 11);
+            gfx_draw_string_font(tx+8, tab_y+5, tn[i], GFX_RGB(0, 0, 0), 11);
         } else {
-            gfx_fill_rect(tx, tab_y, 75, 22, (gfx_color_t){50,55,65,255});
+            gfx_fill_rect(tx, tab_y, 75, 22, GFX_RGB(50, 55, 65));
             gfx_draw_string_font(tx+8, tab_y+5, tn[i], gray, 11);
         }
     }
@@ -193,7 +193,7 @@ void net_tools_draw_ui(int x, int y, int width, int height)
         for (int i = 0; i < nt.interface_count; i++) {
             net_interface_t *iface = &nt.interfaces[i];
             int iy = cy + i*110;
-            gfx_fill_rect(x+10, iy, width-20, 100, (gfx_color_t){35,40,50,255});
+            gfx_fill_rect(x+10, iy, width-20, 100, GFX_RGB(35, 40, 50));
             gfx_draw_string_font(x+20, iy+8, iface->name, accent, 14);
             gfx_draw_string_font(x+80, iy+10, iface->state?"UP":"DOWN",
                                  iface->state?green:red, 12);

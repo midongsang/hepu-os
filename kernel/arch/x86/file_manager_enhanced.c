@@ -501,46 +501,46 @@ static void format_size(uint64_t size, char *buf, int buf_len)
 static gfx_color_t type_color(fme_file_type_t type)
 {
     switch (type) {
-        case FME_TYPE_FOLDER:    return (gfx_color_t){100, 180, 255, 255};
-        case FME_TYPE_EXECUTABLE:return (gfx_color_t){100, 255, 100, 255};
-        case FME_TYPE_IMAGE:     return (gfx_color_t){255, 180, 100, 255};
-        case FME_TYPE_AUDIO:     return (gfx_color_t){200, 100, 255, 255};
-        case FME_TYPE_VIDEO:     return (gfx_color_t){255, 100, 100, 255};
-        case FME_TYPE_DOCUMENT:  return (gfx_color_t){255, 255, 150, 255};
-        case FME_TYPE_ARCHIVE:   return (gfx_color_t){255, 150, 50, 255};
-        default:                 return (gfx_color_t){220, 220, 220, 255};
+        case FME_TYPE_FOLDER:    return GFX_RGB(100, 180, 255);
+        case FME_TYPE_EXECUTABLE:return GFX_RGB(100, 255, 100);
+        case FME_TYPE_IMAGE:     return GFX_RGB(255, 180, 100);
+        case FME_TYPE_AUDIO:     return GFX_RGB(200, 100, 255);
+        case FME_TYPE_VIDEO:     return GFX_RGB(255, 100, 100);
+        case FME_TYPE_DOCUMENT:  return GFX_RGB(255, 255, 150);
+        case FME_TYPE_ARCHIVE:   return GFX_RGB(255, 150, 50);
+        default:                 return GFX_RGB(220, 220, 220);
     }
 }
 
 /* 绘制单个面板 */
 void fme_draw_pane(fme_pane_t *pane, int x, int y, int width, int height, int active)
 {
-    gfx_color_t bg = active ? (gfx_color_t){30, 35, 45, 255} :
-                              (gfx_color_t){25, 28, 35, 255};
-    gfx_color_t border = active ? (gfx_color_t){100, 180, 255, 255} :
-                                  (gfx_color_t){60, 60, 70, 255};
-    gfx_color_t fg = {220, 220, 220, 255};
-    gfx_color_t cursor_bg = {50, 70, 100, 255};
-    gfx_color_t selected_bg = {60, 50, 30, 255};
+    gfx_color_t bg = active ? GFX_RGB(30, 35, 45) :
+                              GFX_RGB(25, 28, 35);
+    gfx_color_t border = active ? GFX_RGB(100, 180, 255) :
+                                  GFX_RGB(60, 60, 70);
+    gfx_color_t fg = GFX_RGB(220, 220, 220);
+    gfx_color_t cursor_bg = GFX_RGB(50, 70, 100);
+    gfx_color_t selected_bg = GFX_RGB(60, 50, 30);
 
     gfx_fill_rect(x, y, width, height, bg);
     gfx_draw_rect(x, y, width, height, border);
 
     /* 路径栏 */
     gfx_fill_rect(x + 1, y + 1, width - 2, 22,
-                  (gfx_color_t){40, 45, 55, 255});
+                  GFX_RGB(40, 45, 55));
     gfx_draw_string_font(x + 5, y + 5, pane->current_path, fg, 11);
 
     /* 表头 */
     int header_y = y + 25;
     gfx_fill_rect(x + 1, header_y, width - 2, 18,
-                  (gfx_color_t){35, 40, 50, 255});
+                  GFX_RGB(35, 40, 50));
     gfx_draw_string_font(x + 5, header_y + 3, "名称",
-                         (gfx_color_t){150, 150, 160, 255}, 10);
+                         GFX_RGB(150, 150, 160), 10);
     gfx_draw_string_font(x + width - 80, header_y + 3, "大小",
-                         (gfx_color_t){150, 150, 160, 255}, 10);
+                         GFX_RGB(150, 150, 160), 10);
     gfx_draw_string_font(x + width - 35, header_y + 3, "类型",
-                         (gfx_color_t){150, 150, 160, 255}, 10);
+                         GFX_RGB(150, 150, 160), 10);
 
     /* 文件列表 */
     int list_y = header_y + 20;
@@ -575,26 +575,26 @@ void fme_draw_pane(fme_pane_t *pane, int x, int y, int width, int height, int ac
         char size_buf[32];
         format_size(item->size, size_buf, sizeof(size_buf));
         gfx_draw_string_font(x + width - 80, ry + 3, size_buf,
-                             (gfx_color_t){180, 180, 180, 255}, 10);
+                             GFX_RGB(180, 180, 180), 10);
 
         /* 类型 */
         const char *type_names[] = {"目录","文件","图片","音频","视频",
                                     "文档","压缩","可执行","链接","其他"};
         gfx_draw_string_font(x + width - 35, ry + 3,
                              type_names[item->type],
-                             (gfx_color_t){160, 160, 160, 255}, 10);
+                             GFX_RGB(160, 160, 160), 10);
     }
 }
 
 /* 绘制预览 */
 void fme_draw_preview(int x, int y, int width, int height)
 {
-    gfx_color_t bg = {20, 22, 30, 255};
-    gfx_color_t fg = {200, 200, 200, 255};
-    gfx_color_t accent = {100, 180, 255, 255};
+    gfx_color_t bg = GFX_RGB(20, 22, 30);
+    gfx_color_t fg = GFX_RGB(200, 200, 200);
+    gfx_color_t accent = GFX_RGB(100, 180, 255);
 
     gfx_fill_rect(x, y, width, height, bg);
-    gfx_draw_rect(x, y, width, height, (gfx_color_t){60, 60, 70, 255});
+    gfx_draw_rect(x, y, width, height, GFX_RGB(60, 60, 70));
 
     gfx_draw_string_font(x + 10, y + 8, "预览", accent, 13);
 
@@ -635,7 +635,7 @@ void fme_draw_preview(int x, int y, int width, int height)
 
         /* 预览区域 */
         gfx_draw_rect(x + 10, py, width - 20, height - py - 10,
-                      (gfx_color_t){50, 50, 60, 255});
+                      GFX_RGB(50, 50, 60));
         if (item->type == FME_TYPE_IMAGE) {
             gfx_draw_string_font(x + width/2 - 30, py + 40,
                                  "[图片预览]", accent, 12);
@@ -648,16 +648,16 @@ void fme_draw_preview(int x, int y, int width, int height)
         }
     } else {
         gfx_draw_string_font(x + 10, y + 40, "未选择文件",
-                             (gfx_color_t){120, 120, 120, 255}, 12);
+                             GFX_RGB(120, 120, 120), 12);
     }
 }
 
 /* 绘制工具栏 */
 void fme_draw_toolbar(int x, int y, int width)
 {
-    gfx_fill_rect(x, y, width, 28, (gfx_color_t){45, 50, 60, 255});
-    gfx_color_t btn = {70, 80, 100, 255};
-    gfx_color_t fg = {220, 220, 220, 255};
+    gfx_fill_rect(x, y, width, 28, GFX_RGB(45, 50, 60));
+    gfx_color_t btn = GFX_RGB(70, 80, 100);
+    gfx_color_t fg = GFX_RGB(220, 220, 220);
 
     const char *buttons[] = {"上一级", "刷新", "新建", "复制", "移动",
                              "删除", "重命名", "搜索", "视图", NULL};
@@ -672,8 +672,8 @@ void fme_draw_toolbar(int x, int y, int width)
 /* 绘制状态栏 */
 void fme_draw_status_bar(int x, int y, int width)
 {
-    gfx_fill_rect(x, y, width, 22, (gfx_color_t){35, 38, 45, 255});
-    gfx_color_t fg = {180, 180, 180, 255};
+    gfx_fill_rect(x, y, width, 22, GFX_RGB(35, 38, 45));
+    gfx_color_t fg = GFX_RGB(180, 180, 180);
 
     fme_pane_t *p = &fme.panes[fme.active_pane];
     char status[200];

@@ -288,13 +288,13 @@ static char byte_to_ascii(uint8_t b)
 /* 绘制编辑器UI */
 void hex_editor_draw_ui(int x, int y, int width, int height)
 {
-    gfx_color_t bg = {20, 20, 30, 255};
-    gfx_color_t fg = {200, 200, 200, 255};
-    gfx_color_t accent = {100, 200, 255, 255};
-    gfx_color_t cursor_bg = {50, 100, 200, 255};
-    gfx_color_t offset_color = {150, 150, 100, 255};
-    gfx_color_t ascii_color = {100, 255, 100, 255};
-    gfx_color_t gray = {100, 100, 100, 255};
+    gfx_color_t bg = GFX_RGB(20, 20, 30);
+    gfx_color_t fg = GFX_RGB(200, 200, 200);
+    gfx_color_t accent = GFX_RGB(100, 200, 255);
+    gfx_color_t cursor_bg = GFX_RGB(50, 100, 200);
+    gfx_color_t offset_color = GFX_RGB(150, 150, 100);
+    gfx_color_t ascii_color = GFX_RGB(100, 255, 100);
+    gfx_color_t gray = GFX_RGB(100, 100, 100);
 
     /* 背景 */
     gfx_fill_rect(x, y, width, height, bg);

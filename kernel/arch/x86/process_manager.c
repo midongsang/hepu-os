@@ -283,14 +283,14 @@ static const char *state_to_string(proc_state_t state)
 /* 绘制UI */
 void process_manager_draw_ui(int x, int y, int width, int height)
 {
-    gfx_color_t bg = {25, 25, 35, 255};
-    gfx_color_t fg = {220, 220, 220, 255};
-    gfx_color_t accent = {100, 180, 255, 255};
-    gfx_color_t green = {100, 220, 100, 255};
-    gfx_color_t yellow = {220, 200, 100, 255};
-    gfx_color_t red = {220, 100, 100, 255};
-    gfx_color_t gray = {120, 120, 120, 255};
-    gfx_color_t selected_bg = {50, 80, 150, 255};
+    gfx_color_t bg = GFX_RGB(25, 25, 35);
+    gfx_color_t fg = GFX_RGB(220, 220, 220);
+    gfx_color_t accent = GFX_RGB(100, 180, 255);
+    gfx_color_t green = GFX_RGB(100, 220, 100);
+    gfx_color_t yellow = GFX_RGB(220, 200, 100);
+    gfx_color_t red = GFX_RGB(220, 100, 100);
+    gfx_color_t gray = GFX_RGB(120, 120, 120);
+    gfx_color_t selected_bg = GFX_RGB(50, 80, 150);
 
     /* 背景 */
     gfx_fill_rect(x, y, width, height, bg);

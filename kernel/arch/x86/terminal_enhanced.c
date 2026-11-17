@@ -588,10 +588,10 @@ void terminal_handle_key(int key)
 /* 绘制标签栏 */
 void terminal_draw_tab_bar(int x, int y, int width)
 {
-    gfx_color_t bg = {40, 40, 50, 255};
-    gfx_color_t active_bg = {60, 60, 80, 255};
-    gfx_color_t fg = {200, 200, 200, 255};
-    gfx_color_t active_fg = {255, 255, 255, 255};
+    gfx_color_t bg = GFX_RGB(40, 40, 50);
+    gfx_color_t active_bg = GFX_RGB(60, 60, 80);
+    gfx_color_t fg = GFX_RGB(200, 200, 200);
+    gfx_color_t active_fg = GFX_RGB(255, 255, 255);
 
     gfx_fill_rect(x, y, width, 24, bg);
     for (int i = 0; i < term.tab_count; i++) {
@@ -607,7 +607,7 @@ void terminal_draw_tab_bar(int x, int y, int width)
     }
     /* 新建标签按钮 */
     gfx_draw_string_font(x + term.tab_count * 100 + 10, y + 6,
-                         "+ 新建", (gfx_color_t){150,150,150,255}, 11);
+                         "+ 新建", GFX_RGB(150, 150, 150), 11);
 }
 
 /* 绘制终端 */
@@ -618,7 +618,7 @@ void terminal_draw(int x, int y, int pixel_width, int pixel_height)
 
     /* 背景 */
     gfx_fill_rect(x, y, pixel_width, pixel_height,
-                  (gfx_color_t){0, 0, 0, 255});
+                  GFX_RGB(0, 0, 0));
 
     /* 绘制字符 */
     for (int row = 0; row < tab->height; row++) {
@@ -643,15 +643,15 @@ void terminal_draw(int x, int y, int pixel_width, int pixel_height)
             /* 背景 */
             if (tc->bg != TERM_COLOR_BLACK || tc->reverse) {
                 gfx_fill_rect(px, py, term.font_width, term.font_height,
-                              (gfx_color_t){(bg_color>>16)&0xFF,
-                                            (bg_color>>8)&0xFF,
-                                            bg_color&0xFF, 255});
+                              GFX_RGB((bg_color>>16)&0xFF,
+                                      (bg_color>>8)&0xFF,
+                                      bg_color&0xFF));
             }
 
             /* 字符 */
-            gfx_color_t fc = {(fg_color>>16)&0xFF,
-                              (fg_color>>8)&0xFF,
-                              fg_color&0xFF, 255};
+            gfx_color_t fc = GFX_RGB((fg_color>>16)&0xFF,
+                                     (fg_color>>8)&0xFF,
+                                     fg_color&0xFF);
             char buf[2] = {tc->ch, 0};
             gfx_draw_string_font(px, py, buf, fc, 12);
 
@@ -668,7 +668,7 @@ void terminal_draw(int x, int y, int pixel_width, int pixel_height)
     int cx = x + tab->cursor_x * term.font_width;
     int cy = y + tab->cursor_y * term.font_height;
     gfx_fill_rect(cx, cy, 2, term.font_height,
-                  (gfx_color_t){200, 200, 200, 255});
+                  GFX_RGB(200, 200, 200));
 }
 
 int terminal_get_state(terminal_t *state)
