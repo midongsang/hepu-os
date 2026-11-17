@@ -115,7 +115,7 @@ static void hs_fill_round_rect_aa(int x, int y, int w, int h, int r, uint32_t c)
 static void hs_fill_round_rect_argb(void *buf, int bw, int bh, int x, int y,
                                     int w, int h, int r, uint32_t c, int corners)
 { desk_surface_t *s = hs_surf(); if (s) s->fill_round_rect_argb(s, buf, bw, bh, x, y, w, h, r, c, corners); }
-static void hs_blur_region(int x, int y, int w, int h, int rad, uint32_t ov, int oa)
+static __attribute__((unused)) void hs_blur_region(int x, int y, int w, int h, int rad, uint32_t ov, int oa)
 { desk_surface_t *s = hs_surf(); if (s) s->blur_region(s, x, y, w, h, rad, ov, oa); }
 static void hs_fill_circle_gradient(int cx, int cy, int r, uint32_t c1, uint32_t c2)
 { desk_surface_t *s = hs_surf(); if (s) s->fill_circle_gradient(s, cx, cy, r, c1, c2); }
@@ -1449,6 +1449,7 @@ static void hs_wallpaper_cycle(void)
 
 void hs_widget_clock_render(hs_widget_t *w, int x, int y)
 {
+    (void)w;
     uint8_t h = rtc64_get_hours();
     uint8_t m = rtc64_get_minutes();
     uint8_t s = rtc64_get_seconds();
@@ -1465,6 +1466,7 @@ void hs_widget_clock_render(hs_widget_t *w, int x, int y)
 
 void hs_widget_cpu_render(hs_widget_t *w, int x, int y)
 {
+    (void)w;
     void *fb = hs_get_framebuffer();
     char buf[32];
     strcpy_hs(buf, "CPU: ");
@@ -1478,6 +1480,7 @@ void hs_widget_cpu_render(hs_widget_t *w, int x, int y)
 
 void hs_widget_memory_render(hs_widget_t *w, int x, int y)
 {
+    (void)w;
     uint64_t total, used, free;
     pmm64_get_stats(&total, &used, &free);
 
@@ -1494,6 +1497,7 @@ void hs_widget_memory_render(hs_widget_t *w, int x, int y)
 
 void hs_widget_workspaces_render(hs_widget_t *w, int x, int y)
 {
+    (void)w;
     void *fb = hs_get_framebuffer();
     int cx = x;
 
@@ -2459,7 +2463,7 @@ void hpdesk_tile_focused(int dir)
 /* V0.57.0: 颜色混合(按百分比向 b 靠拢), 用于悬停底色与投影渐变 */
 /* V0.57.0: 百分比文本 —— 旧的固定三位写法("000"/"003"/"009")在侧栏 Info 页上
  * 看着像码表而不是百分比, 改成 "0%"/"3%"/"100%"。 */
-static void hs_pct_str(int v, char *out)
+static __attribute__((unused)) void hs_pct_str(int v, char *out)
 {
     if (v < 0) v = 0;
     if (v > 100) v = 100;
@@ -2938,9 +2942,9 @@ static int g_surf_reuse, g_surf_repaint;
 static int g_in_partial_frame;
 /* V0.59.23 诊断: 拖动期间走了多少次局部帧/全量帧, 面板被跳过多少次。
  * 面板段那 21.6% 到底是"每帧全量重画"还是"整块 blend", 由这两个计数决定。 */
-static int g_partial_frames, g_full_frames, g_panel_skips;
+static int g_partial_frames, g_full_frames, g_panel_skips __attribute__((unused));
 static int g_last_dirty[4];
-static uint64_t g_t_drag_start;
+static uint64_t g_t_drag_start __attribute__((unused));
 /* V0.59.13 分段计时: rdtsc 周期数, 定位瓶颈用 */
 static inline uint64_t hs_rdtsc(void)
 {
@@ -2964,11 +2968,11 @@ static inline uint64_t hs_rdtsc(void)
 #endif
 static uint64_t g_cyc_render_all, g_cyc_blend, g_cyc_panel;
 /* V0.59.16 二级切分: 把 render_all 与 other 各自再拆一层 */
-static uint64_t g_cyc_wall, g_cyc_panels, g_cyc_cc, g_cyc_notify, g_cyc_cursor;
+static uint64_t g_cyc_wall, g_cyc_panels, g_cyc_cc, g_cyc_notify __attribute__((unused)), g_cyc_cursor __attribute__((unused));
 static uint64_t g_cyc_memset, g_cyc_content;
-static uint64_t g_cyc_bgfill, g_cyc_surfens, g_cyc_cursordraw, g_cyc_ctxmenu, g_cyc_loophdr;
+static uint64_t g_cyc_bgfill, g_cyc_surfens, g_cyc_cursordraw, g_cyc_ctxmenu, g_cyc_loophdr __attribute__((unused));
 static uint64_t g_seg_pre, g_seg_mid, g_seg_post;
-static uint64_t g_seg_lp, g_seg_lm, g_seg_lq;
+static uint64_t g_seg_lp __attribute__((unused)), g_seg_lm __attribute__((unused)), g_seg_lq __attribute__((unused));
 /* 拖动帧各阶段时间戳(相对本帧入口) */
 static uint64_t g_ts1, g_ts2, g_ts3, g_ts4, g_ts5, g_ts6;
 static int g_prof_frames;
@@ -3980,7 +3984,7 @@ static void hs_layer_draw(hs_layer_t *L, int x, int y, int w, int h,
 }
 
 /* 脏区(单矩形)与给定矩形是否相交; 任一无矩形返回 1(保守: 视为相交, 照画) */
-static int hs_dirty_intersects(int x, int y, int w, int h)
+static __attribute__((unused)) int hs_dirty_intersects(int x, int y, int w, int h)
 {
     if (g_dirty_x1 < 0) return 1;
     if (x >= g_dirty_x1 || y >= g_dirty_y1) return 0;
@@ -4677,6 +4681,7 @@ void hs_scrollbar_draw(int x, int track_y, int track_h, int offset, int max_scro
     if (max_scroll <= 0 || track_h <= 8) return;
     void *fb = hs_get_framebuffer();
     int W = g_shell.screen_width, H = g_shell.screen_height;
+    (void)fb; (void)W; (void)H;
     int bw = hs_sx(3);
     hs_fill_rounded_rect(x, track_y, bw, track_h, hs_s(2), g_shell.colors.border);
     int thumb_h = track_h * track_h / (track_h + hs_sy(max_scroll));
@@ -5068,7 +5073,7 @@ static void cc_seg(int x0, int y0, int x1, int y1, uint32_t c, int t)
 
 /* 控制中心开关图标(简笔手绘, 不依赖位图资源):
  * 0 WiFi  1 BT  2 Air  3 DND  4 Loc  5 Torch */
-static void cc_icon_draw(int kind, int cx, int cy, int r, uint32_t fg, uint32_t bg)
+static __attribute__((unused)) void cc_icon_draw(int kind, int cx, int cy, int r, uint32_t fg, uint32_t bg)
 {
     int t = hs_s(3);
     switch (kind) {
@@ -5192,7 +5197,7 @@ static void cc_slider_card(void *fb, int x, int y, int w, int h,
 /* 把颜色按比例压暗(保留 k%, 用于绘制浮层投影的阶梯暗边)。
  * 面板底色本身接近纯黑, 直接给纯黑投影在深色壁纸上看不出来,
  * 所以用"面板色 × 系数"而非固定黑色, 保证在任何主题下都能拉开层次。 */
-static uint32_t hs_dim(uint32_t c, int k)
+static __attribute__((unused)) uint32_t hs_dim(uint32_t c, int k)
 {
     int r = (int)((c >> 16) & 0xFF) * k / 100;
     int g = (int)((c >> 8) & 0xFF) * k / 100;
@@ -5513,7 +5518,7 @@ static int hs_control_center_handle_click(int x, int y)
 }
 
 /* 右键菜单渲染 */
-static int g_menu_file_mode = 0;   /* V0.13.39: 1=文件管理器右键菜单 */
+static int g_menu_file_mode __attribute__((unused)) = 0;   /* V0.13.39: 1=文件管理器右键菜单 */
 
 /* ============================================================================
  * V0.55.0: 桌面配色面板 — 图形化更换桌面背景色, 并持久化到 config.hsqml
@@ -7596,6 +7601,7 @@ void hs_tray_render(int x, int y, int max_width)
 
 void hs_tray_handle_click(int x, int y)
 {
+    (void)y;
     int icon_width = 24;
     int start_x = g_shell.screen_width - (g_shell.tray_count * icon_width) - 8;
 

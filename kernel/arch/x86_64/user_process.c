@@ -912,6 +912,7 @@ int user_process_create_elf(const char *name, void *code_data, uint64_t code_siz
 /* V0.20.78: 动态链接 — 把额外内存映射到已创建进程的地址空间 */
 int user_process_map_extra(int pid, void *data, uint64_t size, uint64_t vaddr)
 {
+    (void)size; (void)vaddr;
     for (int i = 0; i < MAX_USER_PROCS; i++) {
         if (user_procs[i].active && user_procs[i].pid == pid) {
             uint64_t pml4 = user_procs[i].page_table;

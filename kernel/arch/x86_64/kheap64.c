@@ -195,6 +195,7 @@ static uint8_t kheap_memory[KHEAP_SIZE] __attribute__((aligned(4096)));
 void kheap64_init(void *start_addr, uint64_t size)
 {
     /* 忽略传入参数，使用静态数组 */
+    (void)start_addr; (void)size;
     heap_start = (block_header_t *)kheap_memory;
     heap_end = (uint64_t)kheap_memory + KHEAP_SIZE;
     heap_total = KHEAP_SIZE;

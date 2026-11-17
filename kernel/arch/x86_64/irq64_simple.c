@@ -248,6 +248,7 @@ void idt64_load_for_ap(void)
 /* Spurious中断处理函数（不发送EOI，只计数） */
 void irq_spurious_handler(uint64_t *stack_frame)
 {
+    (void)stack_frame;
     atomic_inc64(&irq_count[0xFF]);
     /* spurious中断不需要发送EOI，直接返回 */
 }

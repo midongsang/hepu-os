@@ -322,6 +322,7 @@ void x86_64_map_page(uint64_t *pml4, uint64_t virt, uint64_t phys, uint64_t flag
 uint64_t x86_64_virt_to_phys(uint64_t *pml4, uint64_t virt)
 {
     /* 简化：身份映射时直接返回 */
+    (void)pml4;
     return virt;
 }
 
@@ -460,6 +461,7 @@ void x86_64_init_tss(void)
 void x86_64_set_kernel_stack(uint64_t stack)
 {
     /* 需要更新TSS的rsp0 */
+    (void)stack;
 }
 
 /* x86_64_kernel_main 已移至 kernel/kernel_main_64.c */

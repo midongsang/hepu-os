@@ -232,6 +232,7 @@ static int shell_parse_args(char *line, char **args, int max_args)
 /* 命令处理 */
 static void shell_cmd_usertest(int argc, char **argv)
 {
+    (void)argc; (void)argv;
     vga_puts("[USER] Switching to user mode (PID 100)...\n");
     user_process_switch(100);
     vga_puts("[USER] Returned from user mode\n");
@@ -291,6 +292,7 @@ static void shell_cmd_exec(int argc, char **argv)
 
 static void shell_cmd_help(int argc, char **argv)
 {
+    (void)argc; (void)argv;
     vga_puts("=== HepuOS 64-bit Shell (75 commands) ===\n\n");
 
     vga_puts("--- System Info ---\n");
@@ -775,6 +777,7 @@ static void shell_cmd_echo(int argc, char **argv)
 
 static void shell_cmd_date(int argc, char **argv)
 {
+    (void)argc; (void)argv;
     int year, month, day, hour, minute, second;
     rtc64_get_time(&year, &month, &day, &hour, &minute, &second);
 
@@ -813,6 +816,7 @@ static void shell_cmd_date(int argc, char **argv)
 /* version命令：显示详细版本信息 */
 static void shell_cmd_version(int argc, char **argv)
 {
+    (void)argc; (void)argv;
     vga_puts("=== HepuOS Version ===\n");
     vga_puts("  OS Name:    HepuOS\n");
     vga_puts("  Version:    0.56.1\n");
@@ -833,6 +837,7 @@ static void shell_cmd_version(int argc, char **argv)
 
 static void shell_cmd_uname(int argc, char **argv)
 {
+    (void)argc; (void)argv;
     vga_puts("HepuOS 64-bit Kernel v0.56.1\n");
     vga_puts("Architecture: x86_64 (long mode)\n");
     vga_puts("Memory: 64MB\n");
@@ -932,6 +937,7 @@ static void shell_cmd_ps(int argc, char **argv)
 
 static void shell_cmd_ifconfig(int argc, char **argv)
 {
+    (void)argc; (void)argv;
     uint32_t ip = eth64_get_ip();
     vga_puts("eth0: ");
     if (ip == 0) {
@@ -954,6 +960,7 @@ static void shell_cmd_ifconfig(int argc, char **argv)
 
 static void shell_cmd_clear(int argc, char **argv)
 {
+    (void)argc; (void)argv;
     /* clear screen：用ANSI转义序列或直接写VGA */
     vga_puts("\033[2J\033[H");
 }
@@ -1901,12 +1908,14 @@ static void shell_cmd_md5sum(int argc, char **argv)
 /* true命令：返回success */
 static void shell_cmd_true(int argc, char **argv)
 {
+    (void)argc; (void)argv;
     /* none操作,返回success */
 }
 
 /* false命令：返回failed */
 static void shell_cmd_false(int argc, char **argv)
 {
+    (void)argc; (void)argv;
     /* none操作,返回failed（简化版不处理退出码） */
 }
 
@@ -2010,12 +2019,14 @@ static void shell_cmd_expr(int argc, char **argv)
 /* logname命令：显示登录user名 */
 static void shell_cmd_logname(int argc, char **argv)
 {
+    (void)argc; (void)argv;
     vga_puts("root\n");
 }
 
 /* tty命令：显示终端device名 */
 static void shell_cmd_tty(int argc, char **argv)
 {
+    (void)argc; (void)argv;
     vga_puts("/dev/tty1\n");
 }
 
@@ -2119,6 +2130,7 @@ static void shell_cmd_write(int argc, char **argv)
 
 static void shell_cmd_free(int argc, char **argv)
 {
+    (void)argc; (void)argv;
     extern void pmm64_get_stats(uint64_t *total, uint64_t *used, uint64_t *free);
     uint64_t total, used, free;
     pmm64_get_stats(&total, &used, &free);
@@ -2140,6 +2152,7 @@ static void shell_cmd_free(int argc, char **argv)
 /* drivers命令：显示已注册Driver List */
 static void shell_cmd_drivers(int argc, char **argv)
 {
+    (void)argc; (void)argv;
     extern void drv_print_list(void);
     drv_print_list();
 }
@@ -2147,6 +2160,7 @@ static void shell_cmd_drivers(int argc, char **argv)
 /* uptime命令：显示systemrunning时间 */
 static void shell_cmd_uptime(int argc, char **argv)
 {
+    (void)argc; (void)argv;
     extern uint64_t pit64_get_uptime(void);
     uint64_t uptime_ms = pit64_get_uptime();
     uint64_t seconds = uptime_ms / 1000;
@@ -2179,6 +2193,7 @@ static void shell_cmd_uptime(int argc, char **argv)
 /* meminfo命令：显示详细memory信息 */
 static void shell_cmd_meminfo(int argc, char **argv)
 {
+    (void)argc; (void)argv;
     extern void pmm64_get_stats(uint64_t *total, uint64_t *used, uint64_t *free);
     extern int  drv_get_count(void);
     extern int  drv_get_active_count(void);
@@ -2568,6 +2583,7 @@ static void shell_cmd_timedatectl(int argc, char **argv)
 
 static void shell_cmd_pci(int argc, char **argv)
 {
+    (void)argc; (void)argv;
     extern uint32_t pci_config_read32(uint8_t bus, uint8_t dev, uint8_t func, uint8_t offset);
 
     vga_puts("=== PCI Devices ===\n");
@@ -2633,6 +2649,7 @@ done:
 /* cpuinfo命令：显示CPU信息 */
 static void shell_cmd_cpuinfo(int argc, char **argv)
 {
+    (void)argc; (void)argv;
     char vendor[13] = {0};
     uint32_t eax, ebx, ecx, edx;
 
@@ -2739,6 +2756,7 @@ static void shell_cmd_cpuinfo(int argc, char **argv)
 /* netstat命令：显示网络status */
 static void shell_cmd_netstat(int argc, char **argv)
 {
+    (void)argc; (void)argv;
     extern uint32_t eth64_get_ip(void);
     extern int eth64_get_mac(uint8_t *mac);
     extern void net64_get_stats(uint64_t *rx, uint64_t *tx);
@@ -2788,6 +2806,7 @@ static void shell_cmd_netstat(int argc, char **argv)
 
 static void shell_cmd_df(int argc, char **argv)
 {
+    (void)argc; (void)argv;
     vga_puts("Filesystem     Size    Used    Available\n");
     vga_puts("/dev/ide0      32MB    2MB     30MB\n");
     vga_puts("/dev/ide1      64MB    1MB     63MB\n");
@@ -2795,6 +2814,7 @@ static void shell_cmd_df(int argc, char **argv)
 
 static void shell_cmd_reboot(int argc, char **argv)
 {
+    (void)argc; (void)argv;
     vga_puts("Rebooting... (press reset button)\n");
     /* 简化版：停机waiting复位 */
     while (1) { asm volatile("hlt"); }
@@ -2803,6 +2823,7 @@ static void shell_cmd_reboot(int argc, char **argv)
 /* poweroff命令：ACPIoff机（QEMU） */
 static void shell_cmd_poweroff(int argc, char **argv)
 {
+    (void)argc; (void)argv;
     vga_puts("Shutting down...\n");
     /* QEMU/Bochs ACPIoff机port */
     __asm__ volatile(
@@ -2818,6 +2839,7 @@ static void shell_cmd_poweroff(int argc, char **argv)
 /* env命令：显示环境变量 */
 static void shell_cmd_env(int argc, char **argv)
 {
+    (void)argc; (void)argv;
     vga_puts("Environment variables:\n");
     vga_puts("  PATH=/bin:/sbin\n");
     vga_puts("  HOME=/root\n");
@@ -2830,6 +2852,7 @@ static void shell_cmd_env(int argc, char **argv)
 /* set命令：显示shell设置 */
 static void shell_cmd_set(int argc, char **argv)
 {
+    (void)argc; (void)argv;
     vga_puts("Shell settings:\n");
     vga_puts("  interactive=yes\n");
     vga_puts("  history_size=100\n");
@@ -2841,6 +2864,7 @@ static void shell_cmd_set(int argc, char **argv)
 /* alias命令：显示命令别名 */
 static void shell_cmd_alias(int argc, char **argv)
 {
+    (void)argc; (void)argv;
     vga_puts("Command aliases:\n");
     vga_puts("  ll='ls -la'\n");
     vga_puts("  la='ls -a'\n");
@@ -2854,6 +2878,7 @@ static void shell_cmd_alias(int argc, char **argv)
 /* uname -a full信息 */
 static void shell_cmd_uname_full(int argc, char **argv)
 {
+    (void)argc; (void)argv;
     vga_puts("HepuOS hepu 0.56.1 #1 SMP x86_64 GNU/HepuOS\n");
 }
 

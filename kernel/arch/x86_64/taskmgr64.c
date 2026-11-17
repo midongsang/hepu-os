@@ -108,6 +108,7 @@ static void draw_progress_bar(void *fb, int fb_w, int fb_h,
 /* 任务管理器主界面（图形模式） */
 void taskmgr64_draw(void *fb, int fb_w, int fb_h, int x, int y, int w, int h)
 {
+    (void)h;
     if (!fb) return;
 
     system_info_t info;

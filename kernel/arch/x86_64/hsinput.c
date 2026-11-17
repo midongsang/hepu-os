@@ -11,7 +11,7 @@ static int g_sw = 1024;
 static int g_sh = 768;
 static int g_wheel_acc = 0;
 static int last_left = 0;
-static int last_right = 0;
+static int last_right __attribute__((unused)) = 0;
 
 /* ---- 外部依赖 (USB/PS2 驱动与桌面回调) ---- */
 extern void usb64_poll(void);
