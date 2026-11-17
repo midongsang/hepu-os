@@ -380,9 +380,92 @@ u32 sys_shmdt(u32 shm_id, u32 arg2,
     return (u32)ipc_shm_release(shm_id, sched_current_pid());
 }
 
+/* --------------------------------------------------------------------------
+ * B2 / KERNEL_SCOPE §5-4: 把一段**物理地址**映射进调用进程的用户空间。
+ *
+ * 为什么需要这条: sys_fb_desc 只告诉用户态显存在哪（phys/宽高/pitch/格式），
+ * 却没法让它真的写进去 —— 32 位 sys_mmap 原来只会从用户堆切一块内存, 从不
+ * 建 PTE。于是"桌面搬用户态"这条路在最后一步断掉: 拿到了物理地址, 访问它
+ * 仍然是未映射。
+ *
+ * 语义: addr = 物理地址(会按页向下对齐), length = 字节数,
+ * 返回**用户虚拟地址**; 失败返回 0。虚拟地址从 MMAP_BASE 线性分配,
+ * 每个进程有自己的 page_dir, 所以同一虚拟地址在不同进程映射不同物理是合法的。
+ * 游标存在 process_t.mmap_next, 懒初始化。
+ *
+ * 只映射, 不分配物理帧 —— 物理帧是调用者给的(显存/MMIO 本来就在那)。
+ * 也不做引用计数: 重复 map 同一物理段会拿到不同虚拟地址, 这符合 mmap 的
+ * 常规行为, 回收交给 munmap。
+ * ------------------------------------------------------------------------ */
+#define MAP_PHYS        0x1000u    /* 自定义 flag: addr 解释为物理地址 */
+#define MMAP_BASE       0x60000000u /* 避开用户栈(0x40000000), 栈向下增长 */
+#define MMAP_LIMIT      0xB0000000u /* 留出到 0xBFFFFFFF 的余量 */
+#define MMAP_MAX_LEN    (256u * 1024 * 1024) /* 单次上限: 超过就是调用方算错了 */
+
 u32 sys_mmap(u32 addr, u32 length, u32 prot, u32 flags)
 {
-    (void)addr; (void)prot; (void)flags;
+    /* --- B2: 物理地址映射路径 (framebuffer / MMIO) --- */
+    if (flags & MAP_PHYS) {
+        extern process_t *current;
+        if (!current || !current->page_dir) return 0;
+        if (length == 0 || length > MMAP_MAX_LEN) return 0;
+
+        uint32_t phys = addr & ~(PAGE_SIZE - 1u);
+        uint32_t len  = (length + PAGE_SIZE - 1u) & ~(PAGE_SIZE - 1u);
+
+        if (current->mmap_next == 0) current->mmap_next = MMAP_BASE;
+        uint32_t virt = current->mmap_next;
+        if (virt < MMAP_BASE || (uint64_t)virt + len > (uint64_t)MMAP_LIMIT) return 0;
+
+        for (uint32_t off = 0; off < len; off += PAGE_SIZE) {
+            if (paging_map(current->page_dir, virt + off, phys + off,
+                           PAGE_PRESENT | PAGE_WRITE | PAGE_USER) < 0) {
+                /* 半途失败: 把已建的那几页撤掉, 不留半个映射 */
+                for (uint32_t back = 0; back < off; back += PAGE_SIZE) {
+                    paging_unmap(current->page_dir, virt + back);
+                }
+                return 0;
+            }
+        }
+        current->mmap_next = virt + len;
+
+        {
+            /* 32 位没有"端口 + 数值"形式的现成串口输出, 自己拼十六进制,
+             * 不引外部符号(引了就得在别处补定义, 反而多一处可坏的东西)。 */
+            extern void serial_puts(uint16_t, const char *);
+            char b[11];
+            unsigned v, x;
+            int i;
+            b[0] = '0'; b[1] = 'x';
+            for (i = 0; i < 8; i++) {
+                v = (unsigned)((phys >> ((7 - i) * 4)) & 0xF);
+                b[2 + i] = (char)(v < 10 ? ('0' + v) : ('a' + (v - 10)));
+            }
+            b[10] = 0;
+            serial_puts(0x3F8, "[MMAP] phys=");
+            serial_puts(0x3F8, b);
+
+            x = virt;
+            for (i = 0; i < 8; i++) {
+                v = (x >> ((7 - i) * 4)) & 0xF;
+                b[2 + i] = (char)(v < 10 ? ('0' + v) : ('a' + (v - 10)));
+            }
+            serial_puts(0x3F8, " virt=");
+            serial_puts(0x3F8, b);
+
+            x = len;
+            for (i = 0; i < 8; i++) {
+                v = (x >> ((7 - i) * 4)) & 0xF;
+                b[2 + i] = (char)(v < 10 ? ('0' + v) : ('a' + (v - 10)));
+            }
+            serial_puts(0x3F8, " len=");
+            serial_puts(0x3F8, b);
+            serial_puts(0x3F8, "\n");
+        }
+        return virt;
+    }
+
+    (void)addr; (void)prot;
     /* V7.78安全修复: sys_mmap使用用户态堆分配，不再返回kmalloc内核地址（漏洞B）
      * mmap需要页对齐，通过brk分配页对齐的用户空间内存。 */
     if (length == 0) return 0;
@@ -424,6 +507,70 @@ u32 sys_mmap(u32 addr, u32 length, u32 prot, u32 flags)
 
     user_alloc_add(old_brk, length);
     return old_brk;
+}
+
+/* B2 自检: 在临时页目录里实测 "物理地址 -> 用户虚拟地址" 是否真建了 PTE。
+ *
+ * 为什么必须切 CR3 才能测: current->page_dir 只是个结构体字段, 改它不会切页表;
+ * 若在旧 CR3 下去读新虚拟地址, 读到的是旧目录的映射(或直接 #PF), 那就什么也没验证。
+ * 临时目录由 paging_create_dir 建, 它复制内核 PDE 但清掉 user 位, 所以 ring0
+ * 执行与内核栈都仍然有效, 切过去是安全的。
+ *
+ * 用物理 0x100000 做探针是不挑的: 它一定在内核映像里, identity map 已映射,
+ * 复制到 0x60000000 后读出来的第一个字就是内核代码头。只要不 #PF、且值非 0,
+ * 就证明这条路径真的建立了映射 —— 这正是 sys_fb_desc + SYS_MMAP 给桌面用的同一条。 */
+void sys_mmap_selftest(void)
+{
+    extern process_t *current;
+    extern void paging_switch_dir(page_directory_t *dir);
+    extern page_directory_t *paging_get_kernel_dir(void);
+    extern void *memset(void *, int, unsigned);
+
+    page_directory_t *tmp = paging_create_dir();
+    if (!tmp) {
+        extern void serial_puts(uint16_t, const char *);
+        serial_puts(0x3F8, "[MMAPTEST] create dir failed\n");
+        return;
+    }
+
+    /* 内核态 current 通常是空的, 而 sys_mmap 的第一句就要求有 current 和 page_dir
+     * (它本来只服务用户进程)。所以这里造一个临时进程结构来"扮演调用者" ——
+     * 不这么做测到的只是"内核态没人调 mmap", 什么也证明不了。 */
+    static process_t fake_proc;
+    process_t *save_cur = current;
+    page_directory_t *save_dir = current ? current->page_dir : 0;
+    uint32_t save_next = current ? current->mmap_next : 0;
+
+    memset(&fake_proc, 0, sizeof(fake_proc));
+    fake_proc.page_dir = tmp;
+
+    paging_switch_dir(tmp);
+    current = &fake_proc;
+
+    uint32_t v = sys_mmap(0x100000u, PAGE_SIZE, 0, MAP_PHYS);
+    uint32_t probe = 0;
+    if (v) probe = *(volatile uint32_t *)(uintptr_t)v;
+
+    current = save_cur;
+    if (save_cur) { save_cur->page_dir = save_dir; save_cur->mmap_next = save_next; }
+    paging_switch_dir(save_dir ? save_dir : paging_get_kernel_dir());
+    paging_free_dir(tmp);
+
+    {
+        extern void serial_puts(uint16_t, const char *);
+        serial_puts(0x3F8, v ? "[MMAPTEST] phys->virt ok, read=" : "[MMAPTEST] map FAILED\n");
+        if (v) {
+            char b[11]; unsigned x = probe; int i;
+            b[0] = '0'; b[1] = 'x';
+            for (i = 0; i < 8; i++) {
+                unsigned d = (x >> ((7 - i) * 4)) & 0xF;
+                b[2 + i] = (char)(d < 10 ? ('0' + d) : ('a' + (d - 10)));
+            }
+            b[10] = 0;
+            serial_puts(0x3F8, b);
+            serial_puts(0x3F8, "\n");
+        }
+    }
 }
 
 u32 sys_munmap(u32 addr, u32 length, u32 arg3, u32 arg4)

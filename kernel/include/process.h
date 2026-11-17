@@ -91,6 +91,10 @@ typedef struct process {
     uint32_t    mem_over_ticks;   /* 内存持续超限 tick 计数(100Hz) */
     int         exit_code;        /* V6.67: 进程退出码，供waitpid获取 */
     uint32_t    kernel_stack_raw; /* V6.67: 内核栈 kheap 原始地址 (页对齐分配时供退出释放) */
+    /* B2 / KERNEL_SCOPE §5-4: mmap 区间游标。0 = 尚未用过, 首次 mmap 时懒初始化为
+     * MMAP_BASE。放在结构体末尾, 不影响上面注释里硬编码的
+     * kernel_stack@48 / kernel_esp@52 / page_dir@68 偏移。 */
+    uint32_t    mmap_next;
 } process_t;
 
 /* V3.87-E7: 应用默认内存限额(16MB = 4096页)——.hug/ELF 用户程序创建时生效

@@ -578,6 +578,11 @@ int hepu_init_phase(init_phase_t phase)
                 extern int  desk_start(uint32_t);
                 extern int  desk_tick(void);
 
+                /* B2: 先实测一次"物理地址 -> 用户虚拟地址"是否真建 PTE。
+                 * 桌面搬用户态要靠它, 所以先在这个位置验一遍, 免得桌面那头
+                 * 拿到地址却写不动才发现。跑在 desk_start 之前, 不碰桌面状态。 */
+                { extern void sys_mmap_selftest(void); sys_mmap_selftest(); }
+
                 serial_puts(0x3F8, "[EDESKTOP] desk_start on 32-bit\n");
                 int rc = desk_start(100);
                 serial_puts(0x3F8, "[EDESKTOP] res=");
