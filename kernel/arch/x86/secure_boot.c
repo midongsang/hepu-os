@@ -46,18 +46,26 @@ int sb_start_boot(void)
     return 0;
 }
 
+#define SB_ERR_NOT_IMPLEMENTED (-2)   /* 接口存在但算法未实现，绝不返回 0 冒充通过 */
+
 int sb_verify_stage(sb_stage_t stage, const char *component,
                     const uint8_t *data, uint64_t size)
 {
     sb.current_stage = stage;
-    /* 度量 */
+    /* 度量（真做） */
     sb_measure(stage, component, data, size);
-    /* 简化: 所有阶段验证通过 */
-    sb_verify_result_t result = SB_VERIFY_OK;
-    if (result != SB_VERIFY_OK) {
+    /* 这里原来写的是 `sb_verify_result_t result = SB_VERIFY_OK;` 然后用
+     * `if (result != SB_VERIFY_OK)` 判断 —— 常量跟常量比，条件恒假，等于
+     * "验证永远通过"的假实现。度量是真的，验证是假装的。
+     * 模块目前没有任何签名/哈希算法实现（见 sb_verify_signature / sb_verify_hash），
+     * 所以如实按"未实现"处理：非严格模式警告后继续，严格模式直接判失败。 */
+    vga_puts("[SECBOOT] WARNING: stage verification NOT implemented, component=");
+    vga_puts(component ? component : "?");
+    vga_puts("\n");
+    if (sb.config.strict_mode) {
         sb.boot_failed = 1;
-        snprintf(sb.fail_reason, 256, " orders seg %d verify failed ", stage);
-        if (sb.config.strict_mode) return -1;
+        snprintf(sb.fail_reason, 256, "stage %d verification not implemented", stage);
+        return SB_ERR_NOT_IMPLEMENTED;
     }
     return 0;
 }
@@ -88,14 +96,19 @@ int sb_verify_signature(const uint8_t *data, uint64_t size,
     (void)data; (void)size; (void)signature;
     if (key_id < 0 || key_id >= SB_MAX_KEYS || !sb.keys[key_id].used) return -1;
     if (sb.keys[key_id].revoked) return -1;
-    return 0;
+    /* 只查了"这把 key 存在且没吊销"，没有做任何签名运算。
+     * 原来这里 return 0，调用方会认为签名已验证通过 —— 必须改成未实现。 */
+    vga_puts("[SECBOOT] WARNING: signature verification NOT implemented\n");
+    return SB_ERR_NOT_IMPLEMENTED;
 }
 
 int sb_verify_hash(const uint8_t *data, uint64_t size,
                    const uint8_t *expected_hash, int algo)
 {
     (void)data; (void)size; (void)expected_hash; (void)algo;
-    return 0;
+    /* 同上：一个字节都没比。原来 return 0 等于"哈希永远匹配"。 */
+    vga_puts("[SECBOOT] WARNING: hash verification NOT implemented\n");
+    return SB_ERR_NOT_IMPLEMENTED;
 }
 
 int sb_verify_certificate(int cert_id)
