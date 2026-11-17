@@ -87,6 +87,7 @@ static void mp_pool_free(mp_pool_t *pool, void *ptr)
 /* 判断指针是否在池内存范围内 */
 static int mp_pool_owns(mp_pool_t *pool, void *ptr, void *mem, uint32_t total_size)
 {
+    (void)pool;
     uint8_t *p = (uint8_t *)ptr;
     return (p >= (uint8_t *)mem && p < (uint8_t *)mem + total_size);
 }

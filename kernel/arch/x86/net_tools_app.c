@@ -64,6 +64,7 @@ static void mac_to_str(const uint8_t *mac, char *buf, int sz)
 
 int net_tools_ping(const char *host, int count, int interval_ms)
 {
+    (void)interval_ms;
     if (!nt.initialized) net_tools_init();
     if (!host) return -1;
     strncpy(nt.target, host, 63);

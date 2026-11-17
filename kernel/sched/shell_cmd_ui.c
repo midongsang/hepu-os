@@ -816,6 +816,7 @@ void cmd_fonttype(char *args)
         if (tt_font_is_loaded()) {
             /* 切换到TrueType字体（需要先加载字体数据） */
             extern uint8_t current_font_type;
+            (void)current_font_type;
             /* 简化：直接设置字体类型为2（TrueType） */
             vga_puts("TrueType font active (if loaded)\n");
         } else {

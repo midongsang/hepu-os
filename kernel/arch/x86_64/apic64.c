@@ -1055,9 +1055,9 @@ void apic64_timer_eoi(void)
  * ========================================================================== */
 #define HPET_TIMER0_CONF   0x100u
 #define HPET_TIMER0_CMP    0x108u
+#define HPET_TN_TYPE_LEVEL 0x002u
 #define HPET_TN_INT_EN     (1u << 2)
 #define HPET_TN_PERIODIC   (1u << 3)
-#define HPET_TN_PERIOD_EN  (1u << 4)
 #define HPET_TN_ROUTE_SH   9
 #define HPET_TN_ROUTE_MSK  0x7Fu
 #define HPET_PRIMARY_VECTOR 0x42
@@ -1076,6 +1076,9 @@ void hpet64_tick_handler(void)
     g_hpet_tick_count++;
 }
 
+/* 供桌面就绪后对账：HPET 投递次数（0 = 0x42 未投递，主 tick 仍由 LAPIC 备用承担）。 */
+uint64_t apic64_hpet_tick_count(void) { return g_hpet_tick_count; }
+
 static int hpet64_primary_tick_init(void)
 {
     if (!g_hpet_mapped || g_hpet_period_fs == 0) return -1;
@@ -1087,23 +1090,30 @@ static int hpet64_primary_tick_init(void)
     uint64_t period_ticks = 1000000000000ULL / g_hpet_period_fs;
     if (period_ticks < 16ULL) period_ticks = 16ULL;
 
-    uint32_t t0conf = hpet_read32(HPET_TIMER0_CONF);
-    uint32_t route = (t0conf >> HPET_TN_ROUTE_SH) & HPET_TN_ROUTE_MSK;
-    /* 路由字段未给定时，取 ISA(0..15) 之后的首个空闲 GSI 16 兜底 */
-    uint32_t gsi = route ? route : 16u;
+    uint32_t t0conf_hi = hpet_read32(HPET_TIMER0_CONF + 4);
+    /* 可路由 APIC 输入位图在 TN_CFG 高 32 位(intcap)，仅作诊断留证。
+     * 选一个未被 PIT/RTC/IDE/网卡占用的空闲 GSI；定时器路由选择字段与
+     * IOAPIC 重定向必须指向同一 GSI（QEMU 按 route 抬 irqs[route]）。 */
+    uint32_t intcap = t0conf_hi;
+    const uint32_t HPET_GSI = 16u;
+    uint32_t route = HPET_GSI;
+    uint32_t gsi = HPET_GSI;
 
-    /* 先关 Timer0，写比较初值，再开周期模式 + 中断使能 */
+    /* 先关 Timer0；先置周期模式再写比较值——QEMU 在 CMP 写入时按当前是否
+     * 周期模式记录 period，若先写 CMP 再开周期，period=0 只会触发一次即停。 */
     hpet_write32(HPET_TIMER0_CONF, 0);
+    hpet_write32(HPET_TIMER0_CONF, HPET_TN_PERIODIC);
     uint64_t ctr = hpet_read_counter();
     uint64_t cmp = ctr + period_ticks;
     hpet_write32(HPET_TIMER0_CMP,     (uint32_t)(cmp & 0xFFFFFFFFu));
     hpet_write32(HPET_TIMER0_CMP + 4, (uint32_t)(cmp >> 32));
 
-    uint32_t conf = HPET_TN_INT_EN | HPET_TN_PERIODIC | HPET_TN_PERIOD_EN;
+    uint32_t conf = HPET_TN_INT_EN | HPET_TN_PERIODIC;
     conf |= (route << HPET_TN_ROUTE_SH);
     hpet_write32(HPET_TIMER0_CONF, conf);
 
-    irq64_install_gate(HPET_PRIMARY_VECTOR, (uint64_t)hpet64_tick_handler);
+    extern void irq_entry_66(void);
+    irq64_install_gate(HPET_PRIMARY_VECTOR, (uint64_t)irq_entry_66);
     /* HPET 中断在 QEMU/真机多为级别触发、低电平有效；投递到 BSP。 */
     int rc = apic64_set_irq_redirect((uint8_t)gsi, HPET_PRIMARY_VECTOR,
                                      0, 0, 1, 1, (uint8_t)apic64_get_id());
@@ -1113,6 +1123,7 @@ static int hpet64_primary_tick_init(void)
     vga_puts(" period_ticks="); vga_put_hex(period_ticks);
     vga_puts(" gsi="); vga_put_hex(gsi);
     vga_puts(" route="); vga_put_hex(route);
+    vga_puts(" intcap="); vga_put_hex(intcap);
     vga_puts(" vec="); vga_put_hex(HPET_PRIMARY_VECTOR);
     vga_puts(" rc="); vga_put_hex((uint64_t)rc);
     vga_puts("\n");

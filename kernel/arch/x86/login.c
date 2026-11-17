@@ -75,6 +75,7 @@ int login_is_active(void)
 /* 认证用户 */
 int login_authenticate(int user_id, const char *password)
 {
+    (void)password;
     /* 调用系统调用验证密码（通过multi_user） */
     mu_user_t user;
     if (mu_user_get(user_id, &user) != 0) {
@@ -149,6 +150,7 @@ int login_lock_screen(void)
 /* 解锁屏幕 */
 int login_unlock_screen(const char *password)
 {
+    (void)password;
     /* 验证当前用户密码 */
     mu_user_t current;
     if (mu_user_get_current(&current) == 0) {

@@ -143,8 +143,8 @@ gfx_color_t gfx3d_texture_sample(float u, float v) {
     v = v - (int)v; if (v<0) v+=1;
     int x = (int)(u * (active_texture->width-1));
     int y = (int)(v * (active_texture->height-1));
-    if (x<0)x=0; if(x>=active_texture->width)x=active_texture->width-1;
-    if (y<0)y=0; if(y>=active_texture->height)y=active_texture->height-1;
+    if (x<0) { x=0; } if(x>=active_texture->width) { x=active_texture->width-1; }
+    if (y<0) { y=0; } if(y>=active_texture->height) { y=active_texture->height-1; }
     if (tex_filter == GFX3D_TEX_FILTER_LINEAR) {
         int x2=x+1, y2=y+1;
         if(x2>=active_texture->width)x2=x;
@@ -353,7 +353,7 @@ void gfx3d_draw_cube(float size,gfx_color_t color) {
 }
 
 void gfx3d_draw_sphere(float radius,int segments,int rings,gfx_color_t color) {
-    if(segments<3)segments=3; if(rings<2)rings=2;
+    if(segments<3) { segments=3; } if(rings<2) { rings=2; }
     vec3_t col={COLOR_R(color)/255.0f,COLOR_G(color)/255.0f,COLOR_B(color)/255.0f};
     int vc=(rings+1)*(segments+1);
     vertex_t *verts=(vertex_t*)kmalloc(vc*sizeof(vertex_t));
@@ -417,7 +417,7 @@ void gfx3d_draw_plane(float width,float height,gfx_color_t color) {
 }
 
 void gfx3d_get_stats(uint32_t *t,uint32_t *p,uint32_t *v) {
-    if(t)*t=ctx.triangles_drawn; if(p)*p=ctx.pixels_drawn; if(v)*v=ctx.vertices_processed;
+    if(t) { *t=ctx.triangles_drawn; } if(p) { *p=ctx.pixels_drawn; } if(v) { *v=ctx.vertices_processed; }
 }
 void gfx3d_reset_stats(void) { ctx.triangles_drawn=0;ctx.pixels_drawn=0;ctx.vertices_processed=0; }
 
@@ -434,6 +434,7 @@ void gfx3d_set_blend_func(gfx3d_blend_factor_t src, gfx3d_blend_factor_t dst) {
 /* 计算混合因子 */
 static float blend_factor(gfx3d_blend_factor_t factor, float src_a, float dst_a,
                           float src_r, float dst_r) {
+    (void)dst_r;
     switch (factor) {
         case GFX3D_BLEND_ZERO: return 0.0f;
         case GFX3D_BLEND_ONE: return 1.0f;
@@ -468,9 +469,9 @@ static gfx_color_t blend_color(gfx_color_t src, gfx_color_t dst, float alpha) {
     int g = (int)((sg * sf + dg * df) * 255);
     int b = (int)((sb * sf + db * df) * 255);
 
-    if (r > 255) r = 255; if (r < 0) r = 0;
-    if (g > 255) g = 255; if (g < 0) g = 0;
-    if (b > 255) b = 255; if (b < 0) b = 0;
+    if (r > 255) { r = 255; } if (r < 0) { r = 0; }
+    if (g > 255) { g = 255; } if (g < 0) { g = 0; }
+    if (b > 255) { b = 255; } if (b < 0) { b = 0; }
 
     return MAKE_COLOR(r, g, b);
 }

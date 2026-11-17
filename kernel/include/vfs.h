@@ -201,8 +201,8 @@ static inline int  hepu_fs_readdir(const char *p, hepu_fs_dirent_t *buf, int max
     return n;
 }
 /* ext2 辅助：32 位 stub，不走 inode 直接路径解析 */
-static inline uint32_t hepu_fs_path_to_inode(const char *p) { return 0; }
-static inline int hepu_fs_read_inode(uint32_t i, void *b, uint32_t s) { return -1; }
-static inline int hepu_fs_write_inode(uint32_t i, const void *b, uint32_t s) { return -1; }
+static inline uint32_t hepu_fs_path_to_inode(const char *p) { (void)p; return 0; }
+static inline int hepu_fs_read_inode(uint32_t i, void *b, uint32_t s) { (void)i; (void)b; (void)s; return -1; }
+static inline int hepu_fs_write_inode(uint32_t i, const void *b, uint32_t s) { (void)i; (void)b; (void)s; return -1; }
 
 #endif /* VFS_H */

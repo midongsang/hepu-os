@@ -201,6 +201,7 @@ int sbvr_init(uint32_t dev_id, uint64_t start_lba, uint64_t total_sectors)
 int sbvr_format(uint32_t dev_id, uint64_t start_lba, uint64_t total_sectors,
                 const char *label)
 {
+    (void)dev_id;
     sbvr_header_t hdr;
     memset(&hdr, 0, sizeof(hdr));
 

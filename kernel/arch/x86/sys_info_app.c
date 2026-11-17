@@ -175,6 +175,7 @@ void sys_info_draw_ui(int x, int y, int width, int height)
     gfx_color_t bg = GFX_RGB(30, 30, 40), fg = GFX_RGB(220, 220, 220), accent = GFX_RGB(100, 180, 255);
     gfx_color_t green = GFX_RGB(100, 220, 100), yellow = GFX_RGB(220, 200, 100);
     gfx_color_t gray = GFX_RGB(130, 130, 130), label_color = GFX_RGB(150, 170, 200);
+    (void)label_color;
 
     gfx_fill_rect(x, y, width, height, bg);
 

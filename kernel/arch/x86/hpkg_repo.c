@@ -157,7 +157,7 @@ int hpkg_search_installed(const char *query,
     if (!query || !results || max_results <= 0) return 0;
 
     int count = 0;
-    for (int i = 0; i < g_db.package_count && count < max_results; i++) {
+    for (int i = 0; (uint32_t)i < g_db.package_count && count < max_results; i++) {
         if (!g_db.packages[i].used) continue;
         hpkg_installed_t *pkg = &g_db.packages[i];
 
@@ -189,7 +189,7 @@ int hpkg_search_installed(const char *query,
 int hpkg_find_installed(const char *name, hpkg_installed_t *out)
 {
     if (!name || !out) return -1;
-    for (int i = 0; i < g_db.package_count; i++) {
+    for (int i = 0; (uint32_t)i < g_db.package_count; i++) {
         if (g_db.packages[i].used &&
             repo_strcmp(g_db.packages[i].meta.name, name) == 0) {
             *out = g_db.packages[i];
@@ -216,6 +216,7 @@ typedef struct {
 /* 检查版本是否满足要求（简化版：字符串比较） */
 static int version_satisfies(const char *version, const char *min, const char *max)
 {
+    (void)min; (void)max;
     /* 简化：只要已安装就认为满足 */
     /* 实际应该解析版本号并比较 */
     return hpkg_is_installed(version);
@@ -487,7 +488,7 @@ int hpkg_check_updates(hpkg_installed_t *updates, int max_updates)
     int count = 0;
     /* 简化：遍历已安装包，检查是否有更新版本 */
     /* 实际应该从仓库获取最新版本号并比较 */
-    for (int i = 0; i < g_db.package_count && count < max_updates; i++) {
+    for (int i = 0; (uint32_t)i < g_db.package_count && count < max_updates; i++) {
         if (!g_db.packages[i].used) continue;
         /* 模拟：标记为有更新 */
         /* updates[count] = g_db.packages[i]; */

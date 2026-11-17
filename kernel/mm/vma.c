@@ -113,6 +113,7 @@ int vma_map(vm_address_space_t *space, uint32_t start, uint32_t length, uint32_t
     /* 检查与前一个区域合并 */
     if (prev && prev->end == start && prev->flags == flags) {
         uint32_t old_pages = (prev->end - prev->start) / PAGE_SIZE;
+        (void)old_pages;
         prev->end = end;
         space->total_pages += (end - start) / PAGE_SIZE;
         /* 检查合并后是否可以与后一个区域合并 */
@@ -131,6 +132,7 @@ int vma_map(vm_address_space_t *space, uint32_t start, uint32_t length, uint32_t
     /* 检查与后一个区域合并 */
     if (next_area && end == next_area->start && next_area->flags == flags) {
         uint32_t old_pages = (next_area->end - next_area->start) / PAGE_SIZE;
+        (void)old_pages;
         next_area->start = start;
         space->total_pages += (end - start) / PAGE_SIZE;
         return 0;

@@ -236,6 +236,7 @@ int widget_list_click(wm_widget_t *wgt, int wx, int wy, int x, int y)
 /* 滚动条点击: 设置滑块位置 */
 void widget_scrollbar_click(wm_widget_t *wgt, int wx, int wy, int x, int y)
 {
+    (void)wx; (void)x;
     int max = wgt->u.list.selected;
     if (max < 1) max = 1;
     int rel = y - (wy + wgt->y);

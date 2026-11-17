@@ -100,10 +100,11 @@ static int l2cap_send_command(uint16_t cid, uint8_t code,
                                uint8_t identifier, const uint8_t *data,
                                uint16_t data_len)
 {
+    (void)cid;
     uint8_t buf[256];
     uint16_t total_len = 4 + data_len;  /* 信令头4字节 + 数据 */
 
-    if (total_len + L2CAP_HEADER_SIZE > sizeof(buf)) return -1;
+    if (total_len + L2CAP_HEADER_SIZE > (int)sizeof(buf)) return -1;
 
     /* L2CAP头 */
     build_l2cap_header(buf, total_len, L2CAP_CID_SIGNALING);
@@ -201,7 +202,7 @@ int l2cap_send(uint16_t cid, const uint8_t *data, uint16_t len)
     if (len > chan->mtu) return -3;
 
     uint8_t buf[1024];
-    if (len + L2CAP_HEADER_SIZE > sizeof(buf)) return -4;
+    if (len + L2CAP_HEADER_SIZE > (int)sizeof(buf)) return -4;
 
     /* L2CAP头 */
     build_l2cap_header(buf, len, chan->remote_cid);
@@ -239,6 +240,7 @@ static void handle_conn_rsp(const uint8_t *data, uint16_t len)
     uint16_t local_cid = data[2] | (data[3] << 8);
     uint16_t result = data[4] | (data[5] << 8);
     uint16_t status = data[6] | (data[7] << 8);
+    (void)status;
 
     l2cap_channel_t *chan = find_channel_by_cid(local_cid);
     if (!chan) return;
@@ -316,6 +318,7 @@ static void l2cap_process_signaling(const uint8_t *data, uint16_t len)
 
     uint8_t code = data[0];
     uint8_t identifier = data[1];
+    (void)identifier;
     uint16_t cmd_len = data[2] | (data[3] << 8);
 
     if (cmd_len + 4 > len) return;
@@ -344,6 +347,7 @@ static void l2cap_process_signaling(const uint8_t *data, uint16_t len)
 /* 处理HCI ACL数据 */
 int l2cap_process_acl_data(uint16_t handle, const uint8_t *data, uint16_t len)
 {
+    (void)handle;
     if (!data || len < L2CAP_HEADER_SIZE) return -1;
 
     stat_packets_recv++;

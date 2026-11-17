@@ -161,6 +161,7 @@ static void prdt_build(uint32_t phys, uint32_t bytes)
  * bit1=错误; 完成后清中断位. */
 static int dma_wait_done(uint16_t io_base, int timeout)
 {
+    (void)io_base;
     while (timeout-- > 0) {
         uint8_t bms = dma_inb(bmba + 2);
         if (bms & 0x2) {              /* DMA 错误 */

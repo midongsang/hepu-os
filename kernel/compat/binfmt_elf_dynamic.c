@@ -218,6 +218,7 @@ int elf_parse_dynamic(const uint8_t *data, uint32_t size,
             strtab_size = dyn[i].d_val;
         }
     }
+    (void)strtab_size;
 
     /* 提取DT_NEEDED条目 */
     int lib_count = 0;
@@ -464,6 +465,7 @@ void *dyn_lookup_symbol(const char *name)
 /* 重定位（简化版） */
 int dyn_relocate(uint32_t base_addr, const uint8_t *data, uint32_t size)
 {
+    (void)data; (void)size;
     /* 简化：只记录，实际需要解析RELA/REL段并应用重定位 */
     vga_printf("[ELF-DYN] Relocation for base 0x%x (simplified)\n", base_addr);
     return 0;

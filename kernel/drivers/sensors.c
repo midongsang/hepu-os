@@ -266,6 +266,7 @@ int sensors_sim_demo(void)
     static int t = 0;
     t++;
     float ang = (float)(t % 36) * 10.0f * 0.017453f;   /* 0..360 deg -> rad */
+    (void)ang;
     sensors_sim_write(0, 9.8f, 0.0f, 0.0f, 0.0f, 3);   /* accel */
     sensors_sim_write(1, 0.0f, 0.0f, (float)(t % 10), 0.0f, 2); /* gyro z */
     sensors_sim_write(2, (float)(t % 5), 0.0f, 0.0f, 0.0f, 1);   /* mag */

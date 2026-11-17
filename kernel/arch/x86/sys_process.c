@@ -236,6 +236,7 @@ u32 sys_exit(u32 code, u32 arg2,
         extern process_t *current;
         extern void tss_set_kernel_stack(uint32_t);
         extern char __stack_top[];
+        (void)__stack_top;
         current = NULL;
         tss_set_kernel_stack((uint32_t)mainline_irq_stack
                             + sizeof(mainline_irq_stack));

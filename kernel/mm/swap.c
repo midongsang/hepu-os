@@ -120,6 +120,7 @@ int swap_init_disk(uint32_t dev_id, uint64_t start_lba, uint64_t total_lba)
 
 int swap_format_disk(uint32_t dev_id, uint64_t start_lba, uint64_t total_lba)
 {
+    (void)dev_id;
     swap_disk_header_t hdr;
     memset(&hdr, 0, sizeof(hdr));
     hdr.magic = SWAP_HEADER_MAGIC;

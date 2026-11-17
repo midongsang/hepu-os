@@ -234,7 +234,7 @@ static process_t *sched_pick_weighted(int prio, int current_idx)
     for (int i = 1; i < MAX_PROCESSES && n < 64; i++) {
         int idx = (current_idx + i) % MAX_PROCESSES;
         if (proc_table[idx].state == PROC_READY &&
-            proc_table[idx].priority == prio &&
+            proc_table[idx].priority == (uint32_t)prio &&
             (proc_table[idx].cpu_affinity & 0x1u)) {
             cands[n] = &proc_table[idx];
             int did = proc_table[idx].domain_id;

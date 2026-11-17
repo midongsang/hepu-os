@@ -315,6 +315,7 @@ void image_viewer_draw_ui(int x, int y, int width, int height)
     gfx_color_t bg = GFX_RGB(30, 30, 40);
     gfx_color_t fg = GFX_RGB(255, 255, 255);
     gfx_color_t accent = GFX_RGB(100, 150, 255);
+    (void)accent;
     gfx_color_t gray = GFX_RGB(150, 150, 150);
 
     /* 背景 */

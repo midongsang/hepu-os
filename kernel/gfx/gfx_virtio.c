@@ -296,6 +296,7 @@ static int virtio_init_vq(uint16_t queue_sel, void **desc_out, void **avail_out,
 
     /* 分配队列内存（4KB对齐） */
     uint32_t vq_size = sizeof(virtq_desc_t) * queue_size + sizeof(virtq_avail_t) + sizeof(virtq_used_t);
+    (void)vq_size;
     /* 简化：使用静态内存 */
     static uint8_t vq_mem[4][4096] __attribute__((aligned(4096)));
     static int vq_used = 0;
@@ -367,6 +368,7 @@ static int virtio_gpu_send_cmd(void *cmd, uint32_t cmd_len, void *resp, uint32_t
     /* 处理响应 */
     uint16_t used_idx = ctrl_vq_used->idx - 1;
     uint32_t resp_id = ctrl_vq_used->ring[used_idx % VIRTQ_SIZE].id;
+    (void)resp_id;
     ctrl_vq_last_used = ctrl_vq_used->idx;
 
     /* 检查响应类型 */
@@ -695,6 +697,7 @@ static void virtio_present(void)
 
     /* 传输帧缓冲到主机 */
     uint32_t fb_size = virtio_width * virtio_height * (virtio_bpp / 8);
+    (void)fb_size;
     virtio_gpu_transfer_to_host_2d(virtio_resource_id, 0, 0, virtio_width, virtio_height, 0);
 
     /* 刷新资源到屏幕 */

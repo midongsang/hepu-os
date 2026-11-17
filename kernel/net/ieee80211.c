@@ -145,6 +145,7 @@ int ieee80211_parse_beacon(const uint8_t *frame, int len,
                            int *channel, int *signal_dbm,
                            int *security, int *wpa_version)
 {
+    (void)signal_dbm;
     if (!frame || len < 36) return -1;
 
     /* 检查是否是Beacon帧 */

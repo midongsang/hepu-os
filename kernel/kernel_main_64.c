@@ -589,6 +589,8 @@ void x86_64_kernel_main(void)
             probe[56] == 0x53 && probe[57] == 0xEF) {
             ahci_has_root = 1;
         }
+        extern void storage_hal_set_ahci_root(int);
+        storage_hal_set_ahci_root(ahci_has_root);
 
         /* 从 U 盘启动且机器内还有 SATA 盘时, 不能误把内部盘当根设备。
          * 仅当没有 MBR 0x83 根分区、且当前 SATA 盘不含出厂根分区时探测 U 盘。 */
@@ -622,7 +624,7 @@ void x86_64_kernel_main(void)
             g_root_size = 0;
         } else if (mbr_ext2_found) {
             /* IDE MBR 中已找到根分区, 保持 IDE 块设备 */
-        } else if (have_ahci) {
+        } else if (have_ahci && ahci_has_root) {
             ext2_64_set_block_device(ahci64_read_disk);
         } else {
             vga_puts("[INIT] No SATA/USB disk, falling back to IDE\n");
@@ -1266,6 +1268,13 @@ void x86_64_kernel_main(void)
         if (apic64_timer_needs_recal() && apic64_timer_recalibrate() == 0)
             vga_puts("[OK] APIC timer recalibrated at desktop\n");
 
+        {
+            extern uint64_t g_kernel_tick64;
+            extern uint64_t apic64_hpet_tick_count(void);
+            vga_puts("[HPET] tick对账 kernel_tick="); vga_put_hex(g_kernel_tick64);
+            vga_puts(" hpet_tick="); vga_put_hex(apic64_hpet_tick_count());
+            vga_puts("\n");
+        }
         klog64_log("[GUI] desktop environment ready");
 
         /* Crypto 完整懒加载 + TLS (延迟到桌面后，启动更快) */

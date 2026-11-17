@@ -2584,8 +2584,8 @@ static int hs_upper_overlap_rect(const hs_window_t *w, int *x0, int *y0, int *x1
         int iy1 = wy1 < nhd ? wy1 : nhd;
         if (ix1 > ix0 && iy1 > iy0) {
             if (has) {
-                if (ix0 < ux0) ux0 = ix0; if (iy0 < uy0) uy0 = iy0;
-                if (ix1 > ux1) ux1 = ix1; if (iy1 > uy1) uy1 = iy1;
+                if (ix0 < ux0) { ux0 = ix0; } if (iy0 < uy0) { uy0 = iy0; }
+                if (ix1 > ux1) { ux1 = ix1; } if (iy1 > uy1) { uy1 = iy1; }
             } else { ux0 = ix0; uy0 = iy0; ux1 = ix1; uy1 = iy1; }
             has = 1;
         }
@@ -4704,8 +4704,9 @@ void hs_scrollbar_draw(int x, int track_y, int track_h, int offset, int max_scro
 {
     if (max_scroll <= 0 || track_h <= 8) return;
     void *fb = hs_get_framebuffer();
+    (void)fb;
     int W = g_shell.screen_width, H = g_shell.screen_height;
-    (void)fb; (void)W; (void)H;
+    (void)W; (void)H;
     int bw = hs_sx(3);
     hs_fill_rounded_rect(x, track_y, bw, track_h, hs_s(2), g_shell.colors.border);
     int thumb_h = track_h * track_h / (track_h + hs_sy(max_scroll));

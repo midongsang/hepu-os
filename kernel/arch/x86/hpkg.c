@@ -247,6 +247,7 @@ int hpkg_install(const char *package_path) {
 
 /* 卸载包 */
 int hpkg_remove(const char *package_name, int remove_configs) {
+    (void)remove_configs;
     if (!package_name || !g_initialized) return -1;
 
     int idx = hpkg_find_installed(package_name);

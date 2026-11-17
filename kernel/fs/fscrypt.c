@@ -213,7 +213,6 @@ int fscrypt_encrypt_block(uint32_t inode, uint64_t block_num,
             uint32_t padded_len = len;
             if (current_policy.use_padding) {
                 padded_len = fscrypt_pkcs7_pad(data, len, FSCRYPT_BLOCK_SIZE);
-                if (padded_len < 0) return -1;
             }
 
             if (aes_cbc_encrypt(file_key, key_len, iv, data, padded_len) != 0) {

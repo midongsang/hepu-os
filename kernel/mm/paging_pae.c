@@ -45,6 +45,7 @@ static inline uint32_t pae_pt_idx(uint32_t virt)   { return (virt >> 12) & 0x1FF
 /* 初始化PAE分页 */
 void paging_pae_init(uint32_t mem_size_kb)
 {
+    (void)mem_size_kb;
     extern void serial_puts(uint16_t, const char *);
     serial_puts(0x3F8, "[PAE-PAGING] initializing...\n");
 
