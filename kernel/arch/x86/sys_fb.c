@@ -10,18 +10,11 @@
 
 #include <stdint.h>
 #include <process.h>
+/* 统一源码树: framebuffer 可映射描述 32/64 共用同一份契约（KERNEL_SCOPE §5-4）。
+ * 32 位曾在此文件内自带一份 fb_desc32_t, 字段与共享版逐字一致, 属纯重复。 */
+#include "gfx/display_backend.h"
 
-typedef struct {
-    uint64_t phys;      /* 显存物理地址 */
-    uint32_t width;
-    uint32_t height;
-    uint32_t pitch;     /* 字节/行 */
-    uint32_t bpp;
-    uint32_t format;    /* 1 = BGRX8888 */
-    uint32_t flags;
-} fb_desc32_t;
-
-#define FB_FLAG_BACKBUFFER 0x1
+#define FB_FLAG_BACKBUFFER FB_DESC_FLAG_DOUBLE_BUFFERED
 
 extern int gfx_width;
 extern int gfx_height;
@@ -96,7 +89,7 @@ uint32_t sys_fb_desc(uint32_t user_buf, uint32_t unused1,
     (void)unused1; (void)unused2; (void)unused3;
     if (!user_buf) return (uint32_t)-1;
 
-    fb_desc32_t d;
+    fb_desc_t d;
     d.phys   = (uint64_t)(uintptr_t)bochs_dispi_fb_phys();
     d.width  = (uint32_t)gfx_width;
     d.height = (uint32_t)gfx_height;

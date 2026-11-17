@@ -227,3 +227,61 @@ grep 不到 —— 这类"查不到就当没有"的误判会让人重做已经�
 5. kernel/shared/net/net_shared.h
 6. kernel/shared/drivers/driver_framework.c + .h
 7. kernel/shared/lib/lib_shared.c + .h (新增)
+
+## 为什么剩下的接不上（2026-11-17 实测）
+
+本轮试了两个方向，都被实测挡住。结论比"还没做"重要，记下来免得重复试。
+
+### 1. `net3.h` / `net.h` → `shared/net/net_shared.h`：**字段命名分叉，不能直接 include**
+
+直觉做法是让 32 位的 `kernel/include/net3.h`（只重定义 `ipv4_addr_t` / `mac_addr_t`）
+和 `kernel/include/net.h`（重定义 eth/arp/ip/icmp/tcp/udp 六个头）改成 include 共享头。
+试了，编译立刻报 **6 处 `conflicting types`**（`eth_header_t` / `arp_packet_t` /
+`icmp_header_t` / `udp_header_t` / `tcp_header_t` / `net_checksum`），说明 32 位还有一处
+定义在用。查下去发现 32 位网络栈其实有**三套并行定义**：
+
+| 位置 | 命名风格 | 引用者 |
+|---|---|---|
+| `kernel/include/net.h` | 无前缀：`type` / `hw_type` / `sender_mac` / `dst_mac[6]` | 3 个文件 |
+| `kernel/include/eth.h`、`arp.h`、`icmp.h`、`tcp.h` | `hepu_` 前缀：`hepu_eth_header_t` 等 | 各协议模块 |
+| `kernel/net/ip.c`、`udp.c`、`tcp.c` **文件内部** | 又各自 `typedef` 一遍无前缀版 | 仅本文件 |
+
+三套互不 include，所以从不冲突，但也不共享。而 `net_shared.h` 的字段名是第三套
+（`ethertype` / `htype` / `sha` / `dest_mac` 为 `mac_addr_t` 结构而非 `uint8_t[6]`）——
+**语义相同、字段名和类型都不同**。直接 include 进来不是"复用"，是制造第 4 套。
+
+**要合并就得改所有访问点**（`pkt->type` → `pkt->ethertype`，`pkt->sender_mac[i]` →
+`pkt->sha.addr[i]` …），属于纯改名工程，收益是"少一份定义"，风险是碰整个 32 位网络栈。
+**判断：不划算，除非将来重写 32 位协议栈。**
+
+### 2. `shared/mm/hepu_pmm.h`：**12 个 `static inline` 只有声明、没有实现、没有调用**
+
+`hepu_pmm_init` / `alloc_page` / `alloc_pages` / `free_page` / `get_stats` … 全部是
+`static inline` 原型，函数体为空。grep 全仓库，`hepu_pmm_*` 的**实际调用点为 0**。
+两边都 include 了它（`kernel/include/mm.h` 与 `arch/x86_64/include/pmm64.h`），
+但因为 `static inline` 未使用不报错，编译一直绿 —— 它是一份**设计残留**，
+不是"已完成的统一接口"。谁要真用，得先把 12 个函数体补出来。
+
+### 3. `pmm64.h` 里"`mm_shared.h` 定义"只是一句注释
+
+`kernel/arch/x86_64/include/pmm64.h:96` 写着 `/* get_stats → 填充 mm_phys_stats_t
+（mm_shared.h 定义） */`，但**该文件并没有 `#include mm_shared.h`**。它是靠别的包含路径
+间接拿到的。这类"注释声称共享、实际没 include"最容易骗过后来的审计。
+
+### 4. 已知不能接的两个（原文档已记，这里补一句为什么）
+
+- `shared/lib/lib_shared.c`：`shared_memcpy` 是**逐字节循环**，内核热路径替过去会直接变慢。
+- `shared/gfx/gfx_algo.c`：`gfx_algo_backend_t` 与现行 `desk_surface` 是两代抽象，
+  对接等于重画一遍调用点，属于架构选择而非顺手活。
+
+### 5. 一个**真缺**的东西：64 位没有前台所有权 syscall
+
+`SYS_FB_ACQUIRE(230)` / `SYS_FB_RELEASE(231)` 只在 32 位
+（`kernel/arch/x86/syscall.c:219-220` + `sys_fb.c`），**64 位 syscall 表里没有这两项**。
+32 位的实现是完整的：`sys_fb_acquire` 先把显存按 `MAP_PHYS` 映射进用户地址空间，
+再把前台提交权交给该进程（`desk_fb_owner_acquire`，实现在 **`shared/desktop/desk_runtime.c:43`**）。
+
+但**现在不该补**：64 位桌面（`desktop64.c` / `hpdesk`）跑在内核内，没有任何用户态进程会调，
+补上去就是一个没有调用方的接口 —— 正是这份文档第 185 行警告的"假接口"。
+要补的正确时机是 §5-4 把合成搬进用户态那一步，届时 64 位的 `sys_mmap` 还得先支持
+`MAP_PHYS`（现在只做匿名页分配，`fs_mm_sys.c` 里没有物理映射路径）。
