@@ -890,8 +890,22 @@ static int show_boot_menu(void)
     while (1) {
         clear_screen();
         set_color(EFI_LIGHTCYAN, EFI_BLACK);
-        print_str(L"\r\n  ================================================\r\n");
-        print_str(L"  |          Hepu OS Boot Menu                   |\r\n");
+        /* 标题改成 ASCII 艺术字。
+         * 只用 '#' 和空格这两种标准 ASCII —— 试过 '_ | / \\' 的 figlet 写法, 在
+         * UEFI 固定点阵字体上会散成一堆符号(下划线落基线、竖线偏左, 字母之间空隙大);
+         * 也试过 Unicode 块字符(█ ╔ ═), 但固件字形表不保证有, 缺字形会印成方框。
+         * '#' 是刻度为满格的字符, 拼起来是连续的实心，任何 console 都安全。
+         * 五行严格等宽 23 列, 在 80 列 console 上前后各留 28 格居中。 */
+        set_color(EFI_LIGHTCYAN, EFI_BLACK);
+        print_str(L"\r\n");
+        print_str(L"                            #   # ####  ####  #   #\r\n");
+        print_str(L"                            #   # #     #  #  #   #\r\n");
+        print_str(L"                            ##### ###   ####  #   #\r\n");
+        print_str(L"                            #   # #     #     #   #\r\n");
+        print_str(L"                            #   # ####  #      ### \r\n\r\n");
+        set_color(EFI_WHITE, EFI_BLACK);
+        print_str(L"                            Hepu OS Boot Menu\r\n");
+        set_color(EFI_LIGHTCYAN, EFI_BLACK);
         print_str(L"  ================================================\r\n\r\n");
 
         if (fail_count > 0) {
