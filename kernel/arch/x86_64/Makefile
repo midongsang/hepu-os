@@ -75,6 +75,7 @@ C_SOURCES = \
     $(ARCH_DIR)/desktop64.c \
     $(ARCH_DIR)/bootopts64.c \
     $(ARCH_DIR)/user_process.c \
+    $(ARCH_DIR)/uproc_loader64.c \
     $(ARCH_DIR)/uthread64.c \
     $(ARCH_DIR)/user_aspace64.c \
     $(ARCH_DIR)/user_lib.c \

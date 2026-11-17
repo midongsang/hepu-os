@@ -10,6 +10,7 @@
 #include "domain64.h"
 #include "spinlock.h"
 #include "uproc.h"
+#include "uproc_loader64.h"
 
 /* V0.13.43: 与 GDT Linux 标准布局一致 (0x18=用户数据, 0x20=用户代码) */
 #define USER_CS 0x20  /* 用户代码段选择子 */
@@ -1120,11 +1121,8 @@ typedef struct {
  *   [0x50000000,0x60000000)  兼容程序区：Linux PIE 按加载偏置摆进来
  *   [0x60000000,0x70000000)  共享库区：DT_NEEDED 加载的 .so
  *   [0x70000000,...)         用户栈
- * 三个区间互不重叠，VA 区间管理器按区分配，互不串味。 */
-#define VA_COMPAT_BASE 0x50000000ULL
-#define VA_COMPAT_END  0x60000000ULL
-#define VA_LIB_BASE    0x60000000ULL
-#define VA_LIB_END     0x70000000ULL
+ * 三个区间互不重叠，VA 区间管理器按区分配，互不串味。
+ * 兼容区/库区边界常量见 uproc_loader64.h（loader 与本模块共用）。 */
 
 /* V0.33 P1: 每进程一份 VA 区间表。
  * exec 在进程槽位创建之前就要为 PIE 预留基址，故另设 pending 表，
@@ -1218,6 +1216,23 @@ static void user_va_adopt_pending(int pid)
             }
         }
     }
+}
+
+/* ---- P3-6 §5-3: 暴露给 uproc_loader64.c 的 PENDING VA 账本薄壳 ----
+ * loader 在创建进程槽位之前预留 PIE/解释器 VA，建槽成功后由本模块移交。 */
+uint64_t uproc_va_alloc_pending(uint64_t pool_base, uint64_t pool_end, uint64_t size)
+{
+    return va_alloc_in(VA_OWNER_PENDING, pool_base, pool_end, size);
+}
+
+void uproc_va_free_pending(uint64_t base)
+{
+    va_free(VA_OWNER_PENDING, base);
+}
+
+void uproc_va_adopt_pending(int pid)
+{
+    user_va_adopt_pending(pid);
 }
 
 /* 槽位释放：清空该进程的 VA 区间与模块表，回收模块保留的内核缓冲。
@@ -1897,13 +1912,8 @@ void user_program_hello(void)
 /* 用户态syscall测试程序（在user_app_test.c中定义） */
 extern void user_program_syscall_test(void);
 
-/* ELF64加载器外部声明 */
-extern int elf64_verify(void *elf_data);
-extern uint64_t elf64_get_entry(void *elf_data);
-extern void *elf64_load(void *elf_data, uint64_t size);
-
-/* ext2文件读取 */
-extern int ext2_64_read_file(const char *path, uint8_t *buf, int max_size);
+/* ELF64 读取/校验/偏置加载等纯加载逻辑已下沉到 uproc_loader64.c（P3-6 §5-3）；
+ * 本文件只保留建槽、页表、初始栈、切态与 pid 回传。 */
 
 /* 最近一次成功建槽的真实 pid（BSS 静态槽，不随用户态上下文切换被覆盖）。
  * user_process_switch 经全局 trampoline 恢复栈帧，impl 局部变量在该返回路径下
@@ -1912,297 +1922,27 @@ extern int ext2_64_read_file(const char *path, uint8_t *buf, int max_size);
 static int s_uproc_last_pid = 0;
 static void uproc64_put_dec(int v);
 
-/* 从ext2加载ELF用户程序并执行 */
+/* 从ext2加载ELF用户程序并执行。
+ * P3-6 §5-3 第一阶段：读文件 / 校验 / ABI 判定 / PT_INTERP / 偏置加载已下沉到
+ * uproc_loader64.c；本路径只保留「建槽 → 解释器映射 → VA 移交 → 切态 →
+ * pid 回传 → 错误映射」。函数签名与错误码口径与原实现一致。 */
 static int uproc_exec_impl(const char *path, int argc, const char *const argv[])
 {
-    /* V0.33: ABI 不再是全局开关。
-     * 旧实现无条件置 g_running_linux_elf=1，于是**所有**用户程序（包括 Hepu
-     * 原生程序）都走 Linux 号表翻译：原生 read(2) 被翻译成 Linux open(2)、
-     * 原生 open(3) 被翻译成 close(4)……原生 ABI 被兼容层绑架了。
-     * 现在按 ELF 自身判定（见 elf64_is_linux_abi），并记到**进程**的 env_type 上，
-     * 符合 PHILOSOPHY.md「原生 ABI 优先，兼容层是附加层」。 */
-    vga_puts("[USER64] exec: ");
-    vga_puts(path);
-    vga_puts("\n");
+    uproc_image_t img;
+    int lrc = uproc64_load_image(path, argc, argv, &img);
+    if (lrc < 0) return lrc;
 
-    /* 1. 从ext2读取ELF文件 - V0.20.15: 动态分配, 支持大ELF
-     *
-     * V0.33 修正两件事：
-     *  a) 缓冲区按**文件真实大小**分配，而不是固定 2MB。
-     *     旧实现每次 exec 都从 8MB 内核堆扣 2MB：启动自检连跑十几个用户程序时
-     *     内核堆直接耗尽（[KHEAP] OOM: req=2097152），桌面起来之后任何用户程序
-     *     都跑不起来。2MB 是为了迁就 256KB 静态缓冲上限的历史包袱
-     *     （VERSIONING 0.20.7），现在有动态分配就不该再付这个代价。
-     *  b) 两条错误返回路径漏掉了 kfree(elf_buffer)，每次泄漏 2MB。
-     */
-    extern void *kmalloc(uint32_t size);
-    extern void kfree(void *ptr);
-    /* 先读 ELF 头拿到真实大小, 再分配 */
-    uint8_t elf_hdr[64];
-    int hdr_size = ext2_64_read_file(path, elf_hdr, sizeof(elf_hdr));
-    if (hdr_size < 64) {
-        vga_puts("[USER64] exec ERROR: Cannot read file\n");
-        return HEPU_E_NOENT;
-    }
-    /* 取文件真实大小（stat 拿不到就退回一个保守上限） */
-    uint32_t file_size_hint = 0;
-    {
-        extern int ext2_64_stat(const char *path, uint32_t *size, uint8_t *isdir);
-        uint8_t isdir = 0;
-        if (ext2_64_stat(path, &file_size_hint, &isdir) != 0 || isdir ||
-            file_size_hint < 64 || file_size_hint > (16u << 20)) {
-            file_size_hint = 0;   /* 0 = 未知，走兜底 */
-        }
-    }
-    uint32_t elf_size = file_size_hint ? file_size_hint : (2 * 1024 * 1024);
-    uint8_t *elf_buffer = (uint8_t *)kmalloc(elf_size);
-    if (!elf_buffer) {
-        vga_puts("[USER64] exec ERROR: kmalloc failed\n");
-        return HEPU_E_NOMEM;
-    }
-    /* 把已读的头拷进去 */
-    for (int i = 0; i < hdr_size; i++) elf_buffer[i] = elf_hdr[i];
-    int file_size = ext2_64_read_file(path, elf_buffer, elf_size);
-    if (file_size < 64) {
-        vga_puts("[USER64] exec ERROR: Cannot read file\n");
-        kfree(elf_buffer);
-        return HEPU_E_NOENT;
-    }
-
-    vga_puts("[USER64] exec: read ");
-    char buf[16];
-    int n = file_size, i = 0;
-    char tmp[16];
-    do { tmp[i++] = n % 10 + '0'; } while ((n /= 10) > 0);
-    int j = 0;
-    while (i > 0) buf[j++] = tmp[--i];
-    buf[j] = 0;
-    vga_puts(buf);
-    vga_puts(" bytes\n");
-
-    /* 2. 验证ELF64 */
-    if (elf64_verify(elf_buffer) != 0) {
-        vga_puts("[USER64] exec ERROR: Invalid ELF64\n");
-        kfree(elf_buffer);   /* V0.33: 补漏（原来这条路径泄漏整个缓冲区） */
-        return HEPU_E_LOAD;
-    }
-
-    /* 3. 获取入口点 */
-    uint64_t entry = elf64_get_entry(elf_buffer);
-    vga_puts("[USER64] exec: entry=");
-    char hex[] = "0123456789ABCDEF";
-    char hbuf[19];
-    uint64_t addr = entry;
-    hbuf[0]='0'; hbuf[1]='x';
-    for (int i = 0; i < 16; i++) { hbuf[17-i] = hex[addr & 0xF]; addr >>= 4; }
-    hbuf[18] = 0;
-    vga_puts(hbuf);
-    vga_puts("\n");
-
-    /* 4. 判定 ABI 并选择映射基址（V0.33）
-     *
-     * 三种情况：
-     *  a) Hepu 原生 ELF：链接在 [0x40000000,0x50000000)，按链接地址原样映射，
-     *     走**原生**系统调用号表。
-     *  b) Linux PIE（ET_DYN）：位置无关，可以在用户窗口里任选基址。
-     *     分配到「兼容程序区」[0x50000000,0x60000000)，用加载偏置把镜像摆进去，
-     *     入口点与 R_X86_64_RELATIVE 一起修正。走 **Linux** 系统调用号表。
-     *  c) Linux ET_EXEC（非 PIE）：链接在 0x400000 这类窗口外地址。
-     *     这类二进制的绝对地址已经烧进代码和数据里，**搬不动**
-     *     （搬过去必然跑飞），所以明确拒绝并给出可执行的建议，
-     *     而不是丢一句「code range outside user window」让人猜。
-     */
-    int is_linux_abi = elf64_is_linux_abi(elf_buffer, file_size);
-    uint64_t link_base = elf64_link_base(elf_buffer, file_size);
-    uint64_t map_base = 0;           /* 0 = 按链接地址映射 */
-    int is_pie = 0;
-    {
-        extern uint16_t elf64_get_type(void *elf_data);
-        is_pie = (elf64_get_type(elf_buffer) == 3 /*ET_DYN*/);
-    }
-
-    /* V0.54.6（P1-7）: PT_INTERP —— 用户态动态链接器。
-     *
-     * 内核只负责两件事：把主程序和解释器（ld.so）各自按偏置摆进用户地址
-     * 空间，并把 System V 初始栈里的 AT_BASE/AT_ENTRY/AT_PHDR 填对。
-     * DT_NEEDED、符号查找、重定位、TLS 初始化全部由解释器自己完成 ——
-     * 这正是 Linux 的内核/ld.so 分工，也是能直接吃 glibc 动态二进制的唯一
-     * 现实路径（在用户态重新实现整个 glibc 链接器不现实）。 */
-    int has_interp = elf64_has_interp(elf_buffer, file_size);
-    const char *interp_path = NULL;
-    void *interp_loaded = NULL;
-    uint64_t interp_load_size = 0, interp_code_vaddr = 0, interp_entry_vaddr = 0;
-    if (has_interp) {
-        interp_path = elf64_find_interp(elf_buffer, file_size);
-        if (!interp_path || interp_path[0] != '/') {
-            vga_puts("[USER64] exec ERROR: PT_INTERP path missing/invalid\n");
-            kfree(elf_buffer);
-            return HEPU_E_LOAD;
-        }
-        vga_puts("[USER64] exec: dynamic ELF, interpreter=");
-        vga_puts(interp_path);
-        vga_puts("\n");
-    }
-
-    if (is_linux_abi && link_base && link_base < UWIN_START) {
-        /* 链接在用户窗口之外 */
-        if (!is_pie) {
-            vga_puts("[USER64] exec ERROR: Linux ET_EXEC linked at ");
-            vga_put_hex(link_base);
-            vga_puts("\n");
-            vga_puts("[USER64]   outside Hepu user window [0x40000000,0x80000000).\n");
-            vga_puts("[USER64]   ET_EXEC absolute addresses are baked in - cannot be rebased.\n");
-            vga_puts("[USER64]   Rebuild as PIE (-fPIE / -static-pie) to run on Hepu.\n");
-            kfree(elf_buffer);
-            return HEPU_E_LOAD;
-        }
-    }
-
-    if (is_pie) {
-        /* PIE：从兼容程序区分配一个基址 */
-        uint64_t need = elf64_image_size(elf_buffer, file_size);
-        if (!need) {
-            vga_puts("[USER64] exec ERROR: bad PIE layout\n");
-            kfree(elf_buffer);
-            return HEPU_E_LOAD;
-        }
-        map_base = va_alloc_in(VA_OWNER_PENDING, VA_COMPAT_BASE, VA_COMPAT_END, need);
-        if (!map_base) {
-            vga_puts("[USER64] exec ERROR: no VA space for PIE image\n");
-            kfree(elf_buffer);
-            return HEPU_E_NOMEM;
-        }
-        vga_puts("[USER64] PIE load bias: base=");
-        vga_put_hex(map_base);
-        vga_puts(" size=");
-        vga_put_hex(need);
-        vga_puts("\n");
-    }
-
-    /* 加载ELF到内核内存（带偏置） */
-    void *loaded = elf64_load_biased(elf_buffer, file_size, map_base);
-    if (!loaded) {
-        vga_puts("[USER64] exec ERROR: ELF load failed\n");
-        if (map_base) va_free(VA_OWNER_PENDING, map_base);
-        kfree(elf_buffer);
-        return HEPU_E_LOAD;
-    }
-    /* V0.20.80: elf_buffer保留到重定位完成后再free */
-
-    /* 5. 创建用户进程（真正的用户空间映射）
-     * 将ELF内容映射到用户地址空间0x400000
-     * 入口点：如果e_entry < 0x400000，则为相对偏移，否则为绝对地址
-     */
-    vga_puts("[USER64] exec: ELF loaded, mapping to user space...\n");
-
-    /* V0.20.78: 直接映射到ELF原始vaddr, 不做偏移 — 修复绝对地址引用
-     * V0.33: 偏置加载时 g_elf_last_code_start 已经是修正后的映射基址，
-     *         g_elf_last_entry 是修正后的入口点。 */
-    extern uint64_t g_elf_last_code_start;
-    extern uint64_t g_elf_last_load_size;
-    extern uint64_t g_elf_last_entry;
-    uint64_t code_vaddr = g_elf_last_code_start;
-    uint64_t entry_vaddr = g_elf_last_entry ? g_elf_last_entry : entry;
-
-    /* V0.33 修复：只复制**映像实际大小**，不能拿文件大小当映像大小。
-     *
-     * 原来：exec_code_size = max(映像大小, 文件大小)。
-     * 但 elf64_load_biased 返回的缓冲区只有「映像大小」那么长
-     * （= 最高 PT_LOAD 段末尾 - 映像原点），文件大小可能更大
-     * （文件里还有符号表、字符串表、重定位表等不加载的部分）。
-     * 于是这里会从内核堆缓冲**越界读** 几十 KB，
-     * 并把越界的垃圾内容映射进用户空间。
-     * 正确做法：映像多大就映多大。
-     */
-    uint64_t exec_code_size = g_elf_last_load_size;
-
-    /* P1-7: 解释器（ld.so）按 ET_DYN 偏置装进「库区」[0x60000000,0x70000000)。
-     * 主程序留在兼容区 [0x50000000,0x60000000)；两层互不重叠，
-     * ld.so 之后用 mmap 把 libc 等 .so 放到 0x64000000 以上。 */
-    if (has_interp) {
-        extern int ext2_64_stat(const char *path, uint32_t *size, uint8_t *isdir);
-        extern int ext2_64_read_file(const char *path, uint8_t *buffer, int max_size);
-        uint32_t isize = 0;
-        uint8_t isdir = 0;
-        if (ext2_64_stat(interp_path, &isize, &isdir) != 0 || isdir ||
-            isize < 64 || isize > 8u * 1024u * 1024u) {
-            vga_puts("[USER64] exec ERROR: cannot stat interpreter\n");
-            if (map_base) va_free(VA_OWNER_PENDING, map_base);
-            kfree(loaded);
-            kfree(elf_buffer);
-            return HEPU_E_NOENT;
-        }
-        uint8_t *ibuf = (uint8_t *)kmalloc(isize);
-        if (!ibuf) {
-            vga_puts("[USER64] exec ERROR: OOM for interpreter\n");
-            if (map_base) va_free(VA_OWNER_PENDING, map_base);
-            kfree(loaded);
-            kfree(elf_buffer);
-            return HEPU_E_NOMEM;
-        }
-        int got = ext2_64_read_file(interp_path, ibuf, (int)isize);
-        if (got < 64 || elf64_verify(ibuf) != 0) {
-            vga_puts("[USER64] exec ERROR: bad interpreter image\n");
-            kfree(ibuf);
-            if (map_base) va_free(VA_OWNER_PENDING, map_base);
-            kfree(loaded);
-            kfree(elf_buffer);
-            return HEPU_E_LOAD;
-        }
-        uint64_t need = elf64_image_size(ibuf, (uint64_t)got);
-        if (!need) {
-            vga_puts("[USER64] exec ERROR: bad interpreter layout\n");
-            kfree(ibuf);
-            if (map_base) va_free(VA_OWNER_PENDING, map_base);
-            kfree(loaded);
-            kfree(elf_buffer);
-            return HEPU_E_LOAD;
-        }
-        interp_code_vaddr = va_alloc_in(VA_OWNER_PENDING, VA_LIB_BASE, VA_LIB_END, need);
-        if (!interp_code_vaddr) {
-            vga_puts("[USER64] exec ERROR: no VA space for interpreter\n");
-            kfree(ibuf);
-            if (map_base) va_free(VA_OWNER_PENDING, map_base);
-            kfree(loaded);
-            kfree(elf_buffer);
-            return HEPU_E_NOMEM;
-        }
-        interp_loaded = elf64_load_biased(ibuf, (uint64_t)got, interp_code_vaddr);
-        if (!interp_loaded) {
-            vga_puts("[USER64] exec ERROR: interpreter load failed\n");
-            va_free(VA_OWNER_PENDING, interp_code_vaddr);
-            kfree(ibuf);
-            if (map_base) va_free(VA_OWNER_PENDING, map_base);
-            kfree(loaded);
-            kfree(elf_buffer);
-            return HEPU_E_LOAD;
-        }
-        interp_load_size = g_elf_last_load_size;
-        interp_entry_vaddr = g_elf_last_entry;
-        kfree(ibuf);
-        vga_puts("[USER64] interpreter loaded at ");
-        vga_put_hex(interp_code_vaddr);
-        vga_puts(", entry=");
-        vga_put_hex(interp_entry_vaddr);
-        vga_puts("\n");
-    }
-
-    /* 动态程序：CPU 从解释器入口开始跑；AT_ENTRY 仍指向主程序 _start。 */
-    uint64_t at_entry_vaddr = entry_vaddr;
-    if (has_interp) {
-        at_entry_vaddr = entry_vaddr;
-        entry_vaddr = interp_entry_vaddr;
-    }
-
-    int pid = user_process_create_elf(path, loaded, exec_code_size, code_vaddr, entry_vaddr, elf_buffer,
-                                       (uint64_t)file_size, is_linux_abi ? ENV_LINUX_COMPAT : ENV_NATIVE,
-                                       at_entry_vaddr, has_interp ? interp_code_vaddr : 0,
-                                       argc, argv);
-    kfree(loaded);   /* 代码已复制进用户页；旧版每次 exec 泄漏最多 16MB 内核堆 */
+    int pid = user_process_create_elf(path, img.loaded, img.exec_code_size,
+                                      img.code_vaddr, img.entry_vaddr,
+                                      img.elf_buffer, (uint64_t)img.file_size,
+                                      img.env_type, img.at_entry_vaddr,
+                                      img.has_interp ? img.interp_code_vaddr : 0,
+                                      argc, argv);
+    kfree(img.loaded);   /* 代码已复制进用户页；旧版每次 exec 泄漏最多 16MB 内核堆 */
     if (pid < 0) {
         vga_puts("[USER64] exec ERROR: Failed to create ELF process\n");
-        if (map_base) va_free(VA_OWNER_PENDING, map_base);   /* P1: 释放 PIE 预留 */
-        kfree(elf_buffer);   /* V0.33: 补漏（原来这条路径泄漏整个缓冲区） */
+        uproc64_image_release_pending(&img);   /* 释放 PIE 预留 */
+        kfree(img.elf_buffer);   /* V0.33: 补漏（原来这条路径泄漏整个缓冲区） */
         return HEPU_E_NOMEM;
     }
     /* OPEN-04: 可执行文件名精确匹配安装器时，授予高危操作白名单（一次性登记 PID）。 */
@@ -2217,43 +1957,35 @@ static int uproc_exec_impl(const char *path, int argc, const char *const argv[])
     }
 
     /* P1: 进程槽位已建立，把 exec 期间预留的 PIE 区间移交给该进程 */
-    if (map_base) user_va_adopt_pending(pid);
+    if (img.map_base) uproc_va_adopt_pending(pid);
 
     /* P1-7: 解释器镜像映射进该进程的地址空间（之后 CPU 从它的入口开始执行） */
-    if (has_interp && interp_loaded) {
-        if (user_process_map_image(pid, interp_loaded, interp_load_size, interp_code_vaddr) != 0) {
+    if (img.has_interp && img.interp_loaded) {
+        if (user_process_map_image(pid, img.interp_loaded, img.interp_load_size,
+                                   img.interp_code_vaddr) != 0) {
             vga_puts("[USER64] exec ERROR: failed to map interpreter pages\n");
-            kfree(interp_loaded);
-            kfree(elf_buffer);
+            kfree(img.interp_loaded);
+            kfree(img.elf_buffer);
             return HEPU_E_LOAD;
         }
-        kfree(interp_loaded);
-        interp_loaded = NULL;
-        user_va_adopt_pending(pid);
+        kfree(img.interp_loaded);
+        img.interp_loaded = NULL;
+        uproc_va_adopt_pending(pid);
     }
 
     vga_puts("[USER64] exec: process created (PID=");
     char pidstr[8];
-    n = pid; i = 0;
+    int n = pid, i = 0;
+    char tmp[8];
     do { tmp[i++] = n % 10 + '0'; } while ((n /= 10) > 0);
-    j = 0;
+    int j = 0;
     while (i > 0) pidstr[j++] = tmp[--i];
     pidstr[j] = 0;
     vga_puts(pidstr);
     vga_puts(")\n");
 
-    /* V0.33 SEC-15: 移除「路径含 dyn 即视为动态程序」的启发式。
-     *
-     * 旧判据：`path` 里出现 'd','y','n' 三个字符就算动态程序 ⇒ 走
-     * hepu_dynlink_relocate()。这是**按文件名猜** ELF 性质：
-     *   - /bin/dynhello.elf 撞上 → 走遗留动态链接路径 → 算出的 load bias
-     *     是 0x1000（既不在兼容区也不在用户窗口）→ 程序跑飞 → #GP；
-     *   - 反过来，名字里不带 dyn 的真·动态程序则会被漏判。
-     *
-     * 现在改成基于 ELF 本身的判据：带 PT_INTERP 的程序在 exec 阶段
-     * 就已经被明确拒绝（见上方），静态/静态 PIE 程序不需要也不应该
-     * 走这条路。所以这里直接删掉该调用。 */
-    kfree(elf_buffer);
+    /* 原始 ELF 缓冲：建槽/重定位已完成，释放（V0.33 补漏口径不变）。 */
+    kfree(img.elf_buffer);
 
     /* UPROC ABI 回读断言：在建槽成功、进入用户态之前，按 pid 反查进程表槽位，
      * 确认该 pid 真实存在且 active=1（不靠"数字看起来像 pid"）。 */
@@ -2308,10 +2040,19 @@ int hepu_exec(const char *path, int argc, const char *const argv[])
         if (!argv[i]) return HEPU_E_ARG;
     }
 
+    /* 跨 switch 存活约束：user_process_switch 往返后，返回 trampoline
+     * （user_switch.S: user_return_trampoline）只恢复 rsp / rbx / rbp / r12，
+     * 不恢复 r13 / r14 / r15。因此跨 switch 之后仍要使用的 path 必须留在栈槽，
+     * 不能被编译器提升到 r13 这类未被恢复的寄存器。原实现里 path 由大函数
+     * 内联、自然落在栈上；拆分后本函数帧变小，编译器会把它放进 r13，
+     * 一旦跨 switch 就被踩成用户镜像地址（P3-6 §5-3 实测 panic CR2=0x400003E7）。
+     * volatile 强制每次使用都从栈槽重读。 */
+    const char * volatile path_stk = path;
+
     int rc = uproc_exec_impl(path, argc, argv);
 
     vga_puts("[UPROC] exec path=");
-    vga_puts(path);
+    vga_puts(path_stk);
     vga_puts(" rc=");
     uproc64_put_dec(rc);
     vga_puts("\n");
