@@ -2,7 +2,7 @@
 title: 赫普OS 未关闭问题清单
 status: active
 sys_version: 0.60.7
-updated: 2026-11-177（驱动层整固：新增 BUG-52~56 并逐项给出实测证据；BUG-49「已关闭」更正为不成立；OPEN-02 复现未成功并写明下一步夹具）
+updated: 2026-11-17（驱动层整固：新增 BUG-52~56 并逐项给出实测证据；BUG-49「已关闭」更正为不成立；OPEN-02 复现未成功并写明下一步夹具）
 owner: status
 source_of_truth: kernel/arch/x86_64/
 ---
@@ -596,3 +596,29 @@ BAR 映射是两个独立问题，混在一个提交里会让人分不清哪处�
 | uproc 统一用户程序加载 ABI（契约头 / 32 位适配 / 64 位适配 + argv 上栈 / 成功路径回传真实 pid） | `d1dd19d`、`5096f0a`、`421d358`、`fd469e1` | `kernel/include/uproc.h`（契约头、错误码、栈布局）；32 位 `kernel/compat/uproc32.c`、`binfmt*.c`、`kernel/arch/x86/kernel.c`；64 位 `kernel/arch/x86_64/user_process.c`、`user_stack64.c`、`shell64.c` 等 | 同日独立验证 `evidence-combined/REPORT.md` E6：hello/sec_test/clone_test/ps 四条 rc=100；`/bin/no_such_uproc.elf` rc=-2；pid=100 slot=0 active=1。契约条文见 `evidence-uproc/REPORT.md` | 已闭环 |
 | 保护模式文本 shell 独立枚举 USB HID，双源合流键盘输入 | `8a0af11` | `kernel/arch/x86_64/shell64.c`、`kernel/kernel_main_64.c`（保护/文本分支独立 `usb64_init()`，`:1389-1398`） | 源码核实：保护/文本分支单独枚举 USB HID，与 PS/2 兜底双源合流。**未验证**：保护模式下 USB 键盘端到端输入本轮未单独复测；E5 仅验证 `help`/`ls` 命令回显，未区分按键来源是 USB 还是 PS/2 | 代码已修；保护模式 USB 输入端到端未单独复测 |
 | `hepu.graphics=0` 保护模式：32/64 跳过图形进文本终端 | `db4cf31` | `kernel/arch/x86_64/bootopts64.c`、`kernel/arch/x86/init_sequence.c`、`kernel/boot/multiboot.c`、`kernel/kernel_main_64.c` 等 | 同日独立验证 `evidence-combined/REPORT.md`：E5（64 位保护模式进文本终端、无图形后端初始化行）、E7（32 位保护模式进文本终端、无桌面初始化行）。该验证 HEAD `fd469e1` 含本条提交 | 已闭环（引用同日独立验证） |
+
+## 第二批闭环 / 降级批次（基线 `3d0bd23`，2026-11-17）
+
+> 本批条目随 main 前进到 `3d0bd23` 后补登。状态分两档：**已闭环** = 功能/改动落地并有验证；
+> **降级 / 明确化** = 把"假成功 / 假装通过"改成"显式未实现"，**真实校验或算法仍未实现**，
+> 不得记为"已修好"。既有开放条目编号与状态未改动。
+
+| 修复项 | 提交 | 代码位置 | 验证方式与证据 | 状态 |
+|---|---|---|---|---|
+| 接通 `hepu.lock` 关机开关，补齐鼠标解锁路径；开机置锁收敛为唯一一处 | `ebf438c` | `kernel/arch/x86_64/hpdesk.c`：开关判定 `lock_cfg_disabled()`（`:4563`，32 位兜底 `:4580`）；锁屏点击→登录（`:5664-5668`）；登录按钮→桌面（`:5778-5782`）；键盘迁移（`:7240-7260`）；置锁点（`:7526-7530`） | 键盘路径同日实测（实例 `docsrec2`，2026-11-17 23:11）：锁屏→空格登录页 `f0107`→回车桌面 `f0143`/`f0199`；证据 `evidence-docs-sync/rec-sendkey/`。鼠标点击路径源码核实已接入同一状态机；本轮未单独录鼠标点击帧。提交记录：64/32 双架构编译通过，32 位兜底锁屏关闭保持旧桌面行为 | 已闭环（64 位图形路径；鼠标点击帧未单独复测） |
+| 关掉两处常驻验收探针：desktop64 每 5 帧 SB-08 浮点负载、shell64 四程序 autostart | `0202461` | `kernel/arch/x86_64/desktop64.c`（SB-08 探针改 `if (0)`，复核改 1）；`kernel/arch/x86_64/shell64.c`（`autostart_selftest = 0`，程序本体与命令保留、可手动执行） | 提交记录（2026-11-17 构建）：64 位内核 968,496 → 967,536 B，折叠掉的正是被关探针代码；重启实拍仍停锁屏，`[AUTOSTART]` 出现 0 次。`kernel_main_64.c` 启动期一次的 BSP 浮点自检保留，作为 SMP/FXSAVE 可用证据，不算持续负载 | 已闭环（测试逻辑移出启动路径） |
+| 32 位三处"看起来验了密码其实没验"的假实现改为显式未实现 | `0de2133` | `kernel/arch/x86/login.c`：`login_authenticate()`、`login_unlock_screen()`；`kernel/arch/x86/multi_user.c`：`mu_private_unlock()` | 三处保留"未设密码即放行"既有行为（32 位冒烟 `desk=1` 口径依赖），但每次调用打未实现警告并区分返回口径，不再静默假装成功。**真校验未实现**：`mu_user_t` 无密码/hash 字段，multi_user 无密码存储与持久化；硬接只会变成另一种伪装，需先加 hash 字段 + 持久化（独立工程）。验证：32 位编译 0 error；`tools/regress32.sh` 冒烟 `serial=1 initrd=1 net=1 desk=1 fault=0 bound=1` PASS，桌面口径未变 | **降级 / 明确化（非已实现真实校验）** |
+| 安全启动三处"验证恒通过"空桩改为明确返回未实现 | `3d0bd23` | `kernel/arch/x86/secure_boot.c`：`sb_verify_stage()`、`sb_verify_signature()`、`sb_verify_hash()`；新增 `SB_ERR_NOT_IMPLEMENTED (-2)` | 度量（sb_measure）是真做的，验证一半原先是常量跟自己比 / 只查 key 存在未吊销 / 一字节未比就 `return 0`；现三接口一律返回 `SB_ERR_NOT_IMPLEMENTED` 并打 `[SECBOOT] WARNING`；`sb_verify_stage` 非严格模式警告后继续启动，严格模式判失败。仓库当前无调用方（仅 `secure_boot.h` 声明），改动不影响运行链路。**签名/哈希算法仍未实现**。验证：32 位编译 0 error；`regress32.sh` 冒烟 PASS | **降级 / 明确化（非已实现真实校验）** |
+
+> 不计入本批闭环：`ed68299`（展示页补启动链路四阶段实拍）属文档/展示素材更新，
+> 不是缺陷修复，不在本台账记为 bug 闭环。
+
+### 开机自检口径说明（2026-11-17 核实）
+
+- 自检电池整段包在 `#if defined(HEPU_BOOT_SELFTEST) && HEPU_BOOT_SELFTEST`
+  （`kernel/kernel_main_64.c:895`）；`HEPU_BOOT_SELFTEST` 只在
+  `kernel/arch/x86_64/Makefile` 的 `ifeq ($(BOOT_SELFTEST),1)` 内定义，默认构建不定义。
+  即**编译期开关、默认关闭**；默认构建串口不应出现 PIEPROBE/FBSYN/FBDESC/STATP 等电池输出。
+- 易误读点：默认值分散在 Makefile 与源码注释两处；Makefile 已补注释说明开关归属与守卫位置。
+- 真正持续过的常驻探针是 SB-08 每 5 帧负载与 shell 四程序 autostart，已由 `0202461` 关闭；
+  `kernel_main_64.c` 启动期一次的 BSP 浮点自检保留，不算持续负载。
