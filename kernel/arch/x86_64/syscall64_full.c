@@ -1665,6 +1665,19 @@ uint64_t g_fork_parent_gprs[15];
 /* sys_exit */
 static void sys_exit(int code)
 {
+    /* §5-4 附 第 3 条: owner 退出必须自动回收, 不依赖用户态主动 release。
+     * 桌面/合成进程崩了如果不回收, 前台永远被一个已死的 pid 占着, 屏幕永久
+     * 冻结 —— 而这时候恰恰最需要看到错误信息。放在最前面: 后面任何事情失败
+     * 都不能跳过这一步。非 owner 调用时 shared 侧自行忽略, 无副作用。 */
+    { extern int desk_fb_owner_pid(void);
+      extern void desk_fb_owner_release(int);
+      extern int user_process_get_current_pid(void);
+      int _p = user_process_get_current_pid();
+      if (_p >= 0 && desk_fb_owner_pid() == _p) {
+          desk_fb_owner_release(_p);
+          vga_puts("[FB] owner released on exit\n");
+      } }
+
     /* V0.57.5: 退出前先摘掉本进程的用户线程。
      * 否则 exit 的处理过程里还会被 tick 切到同进程的其它线程，
      * 切回来时帧已经不是这条执行流的了 —— 实测表现为退出瞬间 rip=0 的 #PF。 */
