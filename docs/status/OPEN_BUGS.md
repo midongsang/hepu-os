@@ -2,7 +2,7 @@
 title: 赫普OS 未关闭问题清单
 status: active
 sys_version: 0.60.7
-updated: 2026-11-17（驱动层整固：新增 BUG-52~56 并逐项给出实测证据；BUG-49「已关闭」更正为不成立；OPEN-02 复现未成功并写明下一步夹具）
+updated: 2026-11-18（OBS-05 撤销为取帧时机问题；登记 OBS-07 linuxhello 崩溃、64 空口令拒登、ASan/UBSan 链接清单失败、32 KUnit 既有基线失败。历史：驱动层整固 BUG-52~56；BUG-49 更正为不成立；OPEN-02 复现未成功并写明下一步夹具）
 owner: status
 source_of_truth: kernel/arch/x86_64/
 ---
@@ -673,49 +673,43 @@ diag1/diag2/move/sb_up/hand），但系统目前只有 4 个形态场景，映�
 
 ---
 
-## OBS-05 32 位桌面帧非黑占比约 38%，下半屏纯黑（2026-11-17 登记，根因未定位）
+## OBS-05 32 位桌面非黑占比 —— **已撤销：测量方法/取帧时机问题，现象不复现（2026-11-18 改判）**
 
-**现象（实测确认）**：32 位旧桌面到达后，4 张桌面帧 NONBLACK 均为
-**786,399 / 2,073,600 像素（约 37.9%，≈38%）**；画面上半为深蓝色壁纸，下半约 60%
-为纯黑，无顶栏/面板/窗口等元素。帧尺寸 1920×1080，`[BD-VBE]` 模式与 pitch 已设到
-`1920×1080@32bpp`、双缓冲就绪。
+**改判结论**：2026-11-17 登记的"32 位桌面只画 38%、下半屏纯黑"在基线 `61c53fa` 上
+**不成立**。32 位 multiboot 直启两帧实测 NONBLACK **2,073,598 / 2,073,600（≈100.00%）**，
+九宫格 9 格占比≈1.00。旧值 **786,399（37.9%）系首帧未整帧上色的稀疏帧（取帧时机过早），
+勿再引用**；本条按"测量方法/取帧时机问题"撤销，不再作为渲染缺陷跟踪。
 
-**证据**：`/home/user/Doubao/chats/38452875115179010/evidence-regress-2026-11-17/old-3d0bd23/frames32/desktop_1.png`、
-`desktop_2.png`、`desktop_3.png`、`desktop_4.png`；串口同目录 `ser.log`；回归报告
-`evidence-regress-2026-11-17/old-3d0bd23/REPORT.md`（32-桌面行）。
+**2026-11-18 重测（基线 `61c53fa`，回归分支 `test/regress-2026-11-17`：`93c3147` 61c53fa 复跑与九宫格度量、`0f4b9d4` 采帧时序降级）**：
 
-**2026-11-18 复核（结论：原判据取错了帧）**：按当前 main（`fb178ff`）在
-1920×1080 上重跑 32 位启动并连续取帧，得到：
+- 32 位直启：`evidence-regress-2026-11-17/frames32-direct/desktop_1.png` = 2,073,598/2,073,600，
+  `desktop_2.png` = 2,073,598/2,073,600；九宫格仅右上格 230,398/230,400，其余 8 格 230,400/230,400。
+- 64 位桌面/锁屏各 4 帧 strict NONBLACK 最低 2,073,597/2,073,600，九宫格无黑块分区。
+- UEFI 链路那 4 帧 `evidence-regress-2026-11-17/frames32/desktop_1..4.png` 是 `linuxhello`
+  崩溃后回灌菜单的残留，**不代表桌面**，不计入任何桌面度量；UEFI 链路 32 位桌面记 **UNVERIFIED**。
 
-| 时点 | 帧尺寸 | NONBLACK | 判读 |
-|---|---|---|---|
-| 选完 32 位 +1.5 s | 1920×1080 | 2,073,600 | 引导器加载屏/菜单 |
-| +4.5 s | 1920×1080 | **786,399** | **启动过渡期（与 OBS-05 原数一致）** |
-| +9.5 s | 1920×1080 | **2,073,600** | 桌面终态（满屏） |
+**旧记录（保留备查，结论已作废）**：2026-11-17 旧档
+`evidence-regress-2026-11-17/old-3d0bd23/frames32/desktop_1..4.png` NONBLACK 均为
+786,399/2,073,600（≈37.9%），上半深蓝、下半纯黑。该数值来自启动过渡期（选完 32 位
++4.5 s 前后）的稀疏帧，不是桌面终态；过渡画面本身的问题记录在 OBS-06。
 
-即 786,399 这个数出现在**桌面到达之前**，是启动过渡画面，不是桌面终态；
-桌面到达后 NONBLACK 为 2,073,600（100%）。OBS-05 原来的 4 张"desktop"帧应
-是取在过渡期。**因此"32 位桌面只画 38%"不成立**，32 位桌面渲染本身满屏。
+### 测量口径（2026-11-18 复核）
 
-这个 786,399 过渡画面真正的问题记录在 OBS-06（它是 32 位早期 VGA 文本输出
-盖掉引导器加载屏造成的）。**OBS-05 建议降级为"取证时机问题"，不再作为渲染缺陷跟踪。**
-
-**口径说明**：回归报告对 32 位旧桌面不套 1080p 全量非黑阈值（阈值 N/A），该帧在报告里
-记 `PASS`；本条 OBS 单独记录"下半屏纯黑、非黑未铺满"这一可观测现象，与报告豁免口径并存，
-不把它写成 32 位桌面已达全量渲染。
-
-**取证基线**：本条帧来自回归分支 `test/regress-2026-11-17`（`cc10817`，基线 `3d0bd23`）。
-后续 `53e53cb` 修了 32 位 l10n 空串桩（把 `l10n64.c` 纳入 32 位构建白名单，删两个假桩），
-属文案层改动，未涉及下半屏帧缓冲填充；本条 38% 填充现象在 `53e53cb` 上未复跑。
-
-**根因**：未定位。已排除：VBE 模式/pitch 设置、双缓冲未就绪（串口 `linear framebuffer ready`、
-`[GFX] framebuffer -> draw target (double-buffer)` 在场）。未排除：32 位桌面绘制坐标/
-裁剪与旧稀疏桌面布局、下半屏图层未上屏、双缓冲 present 只刷新了部分行。
-
-**下一步验证手段**：
-1. 在 32 位桌面帧上按行统计非黑像素分布，确认黑色边界是水平固定行还是随重绘漂移；
-2. 对比 64 位同参数桌面帧的图层绘制顺序与 present 路径，定位下半屏是未绘制还是绘制后被清黑；
-3. 逐帧 dump 双缓冲前后缓冲在该边界行的像素值，判断是绘制缺失还是 present 覆盖。
+1. **截图**：32 直启 `frames32-direct/desktop_1.png`、`desktop_2.png`；64 位
+   `frames64/desktop_1..4.png`、`frames64/lock_1..4.png`、`frames64/login_1..4.png`；
+   九宫格叠加图在 `evidence-regress-2026-11-17/obs05/`（如
+   `32-desktop_desktop_1_grid.png`）。
+2. **采集参数**：1920×1080，未缩放、未裁剪。64 位实例
+   `qemu-system-x86_64 -m 1024 -smp 2`，挂 256MB raw 镜像 `snapshot=on`、私有 OVMF 副本、
+   VNC 5902、USB 键鼠；32 位直启
+   `qemu-system-i386 -kernel build_v250/kernel.elf -m 256 -smp 1`，不挂盘、`-no-reboot`。
+   抓图走 unix monitor `screendump` 出 PPM 再转 PNG，帧间隔 1.5–2 s，串口等待上限 60–70 s。
+3. **分子/分母**：strict 口径 RGB 三通道全 0 才判黑（`!= (0,0,0)`），不排除背景色、不裁剪；
+   near 参考口径任一通道 ≥16；分母整帧 2,073,600，九宫格每格 640×360 = 230,400。
+4. **九宫格**：32 直启 9 格≈1.00（TR 230,398），64 位锁屏/桌面各格≥1.00、无黑块分区；
+   红框网格与占比画在副本上，原图不回写。
+5. **复核结论**：`61c53fa` 上 32 位桌面 2,073,598≈100.00%，与旧 38% 不一致，差异来自
+   取帧时机，非分区回退。
 
 ### 32 位锁屏 / 登录路径现状限制（2026-11-17 实测）
 
@@ -724,3 +718,47 @@ diag1/diag2/move/sb_up/hand），但系统目前只有 4 个形态场景，映�
   `login_unlock_screen` / `mu_private_unlock` 三处桩路径未触发，串口无 LOGIN WARNING。
 - 这是**现状限制**，不是 32 位锁屏/认证已通过；要复现该路径需先具备拉起 32 位登录页的入口。
   证据：`evidence-regress-2026-11-17/old-3d0bd23/frames32/ser.log`、`old-3d0bd23/REPORT.md` 32-锁屏 / 32-登录行。
+
+## 回归线实测登记（基线 `61c53fa`，分支 `test/regress-2026-11-17`：`576c6c1` → `93c3147` → `0f4b9d4`）
+
+> 本节登记 2026-11-18 复跑回归线的四条实测；三态口径 PASS / FAIL / UNVERIFIED，
+> 证据目录 `evidence-regress-2026-11-17/`。
+
+### OBS-07 32 位 `linuxhello` 用户态崩溃（FAIL，既有不稳定项，未隔离编译验证）
+
+**现象**：直启与 UEFI 两条路径都在 `[AUTO] linuxhello start` 后退出/重启回灌菜单：直启
+`-no-reboot` 下 QEMU 退出（`frames32-direct/state.txt` `CRASHED=1`）；UEFI 路径重启回灌
+引导菜单。
+**定性**：既有不稳定项；未做隔离编译验证，**不判为本次合并回归**。对照上一基线 `a787a01`，
+同位置 `linuxhello` 故障被回收（rc=3 继续跑后续应用），本轮 escalate 为重启；`53e53cb`
+仅修 32 位文案空串兜底、`61c53fa` 仅统一顶栏 bar_height，未改动 32 位内核执行路径。
+**证据**：`evidence-regress-2026-11-17/frames32-direct/ser.log`、
+`frames32/ser.log`、`frames32-direct/state.txt`。
+
+### 64 位空 Enter 拒登（预期行为，非回归）
+
+- `/account.conf` 已配置账户时，空口令两次被拒：串口 `[LOCK] login: auth failed`（两次），
+  画面红条 "Wrong password"；输入夹具口令后 `login -> desktop (auth ok)`、解锁进桌面。
+  这是 `hpdesk.c` `hs_login_submit()` 三分支的预期行为，非回归。
+- **口令口径**：当前 64 位认证走 auth64（`/account.conf`，hash 由 OOBE 首设），仓库不内置
+  可登录的默认口令；`hepu123` 仅是本回归夹具口令，**非内置默认口令**。
+- 证据：`evidence-regress-2026-11-17/frames64/ser.log`、`frames64/login_reject_1.png`、
+  `frames64/login_1..4.png`、`frames64/desktop_1..4.png`。
+
+### 主机端 ASan/UBSan：7 过 1 败（FAIL，测试脚手架链接清单问题，非内核运行时缺陷）
+
+- 通过 7 / 失败 1；唯一失败项 `elf`：主机测试链接清单只编 `elf64.c`，缺 `compat_gate.c`
+  （定义 `compat_gate_detect_elf`）及进程表依赖，链接报
+  `undefined reference to compat_gate_detect_elf`，属测试脚手架链接清单未随源码重构同步；
+  未做隔离编译验证，不据此判定内核运行时回归。
+- **待办**：修主机测试链接清单（补 `compat_gate.c` 与进程表依赖），不是修内核缺陷。
+- 证据：`evidence-regress-2026-11-17/tests/host-tests.log`。
+
+### 32 位 KUnit：4 套件 / 6 用例失败（既有基线项，非本轮新增）
+
+- 失败套件：`syscall deep`（1 用例）、`user scenario`（3 用例）、`integration`（1 用例）、
+  `security E2E`（1 用例），共 4 套件 6 用例。与
+  `evidence-regress-2026-11-17/old-a787a01/tests/baseline/a787a01-kunit32.txt` 快照逐条一致，
+  `new_fails` 空、`fixed_fails` 空；属既有基线项，非本轮新增。
+- 证据：`evidence-regress-2026-11-17/tests/ser32.txt`、
+  `tests/baseline/61c53fa-kunit32.txt`、`tests/results.json`。
