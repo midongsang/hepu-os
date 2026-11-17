@@ -12,6 +12,17 @@ extern void serial_puts(uint16_t port, const char *s);
 
 #define DHCP_MAX_INTERFACES 2
 
+/* 主机序 <-> 网络序 (与 net64_dhcp.c 同约定)。DHCP 头里的 xid/secs/flags/
+ * 各 IP 字段/magic_cookie 线上大端; 本机小端直写会把 magic cookie 与广播标志
+ * 翻转, slirp DHCP 服务器据此判定报文非法而不应答。 */
+static inline uint16_t htons16(uint16_t v) { return (uint16_t)((v >> 8) | (v << 8)); }
+static inline uint32_t htonl32(uint32_t v)
+{
+    return ((v & 0xFF) << 24) | ((v & 0xFF00) << 8) |
+           ((v & 0xFF0000) >> 8) | ((v & 0xFF000000) >> 24);
+}
+static inline uint32_t ntohl32(uint32_t v) { return htonl32(v); }
+
 typedef struct {
     char interface[16];
     hepu_dhcp_state_t state;
@@ -54,16 +65,16 @@ static uint32_t dhcp_generate_xid(void)
 }
 
 /* 构造DHCP发现包 */
-static int dhcp_build_discover(hepu_dhcp_msg_t *msg, uint8_t *mac)
+static int dhcp_build_discover(hepu_dhcp_msg_t *msg, uint8_t *mac, uint32_t xid)
 {
     memset(msg, 0, sizeof(hepu_dhcp_msg_t));
     msg->op = 1;  /* 请求 */
     msg->htype = 1;  /* 以太网 */
     msg->hlen = 6;
-    msg->xid = dhcp_generate_xid();
-    msg->flags = 0x8000;  /* 广播 */
+    msg->xid = htonl32(xid);
+    msg->flags = htons16(0x8000);  /* 广播 */
     memcpy(msg->chaddr, mac, 6);
-    msg->magic_cookie = DHCP_MAGIC_COOKIE;
+    msg->magic_cookie = htonl32(DHCP_MAGIC_COOKIE);
 
     /* 选项：消息类型=Discover */
     int opt_idx = 0;
@@ -151,10 +162,10 @@ static int dhcp_build_request(hepu_dhcp_msg_t *msg, uint8_t *mac,
     msg->op = 1;
     msg->htype = 1;
     msg->hlen = 6;
-    msg->xid = xid;
-    msg->flags = 0x8000;
+    msg->xid = htonl32(xid);
+    msg->flags = htons16(0x8000);
     memcpy(msg->chaddr, mac, 6);
-    msg->magic_cookie = DHCP_MAGIC_COOKIE;
+    msg->magic_cookie = htonl32(DHCP_MAGIC_COOKIE);
 
     int opt_idx = 0;
     /* 消息类型=Request */
@@ -256,7 +267,7 @@ int dhcp_start(const char *interface)
 
     /* === 阶段1: 发送Discover，等待Offer === */
     hepu_dhcp_msg_t discover;
-    dhcp_build_discover(&discover, mac);
+    dhcp_build_discover(&discover, mac, iface->xid);
     iface->state = DHCP_STATE_SELECTING;
     vga_printf("[DHCP] send Discover(xid=0x%x)\n", iface->xid);
     udp_sendto(sock, 0xFFFFFFFF, 67, (uint8_t *)&discover, sizeof(discover));
@@ -269,11 +280,11 @@ int dhcp_start(const char *interface)
         int len = udp_recvfrom(sock, reply, sizeof(reply), NULL, NULL);
         if (len > 0) {
             hepu_dhcp_msg_t *offer = (hepu_dhcp_msg_t *)reply;
-            if (offer->xid == iface->xid && offer->op == 2) {
+            if (ntohl32(offer->xid) == iface->xid && offer->op == 2) {
                 uint8_t msg_type = 0;
                 dhcp_parse_options(offer, &iface->config, &msg_type, &server_id);
                 if (msg_type == 2) {  /* DHCP Offer */
-                    offered_ip = offer->yiaddr;
+                    offered_ip = ntohl32(offer->yiaddr);
                     got_offer = 1;
                     vga_printf("[DHCP] got Offer: IP=%d.%d.%d.%d, server=%d.%d.%d.%d\n",
                                (offered_ip >> 24) & 0xFF, (offered_ip >> 16) & 0xFF,
@@ -302,11 +313,11 @@ int dhcp_start(const char *interface)
             int len = udp_recvfrom(sock, reply, sizeof(reply), NULL, NULL);
             if (len > 0) {
                 hepu_dhcp_msg_t *ack = (hepu_dhcp_msg_t *)reply;
-                if (ack->xid == iface->xid && ack->op == 2) {
+                if (ntohl32(ack->xid) == iface->xid && ack->op == 2) {
                     uint8_t msg_type = 0;
                     dhcp_parse_options(ack, &iface->config, &msg_type, NULL);
                     if (msg_type == 5) {  /* DHCP ACK */
-                        iface->config.ip_addr = ack->yiaddr;
+                        iface->config.ip_addr = ntohl32(ack->yiaddr);
                         iface->config.acquired = 1;
                         iface->state = DHCP_STATE_BOUND;
                         got_ack = 1;
@@ -424,7 +435,7 @@ int dhcp_process_packet(const uint8_t *data, uint32_t length)
     if (!data || length < sizeof(hepu_dhcp_msg_t)) return -1;
 
     const hepu_dhcp_msg_t *msg = (const hepu_dhcp_msg_t *)data;
-    if (msg->magic_cookie != DHCP_MAGIC_COOKIE) return -1;
+    if (ntohl32(msg->magic_cookie) != DHCP_MAGIC_COOKIE) return -1;
 
     vga_printf("[DHCP] recv msg, op=%d, xid=0x%x\n", msg->op, msg->xid);
     return 0;
