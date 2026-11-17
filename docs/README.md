@@ -92,6 +92,7 @@ source_of_truth: frontmatter of docs/*
 - [赫普OS 未关闭问题清单](status/OPEN_BUGS.md)
 - [SYSTEM_TOOLS](status/SYSTEM_TOOLS.md)
 - [VERSIONING](status/VERSIONING.md)
+- [VM_INSTANCES](status/VM_INSTANCES.md)
 
 ## history
 
