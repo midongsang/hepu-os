@@ -1542,38 +1542,78 @@ static int64_t sys_pipe(int *fds) {
 extern int64_t sys_stat(const char *path, void *statbuf);
 extern int64_t sys_fstat(int fd, void *statbuf);
 
-/* sys_readdir: 列目录，写入用户缓冲 outbuf（每项 "name\0type\0"），返回字节数 */
+/* sys_readdir: 列目录，写入用户缓冲 outbuf（每项 "name\0type\0"），返回字节数。
+ *
+ * SEC-05: 旧实现把 names[64][256] / types[64] 放在函数内 static（16 KB 常驻 BSS，
+ * 靠全局 g_readdir_lock 串行防止多核互相覆盖），并在栈上开 2048 字节 staging
+ * 缓冲；叠加 kernel_path[256]，栈帧约 2.3 KB，逼近 4 KB 内核栈上限，其下还要进
+ * ext2_64_list_dir_entries 再叠加中断 trap frame。现在：
+ *  - names/types 改为调用期 kmalloc，函数返回前 kfree，不再常驻 BSS；
+ *  - 栈上不再开 staging：先在内核数组上算好总长度，确认装得下用户缓冲后，
+ *    逐项 copy_to_user 写进用户缓冲；
+ *  - 分配失败 / 路径非法 / 用户缓冲过小一律返回 -1，不向用户缓冲写半截。
+ * 语义保持不变：每项 "name\0type\0"，内部打包上限仍为 2048 字节；装不下用户缓冲
+ * 直接失败，不静默截断。 */
 extern int ext2_64_list_dir_entries(const char *path, char names[][256], uint8_t *types, int max);
+#define READDIR_MAX_ENTRIES 64
+#define READDIR_STAGE_MAX   2048
 static int64_t sys_readdir(const char *path, char *outbuf, int outsz)
 {
+    extern void *kmalloc(uint32_t size);
+    extern void kfree(void *ptr);
+
     char kernel_path[256];
     if (copy_user_path(kernel_path, sizeof(kernel_path), path) < 0) return -1;
     if (outsz <= 2) return -1;
-    static char names[64][256];
-    static uint8_t types[64];
-    char kbuf[2048];
+
+    char (*names)[256] = (char (*)[256])kmalloc(READDIR_MAX_ENTRIES * 256);
+    uint8_t *types = (uint8_t *)kmalloc(READDIR_MAX_ENTRIES);
+    if (!names || !types) { kfree(names); kfree(types); return -1; }
+
     uint64_t rdf = spinlock_lock_irqsave(&g_readdir_lock);
-    int n = ext2_64_list_dir_entries(kernel_path, names, types, 64);
-    if (n < 0) { spinlock_unlock_irqrestore(&g_readdir_lock, rdf); return -1; }
+    int n = ext2_64_list_dir_entries(kernel_path, names, types, READDIR_MAX_ENTRIES);
+    if (n < 0) {
+        spinlock_unlock_irqrestore(&g_readdir_lock, rdf);
+        kfree(names); kfree(types);
+        return -1;
+    }
     int used = 0;
     for (int i = 0; i < n; i++) {
         int l = 0; while (names[i][l]) l++;
         /* R3-1: 每项实际写 l+3 字节 —— name(l) + 结尾 0 + type(1) + 结尾 0。
-         * 旧代码写 need = l+2 配条件 used + need >= sizeof(kbuf), 两个错刚好抵消,
-         * 通过检查时 used+l+3 恰好不超 2048。这里改成按真实长度判断, 不再靠抵消。 */
+         * 按真实长度判断, 不靠旧代码两个错互相抵消。 */
         int need = l + 3;
-        if (used + need > (int)sizeof(kbuf)) break;
-        for (int j = 0; j < l; j++) kbuf[used++] = names[i][j];
-        kbuf[used++] = 0;
-        kbuf[used++] = types[i] ? 'd' : 'f';
-        kbuf[used++] = 0;
+        if (used + need > READDIR_STAGE_MAX) break;
+        used += need;
     }
-    /* R3-2: 旧代码 used > outsz 时截断后照报长度, 调用方以为拿全了。
+    /* R3-2: used > outsz 时截断后照报长度会让调用方以为拿全了；
      * 用户缓冲装不下就必须失败, 让调用方换更大的缓冲或分批读。 */
-    if (used > outsz) { spinlock_unlock_irqrestore(&g_readdir_lock, rdf); return -1; }
+    if (used > outsz) {
+        spinlock_unlock_irqrestore(&g_readdir_lock, rdf);
+        kfree(names); kfree(types);
+        return -1;
+    }
     spinlock_unlock_irqrestore(&g_readdir_lock, rdf);
-    if (copy_to_user(outbuf, kbuf, (size_t)used) != 0) return -1;
-    return used;
+
+    /* 长度已确认装得下，逐项拷给用户；任一段拷贝失败即放弃，不补写半截。 */
+    int off = 0;
+    for (int i = 0; i < n; i++) {
+        int l = 0; while (names[i][l]) l++;
+        int need = l + 3;
+        if (off + need > READDIR_STAGE_MAX) break;
+        char t = types[i] ? 'd' : 'f';
+        if (copy_to_user(outbuf + off, names[i], (size_t)l) != 0) goto fail;
+        if (copy_to_user(outbuf + off + l, "", 1) != 0) goto fail;
+        if (copy_to_user(outbuf + off + l + 1, &t, 1) != 0) goto fail;
+        if (copy_to_user(outbuf + off + l + 2, "", 1) != 0) goto fail;
+        off += need;
+    }
+    kfree(names); kfree(types);
+    return off;
+
+fail:
+    kfree(names); kfree(types);
+    return -1;
 }
 
 /* R3-7: per-process fork 快照槽。
