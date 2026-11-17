@@ -1081,6 +1081,132 @@ static void boot_menu_render(int avail[MODE_COUNT], int selected, int countdown,
     print_str(L"s.  Up/Down move, Enter boot, 1/2/3 pick, C clear\r\n");
 }
 
+/* ============================================================================
+ * 系统加载屏（选完模式 -> 跳内核之间）
+ *
+ * 为什么要有这一屏：菜单选完到内核真正接管之间还有一段实打实的工作 —— 读内核
+ * 镜像、校验 CRC32、把镜像页预热进缓存、准备内存映射。以前这些是在黑屏加文本
+ * 刷屏里做的，用户看不到任何进展，只觉得"点完就卡了一下"。
+ *
+ * 这里把它们搬到一块带转圈动画的界面上。关键点是**圈不是装饰**：每一帧
+ * ld_tick() 都对应主流程里一段真实进度(读镜像的一段、预热的一页、校验的一块)，
+ * 所以转的圈数和真正做完的事情一一对应，慢机器上圈就会转得更久，不会出现
+ * "动画转完了但还在干等"的假进度。
+ *
+ * GOP 不可用时(严格文本模式)整块退化成原先的 UEFI 文本提示 + Stall，行为不变。
+ * ========================================================================== */
+
+static int g_ld_mute = 0;            /* 1 = 加载屏在屏幕上, 屏蔽 ConOut 输出 */
+static int g_ld_on = 0;              /* 加载屏是否真的画在 GOP 上 */
+static UINT32 g_ld_w = 0, g_ld_h = 0;
+static int g_ld_phase = 0;           /* spinner 相位 0..11 */
+static char g_ld_last[72];           /* 上一帧状态行, 用于按需重画 */
+
+/* 12 个点围成的环, 从 12 点方向顺时针。半径 20。整数坐标表 —— 裸 UEFI 应用不开 FPU */
+static const int ld_sx[12] = {  0,  10,  17,  20,  17,  10,   0, -10, -17, -20, -17, -10 };
+static const int ld_sy[12] = {-20, -17, -10,   0,  10,  17,  20,  17,  10,   0, -10, -17 };
+
+#define LD_BG 0x00120A0A
+#define LD_ACCENT 0x00FF9E4A
+#define LD_TEXT 0x00A8A8A8
+
+/* 只重画环, 不整屏重绘 —— 1920x1080 整屏重绘在 TCG 下每帧上百毫秒, 转起来就卡了 */
+static void ld_paint_ring(void)
+{
+    if (!g_ld_on) return;
+    int cx = (int)g_ld_w / 2, cy = (int)g_ld_h - 148;
+    int span = 30;
+    gop_fill_rect(cx - span, cy - span, span * 2, span * 2, LD_BG);
+    for (int i = 0; i < 12; i++) {
+        int age = (g_ld_phase - i + 12) % 12;
+        UINT8 a;
+        if (age == 0)      a = 255;   /* 刚扫过的位置最亮, 后面依次变暗, 形成拖尾 */
+        else if (age == 1) a = 200;
+        else if (age == 2) a = 140;
+        else if (age == 3) a = 90;
+        else               a = 45;
+        int px = cx + ld_sx[i] - 3, py = cy + ld_sy[i] - 3;
+        gop_fill_rect(px, py, 7, 7, LD_BG);
+        gop_fill_rect_blend(px, py, 7, 7, LD_ACCENT, a);
+    }
+}
+
+/* 更新状态行(居中)。只在文字真的变了才重画, 避免每帧擦写闪烁 */
+static void ld_set_status(const char *s, int pct)
+{
+    if (!g_ld_on) return;
+    if (pct < 0) pct = 0;
+    if (pct > 100) pct = 100;
+    int y = (int)g_ld_h - 196;
+    int x0 = (int)g_ld_w / 2 - 300;
+    gop_fill_rect(x0, y - 4, 600, 44, LD_BG);
+    int sw = gop_string_width_scaled(s, 1);
+    int tx = (int)g_ld_w / 2 - (sw + 54) / 2;
+    gop_printf(tx, y, LD_TEXT, "%s", s);
+    gop_printf(tx + sw + 16, y, 0x00605850, "%d%%", pct);
+    /* 进度条贴底, 和 spinner 拉开距离(之前两者挤在同一块, 环压在条上) */
+    gop_fill_rect((int)g_ld_w / 2 - 240, y + 96, 480, 3, LD_BG);
+    gop_progress_bar((int)g_ld_w / 2 - 240, y + 96, 480, 3, pct, LD_ACCENT);
+}
+
+/* 推进一帧: 相位 +1 -> 重画环 -> 停 50ms。主流程每做完一小段就调一次。 */
+static void ld_tick(void)
+{
+    if (g_ld_on) {
+        g_ld_phase = (g_ld_phase + 1) % 12;
+        ld_paint_ring();
+    }
+    uefi_call_wrapper(BS->Stall, 1, 50000);
+}
+
+/* 画首屏。返回 1 = 图形加载屏已上屏, 0 = 走文本回退 */
+static int ld_begin(int use32, int protect)
+{
+    if (!g_gop_ready) return 0;
+    EFI_GRAPHICS_OUTPUT_PROTOCOL *gop = NULL;
+    uefi_call_wrapper(BS->LocateProtocol, 3,
+                      &gEfiGraphicsOutputProtocolGuid, NULL, (VOID **)&gop);
+    if (!gop) return 0;
+    gop_init(gop);
+    g_ld_w = gop_get_width();
+    g_ld_h = gop_get_height();
+    if (g_ld_w < 320 || g_ld_h < 240) return 0;
+
+    gop_clear(LD_BG);
+
+    /* logo: 复用菜单那套 242x71 的 alpha 点阵, 换成暖白色压在深底上 */
+    int lx = ((int)g_ld_w - hepu_logo_w) / 2;
+    int ly = (int)g_ld_h / 2 - 200;
+    if (ly < 40) ly = 40;
+    gop_draw_alpha_bitmap(lx, ly, hepu_logo_alpha, hepu_logo_w, hepu_logo_h, 0x00F0E8E0);
+
+    const char *title = protect ? "Protection Mode"
+                       : (use32 ? "Hepu OS  32-bit" : "Hepu OS  64-bit");
+    int tw = gop_string_width_scaled(title, 2);
+    gop_draw_string_scaled(((int)g_ld_w - tw) / 2, ly + hepu_logo_h + 26, title, 0x00D8D8D8, 2);
+
+    gop_fill_rect(((int)g_ld_w - 300) / 2, ly + hepu_logo_h + 66, 300, 1, 0x00302828);
+
+    const char *foot = "Hepu OS 0.60.7    HepuBoot UEFI v0.08";
+    gop_draw_string(((int)g_ld_w - gop_string_width_scaled(foot, 1)) / 2,
+                    (int)g_ld_h - 36, foot, 0x00706058);
+
+    g_ld_on = 1;
+    g_ld_mute = 1;
+    g_ld_phase = 0;
+    g_ld_last[0] = 0;
+    ld_paint_ring();
+    ld_set_status("Starting up", 0);
+    return 1;
+}
+
+/* 收尾: 让最后一帧停一下, 免得跳转瞬间画面突变 */
+static void ld_end(void)
+{
+    if (!g_ld_on) return;
+    for (int i = 0; i < 6; i++) ld_tick();
+}
+
 static int show_boot_menu(void)
 {
     int avail[MODE_COUNT];
@@ -1171,6 +1297,10 @@ static void clear_screen(void)
 /* 打印字符串 */
 static void print_str(const CHAR16 *str)
 {
+    /* 加载屏占着屏幕时不写 ConOut: 固件的 GraphicsConsole 会把文字直接画进
+     * GOP 画面左上角, 和加载屏的 logo/spinner 打架。串口日志由 debug_puts 承担,
+     * 文本模式(ld_begin 返回 0)不会置这个标志, 行为不变。 */
+    if (g_ld_mute) return;
     uefi_call_wrapper(ST->ConOut->OutputString, 2, ST->ConOut, str);
 }
 
@@ -1512,40 +1642,22 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
     }
     print_str(L"\r\n");
 
-    /* 从ESP分区加载内核到0x100000 */
-    set_color(EFI_YELLOW, EFI_BLACK);
-    print_str(L"  [Loading kernel to 0x100000...]\r\n");
-    set_color(EFI_LIGHTGRAY, EFI_BLACK);
     {
         UINT64 kaddr = 0, ksize = 0;
-        /* 先加载64位内核（默认） */
-        EFI_STATUS ks = load_kernel_to_memory(KERNEL64_PATH, &kaddr, &ksize);
-        if (EFI_ERROR(ks)) {
-            set_color(EFI_RED, EFI_BLACK);
-            print_str(L"  [FATAL] 64位内核加载失败，尝试32位...\r\n");
-            set_color(EFI_LIGHTGRAY, EFI_BLACK);
-            ks = load_kernel_to_memory(KERNEL32_PATH, &kaddr, &ksize);
-            if (EFI_ERROR(ks)) {
-                print_str(L"  [FATAL] 内核加载失败，无法启动\r\n");
-                wait_key();
-                return EFI_LOAD_ERROR;
-            }
-        }
+        EFI_STATUS ks = EFI_SUCCESS;
+        /* 内核不再在这里读 —— 菜单还没选就先读 64 位镜像是白费功夫(用户可能选
+         * 32 位或保护模式), 而且那段时间屏幕上什么都不显示。现在挪到
+         * show_boot_menu() 之后, 在系统加载屏转圈的时候读。
+         *
+         * 这里只留配置读取, 顺序很关键: 先读配置再初始化 GOP —— init_gop 挑模式
+         * 时会用 g_config.res_w/res_h(HEPBOOT.CFG 的 resolution=), 先 init 后 load
+         * 的话那个配置永远读不到(表现是 cfg 写了 1920x1080 却停在 640x480)。 */
+        load_config();
 
-        /* 内核加载成功，准备跳转 */
-        set_color(EFI_GREEN, EFI_BLACK);
-        print_str(L"  [OK] 内核就绪 @ 0x100000\r\n");
-
-        /* 加载配置文件 */
-        set_color(EFI_YELLOW, EFI_BLACK);
-        print_str(L"  [Loading config...]\r\n");
-        set_color(EFI_LIGHTGRAY, EFI_BLACK);
         /* 菜单要画在 GOP 上, 所以 GOP 初始化必须提到菜单之前 —— 原来它在
          * "选完模式、内核已加载"之后才调, 那时已经来不及做图形菜单了。
          * 提前也安全: 原注释要求 GOP 早于 GetMemoryMap, 现在只是更早一点。 */
         g_gop_ready = init_gop();
-
-        load_config();
 
         /* 显示引导菜单 */
         int boot_mode = show_boot_menu();
@@ -1562,39 +1674,9 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
             use32 = 1;
         }
 
-        if (use32) {
-            set_color(EFI_YELLOW, EFI_BLACK);
-            print_str(L"  [Loading 32-bit kernel...]\r\n");
-            set_color(EFI_LIGHTGRAY, EFI_BLACK);
-            ks = load_kernel_to_memory(KERNEL32_PATH, &kaddr, &ksize);
-            if (EFI_ERROR(ks)) {
-                /* 32 位加载失败：保护模式下就彻底没有可启的内核了，如实报错；
-                 * 普通模式下退回 64 位，因为 64 位内核此刻一定可用 */
-                if (protect && !kernel_available(KERNEL64_PATH)) {
-                    set_color(EFI_RED, EFI_BLACK);
-                    print_str(L"  [FATAL] No bootable kernel in ESP.\r\n");
-                    set_color(EFI_LIGHTGRAY, EFI_BLACK);
-                    print_str(L"  Press any key to return to firmware...\r\n");
-                    wait_key();
-                    return EFI_NOT_FOUND;
-                }
-                set_color(EFI_RED, EFI_BLACK);
-                print_str(L"  [WARN] 32-bit kernel load failed, falling back to 64-bit\r\n");
-                set_color(EFI_LIGHTGRAY, EFI_BLACK);
-                use32 = 0;
-            }
-        }
-
-        /* 命令行：架构 + 图形开关。hepu.graphics=0 是保护模式的唯一标志，
-         * 内核侧读到它就不初始化任何图形后端，直接起串口/VGA 文本终端。 */
-        if (use32) {
-            my_strcpy(g_config.cmdline, "hepu.arch=i386");
-        } else {
-            my_strcpy(g_config.cmdline, "hepu.arch=x86_64");
-        }
-        if (protect) {
-            my_strcat(g_config.cmdline, " hepu.graphics=0");
-        }
+        /* 命令行先按选择写好; 下面万一加载失败回退到另一架构, 再改一次 */
+        my_strcpy(g_config.cmdline, use32 ? "hepu.arch=i386" : "hepu.arch=x86_64");
+        if (protect) my_strcat(g_config.cmdline, " hepu.graphics=0");
 
         set_color(EFI_GREEN, EFI_BLACK);
         print_str(L"  [BOOT] Mode: ");
@@ -1610,6 +1692,82 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
         /* 选到要启的内核后，把失败计数 +1；内核起稳之后由它自己清（或用户按 C）。
          * 放这里而不是更早，是因为"菜单里犹豫"不该算一次失败。 */
         inc_boot_fail_count();
+
+        /* ===== 系统加载屏从这里开始 =====
+         * 下面每一段真实工作都在前后推进 spinner, 所以圈转多少圈 == 干了多少事。 */
+        int ld = ld_begin(use32, protect);
+        if (!ld) {
+            set_color(EFI_YELLOW, EFI_BLACK);
+            print_str(L"  [Loading kernel to 0x100000...]\r\n");
+            set_color(EFI_LIGHTGRAY, EFI_BLACK);
+        }
+
+        if (ld) ld_set_status(use32 ? "Loading 32-bit kernel image"
+                                    : "Loading 64-bit kernel image", 10);
+        for (int i = 0; i < 8; i++) ld_tick();
+        ks = load_kernel_to_memory(use32 ? KERNEL32_PATH : KERNEL64_PATH, &kaddr, &ksize);
+
+        /* 加载失败 -> 换另一个架构再试。保护模式没有 64 位内核时只能如实报错。 */
+        if (EFI_ERROR(ks)) {
+            int other32 = use32 ? 0 : 1;
+            if (ld) ld_set_status("Selected kernel missing, trying other arch", 20);
+            if (kernel_available(other32 ? KERNEL32_PATH : KERNEL64_PATH)) {
+                use32 = other32;
+                my_strcpy(g_config.cmdline, use32 ? "hepu.arch=i386" : "hepu.arch=x86_64");
+                if (protect) my_strcat(g_config.cmdline, " hepu.graphics=0");
+                ks = load_kernel_to_memory(use32 ? KERNEL32_PATH : KERNEL64_PATH, &kaddr, &ksize);
+            }
+        }
+        if (EFI_ERROR(ks)) {
+            if (ld) ld_set_status("No bootable kernel in ESP", 0);
+            g_ld_mute = 0;
+            set_color(EFI_RED, EFI_BLACK);
+            print_str(L"  [FATAL] No bootable kernel in ESP.\r\n");
+            print_str(L"  Press any key to return to firmware...\r\n");
+            set_color(EFI_LIGHTGRAY, EFI_BLACK);
+            wait_key();
+            return EFI_NOT_FOUND;
+        }
+
+        set_color(EFI_GREEN, EFI_BLACK);
+        print_str(L"  [OK] kernel ready @ 0x100000\r\n");
+        set_color(EFI_LIGHTGRAY, EFI_BLACK);
+
+        /* 校验：CRC32 覆盖整幅镜像(HEPBOOT.CFG 里配了 expected_crc 才比对) */
+        if (ld) ld_set_status("Verifying kernel image", 30);
+        for (int i = 0; i < 4; i++) ld_tick();
+        UINT32 kernel_crc = crc32_calc((const void *)(UINTN)kaddr, ksize);
+        for (int i = 0; i < 4; i++) ld_tick();
+        if (g_config.expected_crc != 0 && g_config.expected_crc != kernel_crc) {
+            if (ld) ld_set_status("CRC32 mismatch - kernel corrupted", 0);
+            set_color(EFI_RED, EFI_BLACK);
+            print_str(L"  [FATAL] CRC32 mismatch! Kernel corrupted.\r\n");
+            set_color(EFI_LIGHTGRAY, EFI_BLACK);
+            uefi_call_wrapper(BS->Stall, 1, 3000000);
+            wait_key();
+            return EFI_LOAD_ERROR;
+        }
+
+        /* 预热：逐段触碰内核镜像的每一页, 让内容提前进缓存。
+         * 这一步是真实的 —— 内核启动早期要搬移整幅镜像, 先摸一遍省掉后面的
+         * 缺页停顿; 顺带让 spinner 有个跟"正在做的事"对得上的节奏。 */
+        if (ld) ld_set_status("Preheating kernel pages", 45);
+        {
+            volatile UINT8 sink = 0;
+            UINT64 step = ksize / 24;
+            if (step < 4096) step = 4096;
+            int done = 0;
+            for (UINT64 o = 0; o < ksize; o += step, done++) {
+                sink ^= *(volatile UINT8 *)(UINTN)(kaddr + o);
+                if (ld) ld_set_status("Preheating kernel pages", 45 + done * 3);
+                ld_tick();
+            }
+            (void)sink;
+        }
+
+        if (ld) ld_set_status("Preparing to hand off", 92);
+        for (int i = 0; i < 6; i++) ld_tick();
+
 
         /* V6.86真机兼容: GOP初始化移到GetMemoryMap之前，
          * 避免GOP操作分配内存改变内存映射导致ExitBootServices失败 */
@@ -1635,52 +1793,11 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
             print_str(L"  [OK] GOP high resolution mode enabled\r\n");
             set_color(EFI_LIGHTGRAY, EFI_BLACK);
 
-            /* 方案A启动画面（gop_* 的原型来自 hepboot_gop.h） */
-            EFI_GRAPHICS_OUTPUT_PROTOCOL *gop = NULL;
-            uefi_call_wrapper(BS->LocateProtocol, 3,
-                              &gEfiGraphicsOutputProtocolGuid, NULL, (VOID **)&gop);
-            if (gop) {
-                gop_init(gop);
-                gop_clear(0x00120A0A);
-
-                UINT32 w = gop_get_width();
-                UINT32 h = gop_get_height();
-                int cx = (w - 240) / 2;
-                int cy = h / 2 - 80;
-
-                gop_draw_string(cx, cy, "HepuBoot v0.08", 0x00FFFFFF);
-                gop_draw_string(cx, cy + 20, "Hepu OS UEFI Bootloader", 0x00808080);
-                gop_draw_string(cx, cy + 50, "Loading kernel...", 0x00FFFFFF);
-                gop_progress_bar(cx, cy + 70, 300, 12, 100, 0x00FF9E4A);
-
-                UINT64 boot_ms = boot_timer_elapsed();
-                gop_printf(cx, cy + 90, 0x00808080, "Boot time: %d ms", (UINT32)boot_ms);
-
-                UINT32 kernel_crc = crc32_calc((const void *)(UINTN)kaddr, ksize);
-                gop_printf(cx, cy + 110, 0x00808080, "Kernel size: %d bytes", ksize);
-                gop_printf(cx, cy + 130, 0x00FFFFFF, "CRC32: 0x%08X", kernel_crc);
-
-                if (g_config.expected_crc != 0 && g_config.expected_crc != kernel_crc) {
-                    gop_printf(cx, cy + 150, 0x00FF0000, "EXPECTED: 0x%08X", g_config.expected_crc);
-                    gop_draw_string(cx, cy + 170, "HASH MISMATCH!", 0x00FF0000);
-                    gop_draw_string(cx, cy + 190, "Kernel corrupted!", 0x00FF0000);
-                    gop_draw_string(cx, cy + 210, "Boot halted.", 0x00FF0000);
-                    set_color(EFI_RED, EFI_BLACK);
-                    print_str(L"  [FATAL] CRC32 mismatch! Kernel corrupted.\r\n");
-                    set_color(EFI_LIGHTGRAY, EFI_BLACK);
-                    uefi_call_wrapper(BS->Stall, 1, 3000000);
-                    while (1) {
-                        UINTN index;
-                        uefi_call_wrapper(ST->ConIn->WaitForKey, 1, ST->ConIn);
-                        uefi_call_wrapper(ST->ConIn->ReadKeyStroke, 2, ST->ConIn, &index);
-                    }
-                } else {
-                    gop_draw_string(cx, cy + 150, "Verified OK", 0x0000FF00);
-                }
-
-                uefi_call_wrapper(BS->Stall, 1, 800000);
-            }
+            /* 原来的静态"方案A启动画面"整段删掉 —— 那版画完就 Stall 0.8 秒,
+             * 进度条固定 100%, 等于假进度。现在由上面的 ld_* 加载屏接管。 */
         }
+
+        ld_end();
 
         /* 分配低内存用于跳转代码执行 */
         UINT64 low_addr = 0x80000;
