@@ -15,6 +15,7 @@ extern void gfx64_fill_rounded_rect(int x, int y, int w, int h, int radius, uint
 extern void gfx64_draw_rounded_rect(int x, int y, int w, int h, int radius, uint32_t color);
 extern void gfx64_draw_rect(int x, int y, int w, int h, uint32_t color);
 extern void *gfx64_get_framebuffer(void);
+extern void  gfx64_set_target(void *fb);
 extern void font64_draw_string(void *fb, int fw, int fh, int x, int y,
                                const char *str, uint32_t color, uint16_t size);
 
@@ -265,6 +266,11 @@ void hs_oobe_begin(void)
 void hs_oobe_render(void *fb, int sw, int sh)
 {
     if (!g_active) return;
+    if (!fb) return;
+    /* 统一渲染目标: 遮罩/卡片/按钮走 gfx64 全局原语(写 gfx_target), 文字走
+     * font64 传入的 fb。这里把 gfx_target 显式对齐到 fb, 两套原语才落在同一块
+     * (桌面后台)缓冲上, 帧末 present 整屏拷到前台后向导才不会被覆盖掉。 */
+    gfx64_set_target(fb);
     g_hit_n = 0;
 
     /* 桌面变暗，保持可见 */
