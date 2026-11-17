@@ -79,7 +79,7 @@ typedef struct {
 typedef struct {
     uint8_t  cfis[64];
     uint8_t  acmd[16];
-    uint8_t  reserved[48];
+    uint8_t  reserved[16];   /* 0x50..0x5F，PRDT 规范起点 0x60 */
     ahci_prdt_t prdt[1];
 } __attribute__((packed)) ahci_cmd_table_t;
 
@@ -103,7 +103,19 @@ extern void vga_puts(const char *s);
 extern void vga_put_hex(uint64_t val);
 extern uint64_t pmm64_alloc_page(void);
 extern uint32_t pci_config_read32(uint8_t bus, uint8_t dev, uint8_t func, uint8_t offset);
+extern uint8_t  pci_config_read8(uint8_t bus, uint8_t dev, uint8_t func, uint8_t offset);
 extern void pci_config_write32(uint8_t bus, uint8_t dev, uint8_t func, uint8_t offset, uint32_t val);
+
+/* 中断路由所需的 APIC/IDT 接口（启动后期 IOAPIC 已就绪） */
+extern int  apic64_ioapic_available(void);
+extern int  apic64_set_irq_redirect(uint8_t irq, uint8_t vector, uint8_t delivery_mode,
+                                    uint8_t dest_mode, uint8_t polarity,
+                                    uint8_t trigger_mode, uint8_t dest_id);
+extern uint32_t apic64_get_id(void);
+extern void irq64_install_gate(int vector, uint64_t handler);
+
+/* AHCI 控制器 PCI 中断向量（与 LAPIC timer 0x40 / IPI 0x50 错开） */
+#define AHCI_IRQ_VECTOR 0x41
 
 static ahci_hba_t *ahci_hba = NULL;
 static ahci_port_info_t ahci_ports[AHCI_MAX_PORTS];
@@ -113,6 +125,17 @@ static int ahci_port_count = 0;
 static uint64_t ahci_cmd_list_pages[AHCI_MAX_PORTS];
 static uint64_t ahci_fis_pages[AHCI_MAX_PORTS];
 static uint64_t ahci_cmd_table_pages[AHCI_MAX_PORTS];
+
+/* 控制器在 PCI 总线上的位置与中断线（探测阶段记录） */
+static uint8_t ahci_pci_bus  = 0xFF;
+static uint8_t ahci_pci_dev  = 0xFF;
+static uint8_t ahci_pci_func = 0xFF;
+static uint8_t ahci_irq_line = 0xFF;   /* PCI 0x3C：固件已 swizzle 好的 GSI */
+static uint8_t ahci_irq_pin  = 0;      /* PCI 0x3D：1=INTA ... 4=INTD */
+
+/* 中断计数 + 每端口待处理 IS 快照（ISR 写，等待循环可读） */
+static volatile uint64_t ahci64_irq_count = 0;
+static volatile uint32_t ahci_port_is_pending[AHCI_MAX_PORTS];
 
 static inline uint32_t ahci_readl(volatile const void *reg)
 {
@@ -156,6 +179,90 @@ static int ahci_wait_cmd_complete(ahci_port_t *port, int slot, int timeout)
         if (tfd & (0x01 | 0x20)) return -1;
     }
     return -1;
+}
+
+/* AHCI 中断服务：计数、清 HBA/端口 IS（写 1 清零），快照待处理位。
+ * 命令完成判定仍由等待循环读 CI/TFD 复核；中断负责及时推送并留下计数证据。 */
+void ahci64_irq_handler(void)
+{
+    ahci64_irq_count++;
+    if (!ahci_hba) return;
+    uint32_t gis = ahci_readl(&ahci_hba->is);
+    if (gis) ahci_writel(&ahci_hba->is, gis);
+    for (int i = 0; i < AHCI_MAX_PORTS; i++) {
+        if (!ahci_ports[i].present) continue;
+        ahci_port_t *p = ahci_ports[i].regs;
+        uint32_t is = ahci_readl(&p->is);
+        if (is) {
+            ahci_writel(&p->is, is);
+            ahci_port_is_pending[i] |= is;
+        }
+    }
+}
+
+/* 把控制器 PCI INTx 经 IOAPIC 路由到 AHCI 专用向量；失败则保留纯轮询兜底。 */
+static void ahci64_register_irq(void)
+{
+    if (!apic64_ioapic_available()) {
+        vga_puts("[AHCI64] IOAPIC unavailable, keep polling fallback\n");
+        return;
+    }
+    if (ahci_irq_line == 0xFF || ahci_irq_line == 0) {
+        vga_puts("[AHCI64] no PCI IRQ line assigned, keep polling fallback\n");
+        return;
+    }
+    irq64_install_gate(AHCI_IRQ_VECTOR, (uint64_t)ahci64_irq_handler);
+    /* PCI INTx：低电平有效(polarity=1)、级别触发(trigger=1)，物理投递到 BSP。 */
+    int rc = apic64_set_irq_redirect(ahci_irq_line, AHCI_IRQ_VECTOR,
+                                     0, 0, 1, 1, (uint8_t)apic64_get_id());
+    vga_puts("[AHCI64] IRQ routed gsi=");
+    vga_put_hex(ahci_irq_line);
+    vga_puts(" pin="); vga_put_hex(ahci_irq_pin);
+    vga_puts(" vec="); vga_put_hex(AHCI_IRQ_VECTOR);
+    vga_puts(" rc="); vga_put_hex((uint64_t)rc);
+    vga_puts("\n");
+}
+
+/* FLUSH CACHE EXT (0xEA)：无数据传输命令，PRDTL=0。写完后让设备把写缓存落盘，
+ * 并等 TFD BSY 清除、DRDY 置位（设备回到就绪态）。 */
+static int ahci64_flush_cache(ahci_port_t *port, int port_num)
+{
+    if (!port) return -1;
+    int slot = -1;
+    uint32_t ci = ahci_readl(&port->ci);
+    uint32_t sact = ahci_readl(&port->sact);
+    for (int i = 0; i < 32; i++) {
+        if (!(ci & (1 << i)) && !(sact & (1 << i))) { slot = i; break; }
+    }
+    if (slot < 0) return -1;
+
+    ahci_cmd_header_t *hdr = (ahci_cmd_header_t *)ahci_cmd_list_pages[port_num] + slot;
+    ahci_cmd_table_t *tbl = (ahci_cmd_table_t *)(ahci_cmd_table_pages[port_num] + slot * 128);
+    ahci_memset(hdr, 0, sizeof(*hdr));
+    ahci_memset(tbl, 0, sizeof(*tbl));
+    ((uint8_t *)hdr)[0] = 0x05;   /* cfl=5, W=0, 无数据传输 */
+    hdr->prdtl = 0;
+    hdr->ctba = ahci_cmd_table_pages[port_num] + slot * 128;
+
+    uint8_t *f = tbl->cfis;
+    f[0] = 0x27; f[1] = 0x80; f[2] = 0xEA; f[3] = 0;   /* 0xEA FLUSH CACHE EXT */
+    f[4] = 0; f[5] = 0; f[6] = 0; f[7] = 0x40;
+    f[8] = 0; f[9] = 0; f[10] = 0; f[11] = 0;
+    f[12] = 0; f[13] = 0; f[14] = 0; f[15] = 0;
+
+    ahci_writel(&port->is, 0xFFFFFFFF);
+    ahci_writel(&port->ci, 1 << slot);
+    if (ahci_wait_cmd_complete(port, slot, 1000000) != 0) return -1;
+    return ahci_wait_port_ready(port, 100000);
+}
+
+/* 同步/关机路径：对所有已识别端口发 FLUSH CACHE EXT 并等 BSY/DRDY 干净。 */
+void ahci64_sync_flush(void)
+{
+    for (int i = 0; i < AHCI_MAX_PORTS; i++) {
+        if (!ahci_ports[i].present || ahci_ports[i].total_sectors == 0) continue;
+        ahci64_flush_cache(ahci_ports[i].regs, i);
+    }
 }
 
 /* PxCMD 位：bit0=ST, bit4=FRE(命令列表有效) */
@@ -418,6 +525,10 @@ int ahci64_write_sectors(ahci_port_t *port, uint64_t lba, const uint8_t *buffer,
     if (port_num < 0) return -1;
     int result = ahci64_exec_cmd(port, port_num, 0x35, lba, (uint8_t *)buffer, count, 1);
     if (result != 0) return -1;
+    /* 写命令完成后立即 FLUSH CACHE EXT，等设备写缓存落盘、BSY/DRDY 干净。 */
+    if (ahci64_flush_cache(port, port_num) != 0) {
+        vga_puts("[AHCI64] flush cache FAIL\n");
+    }
     return count;
 }
 
@@ -455,6 +566,7 @@ static void ahci64_selftest(void)
         if (ahci_ports[i].total_sectors <= 1) continue;
         uint64_t tlba = ahci_ports[i].total_sectors - 1;
         for (int k = 0; k < 512; k++) wr[k] = (uint8_t)((k * 13u + 0x5Au) & 0xFF);
+        vga_puts("[AHCI64] selftest irq before="); vga_put_hex(ahci64_irq_count); vga_puts("\n");
         int wres = ahci64_write_sectors(port, tlba, wr, 1);
         if (wres != 1) {
             vga_puts("[AHCI64] selftest: write FAIL\n");
@@ -470,6 +582,7 @@ static void ahci64_selftest(void)
         for (int k = 0; k < 512; k++) if (rd[k] != wr[k]) mismatch++;
         vga_puts("[AHCI64] selftest loopback lba="); vga_put_hex(tlba);
         vga_puts(" mismatch="); vga_put_hex((uint64_t)mismatch);
+        vga_puts(" irq after="); vga_put_hex(ahci64_irq_count);
         vga_puts("\n");
     }
 }
@@ -495,9 +608,17 @@ void ahci64_init(void)
             uint8_t base_class = (class_code >> 24) & 0xFF;
             uint8_t sub_class = (class_code >> 16) & 0xFF;
             if (base_class == 0x01 && sub_class == 0x06) {
-                /* 使能 Memory Space(bit1) + Bus Master(bit2)，否则 MMIO/ DMA 不通 */
+                /* 记录 PCI 位置与中断线/引脚（中断路由用） */
+                ahci_pci_bus  = 0;
+                ahci_pci_dev  = (uint8_t)dev;
+                ahci_pci_func = (uint8_t)func;
+                ahci_irq_line = pci_config_read8(0, (uint8_t)dev, (uint8_t)func, 0x3C);
+                ahci_irq_pin  = pci_config_read8(0, (uint8_t)dev, (uint8_t)func, 0x3D);
+                /* 使能 Memory Space(bit1) + Bus Master(bit2)，清 INTx Disable(bit10)，
+                 * 否则 MMIO/DMA 不通且控制器中断被 PCI 命令位屏蔽。 */
                 uint32_t pcmd = pci_config_read32(0, dev, func, 0x04);
                 pcmd |= 0x07;
+                pcmd &= ~(1u << 10);
                 pci_config_write32(0, dev, func, 0x04, pcmd);
 
                 /* 扫描 BAR0..5，取第一个内存型(bit0=0)非零 BAR 作为 ABAR
@@ -550,6 +671,9 @@ void ahci64_init(void)
     }
     ahci_hba_t *hba = (ahci_hba_t *)hba_phys;
     int count = ahci64_detect(hba);
+    /* 控制器与端口就绪后再挂中断：此时 HBA IE / 端口 IE 已使能，
+     * IOAPIC 在 apic64_switch_to_apic_mode() 阶段已初始化。 */
+    ahci64_register_irq();
     if (count > 0) {
         vga_puts("[AHCI64] Initialized: ");
         char numstr[8];

@@ -203,6 +203,9 @@ void drv_register_all64(void)
     kbd_drv_desc.id = drv_register(&kbd_drv_desc);
     mouse_drv_desc.id = drv_register(&mouse_drv_desc);
     pci_drv_desc.id = drv_register(&pci_drv_desc);
+    /* 显式跑一次结构化枚举（幂等）：递归下钻 PCI-PCI 桥次级总线，串口转储各总线设备。
+     * 此前枚举只在某驱动 find_by_class 被调用时惰性触发，桥后总线不一定被扫到。 */
+    pci64_init();
 
     /* 网络驱动：只登记 PCI 总线上真实在位的网卡。
      * 槽位顺序保持在 PCI 与 AHCI 之间（原网络驱动 ID=6），有网卡时编号不漂移；

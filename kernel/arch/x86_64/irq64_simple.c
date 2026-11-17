@@ -240,6 +240,14 @@ void irq64_init(void)
 /* 为AP核加载IDT（IDTR是per-CPU的，trampoline只加载了GDT/CR3，
    没有加载IDT）。AP核在启用定时器中断/ sti 之前必须调用，
    否则首个定时器中断会落入无效IDT导致#GP/#DF。 */
+/* 启动后期驱动按需安装中断门（如 AHCI PCI 中断）。IDT 表在 irq64_init 后
+ * 仍可写：门描述符格式与启动期一致（Present, DPL=0, Interrupt Gate 0xE）。 */
+void irq64_install_gate(int vector, uint64_t handler)
+{
+    if (vector < 0 || vector >= IDT_ENTRIES) return;
+    idt64_set_gate(vector, handler, 0x08, 0x8E, 0);
+}
+
 void idt64_load_for_ap(void)
 {
     __asm__ volatile("lidt %0" : : "m"(idt64_ptr));

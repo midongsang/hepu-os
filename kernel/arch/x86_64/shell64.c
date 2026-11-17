@@ -2329,8 +2329,11 @@ static void shell_cmd_sync(int argc, char **argv)
     (void)argc; (void)argv;
     extern void blk_cache_flush(void);
     extern void ext2_cache_flush_all(void);
+    extern void ahci64_sync_flush(void);
     blk_cache_flush();
     ext2_cache_flush_all();
+    /* 块缓存落盘后，对 SATA/AHCI 盘发 FLUSH CACHE EXT，等写缓存真正落盘。 */
+    ahci64_sync_flush();
     vga_puts("sync: block cache + ext2 inode cache flushed\n");
 }
 

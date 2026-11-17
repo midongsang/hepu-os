@@ -673,6 +673,8 @@ static int apic64_calibrate_timer(void)
 
 static int      g_hpet_mapped = 0;
 static uint64_t g_hpet_period_fs = 0;
+static int      g_hpet_tick_armed = 0;
+static int      hpet64_primary_tick_init(void);
 
 static uint32_t hpet_read32(uint64_t reg)
 {
@@ -1009,6 +1011,9 @@ void apic64_init_timer(void)
        只触发一次即停）。bit17=周期，bit16=0 不屏蔽，向量 0x40。 */
     apic_write(APIC_LVT_TIMER, (1 << 17) | APIC_TIMER_VECTOR);
     apic_write(APIC_TIMER_ICR, icr);
+
+    /* LAPIC/PIT 作为备用保留；HPET Timer0 周期中断由 BSP 先 arm 一次，AP 跳过。 */
+    if (!g_hpet_tick_armed) hpet64_primary_tick_init();
 }
 
 /* V0.57.0: 启动期校准是否失败过(为 0 说明还没拿到真实频率, 值得在桌面就绪后补一次)。 */
@@ -1035,4 +1040,81 @@ int apic64_timer_recalibrate(void)
 void apic64_timer_eoi(void)
 {
     apic_write(APIC_EOI, 0);
+}
+
+/* ============================================================================
+ * HPET 主 tick 源（提交 3）
+ *
+ * 旧实现：HPET 只在 apic64_calibrate_via_hpet() 里当校准基准读自由计数器，
+ * 主调度 tick 由 LAPIC 周期定时器(向量0x40)投递，PIT 为备用。
+ *
+ * 本实现：配 HPET Timer0 为周期模式(1ms)，比较器到期经 IOAPIC 路由到专用
+ * 向量 0x42；中断复用与 LAPIC tick 同一套调度主体（g_kernel_tick64 /
+ * uthread 轮转 / smp_timer_tick，见 lib64.c 0x40/0x42 分支）。
+ * LAPIC 定时器与 PIT 保持运行，作为 HPET 中断未投递时的备用 tick，不拆除。
+ * ========================================================================== */
+#define HPET_TIMER0_CONF   0x100u
+#define HPET_TIMER0_CMP    0x108u
+#define HPET_TN_INT_EN     (1u << 2)
+#define HPET_TN_PERIODIC   (1u << 3)
+#define HPET_TN_PERIOD_EN  (1u << 4)
+#define HPET_TN_ROUTE_SH   9
+#define HPET_TN_ROUTE_MSK  0x7Fu
+#define HPET_PRIMARY_VECTOR 0x42
+
+extern void irq64_install_gate(int vector, uint64_t handler);
+extern int  apic64_set_irq_redirect(uint8_t irq, uint8_t vector, uint8_t delivery_mode,
+                                    uint8_t dest_mode, uint8_t polarity,
+                                    uint8_t trigger_mode, uint8_t dest_id);
+extern uint32_t apic64_get_id(void);
+
+static volatile uint64_t g_hpet_tick_count = 0;
+
+/* 向量 0x42 入口回调：计数留证；调度主体由 lib64.c 派发分支统一执行。 */
+void hpet64_tick_handler(void)
+{
+    g_hpet_tick_count++;
+}
+
+static int hpet64_primary_tick_init(void)
+{
+    if (!g_hpet_mapped || g_hpet_period_fs == 0) return -1;
+
+    uint32_t id = hpet_read32(HPET_ID);
+    int num_timers = ((id >> 8) & 0x1F) + 1;
+
+    /* 1ms 周期换算成 HPET 计数（period_fs = 飞秒/tick） */
+    uint64_t period_ticks = 1000000000000ULL / g_hpet_period_fs;
+    if (period_ticks < 16ULL) period_ticks = 16ULL;
+
+    uint32_t t0conf = hpet_read32(HPET_TIMER0_CONF);
+    uint32_t route = (t0conf >> HPET_TN_ROUTE_SH) & HPET_TN_ROUTE_MSK;
+    /* 路由字段未给定时，取 ISA(0..15) 之后的首个空闲 GSI 16 兜底 */
+    uint32_t gsi = route ? route : 16u;
+
+    /* 先关 Timer0，写比较初值，再开周期模式 + 中断使能 */
+    hpet_write32(HPET_TIMER0_CONF, 0);
+    uint64_t ctr = hpet_read_counter();
+    uint64_t cmp = ctr + period_ticks;
+    hpet_write32(HPET_TIMER0_CMP,     (uint32_t)(cmp & 0xFFFFFFFFu));
+    hpet_write32(HPET_TIMER0_CMP + 4, (uint32_t)(cmp >> 32));
+
+    uint32_t conf = HPET_TN_INT_EN | HPET_TN_PERIODIC | HPET_TN_PERIOD_EN;
+    conf |= (route << HPET_TN_ROUTE_SH);
+    hpet_write32(HPET_TIMER0_CONF, conf);
+
+    irq64_install_gate(HPET_PRIMARY_VECTOR, (uint64_t)hpet64_tick_handler);
+    /* HPET 中断在 QEMU/真机多为级别触发、低电平有效；投递到 BSP。 */
+    int rc = apic64_set_irq_redirect((uint8_t)gsi, HPET_PRIMARY_VECTOR,
+                                     0, 0, 1, 1, (uint8_t)apic64_get_id());
+    g_hpet_tick_armed = 1;
+
+    vga_puts("[HPET] primary tick armed: timers="); vga_put_hex((uint64_t)num_timers);
+    vga_puts(" period_ticks="); vga_put_hex(period_ticks);
+    vga_puts(" gsi="); vga_put_hex(gsi);
+    vga_puts(" route="); vga_put_hex(route);
+    vga_puts(" vec="); vga_put_hex(HPET_PRIMARY_VECTOR);
+    vga_puts(" rc="); vga_put_hex((uint64_t)rc);
+    vga_puts("\n");
+    return 0;
 }

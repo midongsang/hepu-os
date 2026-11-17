@@ -481,6 +481,12 @@ IRQ_ENTRY 47
 /* APIC定时器中断入口（向量0x40=64） */
 IRQ_ENTRY 64
 
+/* AHCI/SATA 控制器中断入口（向量0x41=65） */
+IRQ_ENTRY 65
+
+/* HPET 主 tick 中断入口（向量0x42=66，IOAPIC 路由） */
+IRQ_ENTRY 66
+
 /* IPI核间中断入口（向量0x50=80） */
 IRQ_ENTRY 80
 

@@ -489,8 +489,8 @@ static void irq_handler_64_body(uint64_t *stack_frame)
             }
             __asm__ volatile("movb $0x20, %al\noutb %al, $0x20");  /* 主PIC EOI */
         }
-    } else if (vector == 0x40) {
-        /* APIC定时器中断（每个CPU独立, 1000Hz=1ms） */
+    } else if (vector == 0x40 || vector == 0x42) {
+        /* APIC定时器(0x40) / HPET 主 tick(0x42) 中断（1000Hz=1ms），调度主体共用 */
         extern uint64_t g_kernel_tick64;
         atomic_inc64(&g_kernel_tick64);
         /* V0.13.46: 用户态强制终止截获（kill请求 或 未响应超时看门狗） */
@@ -525,10 +525,24 @@ static void irq_handler_64_body(uint64_t *stack_frame)
                 uthread_timer_tick(stack_frame);
             }
         }
-        extern void apic64_timer_eoi(void);
         extern void smp_timer_tick(void);
         smp_timer_tick();  /* SMP调度tick */
-        apic64_timer_eoi();  /* 发送EOI到Local APIC */
+        if (vector == 0x40) {
+            extern void apic64_timer_eoi(void);
+            apic64_timer_eoi();  /* LAPIC: EOI 到 Local APIC */
+        } else {
+            /* HPET 主 tick：计数留证后走 IOAPIC EOI */
+            extern void hpet64_tick_handler(void);
+            extern void apic64_send_eoi(void);
+            hpet64_tick_handler();
+            apic64_send_eoi();
+        }
+    } else if (vector == 0x41) {
+        /* AHCI/SATA 控制器 PCI 中断（IOAPIC 路由，级别触发） */
+        extern void ahci64_irq_handler(void);
+        ahci64_irq_handler();
+        extern void apic64_send_eoi(void);
+        apic64_send_eoi();
     } else if (vector == 0x50) {
         /* IPI核间中断 */
         extern void apic64_timer_eoi(void);
