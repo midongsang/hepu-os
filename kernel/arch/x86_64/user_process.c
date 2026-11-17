@@ -1905,6 +1905,13 @@ extern void *elf64_load(void *elf_data, uint64_t size);
 /* ext2文件读取 */
 extern int ext2_64_read_file(const char *path, uint8_t *buf, int max_size);
 
+/* 最近一次成功建槽的真实 pid（BSS 静态槽，不随用户态上下文切换被覆盖）。
+ * user_process_switch 经全局 trampoline 恢复栈帧，impl 局部变量在该返回路径下
+ * 不可靠（历史上成功建槽后外部 rc 被踩成 10/0/0x40000067）。故在建槽成功、
+ * 进入用户态之前把 pid 落到本槽，hepu_exec 返回时按槽回传。 */
+static int s_uproc_last_pid = 0;
+static void uproc64_put_dec(int v);
+
 /* 从ext2加载ELF用户程序并执行 */
 static int uproc_exec_impl(const char *path, int argc, const char *const argv[])
 {
@@ -2248,10 +2255,29 @@ static int uproc_exec_impl(const char *path, int argc, const char *const argv[])
      * 走这条路。所以这里直接删掉该调用。 */
     kfree(elf_buffer);
 
+    /* UPROC ABI 回读断言：在建槽成功、进入用户态之前，按 pid 反查进程表槽位，
+     * 确认该 pid 真实存在且 active=1（不靠"数字看起来像 pid"）。 */
+    {
+        int slot = -1;
+        for (int si = 0; si < MAX_USER_PROCS; si++) {
+            if (user_procs[si].pid == pid) { slot = si; break; }
+        }
+        vga_puts("[UPROC] pid=");
+        uproc64_put_dec(pid);
+        vga_puts(" slot=");
+        uproc64_put_dec(slot);
+        vga_puts(" active=");
+        uproc64_put_dec(slot >= 0 ? (int)user_procs[slot].active : -1);
+        vga_puts("\n");
+    }
+
+    /* 真实 pid 落到静态槽（早于进入用户态），返回时按槽回传。 */
+    s_uproc_last_pid = pid;
+
     /* 切换到用户态 */
     user_process_switch(pid);
 
-    return pid;
+    return s_uproc_last_pid;
 }
 
 /* ---- UPROC 统一 ABI 对外入口（32/64 同一套契约，见 kernel/include/uproc.h） ---- */
