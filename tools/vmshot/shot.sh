@@ -50,7 +50,10 @@ if [ -z "$SLOT" ]; then
   flock -w 900 "$fd" || { echo "[shot] 等不到 QEMU 额度，放弃" >&2; exit 1; }
   SLOT=1; SLOT_FD=$fd
 fi
-echo "[shot] tag=$TAG slot=$SLOT/$SLOTS img=$IMG"
+# 挂 VNC 而不是 -display none: 后者会让 QEMU 的 VGA surface 停在固件默认 640x480,
+# 即使 Guest 内部已是 1920x1080, screendump 出来的仍是 640x480。
+VNCPORT=$((5900 + SLOT))
+echo "[shot] tag=$TAG slot=$SLOT/$SLOTS img=$IMG vnc=:$VNCPORT"
 
 # 只清自己这个 tag 上一次留下的实例，绝不 pkill -x 全局（那会杀掉别的 agent）
 if [ -f "$INST/qemu.pid" ]; then
@@ -63,7 +66,7 @@ qemu-system-x86_64 -L $B/pkg/datadir \
   -drive if=pflash,format=raw,readonly=on,file=$V/OVMF_CODE_4M.fd \
   -drive if=pflash,format=raw,file=$INST/V.fd \
   -drive format=raw,file=$IMG,file.locking=off,snapshot=on \
-  -m 1024 -smp 2 -display none -monitor unix:$INST/mon.sock,server,nowait \
+  -m 1024 -smp 2 -vnc 127.0.0.1:${VNCPORT} -monitor unix:$INST/mon.sock,server,nowait \
   -serial file:$INST/ser.log \
   -device qemu-xhci -device usb-kbd -device usb-mouse -vga std \
   -nic user,model=e1000 -daemonize -pidfile $INST/qemu.pid 2>&1 | head -2

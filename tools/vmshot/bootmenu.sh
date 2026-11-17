@@ -50,7 +50,8 @@ fi
 
 # 顺带把菜单停留时间报出来，省得截图后才发现窗口太窄
 TO=$(mtype -i "$IMG"@@1M ::/HEPBOOT.CFG 2>/dev/null | grep -i '^timeout' | head -1 | tr -d '\r')
-echo "[bootmenu] tag=$TAG slot=$SLOT/$SLOTS $TO"
+VNCPORT=$((5900 + SLOT))
+echo "[bootmenu] tag=$TAG slot=$SLOT/$SLOTS $TO vnc=:$VNCPORT"
 
 if [ -f "$INST/qemu.pid" ]; then
   OLD=$(cat "$INST/qemu.pid" 2>/dev/null)
@@ -62,7 +63,7 @@ qemu-system-x86_64 -L $B/pkg/datadir \
   -drive if=pflash,format=raw,readonly=on,file=$V/OVMF_CODE_4M.fd \
   -drive if=pflash,format=raw,file=$INST/V.fd \
   -drive format=raw,file=$IMG,file.locking=off,snapshot=on \
-  -m 1024 -smp 2 -display none -monitor unix:$INST/mon.sock,server,nowait \
+  -m 1024 -smp 2 -vnc 127.0.0.1:${VNCPORT} -monitor unix:$INST/mon.sock,server,nowait \
   -serial file:$INST/ser.log -vga std -daemonize -pidfile $INST/qemu.pid 2>&1 | head -2
 
 sleep "$WAIT"

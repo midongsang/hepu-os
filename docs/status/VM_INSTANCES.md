@@ -43,6 +43,31 @@ bash shots/.bootmenu.sh <TAG> [WAIT_SEC] [OUT.png]
 2. **禁止 `pkill -f '<含自身命令行的字符串>'`** —— 会匹配到脚本自己（本项目已经踩过两次，表现为 exit 137 但 QEMU 反而活着）。
 3. **禁止在脚本里 `cd` 到 `run/` 再写固定文件名** —— 那是老方案的形状，会重新引入冲突。
 
+## 录屏
+
+```bash
+bash shots/.record.sh <TAG> [DUR_SEC] [FPS] [OUT.mp4]
+```
+
+QEMU 没有内建录屏，这台机也没有 X 装 vnc2mpg 一类工具。走 QMP 循环 `screendump`
+抓帧再合成 —— 启动过程对帧率要求低（默认 4fps 够看），这条路比装 VNC 流工具稳。
+
+合成用 `concat` + 每帧真实 `duration`，所以**视频时长 == 真实启动时长**，
+不会因为 TCG 下抓帧不稳而变成快放。
+
+### 一个必须知道的坑：`-display none` 会锁死 640×480
+
+`-display none` 时 QEMU 的 VGA surface 停在固件默认的 640×480，
+**即使 Guest 内部已经是 1920×1080**（引导器日志里明明写着
+`[GFX64] Mode set: 1920x1080 fb=0x80000000`），`screendump` 出来的还是 640×480。
+
+必须挂真实 display 后端（`-vnc 127.0.0.1:<port>`），surface 才会跟随 VGA 模式变化。
+三个脚本（shot / bootmenu / record）都已改成 VNC，端口按 slot 分配（5900+slot）。
+
+另外启动途中分辨率会从 640×480 跳到 1920×1080，所以录制时每帧都
+**等比缩放后居中贴到 1280×720 画布**，两边留黑边不变形 ——
+直接 thumbnail 会让不同尺寸的帧混进 concat，ffmpeg 要么报错要么退化到第一帧尺寸。
+
 ## 减少启动次数（比并行更有效）
 
 一个 QEMU 启动约 20 秒级（TCG 无 KVM），改 5 处就起 5 次是浪费。判据能合并就合并：**一次启动同时验引导菜单 → 进内核 → 串口日志 → 桌面 NONBLACK → SELFTEST**。
