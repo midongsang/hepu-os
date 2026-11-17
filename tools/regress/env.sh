@@ -13,7 +13,8 @@
 # ---- 定位仓库与会话目录 ----
 REGRESS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export WT="$(cd "$REGRESS_DIR/../.." && pwd)"
-export CHAT="$(cd "$WT/.." && pwd)"
+# CHAT 为工具链/固件/证据根目录；默认按 worktree 上一级推导，可用 HEPU_CHAT 覆盖（换位置布点时）。
+export CHAT="${HEPU_CHAT:-$(cd "$WT/.." && pwd)}"
 
 # ---- 工具链（三条环境变量缺一不可）----
 export T="$CHAT/.toolchain/pkg/root2"

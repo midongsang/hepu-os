@@ -61,8 +61,11 @@ def fail_labels(text):
     return set(l.strip() for l in text.splitlines()
                if "KUNIT-FAIL-SUITE" in l or "KUNIT-FAIL]" in l)
 
-old_snap = os.path.join(td, "..", "old-3d0bd23", "tests", "baseline",
-                        "3d0bd23-kunit32.txt")
+candidates = [
+    os.path.join(td, "..", "old-a787a01", "tests", "baseline", "a787a01-kunit32.txt"),
+    os.path.join(td, "..", "old-3d0bd23", "tests", "baseline", "3d0bd23-kunit32.txt"),
+]
+old_snap = next((c for c in candidates if os.path.exists(c)), candidates[0])
 old_text = read(old_snap)
 old_labels = fail_labels(old_text) if old_text else None
 new_labels = fail_labels(read(os.path.join(td, "ser32.txt")))

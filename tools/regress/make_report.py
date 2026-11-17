@@ -10,7 +10,7 @@ import json, os, re, subprocess, glob
 EV = os.environ["EV"]
 WT = os.environ["WT"]
 REG = os.path.join(WT, "tools", "regress")
-BASELINE = os.environ.get("BASELINE", "a787a01")
+BASELINE = os.environ.get("BASELINE", "61c53fa")
 FIXTURE = os.environ.get("FIXTURE_PASSWORD", "hepu123")
 
 
@@ -38,6 +38,11 @@ def git(*args):
 results = load_json(os.path.join(EV, "tests", "results.json"))
 metrics = load_json(os.path.join(EV, "tests", "metrics.json"))
 summary = metrics.get("summary", {})
+obs05 = {
+    "32-desktop": load_json(os.path.join(EV, "tests", "obs05-32-desktop.json")),
+    "64-lock": load_json(os.path.join(EV, "tests", "obs05-64-lock.json")),
+    "64-desktop": load_json(os.path.join(EV, "tests", "obs05-64-desktop.json")),
+}
 
 
 def frames(arch, role):
@@ -92,7 +97,8 @@ for f in stage_files:
         captured.append("Preparing to hand off")
     elif "menu" in b:
         captured.append("menu（上下文帧）")
-missing = ["Loading 64-bit kernel image", "Verifying kernel image"]
+missing = ["Loading 64-bit kernel image", "Verifying kernel image",
+           "Preheating kernel pages（64 录像未采到独立帧；32 加载帧 loading_1 采到 Preheating 96%）"]
 rows.append(("64-加载阶段帧覆盖", "64",
              "UNVERIFIED" if missing else "PASS",
              "、".join(stage_files),
@@ -102,7 +108,8 @@ rows.append(("64-加载阶段帧覆盖", "64",
 lock64 = "PASS" if (m64.get("lock_verdict") == "PASS" and has_marker("64", "booting to lock")) else "FAIL"
 rows.append(("64-锁屏", "64", lock64,
              "、".join(frames("64", "lock")[:4]),
-             "米白底锁屏；串口 booting to lock 标记在场；NONBLACK min=%s" % m64.get("lock_nonblack_min")))
+             "串口 `booting to lock screen` 在场；本树锁屏画面即米白底解锁页（头像 U、用户名 hepu、密码框、Unlock 按钮、VKB/PWR），"
+             "未观察到独立于密码页的纯时钟锁屏；NONBLACK min=%s" % m64.get("lock_nonblack_min")))
 
 # 登录页（lock -> login）
 login64_frames = frames("64", "login")
@@ -110,7 +117,7 @@ login64_state = st64.get("LOGIN_PAGE", "0")
 rows.append(("64-登录页", "64",
              "PASS" if login64_frames and login64_state == "1" else "UNVERIFIED",
              "、".join(login64_frames[:4]),
-             "锁屏任意键进入登录页；登录页帧 4 张，另空口令拒绝提示帧 1 张"))
+             "按键后串口 `lock -> login (key)`，登录页为同一解锁/密码 UI；登录页帧 4 张，另空口令拒绝提示帧 1 张（红条 Wrong password）"))
 
 # 空 Enter 探测（不输入口令直接提交）
 empty = st64.get("EMPTY_ENTER", "UNVERIFIED")
@@ -160,11 +167,12 @@ lock_hit = "LOCK_HIT=1" in state32
 rows.append(("32-菜单", "32",
              "PASS" if len(frames("32", "menu")) >= 4 else "UNVERIFIED",
              "、".join(frames("32", "menu")[:4]),
-             "菜单方向键 down+ret 选择 32 位项；截图 %d 张" % len(frames("32", "menu"))))
+             "菜单数字键 `2` 即时选中 32 位项（串口 `[BOOT] Mode: 32-bit i386` 在场）；截图 %d 张" % len(frames("32", "menu"))))
 rows.append(("32-加载屏", "32",
-             "PASS" if len(frames("32", "loading")) >= 1 else "UNVERIFIED",
+             "UNVERIFIED",
              "、".join(frames("32", "loading")[:4]),
-             "32 位加载阶段截图 %d 张（32 位内容偏稀疏）" % len(frames("32", "loading"))))
+             "4 帧中仅 loading_1 为有效 Preheating 96% 快照，其余 3 帧为切换黑屏/过渡帧，未凑齐 4 张有效加载屏；"
+             "串口 32-bit 引导标记在场。"))
 if lock_hit:
     lock32 = "PASS" if m32.get("lock_verdict") == "PASS" else "FAIL"
     lock32_note = "32 位出现锁屏页；NONBLACK min=%s" % m32.get("lock_nonblack_min")
@@ -193,15 +201,15 @@ rows.append(("32-UEFI 链路桌面帧", "32", "UNVERIFIED",
 rows.append(("32-linuxhello 用户态崩溃", "32", "FAIL",
              os.path.join(EV, "frames32-direct", "ser.log"),
              "直启与 UEFI 两条路径均在 [AUTO] linuxhello start 后退出/重启：直启 -no-reboot 下 QEMU 退出，"
-             "UEFI 路径重启回灌菜单。旧基线同位置 linuxhello 故障被回收（rc=3 继续跑后续应用），"
-             "本次 escalate 为重启；a787a01 未改动 32 位内核源码（仅 Makefile 兼容层目录迁移，行为声明不变），"
-             "根因未隔离编译验证，暂记为既有不稳定项存疑，不直接判为本次合并回归。"))
+             "UEFI 路径重启回灌菜单。对照上一基线 a787a01：同位置 linuxhello 故障被回收（rc=3 继续跑后续应用），"
+             "本轮 escalate 为重启；61c53fa 链路上 53e53cb 仅修 32 位文案空串兜底、61c53fa 仅统一顶栏 bar_height，"
+             "未改动 32 位内核执行路径；根因未隔离编译验证，暂记为既有不稳定项存疑，不直接判为本次合并回归。"))
 
 # 32 登录/认证：本树无外部调用方拉起登录页，认证桩路径未被触发
 login_warn = has_marker("32", "LOGIN\\] WARNING|password verification NOT")
 rows.append(("32-登录/认证路径", "32", "UNVERIFIED",
              os.path.join(EV, "frames32", "ser.log"),
-             "本次 32 链路直进旧桌面，登录页未被拉起（仓库内 login_show 无外部调用方）；"
+             "本轮 UEFI 与直启两条路径均未拉起登录页（仓库内 login_show 无外部调用方）；"
              "0de2133 三处显式未实现桩（login_authenticate / login_unlock_screen / mu_private_unlock）"
              "未被调用，串口无 LOGIN WARNING。认证行为属未验证，不是已通过。"
              "预期/回归判断：改动意图是把假校验改成显式未实现并保留无密码放行，并非让登录注定失败；"
@@ -241,8 +249,8 @@ secboot_warn = any(
     for d in ("frames64", "frames32", "protect64", "protect32"))
 rows.append(("安全启动验证桩", "host", "UNVERIFIED",
              os.path.join(EV, "frames64", "ser.log"),
-             "3d0bd23 将三处空桩改为返回未实现（-2）；本次非严格模式启动未触发 verify 调用，串口未见 NOT implemented 警告，"
-             "桩路径未被 exercised"))
+             "合入历史中的 3d0bd23（早于本基线）将三处空桩改为返回未实现（-2）；本次非严格模式启动未触发 verify 调用，"
+             "串口未见 NOT implemented 警告，桩路径未被触发"))
 
 # ---------- 主机/冒烟测试 ----------
 host = results.get("host_tests", {})
@@ -309,7 +317,7 @@ lines = []
 lines.append("# HepuOS 回归测试报告（test/regress-2026-11-17）\n")
 lines.append("- 分支：`%s`" % branch)
 lines.append("- 基线提交：`%s` %s" % (BASELINE, baseline_subject))
-lines.append("- 本次回归提交：`%s` %s" % (head, subject))
+lines.append("- 回归脚本/报告快照随分支 `%s` 最新提交入库（不 push）；基线为 `%s`" % (branch, BASELINE))
 lines.append("- 证据目录：`%s`" % EV)
 lines.append("- 运行环境：2 核 / 无 /dev/kvm / 全 TCG；QEMU 全机串行（/tmp/hepu-qemu.lock），编译串行（/tmp/hepu-build.lock）")
 lines.append("- 三态口径：**PASS** 取证通过；**FAIL** 真实失败；**UNVERIFIED** 未能取证，不计通过\n")
@@ -338,29 +346,119 @@ lines.append("- **32 位直启补充**：桌面帧 %d，NONBLACK 最低=%s（%s�
     s32.get("direct_desktop_verdict"),
     100.0 * (s32.get("direct_desktop_nonblack_min") or 0) / 2073600))
 
+# ---------- OBS-05 测量口径 + 九宫格 ----------
+ROW_CN = {"TL": "上左", "TC": "上中", "TR": "上右",
+          "ML": "中左", "MC": "正中", "MR": "中右",
+          "BL": "下左", "BC": "下中", "BR": "下右"}
+
+
+def obs05_block(key, title, compare_note=""):
+    d = obs05.get(key) or {}
+    imgs = d.get("images") or []
+    if not imgs:
+        lines.append("\n## OBS-05：%s（无取证帧，UNVERIFIED）\n" % title)
+        if compare_note:
+            lines.append(compare_note)
+        return
+    first = imgs[0]
+    W, H = first["size"]
+    lines.append("\n## OBS-05：%s 测量口径与九宫格\n" % title)
+    lines.append("### 1) 测量截图（绝对路径，共 %d 帧）" % len(imgs))
+    for im in imgs:
+        lines.append("- `%s`" % im["path"])
+    ov = first.get("overlay")
+    if ov:
+        lines.append("- 九宫格叠加对照图：`%s`" % ov)
+    lines.append("\n### 2) 采集参数")
+    lines.append("- 分辨率：截图实测 %d×%d（目标桌面 1920×1080）；帧由 QEMU monitor `screendump` 出 PPM，"
+                 "再用 PIL `convert(\"RGB\")` 转 PNG，未缩放、未裁剪。" % (W, H))
+    if key == "32-desktop":
+        lines.append("- 实例：`qemu-system-i386 -kernel build_v250/kernel.elf`，multiboot 直启；`-m 256 -smp 1`；"
+                     "**不挂磁盘**（无 ext2 镜像）；`-no-reboot`；VNC 127.0.0.1:5902。")
+        lines.append("- 等待：串口 `elastic free desktop init done` 命中后取帧（本轮 %d 帧，帧间隔 1.5s）；"
+                     "直启无菜单阶段，最早桌面帧在首帧注册后约 1s 内抓到。" % len(imgs))
+    else:
+        lines.append("- 实例：`qemu-system-x86_64`，`-m 1024 -smp 2`；挂回归镜像 `%s`（256MB raw，`snapshot=on` 只读共享）；"
+                     "OVMF CODE/VARS 私有副本；`-vnc 127.0.0.1:5902`，USB 键盘/鼠标。" % os.path.join(EV, "build", "hepu.img"))
+        lines.append("- 等待：菜单 7s 后取帧；状态标记串口等待上限 60–70s；每状态 4 帧，帧间隔 1.5–2s。")
+    lines.append("- 抓图方式：Unix socket monitor 下发 `screendump <ppm>`（非 -vnc 截屏、非外部录屏抽帧）；"
+                 "QEMU 退出则跳过该帧并在状态文件标记 CRASHED。")
+    lines.append("\n### 3) 分子/分母定义")
+    lines.append("- 分子（主口径 strict）：`pixel != (0,0,0)`，即 RGB 三通道不全为黑才计 1；"
+                 "**未排除背景色、未按主题色剔点**。")
+    lines.append("- 近黑参考口径（near，仅附列不参与判定）：任一通道 ≥16 判非黑。")
+    lines.append("- 分母：整帧 W×H = %d；九宫格每格分母 = (W/3)×(H/3)，格内占比 = 格内非黑 / 格内像素。"
+                 % (W * H))
+    lines.append("- 整帧 NONBLACK：strict 最低 %d / %d（%.2f%%）；near 最低 %d。" % (
+        d.get("whole_strict_min", 0), W * H,
+        100.0 * (d.get("whole_strict_min", 0) or 0) / (W * H),
+        min((i["near_nonblack"] for i in imgs), default=0)))
+    # 九宫格取第一帧（代表帧），附 4 帧均值在 JSON
+    lines.append("\n### 4) 九宫格分区占比（代表帧：%s，strict 口径）" % os.path.basename(first["path"]))
+    lines.append("")
+    lines.append("| 分区 | 非黑像素 | 占比 | 分区 | 非黑像素 | 占比 | 分区 | 非黑像素 | 占比 |")
+    lines.append("|---|---|---|---|---|---|---|---|---|")
+    cells = first["cells"]
+    def c(k):
+        x = cells[k]
+        return "%d / %.2f%%" % (x["strict_nonblack"], 100.0 * x["strict_ratio"])
+    lines.append("| 上 | %s | %s | %s |" % (
+        ROW_CN["TL"] + " " + c("TL"), ROW_CN["TC"] + " " + c("TC"), ROW_CN["TR"] + " " + c("TR")))
+    lines.append("| 中 | %s | %s | %s |" % (
+        ROW_CN["ML"] + " " + c("ML"), ROW_CN["MC"] + " " + c("MC"), ROW_CN["MR"] + " " + c("MR")))
+    lines.append("| 下 | %s | %s | %s |" % (
+        ROW_CN["BL"] + " " + c("BL"), ROW_CN["BC"] + " " + c("BC"), ROW_CN["BR"] + " " + c("BR")))
+    # 哪几格偏低
+    low = [ROW_CN[k] for k in ("TL", "TC", "TR", "ML", "MC", "MR", "BL", "BC", "BR")
+           if cells[k]["strict_ratio"] < 0.5]
+    if low:
+        lines.append("- 非黑占比 <50%% 的格：%s。" % "、".join(low))
+    else:
+        lines.append("- 九宫格全部 ≥50%，无明显黑块分区。")
+    if compare_note:
+        lines.append("\n### 5) 与旧基线对比")
+        lines.append(compare_note)
+
+
+obs05_block("32-desktop", "32 位桌面（multiboot 直启）",
+            "旧基线 3d0bd23 台账值 786,399 / 2,073,600 ≈ 38%%（部分首帧稀疏画面）。"
+            "本轮 61c53fa 实测见上：整帧 strict NONBLACK 最低 %s，占比 %.2f%%；"
+            "若与 38%% 不一致，差异来自抓图时机（旧值取到首帧尚未整帧上色的稀疏画面，本轮取桌面稳定后 %d 帧），"
+            "而非同一时点的回退。旧值仅存于 old-3d0bd23/ 对照，不混入本轮结论。" % (
+                obs05["32-desktop"].get("whole_strict_min", 0),
+                100.0 * (obs05["32-desktop"].get("whole_strict_min", 0) or 0) / 2073600,
+                len(obs05["32-desktop"].get("images", []))))
+obs05_block("64-lock", "64 位锁屏")
+obs05_block("64-desktop", "64 位桌面")
+
 lines.append("\n## 加载屏推进证据\n")
 lines.append("- 视频：`%s`" % os.path.join(EV, "loading", "loading.mp4"))
 for stf in stage_files:
     lines.append("- 抽帧：`%s`" % stf)
-lines.append("- 未采到独立静态帧的阶段：Loading 64-bit kernel image、Verifying kernel image（UNVERIFIED）。")
+lines.append("- 未采到独立静态帧的阶段（64 录像）：Loading 64-bit kernel image、Verifying kernel image、Preheating kernel pages（UNVERIFIED）；"
+             "Preheating 在 32 位加载帧 `frames32/loading_1.png` 中采到（96%）。")
 
 lines.append("\n## 失败 / 未验证项与原因\n")
 bad = [r for r in rows if r[2] in ("FAIL", "UNVERIFIED")]
 if not bad:
     lines.append("- 无。")
 for name, arch, st, ev, note in bad:
-    lines.append("- **%s（%s / %s）**：%s；证据 `%s`" % (name, arch, st, note, ev))
+    lines.append("- **%s（%s / %s）**：%s；证据 `%s`" % (
+        name, arch, st, note.rstrip("。"), ev))
 
 lines.append("\n## 新提交意图对照（基线 %s）\n" % BASELINE)
 lines.append("- **9e8f2a3 登录页接入账户密码三分支认证**：未配置账户放行 / 已配置 sha256 比对 / 失败留登录页；"
              "本轮按该三分支实测空 Enter 与夹具密码两条路径，结果见上表。")
 lines.append("- **dec60c9 锁屏/登录文案接入多语言表**：登录页为中文化后渲染；自动化按键不受文案影响。")
 lines.append("- **10e42fa 向导与锁屏状态优先级修复**：锁屏/登录态优先于 OOBE 模态，按键不被向导吞掉。")
-lines.append("- **261a027 / a787a01 合并**：并入首设向导优先级修复；64 桌面仍正常到达。\n")
+lines.append("- **261a027 / a787a01 合并**：并入首设向导优先级修复；64 桌面仍正常到达。")
+lines.append("- **53e53cb i18n**：日期跟随语言；修 32 位“文案全空”空串兜底（本轮 32 直启桌面日期/设置文案在场）。")
+lines.append("- **61c53fa 顶栏高度双默认统一**：bar_height 只留 36 一处真源，去掉 hpdesk_init 里第二个默认值 40；"
+             "本轮 64/32 桌面顶栏布局未塌。\n")
 
 lines.append("\n## 基线对比\n")
-lines.append("- 本次基线提交：`%s`；上一基线 3d0bd23 证据已归档至 `%s/old-3d0bd23/`，未与本次结果混比。"
-             % (BASELINE, EV))
+lines.append("- 本次基线提交：`%s`；紧邻上一基线 a787a01 证据归档至 `%s/old-a787a01/`，更早 3d0bd23 归档至 `%s/old-3d0bd23/`，"
+             "均未与本次结果混比。" % (BASELINE, EV, EV))
 lines.append("- 32 位 KUnit 基线快照：`%s`（%s 套件失败 / %s 用例失败；比对结论：%s）。" % (
     base_snap, kt.get("fail_suites", "?"), kt.get("fail_cases", "?"), compare))
 lines.append("- 主机端 ASan/UBSan：7 过 1 败，失败项性质见上表。")

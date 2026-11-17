@@ -44,6 +44,10 @@ run_step tests      "$REGRESS_DIR/run_tests.sh"
 echo "==== 帧度量汇总 ====" | tee -a "$STEPS"
 python3 "$REGRESS_DIR/analyze_frames.py" 2>&1 | tee -a "$STEPS"
 
+echo "==== OBS-05 九宫格度量 ====" | tee -a "$STEPS"
+bash "$REGRESS_DIR/obs05.sh" >> "$EV/tests/obs05.log" 2>&1
+echo "[obs05] exit=$?" | tee -a "$STEPS"
+
 echo "==== 生成报告 ====" | tee -a "$STEPS"
 python3 "$REGRESS_DIR/make_report.py" 2>&1 | tee -a "$STEPS"
 
