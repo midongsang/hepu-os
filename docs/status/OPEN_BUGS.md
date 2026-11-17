@@ -646,9 +646,9 @@ after-init 串口回读 MAC `52:54:00:12:34:56`、link up。
 为纯黑，无顶栏/面板/窗口等元素。帧尺寸 1920×1080，`[BD-VBE]` 模式与 pitch 已设到
 `1920×1080@32bpp`、双缓冲就绪。
 
-**证据**：`/home/user/Doubao/chats/38452875115179010/evidence-regress-2026-11-17/frames32/desktop_1.png`、
+**证据**：`/home/user/Doubao/chats/38452875115179010/evidence-regress-2026-11-17/old-3d0bd23/frames32/desktop_1.png`、
 `desktop_2.png`、`desktop_3.png`、`desktop_4.png`；串口同目录 `ser.log`；回归报告
-`evidence-regress-2026-11-17/REPORT.md`（32-桌面行）。
+`evidence-regress-2026-11-17/old-3d0bd23/REPORT.md`（32-桌面行）。
 
 **口径说明**：回归报告对 32 位旧桌面不套 1080p 全量非黑阈值（阈值 N/A），该帧在报告里
 记 `PASS`；本条 OBS 单独记录"下半屏纯黑、非黑未铺满"这一可观测现象，与报告豁免口径并存，
@@ -669,4 +669,4 @@ after-init 串口回读 MAC `52:54:00:12:34:56`、link up。
   串口无 `booting to lock` 标记；登录页未被拉起，`login_authenticate` /
   `login_unlock_screen` / `mu_private_unlock` 三处桩路径未触发，串口无 LOGIN WARNING。
 - 这是**现状限制**，不是 32 位锁屏/认证已通过；要复现该路径需先具备拉起 32 位登录页的入口。
-  证据：`evidence-regress-2026-11-17/frames32/ser.log`、`REPORT.md` 32-锁屏 / 32-登录行。
+  证据：`evidence-regress-2026-11-17/old-3d0bd23/frames32/ser.log`、`old-3d0bd23/REPORT.md` 32-锁屏 / 32-登录行。

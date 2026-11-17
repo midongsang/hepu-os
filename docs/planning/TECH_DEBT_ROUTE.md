@@ -762,7 +762,7 @@ desk_select("mine");       /* 切过去 */
   端口复位保持时长、链接指针类型位），运行时未复现；分析见
   `evidence-rxnet-2026-11-17/OPEN-02-uhci-analysis.md`。
 - **32 位桌面下半屏纯黑（OBS-05）**：NONBLACK 786,399 / 2,073,600（约 38%），根因未定位，
-  证据 `evidence-regress-2026-11-17/frames32/desktop_1..4.png`；下一步按行统计非黑分布、
+  证据 `evidence-regress-2026-11-17/old-3d0bd23/frames32/desktop_1..4.png`；下一步按行统计非黑分布、
   对比 64 位 present 路径、dump 双缓冲边界行像素。
 - **32 位锁屏 / 登录路径未触发**：32 位兜底关闭锁屏、直进旧桌面，登录页未拉起；这是现状
   限制，不记为已通过；要复现需先具备拉起 32 位登录页的入口。
