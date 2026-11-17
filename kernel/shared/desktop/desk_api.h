@@ -112,6 +112,12 @@ typedef struct desk_surface {
     void (*clip_disable)(struct desk_surface *s);
 } desk_surface_t;
 
+/* 当前活动绘制表面（桌面宿主注册后返回; 未注册时返回 NULL）。
+ * 必须在这里声明: 原先 hpdesk.c 直接调 desk_active_surface() 而没有可见原型,
+ * 被隐式当作 int, 64 位下指针被截成 32 位高半丢失 (-Wint-conversion)。
+ * 内核当前帧缓冲地址在 4GB 以下所以没立刻出事, 但这是定时炸弹。 */
+desk_surface_t *desk_active_surface(void);
+
 /* --- 输入事件 ------------------------------------------------------ */
 
 typedef enum {
