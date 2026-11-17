@@ -47,6 +47,7 @@ int multiboot_get_framebuffer(mb_framebuffer_t *fb);
 /* V6.52: HepuBoot安全/恢复模式 */
 int multiboot_is_safe_mode(void);
 int multiboot_is_recovery_mode(void);
+int multiboot_is_nographics(void);
 void multiboot_force_recovery_mode(void);
 
 #endif

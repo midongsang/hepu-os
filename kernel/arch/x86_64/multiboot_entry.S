@@ -23,7 +23,7 @@
 multiboot_entry:
     /* 保存Multiboot信息 */
     movl %eax, %esi          /* ESI = magic */
-    movl %ebx, %edi          /* EDI = mb_info */
+    movl %ebx, mb_info_save  /* mb_info 存入静态变量(EDI 后面会被页表初始化复用) */
 
     /* 检查是否支持长模式 */
     movl $0x80000001, %eax
@@ -112,7 +112,7 @@ long_mode_entry:
 
     /* 传递Multiboot信息给64位入口 */
     movl %esi, %eax          /* EAX = magic */
-    movq %rdi, %rbx          /* RBX = mb_info */
+    movq mb_info_save(%rip), %rbx  /* RBX = mb_info */
 
     /* 跳转到64位内核主入口 */
     jmp x86_64_entry
@@ -137,6 +137,11 @@ gdt64_ptr:
 /* 内核栈（在kernel_main_64.c中定义） */
 .extern kernel_stack_top
 .extern x86_64_entry
+
+/* 保存 Multiboot info 指针（跨页表初始化保留） */
+.section .data
+mb_info_save:
+    .quad 0
 
 /* ============================================================================
  * PVH ELF Note（用于QEMU -kernel加载64位内核）

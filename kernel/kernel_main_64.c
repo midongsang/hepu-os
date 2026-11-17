@@ -67,6 +67,11 @@ extern int rtl8139_init(void);
 /* 图形子系统 */
 extern int gfx64_init_from_bootloader(void);
 
+/* 启动参数解析 (hepu.graphics=0 / hepu.lock=0 等) */
+extern void bootopts64_init(uint32_t magic, uint64_t mb_info_addr);
+extern int  bootopts_nographics(void);
+extern int  bootopts_nographics_forced(void);
+
 /* 网络协议栈 */
 extern void net64_init(void);
 extern void net64_poll(void);
@@ -214,6 +219,11 @@ void x86_64_kernel_main(void)
     vga_puts("[INFO] MB info addr: ");
     vga_put_hex(g_mb_info_addr);
     vga_puts("\n");
+
+    /* 解析 cmdline 启动参数(hepu.graphics=0 保护模式 / hepu.lock=0 等)。
+     * 必须在任何图形子系统初始化之前完成: 保护模式下后面的 gfx64/桌面/OOBE
+     * 整条图形路径都要跳过。 */
+    bootopts64_init(g_mb_magic, g_mb_info_addr);
 
     /* 启用高级特性 */
     vga_puts("[INIT] Enabling SCE (System Call Extensions)...\n");
@@ -763,14 +773,19 @@ void x86_64_kernel_main(void)
     rtl8139_init();
 
     /* 初始化图形子系统（VBE） */
-    vga_puts("[INIT] Initializing 64-bit graphics (VBE)...\n");
-    gfx64_init_from_bootloader();
-    /* 启用TrueType字体（如果已加载） */
-    extern void gfx64_enable_ttf(int enable);
-    extern void gfx64_set_font_size(int size);
-    gfx64_set_font_size(16);
-    gfx64_enable_ttf(1);
-    vga_puts("[INIT] TrueType font enabled for graphics\n");
+    if (bootopts_nographics()) {
+        /* 保护模式: 不 init VBE/GOP/dispi, 不建 back buffer, 不加载图形字体 */
+        vga_puts("[INIT] graphics subsystem skipped (protect mode, text terminal only)\n");
+    } else {
+        vga_puts("[INIT] Initializing 64-bit graphics (VBE)...\n");
+        gfx64_init_from_bootloader();
+        /* 启用TrueType字体（如果已加载） */
+        extern void gfx64_enable_ttf(int enable);
+        extern void gfx64_set_font_size(int size);
+        gfx64_set_font_size(16);
+        gfx64_enable_ttf(1);
+        vga_puts("[INIT] TrueType font enabled for graphics\n");
+    }
 
     /* 在网络栈前显式（重新）初始化 CSPRNG：DHCP/DNS/TLS 及 getrandom
      * 都依赖它。crypto_init_core 此前已间接调用过一次 csprng_init，这里
@@ -1355,8 +1370,9 @@ void x86_64_kernel_main(void)
         desktop64_run();
     } else {
         vga_puts("[INIT] Falling back to text shell\n");
-        /* 图形化不可用: 文本模式作为首启向导兜底通道 */
-        if (need_oobe) {
+        /* 图形化不可用: 文本模式作为首启向导兜底通道。
+         * 保护模式(hepu.graphics=0)下图形化向导整体跳过, 直接进 shell。 */
+        if (need_oobe && !bootopts_nographics_forced()) {
             vga_puts("[HepuOS] Text-mode setup wizard (GUI unavailable)\n");
             oobe64_run();
         }

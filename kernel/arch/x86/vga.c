@@ -162,6 +162,10 @@ void vga_putc(char c)
 
 void vga_puts(const char *str)
 {
+    /* 保护模式(hepu.graphics=0): 文本屏不可见, 把输出镜像到 COM1 供自动验证 */
+    extern int multiboot_is_nographics(void);
+    extern void serial_putc(uint16_t, char);
+    int mirror = multiboot_is_nographics();
     while (*str) {
         unsigned char c = (unsigned char)*str;
         if (c >= 0xE0 && c <= 0xEF) {
@@ -170,6 +174,8 @@ void vga_puts(const char *str)
             if (cjk_puts_utf8(&str)) continue;
         }
         vga_putc(*str++);
+        if (mirror && ((c >= 0x20 && c < 0x7F) || c == '\n' || c == '\r' || c == '\t'))
+            serial_putc(0x3F8, (char)c);
     }
 }
 

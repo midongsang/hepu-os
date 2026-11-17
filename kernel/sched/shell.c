@@ -196,6 +196,8 @@ void shell_main(void)
      * 结果直接进启动日志 (真机键盘时序不确定时的确定性验收通道). */
     {
         extern void serial_puts(uint16_t, const char *);
+        extern int multiboot_is_nographics(void);
+        if (!multiboot_is_nographics()) {
         /* V6.65 DEBUG: fork-test放在最开头测试 */
         serial_puts(0x3F8, "[DEBUG] before fork-test at start\n");
         vga_puts(" [SHELL] auto-test: run fork-test (fork+waitpid)...\n");
@@ -290,6 +292,10 @@ void shell_main(void)
          * 旧桌面已下线, 内核桌面统一由 hpdesk 提供, 这一段不再调它 ——
          * 否则自检会拉出一套跟真实桌面不同的界面, 反而误导。 */
         serial_puts(0x3F8, "[AUTO] desktop preview skipped (desktop moved to hpdesk)\n");
+        } else {
+            /* 保护模式: 跳过整批用户态自动演示(含 gfxtest 图形测试), 直接进交互 shell */
+            serial_puts(0x3F8, "[AUTO] protect mode: autostart demos skipped, text shell only\n");
+        }
     }
     firstboot_welcome();  /* V3.87-E15: 首次启动引导页(auto-test 之后, 避免被挤出屏外) */
 #endif
@@ -315,8 +321,15 @@ void shell_main(void)
 
         vga_set_color(VGA_COLOR_GREEN, VGA_COLOR_BLACK);
         vga_puts("hepu@os:~$ ");
-        vga_set_color(VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK);        int len = keyboard_readline(buffer, SHELL_BUFFER_SIZE);
+        vga_set_color(VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK);
+        int len = keyboard_readline(buffer, SHELL_BUFFER_SIZE);
         if (len > 0) {
+            /* 保护模式: 把已输入命令回显到 COM1, 供自动验证命令可执行 */
+            extern int multiboot_is_nographics(void);
+            if (multiboot_is_nographics()) {
+                serial_puts(0x3F8, buffer);
+                serial_puts(0x3F8, "\n");
+            }
             shell_execute(buffer);
         }
     }

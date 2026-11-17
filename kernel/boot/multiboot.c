@@ -64,6 +64,9 @@ static uint32_t mb_magic = 0;
 static int mb_safe_mode = 0;
 static int mb_recovery_mode = 0;
 
+/* 保护模式: hepu.graphics=0, 禁用图形, 纯文本终端 */
+static int mb_nographics = 0;
+
 /* 内存映射缓存 */
 #define MB_MMAP_MAX 16
 static mb_memory_region_t mb_mmap[MB_MMAP_MAX];
@@ -212,6 +215,12 @@ void multiboot_init(uint32_t magic, void *info)
                 mb_recovery_mode = 1;
                 vga_printf("[MB] RECOVERY MODE enabled\n");
             }
+            /* 保护模式: 禁用 VBE/启动画面/弹性桌面, 纯文本 + shell */
+            if (strstr(cmdline, "hepu.graphics=0") ||
+                strstr(cmdline, "hepu.nographics=1")) {
+                mb_nographics = 1;
+                vga_printf("[MB] PROTECT MODE enabled (graphics disabled)\n");
+            }
         }
     }
 
@@ -320,6 +329,12 @@ int multiboot_is_safe_mode(void)
 int multiboot_is_recovery_mode(void)
 {
     return mb_recovery_mode;
+}
+
+/* 保护模式(hepu.graphics=0): 1=禁用图形, 纯文本终端 */
+int multiboot_is_nographics(void)
+{
+    return mb_nographics;
 }
 
 /* V6.52: 强制设置恢复模式（用于引导失败计数触发） */

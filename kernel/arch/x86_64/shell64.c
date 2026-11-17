@@ -18,6 +18,8 @@ extern void vga_puts(const char *s);
 extern void vga_putchar(char c);
 extern char keyboard64_getchar(void);
 extern int keyboard64_haschar(void);
+extern void serial_puts_raw(const char *s);
+extern int  bootopts_nographics(void);
 extern void rtc64_get_time(int *year, int *month, int *day,
                             int *hour, int *minute, int *second);
 extern int ext2_64_list_dir(const char *path);
@@ -124,6 +126,11 @@ static int shell_read_line(char *buf, int max)
             if (c == '\n' || c == '\r') {
                 vga_putchar('\n');
                 buf[pos] = 0;
+                /* 保护模式: 文本终端无屏幕, 把已输入命令回显到 COM1 供自动验证 */
+                if (bootopts_nographics()) {
+                    serial_puts_raw(buf);
+                    serial_puts_raw("\n");
+                }
                 history_add(buf);
                 return pos;
             } else if (c == '\b' || c == 0x7F) {
@@ -379,6 +386,11 @@ static void shell_cmd_hepu(int argc, char **argv)
         shell_cmd_ps(0, 0);
     } else if (strcmp(argv[1], "gui") == 0) {
         extern int hepu_nographics;
+        extern int bootopts_nographics_forced(void);
+        if (bootopts_nographics_forced()) {
+            vga_puts("Protect mode (hepu.graphics=0): GUI disabled, cannot reopen\n");
+            return;
+        }
         hepu_nographics = 0;
         extern int desktop64_init(void);
         extern void desktop64_run(void);

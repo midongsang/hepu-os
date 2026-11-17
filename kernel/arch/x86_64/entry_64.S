@@ -672,7 +672,7 @@ x86_64_far_jump:
 x86_64_entry_64:
     /* V0.54.6: 最简路径 — 直接用正确 magic 值，绕开 Stage2 传递问题 */
     movl $0x2BADB002, %edi        /* RDI = magic (multiboot 规范值) */
-    movq $0, %rsi                 /* RSI = mb_info = 0 (VBE 在 0x6000) */
+    movq %rbx, %rsi               /* RSI = mb_info (引导器在 RBX 中传入) */
     jmp kernel_gdt64_flush
 
 kernel_gdt64_flush:

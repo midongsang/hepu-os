@@ -25,4 +25,7 @@ int bootopts_nographics_forced(void); /* 1=nographics 由 cmdline 强制，gui �
 /* 获取原始 cmdline 字符串（可能为 NULL） */
 const char *bootopts_cmdline(void);
 
+/* 1=cmdline hepu.lock=0, 关闭开机锁屏(默认开启锁屏) */
+int bootopts_lock_disabled(void);
+
 #endif /* HEPU_BOOTOPTS64_H */

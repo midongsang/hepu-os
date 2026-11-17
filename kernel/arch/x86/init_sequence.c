@@ -413,10 +413,13 @@ int hepu_init_phase(init_phase_t phase)
             break;
 
         case INIT_PHASE_APPS:
-            {
-                extern void serial_puts(uint16_t, const char *);
-                serial_puts(0x3F8, "[APPS] starting app framework (72 modules)...\n");
-            }
+        {
+            extern void serial_puts(uint16_t, const char *);
+            extern int multiboot_is_nographics(void);
+            int protect_gfx = multiboot_is_nographics();
+            serial_puts(0x3F8, "[APPS] starting app framework (72 modules)...\n");
+            if (protect_gfx) serial_puts(0x3F8, "[APPS] protect mode: graphics/desktop init skipped\n");
+
             appframework_init(); packagemanager_init();
             {
                 extern void serial_puts(uint16_t, const char *);
@@ -443,7 +446,7 @@ int hepu_init_phase(init_phase_t phase)
             desktopmode_init(); gameframework_init();
             enterprise_init(); devtools_init(); compat_init();
             { extern void serial_puts(uint16_t, const char *); serial_puts(0x3F8, "[APPS] 3/7: bt/usb/gfx/camera...\n"); }
-            bt2_init(); usb2_init(); gfx2_init();
+            bt2_init(); usb2_init(); if (!protect_gfx) gfx2_init();
 
             /* D-7: pluggable 图形层选完后，如果这台机器并没有真实帧缓冲
              * （BIOS + multiboot 加载时 multiboot 信息里没有 framebuffer 字段，
@@ -459,7 +462,7 @@ int hepu_init_phase(init_phase_t phase)
                 extern int gfx_has_vbe_fb(void);
                 extern void vga_gfx_init(void);
                 extern void serial_puts(uint16_t, const char *);
-                if (!gfx_has_vbe_fb()) {
+                if (!protect_gfx && !gfx_has_vbe_fb()) {
                     serial_puts(0x3F8, "[GFX] no VBE/GOP framebuffer -> entering VGA mode 0x13\n");
                     vga_gfx_init();
                     /* 切完模式必须立刻提交一次：0xA0000 里还留着 SeaBIOS 文本模式
@@ -545,11 +548,12 @@ int hepu_init_phase(init_phase_t phase)
             rtk_kernel_init(); i18ns_system_init();
             multilingual_ime_init(); app_freeze_init();
             id_randomizer_init();
-            {
+            if (!protect_gfx) {
                 extern void serial_puts(uint16_t, const char *);
                 serial_puts(0x3F8, "[APPS] 6/7: pre-desktop done, calling elastic_desktop_init...\n");
+                elastic_desktop_init();
             }
-            elastic_desktop_init();
+            if (!protect_gfx)
             {
                 extern void serial_puts(uint16_t, const char *);
                 serial_puts(0x3F8, "[APPS] 7/7: elastic_desktop_init done!\n");
@@ -606,6 +610,7 @@ int hepu_init_phase(init_phase_t phase)
             }
                 { extern void vga_dump_regs(void); vga_dump_regs(); }
             }
+        }
             ai_notification_init(); creator_mode_init();
             onboarding_init(); lowmem_throttle_init();
             hdpk_template_init(); android_api_init();

@@ -397,6 +397,13 @@ void hepu_kernel_main(uint32_t magic, multiboot_info_t *mb_info)
     early_console_init();
     extern void multiboot_init(uint32_t, void *);
     multiboot_init(magic, mb_info);
+    extern int multiboot_is_nographics(void);
+    int protect_gfx = multiboot_is_nographics();
+    if (protect_gfx) {
+        /* 保护模式标记: 串口 + 文本屏各一行, 含架构字段便于 grep */
+        serial_puts(0x3F8, "[PROTECT] hepu.graphics=0: graphics disabled, text terminal only (arch=i386)\n");
+        vga_puts("[PROTECT] hepu.graphics=0: graphics disabled, text terminal only (arch=i386)\n");
+    }
 
     /* V8.51: 64位支持检测（P2-1第一步：检测CPU能力，不切换长模式） */
     {
@@ -420,7 +427,7 @@ void hepu_kernel_main(uint32_t magic, multiboot_info_t *mb_info)
     if (compat_level < 2) {
         serial_puts(0x3F8, "[BOOT] compat level low, disabling boot splash\n");
     }
-    if (mb_info && (mb_info->flags & (1 << 12)) && mb_info->framebuffer_bpp == 32 && compat_level >= 2) {
+    if (!protect_gfx && mb_info && (mb_info->flags & (1 << 12)) && mb_info->framebuffer_bpp == 32 && compat_level >= 2) {
         extern void boot_gfx_init(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
         extern void boot_log_init(int, int, int);
         extern void boot_log(const char *, ...);
@@ -538,11 +545,11 @@ void hepu_kernel_main(uint32_t magic, multiboot_info_t *mb_info)
 
     /* V2.35: 图形化开机 logo (串口就绪, 显示约2.5秒后继续)
      * V6.52: 恢复模式跳过splash, 直接文本启动 */
-    if (!recovery_mode) {
+    if (!recovery_mode && !protect_gfx) {
         extern void splash_show(void);
         splash_show();
     } else {
-        vga_puts("[BOOT] recovery mode: splash skipped\n");
+        vga_puts("[BOOT] recovery/protect mode: splash skipped\n");
     }
     serial_puts(0x3F8, "[LIVE] splash done\n");
     serial_puts(0x3F8, "[DBG] before VFS init\n");
