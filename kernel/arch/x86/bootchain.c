@@ -5,6 +5,7 @@
 
 #include <stdint.h>
 #include "bootchain.h"
+#include <version.h>
 #include "constants.h"
 #include "vga.h"
 #include "string.h"
@@ -23,8 +24,15 @@ void bootchain_init(void)
     boot.timeout = 5;
 
     /* 启动条目 */
-    boot_entry_add(" Hepu OS 0.23", "/boot/hepu-kernel.bin", "/boot/initrd.img", "root=/dev/sda2 ro quiet");
-    boot_entry_add(" Hepu OS 0.23(resume mode)", "/boot/hepu-kernel.bin", "/boot/initrd.img", "root=/dev/sda2 ro single");
+    /* 版本号不再硬编码(Hepu OS 0.23): 引导菜单标题必须与代码/文档同源 */
+    {
+        extern int snprintf(char *, unsigned long, const char *, ...);
+        char t_main[64], t_resume[64];
+        snprintf(t_main, sizeof(t_main), " Hepu OS %s", HEPU_OS_VERSION);
+        snprintf(t_resume, sizeof(t_resume), " Hepu OS %s(resume mode)", HEPU_OS_VERSION);
+        boot_entry_add(t_main, "/boot/hepu-kernel.bin", "/boot/initrd.img", "root=/dev/sda2 ro quiet");
+        boot_entry_add(t_resume, "/boot/hepu-kernel.bin", "/boot/initrd.img", "root=/dev/sda2 ro single");
+    }
     boot_entry_add(" Hepu OS 0.22(旧 version)", "/boot/hepu-kernel-0.22.bin", "/boot/initrd.img", "root=/dev/sda2 ro");
     boot_entry_add(" memory test ", "/boot/memtest86.bin", NULL, NULL);
 

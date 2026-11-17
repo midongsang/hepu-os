@@ -44,8 +44,9 @@ typedef struct {
 } hs_theme_colors_t;
 
 /* V0.13.8 S0: UI 设计令牌 — 间距(5档)/圆角(4档)/字号(7档) 全系统统一 */
-/* 系统版本号唯一宏 —— 界面/终端/任务管理器都引用它, 别再多点硬编码 */
-#define HEPU_OS_VERSION "0.59.0"
+/* 系统版本号唯一宏 —— 界面/终端/任务管理器都引用它, 别再多点硬编码。
+ * 自 0.60.7 起移到 kernel/include/version.h, 供 32/64 位共用同一份定义。 */
+#include <version.h>
 
 #define HS_SP_1 4
 #define HS_SP_2 8

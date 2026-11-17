@@ -5,33 +5,52 @@
 [![Build](https://github.com/midongsang/hepu-os/actions/workflows/ci.yml/badge.svg)](https://github.com/midongsang/hepu-os/actions/workflows/ci.yml)
 [![Release](https://github.com/midongsang/hepu-os/actions/workflows/release.yml/badge.svg)](https://github.com/midongsang/hepu-os/actions/workflows/release.yml)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPLv3-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-v0.59.0-brightgreen.svg)](#当前版本)
-[![Kernel size](https://img.shields.io/badge/kernel-852KB-blue.svg)](#当前版本)
+[![Version](https://img.shields.io/badge/version-v0.60.7-brightgreen.svg)](#当前版本)
+[![Kernel size](https://img.shields.io/badge/kernel-937KB-blue.svg)](#当前版本)
 [![glibc 动态链接](https://img.shields.io/badge/glibc-✓-brightgreen.svg)](#核心特性)
 [![ext2](https://img.shields.io/badge/ext2-✓-brightgreen.svg)](#核心特性)
 [![SMP](https://img.shields.io/badge/SMP-4core-green.svg)](#核心特性)
 [![Discussions](https://img.shields.io/badge/Discussions-欢迎交流-blue.svg)](https://github.com/midongsang/hepu-os/discussions)
 
-赫普OS是一款自研64位操作系统，支持SMP多处理器、双内核混合引导、完整图形桌面、ext2文件系统和TCP/IP网络协议栈，
-用户态已具备真正的线程能力（`clone` 共享地址空间 + 独立线程退出）。
+赫普OS是一款自研 **32/64 位双架构**操作系统：32 位与 64 位共用**同一份图形桌面**
+（`kernel/shared/desktop/` 注册表契约，视觉以 64 位实现为准），支持 SMP 多处理器、
+双内核混合引导、ext2 文件系统和 TCP/IP 网络协议栈，用户态已具备真正的线程能力
+（`clone` 共享地址空间 + 独立线程退出）。
 
 ## 当前版本
 
-**0.59.0** — 当前版本（版本号唯一事实源：`docs/status/VERSIONING.md` frontmatter）
+**0.60.7** — 当前版本（版本号唯一事实源：`docs/status/VERSIONING.md` frontmatter，
+代码侧单一来源：`kernel/include/version.h`，32/64 位共用）
 
-本版是桌面层的收口：任务管理器拆成 `Processes` / `Devices` 两页（进程表八列带竖线、
-PRIO/CORE/TIME 有真实数据），四条 CPU/MEM/RX/TX 视图改成连续面积图并补满宽度，
-补齐全系统通用滚动条；窗口投影从"三层不透明色带"换成真卷积高斯 mask（按窗口短边
-自适应圆角/半径/偏移，Display 页可关闭）；新增内置第二套光标 Modern（48px 线稿双色
-压缩，17 个形态共 34.7KB）并随 UI 缩放档放大，Display 页可切换。
+本版是**内核正确性批次**，把一个长期被误判的崩溃查到了底：32 位只要多加约 1 KB
+静态数据就启动失败，此前结论是"BSS 已贴边界、不能再加"。用
+`qemu-system-i386 -d int,cpu_reset` 抓到异常链后才确认真实机制 ——
+`e1000` 把网卡 MMIO 物理地址（`0xFEB80000`，4 GB 附近）当指针直写，而按需分页对
+**任意**缺页地址都会分配一块随机物理页并映射过去，于是每写一次"网卡寄存器"
+就随机篡改一块物理内存；踩到堆的 free list 就表现为 `kmalloc` 里 `#PF`，再撞上
+`#DF` 变成 triple fault。同一批还修了 `e1000` 拿 `kmalloc` 堆块当 DMA 缓冲
+（块被 split 后紧邻下一个 `block_header`，越界即踩坏链表），以及 `kheap`
+遇 header magic 不符时不再信任坏块的 `size/next`。
 
-期间查清了一个把前两轮阴影工作全部作废的问题：`hpdesk.c` 把 `gfx64.c` 的宏当全局
-变量 `extern`，链接一直失败，而验证命令 `grep ' error'` 匹配不到 `undefined reference`，
-于是三次"改完看着还是假"其实都在跑旧镜像 —— 详见 `docs/status/PROGRESS_0_59.md`。
+配套完成：**安装器闭环**（三层叠加缺陷修完后，装出来的目标盘可单独 UEFI 启动，
+桌面 `NONBLACK=2073597`，`/bin` 27 个 ELF、配置 md5 与源盘逐一致）；
+`sys_readdir` 撤掉 16 KB 静态表（栈帧 `objdump` 实量 2,360 → 360 B）；
+驱动四域实测闭环（xHCI 枚举键鼠、AHCI 读 LBA0 签名 `55AA` 且末扇区回环
+`mismatch=0x0`、E1000 注册并 DHCP 通、boot 期 APIC 校准改用 HPET 基准
+5 次启动零告警）；`uart64` IRQ4 与 DHCP T1 续租打通。
 
-![Hepu OS 桌面（1920×1080）](docs/assets/cursor-modern-0.60.5.jpg)
+### 64 位桌面（1920×1080）
 
-*Hepu OS v0.59.0 桌面：Display 页的投影/光标开关、Modern 光标、Quick Controls*
+![Hepu OS 64 位桌面](docs/assets/desktop-64-0.60.7.jpg)
+
+### 32 位桌面（1920×1080，同一份桌面代码）
+
+![Hepu OS 32 位桌面](docs/assets/desktop-32-0.60.7.jpg)
+
+32 位与 64 位共用 `kernel/shared/desktop/` 的注册表与绘制路径，差异只在主题默认值
+（上图 64 位 Light / 32 位 Dark）和系统调用入口（`int $0x80` vs `syscall`）。
+
+*Hepu OS v0.60.7 桌面（1920×1080）：顶栏、Settings、8 色圆、网络通知*
 
 ![任务管理器：Processes 页](docs/assets/taskmgr-grid-processes-0.59.5.png)
 *任务管理器 Processes 页：八列 + 七条列竖线，标签栏固定在顶部*

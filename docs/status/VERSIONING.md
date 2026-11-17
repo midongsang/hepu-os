@@ -1,8 +1,8 @@
 ---
 title: VERSIONING
 status: active
-sys_version: 0.59.0
-updated: 2026-11-13
+sys_version: 0.60.7
+updated: 2026-11-17
 owner: status
 source_of_truth: null
 supersedes: null
@@ -113,6 +113,36 @@ supersedes: null
 - bug版本：0
 
 > 版本号以本文件 frontmatter `sys_version` 为唯一事实源。以下为历史迭代记录。
+
+**0.60.7 迭代内容（2026-11-17，内核正确性批次 + 安装器闭环）**
+
+1. **查清并修复"32 位加约 1 KB BSS 就启动失败"的真因**（此前误判为"BSS 已贴边界"）。
+   用 `qemu-system-i386 -d int,cpu_reset` 抓到完整异常链：`e1000_init+0x157/0x305/0x34a`
+   `#PF`（`CR2=0xFEB8xxxx`，网卡 MMIO 物理址当指针直写）→ `kmalloc+0x1f2` `#PF`
+   （写 `block->prev`，free list 已被踩坏）→ `boot.S early_msg` 二次崩溃（`SP=0x5e000002`）
+   → `#DF` 撞 `#PF` → triple fault。两条并存缺陷：
+   ① 按需分页对**任意**缺页地址都 `alloc_frame()` 再映射 ⇒ 写 MMIO 等于把随机物理页
+   映射过去并写入，等于随机篡改物理内存；② `e1000` 拿 `kmalloc` 堆块当 DMA 缓冲，
+   块 split 后紧邻下一个 `block_header`，越界/硬件写直接踩坏链表头。堆起点随
+   `__kernel_end` 按页移动，BSS 一变 4 KB 所有地址整体偏移 —— 这才是"改任意一行
+   崩溃就消失/出现"的机制。修复：超出 `mm_phys_limit()` 的缺页一律映射同一个哑页；
+   四个 DMA 缓冲改 `mm_alloc_pages()` 页级独占；`kheap` 遍历遇 magic 不符即停止，
+   不再信任坏块的 size/next。
+2. **安装器闭环（OPEN-04）**：`install64` 自编 syscall 号与内核实际号错位、SEC-04 高危闸
+   只放行 `PID==0`、`[4/5]` 缺"放系统文件"步骤，三层叠加导致装出来的盘不可启动。
+   修后目标盘 `fsck clean, 74/30720 files`，含 `system.conf/accounts.conf/display.conf`
+   与 `/bin` 27 个 ELF，配置 md5 与源盘一致；**从装好的盘单独 UEFI 启动，桌面
+   `NONBLACK=2073597`**。
+3. **`sys_readdir` 静态表移除**：`names[64][256]` 16,384 B BSS → 调用期 `kmalloc/kfree`；
+   `objdump` 实量栈帧 2,360 B → 360 B。
+4. **驱动域实测闭环**：xHCI（`pci_find_class_bar0` 只扫 bus 0 且只读 BAR 低 32 位，
+   而 `qemu-xhci` 的 BAR0 是 64 位 MMIO `0x800000000`）；AHCI 四处叠加缺陷（`tfd` 误用
+   uint64、`FRE` 误用 0x8000、H2D FIS 扇区计数错放 11/12、不取 IDENTIFY 容量）；
+   E1000 注册（HAL 与注册表无条件把 eth0 登记成 RTL8139）；boot 期 APIC 校准（PIT ch2
+   缺 `0x80` 锁存 + QEMU i8254 mode0 回卷到 0xFFFF，改用 HPET 主计数器基准，
+   5 次启动 `WARN` 0 次、62.547~62.586 MHz）。
+5. **`uart64` IRQ4 打通**（IER 开了接收中断但从未注册处理函数）；**DHCP T1 续租**。
+6. **KHEAP 防御**：`kfree` 后来者若传对齐指针/野指针，不再静默破坏链表。
 
 **0.59.0 迭代内容（2026-11-13，桌面视觉与交互收口）**
 
@@ -778,6 +808,7 @@ ext2_disk_uefi.img           # 数据盘（版本无关）
 
 | 版本 | 日期 | 主要内容 |
 |------|------|---------|
+| 0.60.7 | 2026-11-17 | 内核正确性批次：查清"32位+1KB BSS 即崩"真因（QEMU `-d int,cpu_reset` 抓到 `e1000` MMIO 直写 → 按需分页随机映射物理页 → 踩坏 heap free list → triple fault），修复为 MMIO 哑页 + `e1000` 页级 DMA 缓冲 + kheap magic 防御；安装器 OPEN-04 闭环（装出的盘可单独启动，`NONBLACK=2073597`）；`sys_readdir` 撤 16 KB 静态表（栈帧 2360→360 B）；驱动四域（xHCI/AHCI/E1000/HPET）实测闭环；`uart64` IRQ4 + DHCP T1 续租 |
 | 0.58.0 | 2026-11-13 | clone 真线程落地：用户线程调度单元 `uthread64`、IRQ 帧偏移根因（ds/es 压顶致 rax 写进 rbx）、每线程独立内核栈、收尾 #PF 两处根因（内核栈 use-after-free + crt0 的 32 位 int 0x80）、线程退出接口 `SYS_HEPU_THREAD_EXIT=235`；三次运行 `PASS=1 FAIL=0 EXCEPTION=0`（详见 FIXES_0_58_0.md） |
 | 0.54.12 | 2026-11-11 | 桌面稳定性(窗口槽位泄漏/PIT 中断冻结)+安全止血包 6P0+12P1(LAPIC 校准至真实 1kHz、writev/clone/sigaction/reboot/mkfs 加固)+文档真值对齐+SMP 计划与决策对比+真机上机 checklist(41 缺口/7 硬阻塞) |
 | 0.13.68 | 2026-10-28 | 安全修复集成:严格用户窗口+页表校验堵系统调用任意读写;ELF/堆/fd/ext2加固;栈对齐修复#GP;sec_test回归;更正审计文档(漏洞A未修复) |
