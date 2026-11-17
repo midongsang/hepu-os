@@ -79,7 +79,7 @@ typedef struct {
 typedef struct {
     uint8_t  cfis[64];
     uint8_t  acmd[16];
-    uint8_t  reserved[48];
+    uint8_t  reserved[16];   /* 0x50..0x5F，PRDT 规范起点 0x60 */
     ahci_prdt_t prdt[1];
 } __attribute__((packed)) ahci_cmd_table_t;
 
