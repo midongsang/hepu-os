@@ -24,8 +24,9 @@ iteration_history: ../history/DESIGN_ITERATIONS.md
 
 > **落地现状（2026-11-12 核对，属已记录的架构债务，不是解释性豁免）**
 >
-> - 当前实现**违反本约束**：`kernel/compat/`（`binfmt_elf.c`、`binfmt_pe.c`、`linux_abi.c`、
->   `binfmt_macho.c`）与 `syscall64_full.c` 的 `linux_map[350]` **全部编译进内核**
+> - 当前实现**违反本约束**：`services/compat/`（`binfmt_elf.c`、`binfmt_pe.c`、`linux_abi.c`、
+>   `binfmt_macho.c`；`f3b3c78` 由 `kernel/compat/` 迁出，行为不变、仍编入 32 位内核）与
+>   `syscall64_full.c` 的 `linux_map[350]` **全部编译进内核**
 >   （`kernel/arch/x86_64/Makefile`），兼容逻辑没有独立用户态服务。
 > - 冲突来源是 `PHILOSOPHY.md` 7.2 的措辞（"用户态 / **轻量内核模块**"）在当时给了过渡余地；
 >   **两者冲突时以本条硬约束为准**，7.2 只作为分阶段路线，不作为长期落点。
@@ -1314,7 +1315,7 @@ C + Rust 只能降低「对接 C ABI、源码级移植」的成本，不自动�
 
 **结论五：架构决策 A —— 兼容翻译迁出内核（2026-11-02 已决策）。**
 0.54.6 存在两处内核侧号翻译：64 位 `ENV_LINUX_COMPAT` + 系统调用号映射表，
-以及 32 位树的 `kernel/compat/linux_abi.c`（由 `kernel/arch/x86/syscall.c` 调用）。
+以及 32 位树的 `services/compat/linux_abi.c`（由 `kernel/arch/x86/syscall.c` 调用；`f3b3c78` 由 `kernel/compat/` 迁出）。
 经决策，二者均判定为**待迁移的技术债**，不属于目标形态：
 
 - 内核只保留 ABI 中立的系统调用入口、内存/域/线程原语，不含 Linux 调用号映射、
