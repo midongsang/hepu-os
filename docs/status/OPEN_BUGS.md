@@ -48,7 +48,7 @@ source_of_truth: kernel/arch/x86_64/
 | BUG-55 | **32 位 IDE PIO 缺 BUG-13 的三条修正，且整条链路从未在挂盘条件下验证**：32 位冒烟历来不挂盘，日志恒为 `no drive present, skip` / `no disk, skip` / `VVRAM ... failed to read MBR (IDE not ready)`，于是 `kernel/drivers/ide.c`（被顶层 `find` 自动收录进 32 位内核）缺的 400 ns 建立时间、DF(0x20) 判定、DRQ 过渡态处理一直无人发现。修复：补 `ide_delay_400ns`；拆分 `ide_wait_not_busy` / `ide_wait_drq`（BSY=0 且 DRQ=0 判为合法过渡态继续等，ERR+DF 统一判错，超时兜底）；读写改为每扇区独立等 DRQ、单扇区超时 10 000→40 000；多扇区仍一条命令 `SECCOUNT` 连续读。**实测**（256 MB MBR+ext2 测试盘）：`[IDE] drive found: QEMU HARDDISK`、LBA0 与分区表 `#0 type=0x83 lba=2048 sectors=512000`、`write+readback last-sector PASS`、`[EXT2] read /hello.txt: hello from Hepu OS block-device test disk`、`bigfile(512KB,dbl-indirect) write+readback PASS`、`auto-fsck: OK`，IDE 等待失败 0 次；**不挂盘时三句 skip 原样保留**（挂盘仍是可选项，未变成必需） | `kernel/drivers/ide.c` | 已修复（v0.59.2） |
 | BUG-56 | **NET_HAL 与驱动注册表把实际在位的 e1000 报成 RTL8139**：`network_hal64.c` 无条件 `dev->type = NET_DEV_RTL8139` 并调 rtl8139 init，`drv_register64.c` 也无条件注册 `RTL8139 (ID=6)`，而同一次启动里 e1000 已正确探测到 MMIO 与 MAC —— 上层拿到的是一个不存在设备的 ops 表。32 位 `kernel/drivers/eth.c` 同类：RTL 失败后直接落"模拟实现"，从不接 e1000。修复：两侧改为按 PCI 探测选型（e1000 在位用 e1000 ops，真存在 RTL8139 才用 RTL，都没有则明确报 no NIC 且不伪造 eth0），注册表只登记真实在位设备、ID 槽位不漂移。**实测**：`[DRV] Registered: E1000 (ID=6)`、`[NET_HAL] E1000 initialized (eth0)`；DHCP 10.0.2.15 / 255.255.255.0 / 网关 10.0.2.2 / DNS 10.0.2.3，ARP `resolved 10.0.2.2 -> 52:55:0a:00:02:02`，ICMP `echo reply`，TCP `Connection established`（state=4） | `network_hal64.c`、`drv_register64.c`、`e1000_64.c`、`rtl8139_64.c`、`net64*.c`、`kernel/drivers/eth.c`、`kernel_main_64.c`（仅过时文案） | 已修复（v0.59.2） |
 | BUG-57 | **"32 位加约 1 KB BSS 就启动失败"被误判为"BSS 已贴边界"**：现象是自检里把临时结构从 `kmalloc` 改成 `static process_t`（约 192 B BSS）后，32 位稳定 `lines=193`、`initrd/net/desk` 全 0，崩在 `klog_capture_boot` 之前；改回 `kmalloc` 立刻恢复。此前的解释是"BSS 97 MB 已到边界、再加几百字节就炸"，据此还写进了文档。**实测推翻**：1 KB/2 KB 静态探针写入后仍 PASS（817 行）；`process_t` 仅 192 B 比探针还小却会崩；`mem_kb≈255 MB`、堆结束 129 MB、剩 126 MB；栈水位 `headroom=0x3D20`（只用 736 B / 16 KB）。用 `qemu-system-i386 -d int,cpu_reset` 抓到异常链：`e1000_init+0x157/0x305/0x34a` `#PF`（`CR2=0xFEB8xxxx`，把网卡 MMIO 物理址当指针直写）→ `kmalloc+0x1f2` `#PF`（写 `[edx+0x10]`=`block->prev`，free list 已被踩坏）→ `boot.S early_msg` 二次崩溃（`SP=0x5e000002`）→ `#DF` 撞 `#PF` → triple fault。真实机制是两条并存缺陷：①按需分页对**任意**缺页地址都 `alloc_frame()` 再映射 ⇒ 写 MMIO 等于把一块随机物理页映射过去并写入，等于随机篡改物理内存；②`e1000` 拿 `kmalloc` 堆块当 DMA 缓冲（`rx_bufs=kmalloc(64KB+16)`），块被 split 后紧邻下一个 `block_header`，越界/硬件写直接踩坏链表头（堆 canary 抓到伪块就在 `rx_bufs` 数据区内部，`magic=0`）。堆起点 = `__kernel_end` 按页对齐，BSS 一变 4 KB 所有分配地址整体偏移 —— 这才是"改任意一行代码崩溃就消失/出现"的来源。**修复**：超出 `mm_phys_limit()` 的缺页一律映射同一个哑页（写入只污染哑页）；四个 DMA 缓冲改 `mm_alloc_pages()` 页级独占（1/16/1/4 页）；`kheap` 遍历遇 `magic` 不符即停止，不再信任坏块的 `size/next`。**实测**：32 位冒烟 `serial=1 initrd=1 net=1 desk=1 fault=0 bound=1` PASS；桌面 `NONBLACK=2073600`；64 位 959,408 B | `paging.c`、`pmm.c`、`kheap.c`、`kernel/drivers/e1000.c`、`sys_mem.c` | 已修复（v0.60.7） |
-| BUG-48 | INT13 磁盘重置在关中断下调用 | boot/BOOTLOADER_DEFINITION_PLAN.md, 待 QEMU 验证 | 待验证 |
+| BUG-48 | INT13 磁盘重置在关中断下调用 | tools/hepboot/hepboot.S | **已闭环（2026-11-17 代码核实）** |
 | OPEN-01 | **QEMU 高 LBA(P2/P3) 写成功读全 0** —— **实测不复现，关闭（v0.59.1）**。新增 `ide64_selftest_high_lba()`：在独立 slave 测试盘（QEMU `-drive if=ide,index=1`，256MB）上对 LBA `0 / 0x1000 / 0x20000 / 0x3FFFF / 0x7F000` 逐个写入递增 pattern → 读回逐字节比对，外加一段 8 扇区连续读写的多扇区回环。实测 `[ATA] high-lba selftest drive=0x1 cases=0x5 fails=0x0`，多扇区回环无 mismatch。历史现象最可能来自 0.13.57 时期「逐扇区发命令 + 写后未等 FLUSH 完成」，这两点在 v0.59.1 的 BUG-13 修复里已一并处理。注：自检只用 slave 盘，不碰系统盘 | `ide64.c ide64_selftest_high_lba()`；QEMU 双盘实跑；`fails=0x0` | 已关闭 |
 | OPEN-02 | UHCI 写路径时序竞态 | 0.13.42 遗留；**v0.59.2 尝试复现未成功**：按约束只挂 `-device piix3-usb-uhci -device usb-kbd`，没有 bulk 设备，BOT 的 CBW/CSW 批量写路径整条未进入；既有缓解（命令级重试、CSW 重读、帧同步重挂 QH、8 深 scratch 轮转）仍在位，HID 中断 IN 两次按键各 1 条队列项、无 TD err/stall。**下一步验证手段**：需要带 usb-storage 夹具的满扇区 bulk 写压测（本域外，未做） | 待解决 |
 | OPEN-03 | ~~QEMU sendkey 不被键盘驱动读取~~ **已关闭（非真 bug，旧测量误解）**。PS/2 与 USB HID 两条键盘链路端到端可用，无需先点击聚焦。四重实测证据（ef3c7cc 内核，PS/2 配置未挂 USB）：① 中断级 `g_kbd_irq_count`（符号地址 0x1f29f4）每次按键 +2（按下/释放各 1 次），键盘环形缓冲 head/tail 同步前移且条目被消费；`sendkey 2` 后计数 11→13、缓冲指针 3→4；② 界面级 `sendkey 2` 使 OOBE 由 1/4 推进到 2/4（截屏像素差 73616 px），账户创建页输入 h/e/p/u，用户名框真实回显 "hepu"；③ USB HID 键盘对照（`-device piix3-usb-uhci -device usb-kbd`）sendkey 改走 USB 队列（此时 PS/2 IRQ1 静默），同样推进向导、回显 hepu、Tab 切换输入框焦点（像素差 3008 px）。**应用层边界（避免再误判）**：OOBE 语言页只绑定数字键 `1`/`2`，Tab/方向键/回车在该页未绑定，属应用设计；旧「按了没反应」源于此，加之此前缺中断级取证，把「界面没变化」误判为「驱动没收到键」 | `g_kbd_irq_count` 中断计数 + 环形缓冲指针；OOBE 页面推进与文本回显；USB HID 对照链路 | 已关闭（非缺陷） |
@@ -516,3 +516,28 @@ diag1/diag2/move/sb_up/hand），但系统目前只有 4 个形态场景，映�
 
 - 32 位冒烟：`serial=1 initrd=1 net=1 desk=1 fault=0 bound=1`，`== 32 位内核冒烟 PASS`。
 - 64 位内核 `hepu-kernel64.bin` 956 080 字节（上限 1 048 576）；桌面帧缓冲非黑像素 2 073 597 / 2 073 600，与基线一致，无像素回退。
+
+### BUG-48 结案说明（2026-11-17）
+
+**原描述**：「INT13 磁盘重置在关中断下调用」，一直挂「待 QEMU 验证」。
+
+**代码核实结果 —— 这条已经不成立，三个层次**：
+
+1. **磁盘重置本身已被禁用**。`tools/hepboot/hepboot.S` 里 AH=00H 那段
+（`movb $0x00, %ah` / `sti` / `int $0x13` / `cli`）**整块被注释掉**，连同它的
+`rs_skip_reset` 标签一起。既然重置不再执行，「重置在关中断下调用」这条路径
+已经不存在。
+2. **实际在跑的 INT13 是开中断的**。真正执行的是 AH=42H LBA 扩展读，
+调用前一行是 `sti`（注释写着「V0.10.5: 开中断，确保 INT13 卡住时键盘仍有响应」），
+调用后 `int13_ret:` 立刻 `cli` 把中断状态收回 —— 这是正确顺序（BIOS 调用期间开中断，
+返回后立刻关）。
+3. **而且它有卡住保护**。调用前把 `SP` 和返回地址存到 `0x4000`、置递归标志
+（`V6.44 保存SP+返回地址到0x4000, 设置递归标志`），BIOS 真卡死时有恢复路径。
+
+**为什么一直挂着**：原记录指向 `boot/BOOTLOADER_DEFINITION_PLAN.md`（该文件实际在
+`docs/boot/` 下且内容已迁移），代码经过多轮 V5.x/V6.x 改造后这段早被重写，
+但条目没跟着关。属「台账比代码旧」。
+
+**残余风险（如实保留）**：legacy BIOS 引导链本身**不在当前交付路径上**
+（64 位走 UEFI，32 位走 QEMU `-kernel`/GRUB），所以即使有遗留问题也不影响
+双架构镜像。真机从 BIOS 介质启动时的行为本轮没有实测，这一点标注在这里。
