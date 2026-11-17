@@ -2571,17 +2571,50 @@ static int64_t wrap_fb_acquire(int64_t a1, int64_t a2, int64_t a3, int64_t a4, i
     const fb_desc_t *d = dp;
     if (!d->phys) return -1;                      /* 显存还没出现(boot 早期) */
 
-    uint64_t total = (uint64_t)d->pitch * (uint64_t)d->height;
-    if (total == 0) total = (uint64_t)d->width * d->height * (d->bpp / 8);
+    /* §5-4 附 第 4 条: 双缓冲与单缓冲的语义必须分开, 不能用同一句「给写权」糊过去。
+     *   双缓冲: 交出去的是 **后台缓冲** 写权 —— 用户在 back 上画, 撕裂天然不存在,
+     *           真正上屏要调 flip(把 back 拷进 LFB)。back 是 pmm64_alloc_pages 出来的
+     *           物理页, 行宽是 width*4(紧密排列), 不是显存的 pitch。
+     *   单缓冲: 直接给 LFB —— 用户直写显存, 安全性完全依赖「期间内核不 present」
+     *           这一条(第 2 条已接线)。这时候没有 flip 可调, 调了也是空操作。 */
+    uint64_t src_phys;
+    uint64_t total;
+    if (d->flags & FB_DESC_FLAG_DOUBLE_BUFFERED) {
+        extern uint8_t *gfx64_back_buffer(void);
+        uint8_t *bb = gfx64_back_buffer();
+        if (!bb) return -1;                       /* 声明了双缓冲却没有 back, 拒绝而非降级 */
+        src_phys = (uint64_t)(uintptr_t)bb;
+        total = (uint64_t)d->width * (uint64_t)d->height * 4ULL;
+    } else {
+        src_phys = d->phys;
+        total = (uint64_t)d->pitch * (uint64_t)d->height;
+        if (total == 0) total = (uint64_t)d->width * d->height * (d->bpp / 8);
+    }
     if (total == 0) return -1;
     if (a1 > 0 && (uint64_t)a1 < total) total = (uint64_t)a1;
 
     /* prot = READ|WRITE(3), flags = MAP_PHYS(0x1000), fd/off 不用 */
-    int64_t virt = sys_mmap((uint64_t)d->phys, total, 3, 0x1000, -1, 0);
+    int64_t virt = sys_mmap(src_phys, total, 3, 0x1000, -1, 0);
     if (virt <= 0) return -1;                     /* 映射失败就不给所有权 */
 
     if (desk_fb_owner_acquire(pid) != 0) return -16;
     return virt;
+}
+
+/* §5-4 附 第 4 条: 双缓冲下的提交动作。
+ * 只有 owner 能 flip —— 非 owner 调它等于绕过所有权往屏幕上画, 必须拒绝。
+ * 单缓冲模式下 back_buffer 为空, gfx64_present 自己 return, 这里返回 0 表示
+ * 「已经就是前台, 无需提交」, 不当作错误。 */
+static int64_t wrap_fb_flip(int64_t a1, int64_t a2, int64_t a3, int64_t a4, int64_t a5, int64_t a6) {
+    (void)a1;(void)a2;(void)a3;(void)a4;(void)a5;(void)a6;
+    extern int desk_fb_owner_pid(void);
+    extern int user_process_get_current_pid(void);
+    extern void gfx64_present(void);
+    int pid = user_process_get_current_pid();
+    if (pid <= 0) return -1;
+    if (desk_fb_owner_pid() != pid) return -1;    /* 非 owner 不许提交 */
+    gfx64_present();
+    return 0;
 }
 
 static int64_t wrap_fb_release(int64_t a1, int64_t a2, int64_t a3, int64_t a4, int64_t a5, int64_t a6) {
@@ -2868,6 +2901,7 @@ static syscall_fn_t syscall_table[SYSCALL_MAX] = {
     [SYS_FB_DESC]       = wrap_fb_desc,
     [SYS_FB_ACQUIRE]    = wrap_fb_acquire,
     [SYS_FB_RELEASE]    = wrap_fb_release,
+    [SYS_FB_FLIP]       = wrap_fb_flip,
 };
 
 /* 安全修复：旧实现用 char tmp[8]/buf[8] 打印调用号，用户传入 rax=2147483647

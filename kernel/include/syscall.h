@@ -140,6 +140,12 @@
  * release 交还。owner 进程退出时内核强制回收, 不依赖用户态主动调。 */
 #define SYS_FB_ACQUIRE      230
 #define SYS_FB_RELEASE      231
+/* §5-4 附 第 4 条: 双缓冲下 acquire 返回的是 **后台缓冲** 写权, 不是前台。
+ * 后台画完之后必须调 flip 才提交(拷 back -> LFB), 这样撕裂天然不存在;
+ * 单缓冲下 acquire 直接返回 LFB, 安全性依赖第 2 条(期间内核不 present)。
+ * flip 只对 owner 有效; 单缓冲模式下调用 flip 返回 0 且不做任何事(已经是前台)。
+ * 是否双缓冲由 SYS_FB_DESC 的 FB_DESC_FLAG_DOUBLE_BUFFERED 告知。 */
+#define SYS_FB_FLIP         232
 #define SYS_EXIT_GROUP      228   /* 进程组退出 */
 /* ---- 原有 syscall 保持不变（用 #ifdef 保护，若已定义则跳过） ---- */
 #define SYS_GFX_INIT       200   /* 初始化VGA图形模式 (V4.02: gfxtest支持) */
