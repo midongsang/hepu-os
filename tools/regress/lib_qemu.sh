@@ -64,18 +64,31 @@ q_send_text() {
   done
 }
 
+q_alive() {
+  local PID="$INST/qemu.pid"
+  [ -f "$PID" ] || return 1
+  local P; P=$(cat "$PID" 2>/dev/null)
+  [ -n "${P:-}" ] && kill -0 "$P" 2>/dev/null
+}
+
 q_dump() {
-  # $1 = ppm 路径；$2 = png 路径；输出 W,H,NONBLACK 到 stdout
+  # $1 = ppm 路径；$2 = png 路径；输出 W,H,NONBLACK 到 stdout；QEMU 已退时返回 1
   local PPM="$1" PNG="$2"
+  q_alive || { echo "QEMU dead, skip screendump"; return 1; }
   python3 - "$INST/mon.sock" "$PPM" "$PNG" <<'PY'
-import socket, sys, time
+import os, socket, sys, time
 from PIL import Image
 mon, ppm, png = sys.argv[1], sys.argv[2], sys.argv[3]
-s = socket.socket(socket.AF_UNIX); s.connect(mon); time.sleep(0.3)
-s.sendall(("screendump %s\n" % ppm).encode()); time.sleep(2.5)
-try: s.recv(4096)
-except Exception: pass
-s.close()
+try:
+    s = socket.socket(socket.AF_UNIX); s.connect(mon); time.sleep(0.3)
+    s.sendall(("screendump %s\n" % ppm).encode()); time.sleep(2.5)
+    try: s.recv(4096)
+    except Exception: pass
+    s.close()
+except Exception as e:
+    print("monitor unreachable:", e); sys.exit(1)
+if not os.path.exists(ppm) or os.path.getsize(ppm) == 0:
+    print("screendump ppm missing"); sys.exit(1)
 im = Image.open(ppm).convert("RGB")
 im.save(png)
 non = sum(1 for p in im.getdata() if p != (0, 0, 0))

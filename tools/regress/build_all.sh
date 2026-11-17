@@ -31,14 +31,16 @@ HEPU_IMG="$IMG" python3 tools/build_uefi_dual.py > "$EV/build/build-image.log" 2
 
 # ---- ext2 根分区覆盖配置（LBA 264192, 120MB = 204800 扇区）----
 EXT="$EV/build/_r.ext2"
-HASH=$(printf 'hepu123' | sha256sum | awk '{print $1}')
+# auth64 读取的规范路径是 /account.conf（auth64.c ACC_PATH）；夹具口令 hepu123 为本回归
+# 自选（仓库无内置默认口令，OOBE 口令由用户首设），hash=sha256(hepu123)，无盐。
+HASH=$(printf '%s' "$FIXTURE_PASSWORD" | sha256sum | awk '{print $1}')
 # 注意：默认保持开机锁屏（不写 lock=0），链路取证需要先到锁屏页。
 printf 'oobe_done=1\nlang=0\n' > "$EV/build/_sys.conf"
 printf 'user=dev\nrole=2\nhash=%s\nadminhash=%s\n' "$HASH" "$HASH" > "$EV/build/_acc.conf"
 printf 'scale=150\nresolution=1920x1080\nshadow=1\ncursor=0\n' > "$EV/build/_disp.conf"
 
 dd if="$IMG" of="$EXT" bs=512 skip=264192 count=204800 status=none
-for f in _sys.conf:/system.conf _acc.conf:/accounts.conf _disp.conf:/display.conf; do
+for f in _sys.conf:/system.conf _acc.conf:/account.conf _disp.conf:/display.conf; do
   src=${f%%:*}; dst=${f##*:}
   debugfs -w -R "rm $dst" "$EXT" >/dev/null 2>&1 || true
   debugfs -w -R "write $EV/build/$src $dst" "$EXT" >/dev/null 2>&1

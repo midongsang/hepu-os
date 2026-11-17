@@ -36,6 +36,7 @@ run_step patch_cfg  "$REGRESS_DIR/patch_menu_cfg.sh"
 run_step loading    "$REGRESS_DIR/record_loading.sh" 30 6
 run_step boot64     "$REGRESS_DIR/boot64.sh"
 run_step boot32     "$REGRESS_DIR/boot32.sh"
+run_step desktop32 "$REGRESS_DIR/desktop32_direct.sh"
 run_step protect64 "$REGRESS_DIR/protect64.sh"
 run_step protect32 "$REGRESS_DIR/protect32.sh"
 run_step tests      "$REGRESS_DIR/run_tests.sh"

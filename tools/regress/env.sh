@@ -29,6 +29,13 @@ export EV="${HEPU_EV:-$CHAT/evidence-regress-2026-11-17}"
 export IMG="$EV/build/hepu.img"
 export VNCPORT="${HEPU_VNC:-5902}"
 
+# ---- 基线与夹具口令 ----
+# 仓库代码里没有内置默认口令：OOBE 向导口令由用户首设（auth64_create_account），
+# 测试夹具在 /account.conf 写入 sha256(hepu123)，口令 hepu123 仅为本回归 fixture 选择，
+# 不是发行版默认口令。
+export BASELINE="${HEPU_BASELINE:-61c53fa}"
+export FIXTURE_PASSWORD="${HEPU_FIXTURE_PASS:-hepu123}"
+
 # ---- 锁 ----
 BUILD_LOCK=/tmp/hepu-build.lock
 QEMU_LOCK=/tmp/hepu-qemu.lock
