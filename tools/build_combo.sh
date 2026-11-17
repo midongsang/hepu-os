@@ -25,6 +25,21 @@ SYSTEM_VER=v1.02
 
 mkdir -p $BLD $OUT
 if [ ! -f "$KERNEL" ]; then echo "无内核, 先 make all"; exit 1; fi
+
+# P3-11: 本脚本用的是旧一代引导器(tools/bootloader.S + tools/bootloader.ld,
+# 基址 0x7C00)。那一代已被 tools/hepboot/ 取代 —— hepboot.S v1.02 基址
+# 0x8000(hepboot.ld 注释明确写"原 0x7C00 与 MBR 冲突"), LBA 布局也跟着变了,
+# 所以不能把路径直接指过去就完事。
+# 这里做显式前置检查: 缺源就直说缺什么、该走哪条路径, 而不是让 gcc 甩一屏报错。
+for f in tools/bootloader.S tools/bootloader.ld; do
+    if [ ! -f "$ROOT/$f" ]; then
+        echo "[combo] 缺少旧一代引导器源: $f" >&2
+        echo "[combo] 该布局依赖 0x7C00 基址, 已被 tools/hepboot/ 取代。" >&2
+        echo "[combo] 当前可用路径: tools/build_uefi_dual.py (UEFI 双架构镜像)。" >&2
+        echo "[combo] 若要重建 combo 镜像, 需按 hepboot 的 0x8000/HDD 变体重写布局。" >&2
+        exit 2
+    fi
+done
 if [ ! -f "$DATADISK" ]; then echo "无数据盘 $DATADISK"; exit 1; fi
 
 KSIZE=$(stat -c%s "$KERNEL")

@@ -44,6 +44,12 @@
 
 ## 三、可切换：注册表
 
+> **定位说明**：注册表是**本项目新加的设计**，不是对既有 `hpdesk.c` 的现有
+> 结构的描述。`hpdesk.c` 原本是"内核里直接被调用的一份桌面"，没有注册、
+> 没有选择、没有"换一个桌面"的概念。这一层是 2026-11 为了"旧桌面保留但
+> 迁出内核 / 留可切换的图形化桌面接口"两个要求加出来的，写在这里是为了让
+> 后来人知道它是新增契约，不是既有事实。
+
 `desk_registry.c` 提供：
 
 ```c
@@ -87,10 +93,12 @@ desk_select("mine");          /* 切过去 */
 | 项 | 状态 |
 |---|---|
 | `desk_api.h` + `desk_registry.c` | ✅ 已建（纯逻辑，32/64 都能编） |
-| 32 位内核内桌面 | ⛔ **已下线**（`init_sequence.c` 不再进 `elastic_desktop_main_loop`） |
-| 32 位用户态桌面 | 🚧 进行中：先要 `SYS_FB_DESC` + `SYS_MMAP` 拿得到 LFB |
-| 64 位桌面接同一接口 | ⏳ 未做（现状仍是 `hpdesk.c` 直写） |
-| 默认桌面 `desk_shell` | ⏳ 未做 |
+| 32 位内核内旧桌面（`elastic_desktop_main_loop`） | ⛔ **已下线**，不再被调用 |
+| 32 位经注册表起桌面 | ✅ **已接通**：`init_sequence.c` 在 32 位上调 `desk_start(100)` → 打 `[EDESKTOP] desk_start on 32-bit`，再 `desk_tick()` 量首帧周期 |
+| 64 位经注册表起桌面 | ✅ **已接通**：`desktop64_init` 走同一条 `desk_start` 路径，最终进 `hpdesk_init` |
+| 32 位与 64 位共用同一份桌面源码 | ✅ `hpdesk.c` 同一份文件同时编进两个架构，视觉以 64 位为准 |
+| 32 位用户态桌面（搬出 ring0） | 🚧 未做：依赖 `SYS_FB_DESC` + `SYS_MMAP` 真映射，另见 `KERNEL_SCOPE.md` §5-4 |
+| 默认桌面 `desk_shell` | ⏳ 未做（当前注册表里是 `hpdesk`） |
 
 ## 六、与其它文档的关系
 

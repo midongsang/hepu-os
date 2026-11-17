@@ -7,7 +7,10 @@ import pycdlib
 import os
 import struct
 
-PROJECT = "/home/user/Doubao/chats/38448056008342018/extracted/os-source/hepu_os_src/hepu-os"
+# P3-11: 原来是另一个会话副本的绝对路径(38448056008342018), 换机器/换会话后
+# 必然失效。改为从脚本自身位置推导: tools/<this>.py 的上一级就是仓库根。
+import os as _os
+PROJECT = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
 OUTPUT = "/tmp/hepu64.iso"
 
 def main():

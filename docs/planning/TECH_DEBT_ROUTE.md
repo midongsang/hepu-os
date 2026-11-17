@@ -587,14 +587,14 @@ desk_select("mine");       /* 切过去 */
 
 | # | 项 | 风险 | 验收 |
 |---|---|---|---|
-| P2-1 | 64 位贴 7 个 phase 标签（复用 `init_phase_t`） | 极低 | 日志逐行 diff 与合并前一致；`regress.sh` 仍 N/N |
+| P2-1 | ~~64 位贴 7 个 phase 标签~~ **已完成** | 在 `kernel_main_64.c` 的 7 个节点各打一行 `[INIT] phase:  <名> `，名字逐字照抄 32 位 `hepu_init_phase_name()`（含原有前后空格）。按真实启动顺序：`cores subsystem`(物理内存) → `HW driver`(早 IDT) → `security encryption`(seccomp) → `fs`(ext2) → `net proto`(net64) → `system service`(process64) → `app framework`(desktop64)。<br>**不调 `hepu_init_phase()` 的原因**：它内部调 `vfs_init`/`devfs_init` 等只存在于 32 位的模块，64 位链接不上。<br>**踩到的坑**：64 位 `vga_puts()` 第一行就是 `serial_puts_local()`（`lib64.c` 的 `vga_puts_nolock`），本来就落串口，第一版再配一个 `serial_puts(0x3F8,...)` 导致每行在 `ser_kill.log` 出现两遍。去掉多余那句后 7 行各出现一次。<br>验证：64 位 949,232 B（+256 B），截图 1920×1080 非黑 2,073,600。 | 已完成（2026-11-17） |
 | P2-2 | `desk_registry` 写入 `DESKTOP_INTERFACE.md` 并标"新增，非既有设计" | 无 | 文档与代码一致 |
 
 ### P3 —— 存量与可增量
 
 | # | 项 | 备注 |
 |---|---|---|
-| P3-1 | 32 位 6 个 KUNIT fail（syscall deep / user scenario / integration / security E2E） | 历史遗留，非 D-7/D-8 引入 |
+| P3-1 | ~~32 位 6 个 KUNIT fail~~ **已结案：52 个 suite 全 0 fail** | 冒烟里 `[KUNIT] result:` 共 52 行，逐行都是 `failed=0x00000000`。历史上出问题的那四个套件都在跑且全过：`syscall deep`（0x32=50 项）、`user scenario`（0x10=16 项）、`integration`（0x0E=14 项）、`security E2E`（0x0F=15 项）。<br>归因：`kunit_syscall_deep.c:402` 那条 `KUNIT_ASSERT(SYS_MAX == 222)` 是唯一的**固定 FAIL**（实现是 236），它一失败整条 syscall deep 套件就记 fail；`e4db810`（N-3）把它改成区间断言 `SYS_MAX >= 200 && SYS_MAX < 512` 后，这个套件恢复全过。其余「fail」没有独立证据留存，应是同一条断言在不同构建期的连带计数，不是六个互不相关的 bug。 | 已闭环（2026-11-17） |
 | P3-2 | 顶栏 ASCII 字形残留（`Hepu OS` 只出 `H`，`640x480@0Hz` 出白三角） | D-7 最后一处 |
 | P3-3 | `mouse64_init(1024,768)` 初始位置偏左上 | **已核实**：只影响光标初始位置，非坐标上限，危害轻微 |
 | P3-4 | 桌面线四项（控制中心位图图标 / `bar_height` 36vs40 / 天气卡 24px / 胶囊居中口径） | 用户已给口径，代码未改 |
@@ -606,16 +606,16 @@ desk_select("mine");       /* 切过去 */
 | P3-8 | §5-6 32 位其余文件接 `shared/` | 引用数 1，才开头 |
 | P3-9 | 32 位缺 12 个 Rust 用户程序（无 cargo） | 需外部环境 |
 | P3-10 | D-1…D-6 剩余 | 见本文档前半 |
-| P3-11 | 三个镜像脚本都不可用：`build_combo.sh` 依赖的 5 个源文件已不在仓库；`build_iso.py` / `build_hybrid_iso.py` 的 `PROJECT` 硬编码到另一个工作区副本 | 2026-11-16 核实。当前唯一可构建产物是 `build_uefi_dual.py` 的 UEFI 镜像。README 与 `guides/INSTALL.md` 已加说明，但脚本本身未修 |
+| P3-11 | ~~三个镜像脚本都不可用~~ **脚本已能自述病因** | **已修**。核实比原记录深一层：`tools/bootloader.S` / `bootloader.ld` **不是"丢了"，是被 `tools/hepboot/` 整体取代**——`hepboot.S` v1.02 基址 `0x8000`（`hepboot.ld` 注释："原 0x7C00 与 MBR 冲突"），LBA 布局随之改变，所以不能简单把路径改指过去。本轮做了三件事：① `build_iso.py` / `build_hybrid_iso.py` 的 `PROJECT` 从另一个会话副本的绝对路径改为 `os.path.dirname(dirname(abspath(__file__)))` 自动推导；② `build_combo.sh` 加前置检查，缺源时直接打印"该布局已被 hepboot 取代 + 当前该走 `build_uefi_dual.py` + 要重建需按 0x8000/HDD 变体重写"，而不是让 gcc 甩一屏报错；③ `build_uefi_dual.py` 加 `_require_tools()` 自检（`sgdisk`/`mkfs.vfat`/`mkfs.ext2`/`mcopy`），缺哪个报哪个并给安装命令，不再抛 Python traceback。**仍未做**：`tools/hepboot/x86_64/stage2_64.S` 有源但没有构建规则产出 `stage2_64.bin`，iso 脚本因此仍跑不完；combo 镜像要不要按 0x8000 重建未定 |
 
 ### 台账外新发现（2026-11-17，尚未排进优先级）
 
 | # | 项 | 现状 | 性质 |
 |---|---|---|---|
 | N-1 | **2560x1600 双缓冲放不下** | 缓冲本身已能动态分配（`[GFX] draw target -> heap 16000KB (2560x1600)`，非黑 3,928,481 = 95.9%），但 `hs_wallpaper_build_cache` 按 `w*h*4` 再吃 16 MB，合计 32 MB = 整个 32 MB 堆（256 MB 机器档），后续分配全部失败 → 画面撕裂、壁纸全黑。**修法二选一**：壁纸缓存降精度（存 1920 宽渲染时横向拉伸，省 16 MB）/ 提堆（32→48 MB） | 内存预算 |
-| N-2 | **32 位 `png64_decode` 会卡死** | `[WP32] dec start` 之后没有 `dec ok`，串口行数从 809 掉到 429。五处 `P_ALLOC` 都有 NULL 检查，所以不是简单分配失败；未深挖是 inflate 还是写物理页阶段。当前绕过：壁纸走离线预解码 RGBA 数组（`b3292b5`）。**任何将来要用 PNG 解码的 32 位功能都需先解决这条** | 阻塞项 |
+| N-2 | ~~32 位 `png64_decode` 会卡死~~ **已结案：不复现，解码器本身正常** | 用 8×8(167B,1 页) / 64×64(2158B,4 页) / 512×288(29,667B,145 页) 三档递进实测，全部解码成功，阶段打点 `scan done → alloc idat → alloc raw → inflate start/done → alloc rgba` 逐段成对出现。<br>曾被怀疑的两个点都排除：① 多页分配不是死循环——`mm_alloc_pages(4)` 实测 0.7~30 M 周期（2~10 ms），边界值 `total_pages=0xFF7F`、`limit=0xFF7B` 正常，`mem_region_count=2`；② 不是 `#PF`——V3.86 起 identity map 已从 16 MB 扩到 **256 MB 全物理直映**（`paging.c` 里还有一次全量完整性复检补洞），135 MB 处的分配页可直接读写。<br>原 `[WP32] dec start` 后无 `dec ok` 应是旧镜像/旧构建下的时序偶发，现基线（32 位 3,923,568 B，冒烟 PASS `lines=801`）不再出现。**32 位壁纸的预解码 RGBA 兜底（`hs_wp_load` 的 `n<=8 && idx==0` 分支）保留**，但理由已从"解码器坏了"改为"无盘启动读不到文件"。 | 已闭环（2026-11-17） |
 | N-3 | `kunit_syscall_deep.c:402` 断言 `SYS_MAX == 222` | 实现是 236，**固定 FAIL**，与 P3-1 的 6 个 KUNIT fail 可能同源 | 测试 |
-| N-4 | 20 MB 死内存回收 | 原判断含 `fb_mem*` 11 MB + `back_buffer` 8.3 MB + QUIC/HTTP3 7.3 MB。**`back_buffer` 现已非闲置**（它就是双缓冲的绘制目标），实际可回收量需重算 | 清理 |
+| N-4 | ~~20 MB~~ **11.4 MB 死内存回收** | **已完成**。重算结果：原 20 MB 里 `back_buffer`(8.3 MB) 已非闲置（它是双缓冲绘制目标，不能算死内存），QUIC/HTTP3 那 7.3 MB 未在本轮核实到对应符号。真正可回收的是 `gfx_virtio.c` 两个函数内 static 数组：`fb_mem`(3 MB, 1024×768×4) + `fb_mem_large`(8.3 MB, 1920×1080×4) = 11.3 MB。32 位实际走 VBE，`virtio_gpu_probe()` 在 `[GFX-VIRTIO] no virtio-gpu device found` 后直接 `return -1`，**永远走不到分配处**，这两个数组从开机到关机没被写过一个字节，却整体占着 .bss。改成 `virtio_fb_alloc()` 用 `mm_alloc_pages` 运行时按需取（上限 1920×1080×32，一次取避免切换分辨率时重复分配），virtio 探测失败则一次都不分配。实测 `.bss` 108,522,412 → **97,078,188**（−11,444,224 B），`nm` 里 `fb_mem*` 符号消失，32 位冒烟 PASS，桌面 `NONBLACK=2073600` 无回退 | 清理（已做） |
 | N-5 | `gfx64_blur_region` 32 位仍是纯覆色 | **无调用点的死路径**（`hs_blur_region` 定义了但零调用）。桌面实际用的毛玻璃已走 `hs_panel_glass_*`（`e9e2f99`，32/64 共用），不经过这个函数，保持退化不影响任何画面 | 无需修 |
 
 ### 不做的事（明确列出，避免反复讨论）

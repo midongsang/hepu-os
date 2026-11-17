@@ -419,6 +419,7 @@ uint64_t g_kernel_tick64 = 0;
 volatile uint64_t g_user_exception_count = 0;
 
 /* 中断处理主体（原irq_handler_64逻辑） */
+static void hepu_panic_kernel_fault(uint64_t *sf);
 static void irq_handler_64_body(uint64_t *stack_frame)
 {
     /* 中断帧布局（栈顶开始）：
@@ -661,9 +662,97 @@ static void irq_handler_64_body(uint64_t *stack_frame)
                 return;   /* 交回中断桩，桩会 iretq 回内核 */
             }
             vga_puts("[EXCEPTION] user-mode fault with no active process, stopping\n");
+            /* 无活跃进程可终止: 也是内核没法收拾的局面, 走带回溯的 panic */
+            hepu_panic_kernel_fault(stack_frame);
         }
-        while (1) { __asm__ volatile("hlt"); }
+        /* 内核态异常: 内核自己出异常无法"只杀一个进程", 但不能无声 hlt ——
+         * 至少要留下 cr2/rip/栈回溯, 否则定位一次崩溃要反复猜。 */
+        hepu_panic_kernel_fault(stack_frame);
     }
+}
+
+/* SEC-06: 内核态异常/缺页的现场转储 + 停机。
+ *
+ * 原来内核态异常直接落到 while(1) hlt —— 只打印了 vector/rip/cr2 就静止,
+ * 没有任何栈回溯, 定位一次内核崩溃要反复猜测改代码重编。
+ * hepu_panic() 早就写好了(rbp 链回溯), 但只被显式调用点用到, 异常路径没接上。
+ *
+ * 这里用中断帧里的 rbp(stack_frame[10])做回溯起点 —— 注意不能用当前函数的
+ * rbp, 那是 irq_handler_64_body 自己的, 往回走只会走到中断处理函数, 看不到
+ * 出事那条调用链。
+ *
+ * 帧布局: [2..16]=r15,r14,r13,r12,r11,r10,r9,r8,rbp,rdi,rsi,rdx,rcx,rbx,rax
+ *         [19]=rip [20]=cs [21]=rflags [22]=rsp [23]=ss
+ */
+static void hepu_panic_kernel_fault(uint64_t *sf)
+{
+    uint64_t vector = sf[17];
+    uint64_t error  = sf[18];
+    uint64_t rip    = sf[19];
+    uint64_t rbp    = sf[10];
+    uint64_t cr2    = 0;
+
+    /* 关键: 内核态崩溃时必须走串口。
+     * vga_puts 写的是 VGA 文本缓冲(0xB8000), 在 GOP/VBE 图形模式下屏幕上
+     * 什么都看不到 —— 实测触发缺页后屏幕只有 "Guest has not initialized the
+     * display", 串口停在触发点之后什么都没有, 等于崩溃现场完全丢失。
+     * 串口是唯一无条件可用的诊断通道。 */
+    extern void serial_puts(uint16_t port, const char *s);
+    extern void serial_hex(uint64_t v);
+
+    serial_puts(0x3F8, "\n*** HEPU PANIC: kernel-mode exception ***\n");
+    serial_puts(0x3F8, "  vector=0x"); serial_hex(vector);
+    serial_puts(0x3F8, " error=0x");   serial_hex(error);
+    serial_puts(0x3F8, "\n  rip=0x");    serial_hex(rip);
+    serial_puts(0x3F8, " cs=0x");        serial_hex(sf[20]);
+    serial_puts(0x3F8, " rflags=0x");    serial_hex(sf[21]);
+    serial_puts(0x3F8, " rsp=0x");       serial_hex(sf[22]);
+    serial_puts(0x3F8, "\n");
+    if (vector == 14) {
+        __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
+        serial_puts(0x3F8, "  CR2=0x"); serial_hex(cr2);
+        serial_puts(0x3F8, (error & 0x1) ? " (protection violation)" : " (not present)");
+        serial_puts(0x3F8, (error & 0x2) ? " write" : " read");
+        serial_puts(0x3F8, "\n");
+    }
+    /* 栈回溯: rbp 链。用中断帧里的 rbp(sf[10]), 不是当前函数的 rbp ——
+     * 后者往回走只会看到中断处理函数自己, 看不到出事那条调用链。
+     * 限制 8 层并做对齐/单调检查: 无帧指针编译时链会提前断, 不能当真无限走。 */
+    serial_puts(0x3F8, "Stack trace (rbp chain, approximate):\n");
+    int frames = 0;
+    for (int i = 0; i < 8 && rbp; i++) {
+        if (rbp < 0x1000ULL || (rbp & 0x7)) break;
+        uint64_t ret = ((uint64_t *)rbp)[1];
+        if (!ret) break;
+        serial_puts(0x3F8, "  [0x"); serial_hex(ret); serial_puts(0x3F8, "]\n");
+        frames++;
+        uint64_t next = ((uint64_t *)rbp)[0];
+        if (next <= rbp) break;
+        rbp = next;
+    }
+    if (!frames) {
+        /* 实测本内核以 -fomit-frame-pointer 编译, 绝大多数函数没有 rbp 链,
+         * 回溯拿到空是常态。与其打一行空标题, 不如把原始 rbp 与 rsp 附近
+         * 的栈字打出来 —— 人工用 objdump 对着 rip 反查, 一样能定位。 */
+        serial_puts(0x3F8, "  (rbp chain unavailable; kernel built without frame pointers)\n");
+        serial_puts(0x3F8, "  raw rbp=0x"); serial_hex(sf[10]); serial_puts(0x3F8, "\n");
+        {
+            uint64_t sp = sf[22];
+            serial_puts(0x3F8, "  raw stack at fault rsp:\n");
+            if (sp >= 0x1000ULL && !(sp & 0x7)) {
+                for (int k = 0; k < 8; k++) {
+                    uint64_t v;
+                    /* 逐字读; 若某一格本身又被换出/未映射, 这里会再缺一次页,
+                     * 但异常处理期间 IF=0 且同栈, 风险有限。 */
+                    v = ((uint64_t *)sp)[k];
+                    serial_puts(0x3F8, "   +"); serial_hex((uint64_t)(k * 8));
+                    serial_puts(0x3F8, " 0x"); serial_hex(v); serial_puts(0x3F8, "\n");
+                }
+            }
+        }
+    }
+    serial_puts(0x3F8, "System halted (kernel fault, cannot isolate).\n");
+    while (1) { __asm__ volatile("hlt"); }
 }
 
 /* Hepu panic: 打印错误信息+栈帧后停机（SEC-06） */
