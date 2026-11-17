@@ -17,6 +17,7 @@ source_of_truth: frontmatter of docs/*
 
 - [ANTI_BURDEN](architecture/ANTI_BURDEN.md)
 - [ARCHITECTURE_LAYERS](architecture/ARCHITECTURE_LAYERS.md)
+- [BOOT_FLOW](architecture/BOOT_FLOW.md)
 - [BRAND_GUIDE](architecture/BRAND_GUIDE.md)
 - [赫普OS 系统设计（现行）](architecture/DESIGN.md)
 - [DESKTOP_INTERFACE](architecture/DESKTOP_INTERFACE.md)
