@@ -278,13 +278,44 @@ release 后可重新 acquire ✓；暂停/恢复各一次串口计数 ✓（那�
 进程，当前没有用户态桌面调用者，所以造不出这个场景）；单/双缓冲各跑一次（32 位
 只有单缓冲 `flags=0`，双缓冲要等 64 位接这条接口）。
 
-**一个必须记住的教训：32 位 BSS 已经贴到边界**
+**"32 位 BSS 已经贴到边界"这个判断是错的（2026-11-17 更正）**
 
-自检第一版用 `static process_t fake_proc` 存临时进程结构，只多占约 1 KB BSS，
-32 位就**稳定启动失败**（`lines=193`、`initrd/net/desk` 全 0，崩在
-`klog_capture_boot` 之前），改 `kmalloc` 分配后立刻恢复（`lines=817` PASS）。
-这条与 N-1（2560×1600）卡在内存预算的判断互相印证：**BSS 97 MB 不是"还有余量"，
-是"再加几百字节就可能炸"**。以后往 32 位加静态缓冲之前必须先算这条账。
+早前记录：自检第一版用 `static process_t fake_proc` 存临时进程结构，只多占约
+192 B BSS，32 位就稳定启动失败（`lines=193`、`initrd/net/desk` 全 0，崩在
+`klog_capture_boot` 之前），改 `kmalloc` 后立刻恢复，于是推断"BSS 已贴边界、
+再加几百字节就可能炸"。
+
+后续实验逐条推翻了这条因果：1 KB / 2 KB 静态探针写入后仍 PASS（817 行）；
+`process_t` 只有 192 B，比探针还小却会崩；内存实测 `mem_kb≈255 MB`、堆结束
+129 MB、剩 126 MB；栈水位 `headroom=0x3D20`（只用 736 B / 16 KB）。
+
+用 `qemu-system-i386 -d int,cpu_reset` 抓异常链后确认真实机制，**与 BSS 总量无关**：
+
+```
+e1000_init+0x157/0x305/0x34a  #PF  CR2=0xFEB8xxxx  (网卡 MMIO 物理址当指针直写)
+kmalloc+0x1f2                 #PF  写 [edx+0x10] = block->prev, edx 是垃圾
+boot.S early_msg              #PF  SP 已被破坏(0x5e000002) —— 二次崩溃现场
+                              #DF 撞 #PF -> triple fault
+```
+
+两条并存的缺陷：
+
+1. **按需分页对任意缺页地址都 `alloc_frame()` 再映射**。32 位 `e1000` 把 MMIO
+   物理地址（`0xFEB80000`，在 4 GB 附近，远超 256 MB identity map）当指针写，
+   于是每写一次"寄存器"，内核就把一块**随机物理页**映射过去并写入 —— 等于随机
+   篡改物理内存。踩到 heap free list 就是上面那个 `kmalloc` 的 #PF。
+   现已改为：超出 `mm_phys_limit()` 的地址一律映射到同一个哑页（写入只污染哑页）。
+2. **e1000 拿 `kmalloc` 的堆块当 DMA 缓冲**（`rx_bufs = kmalloc(64 KB + 16)`）。
+   堆块 split 后紧邻下一个 `block_header`，任何越界/硬件写入直接踩坏链表头。
+   堆 canary 抓到伪块就在 `rx_bufs` 数据区内部（`magic=0`）。现已改为
+   `mm_alloc_pages()` 页级独占分配。
+
+**这解释了"布局敏感"**：堆起点等于 `__kernel_end`（随 BSS 大小移动、按页对齐），
+BSS 一变 4 KB，所有分配地址整体偏移，被踩坏的是谁就变。所以"改任意一行代码
+就能让崩溃消失/出现"不是随机，而是**堆溢出 + 地址偏移**。
+
+真正的教训是：**不要用 `kmalloc` 的堆块承载 DMA 目标，也不要把物理地址当指针**，
+而不是"BSS 快满了、不能再加静态缓冲"。
 
 **将来实现时的验收判据（先写下来，避免又变成"改完看着还是假"）**
 
