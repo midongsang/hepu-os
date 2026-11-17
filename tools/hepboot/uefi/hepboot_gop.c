@@ -186,6 +186,105 @@ void gop_draw_string(int x, int y, const char *s, UINT32 color)
     }
 }
 
+/* ---- 放大绘制 -----------------------------------------------------------
+ * 8x16 的点阵在高分辨率下太小，整数放大到 scale 倍。nearest-neighbor，有锯齿，
+ * 但引导界面的大标题由 logo 位图承担，这些是正文，够用。
+ * ------------------------------------------------------------------------ */
+void gop_draw_char_scaled(int x, int y, char c, UINT32 color, int scale)
+{
+    unsigned char uc = (unsigned char)c;
+    int idx = uc - 32;
+    if (idx < 0 || idx >= 95) return;
+    if (scale < 1) scale = 1;
+
+    const unsigned char *glyph = font8x16[idx];
+    for (int row = 0; row < 16; row++) {
+        unsigned char bits = glyph[row];
+        for (int col = 0; col < 8; col++) {
+            if (bits & (0x80 >> col)) {
+                /* 一个点阵像素扩成 scale x scale 的方块，避免逐像素调用 */
+                gop_fill_rect(x + col * scale, y + row * scale, scale, scale, color);
+            }
+        }
+    }
+}
+
+void gop_draw_string_scaled(int x, int y, const char *s, UINT32 color, int scale)
+{
+    if (!s) return;
+    if (scale < 1) scale = 1;
+    int cx = x;
+    while (*s) {
+        if (*s == '\n') {
+            cx = x;
+            y += 16 * scale;
+        } else {
+            gop_draw_char_scaled(cx, y, *s, color, scale);
+            cx += 8 * scale;
+        }
+        s++;
+    }
+}
+
+int gop_string_width_scaled(const char *s, int scale)
+{
+    if (!s) return 0;
+    if (scale < 1) scale = 1;
+    int n = 0;
+    while (*s) { if (*s != '\n') n++; s++; }
+    return n * 8 * scale;
+}
+
+void gop_fill_rect_blend(int x, int y, int w, int h, UINT32 color, UINT8 a)
+{
+    if (!g_fb || a == 0) return;
+    if (x < 0) { w += x; x = 0; }
+    if (y < 0) { h += y; y = 0; }
+    if (x + w > (int)g_width) w = g_width - x;
+    if (y + h > (int)g_height) h = g_height - y;
+    if (w <= 0 || h <= 0) return;
+
+    UINT32 sr = (color >> 16) & 0xFF, sg = (color >> 8) & 0xFF, sb = color & 0xFF;
+    for (int row = 0; row < h; row++) {
+        UINT32 *ptr = g_fb + (y + row) * g_pitch + x;
+        for (int col = 0; col < w; col++) {
+            UINT32 d = ptr[col];
+            UINT32 dr = (d >> 16) & 0xFF, dg = (d >> 8) & 0xFF, db = d & 0xFF;
+            UINT32 r = (sr * a + dr * (255 - a)) / 255;
+            UINT32 g = (sg * a + dg * (255 - a)) / 255;
+            UINT32 b = (sb * a + db * (255 - a)) / 255;
+            ptr[col] = (r << 16) | (g << 8) | b;
+        }
+    }
+}
+
+void gop_draw_alpha_bitmap(int x, int y, const unsigned char *alpha,
+                           int w, int h, UINT32 color)
+{
+    if (!g_fb || !alpha) return;
+    UINT32 sr = (color >> 16) & 0xFF, sg = (color >> 8) & 0xFF, sb = color & 0xFF;
+
+    for (int row = 0; row < h; row++) {
+        int dy = y + row;
+        if (dy < 0 || dy >= (int)g_height) continue;
+        UINT32 *ptr = g_fb + dy * g_pitch;
+        const unsigned char *ap = alpha + row * w;
+        for (int col = 0; col < w; col++) {
+            int dx = x + col;
+            if (dx < 0 || dx >= (int)g_width) continue;
+            UINT32 a = ap[col];
+            if (a == 0) continue;
+            if (a == 255) { ptr[dx] = color; continue; }
+            UINT32 d = ptr[dx];
+            UINT32 dr = (d >> 16) & 0xFF, dg = (d >> 8) & 0xFF, db = d & 0xFF;
+            UINT32 r = (sr * a + dr * (255 - a)) / 255;
+            UINT32 g = (sg * a + dg * (255 - a)) / 255;
+            UINT32 b = (sb * a + db * (255 - a)) / 255;
+            ptr[dx] = (r << 16) | (g << 8) | b;
+        }
+    }
+}
+
 static void num_to_str(UINT32 n, char *buf, int base, int uppercase)
 {
     const char *digits = uppercase ? "0123456789ABCDEF" : "0123456789abcdef";

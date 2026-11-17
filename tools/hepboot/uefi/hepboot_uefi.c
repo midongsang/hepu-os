@@ -9,6 +9,8 @@
 
 #include <efi.h>
 #include <efilib.h>
+#include "hepboot_gop.h"
+#include "hepboot_logo.h"
 
 /* 自定义字符串函数 (UEFI freestanding环境不用标准C库) */
 static int my_strcmp(const char *a, const char *b)
@@ -467,6 +469,15 @@ static int init_gop(void)
         }
     }
 
+    /* 有些固件(实测 OVMF + std VGA 在提前调用的时序上)第一次 SetMode 之后
+     * FrameBufferBase 仍是 0 —— 此时 Mode->Info 已经是新分辨率(width/height/pitch
+     * 都对)，唯独线性帧缓冲没交出来。再设一次同一模式，固件会重建
+     * GraphicsConsole 绑定，之后 FrameBufferBase 才有效。
+     * 不做这一步的直接后果是 0x6000 里 fb=0，内核拿不到帧缓冲 -> 黑屏。 */
+    if (gop->Mode && gop->Mode->FrameBufferBase == 0) {
+        uefi_call_wrapper(gop->SetMode, 2, gop, gop->Mode->Mode);
+    }
+
     /* 获取当前模式信息 */
     EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *info = gop->Mode->Info;
     if (!info) {
@@ -510,6 +521,18 @@ static int init_gop(void)
     print_str(L" fb=0x");
     print_hex(g_gop_info.framebuffer_base);
     print_str(L"\r\n");
+
+    if (g_gop_info.framebuffer_base == 0) {
+        /* 到这里说明两次 SetMode 都没拿到线性帧缓冲。没有 fb 就画不了 GOP 菜单，
+         * 也不能把 0 写进 0x6000 骗内核 —— 如实返回失败，让菜单退回文本模式。 */
+        print_str(L"    [GOP] FrameBufferBase=0, 无线性帧缓冲\r\n");
+        g_gop_info.available = 0;
+        return 0;
+    }
+
+    /* 把协议实例交给绘制库(gop.c), 否则它的 g_fb 一直是 NULL,
+     * 所有 gop_clear/gop_fill_rect/gop_draw_* 都是空操作, 画面上什么都不出现。 */
+    gop_init(gop);
 
     return 1;
 }
@@ -851,6 +874,213 @@ static void save_default_mode(int mode)
         EFI_VARIABLE_RUNTIME_ACCESS, sizeof(v), &v);
 }
 
+/* GOP 是否可用。菜单要放在 GOP 上画, 但 init_gop 原来在菜单之后才调 ——
+ * 拿不到这个标志就只能退回文本菜单, 所以两个分支都保留。 */
+static int g_gop_ready = 0;
+
+/* 数字转十进制字符串（UEFI 环境不引 snprintf，几处都要用，抽一个） */
+static void u32_to_str(UINT32 n, char *buf)
+{
+    char tmp[12];
+    int i = 0;
+    if (n == 0) { buf[0] = '0'; buf[1] = 0; return; }
+    while (n > 0 && i < 10) { tmp[i++] = (char)('0' + (n % 10)); n /= 10; }
+    for (int j = 0; j < i; j++) buf[j] = tmp[i - 1 - j];
+    buf[i] = 0;
+}
+
+/* 菜单渲染。gfx=1 走 GOP 像素绘制, 0 走原来的文本控制台。
+ *
+ * 两者的取舍: GOP 能画真字形 logo(带 alpha 抗锯齿)、能控版面;
+ * 但屏幕输出和串口日志从此分家, 早期启动出问题只能靠串口复盘。
+ * 所以 GOP 不可用(或者固件不给 EfiGraphicsOutput)时必须还能退回文本版。 */
+static void boot_menu_render(int avail[MODE_COUNT], int selected, int countdown,
+                             UINT32 fail_count, int gfx)
+{
+    static const char *labels[MODE_COUNT] = {
+        "Hepu OS 64-bit", "Hepu OS 32-bit", "Protection Mode"
+    };
+    static const char *notes[MODE_COUNT] = {
+        "graphical desktop", "graphical desktop", "terminal only, no graphics"
+    };
+
+    if (gfx) {
+        int W = (int)gop_get_width();
+        int H = (int)gop_get_height();
+        gop_clear(GOP_COLOR_BG);
+
+        /* logo: 真字体渲染的点阵, alpha 混合 => 边缘抗锯齿。
+         * 这是文本模式做不到的: 那边只有固件字形表里那几个固定图案。 */
+        int lx = (W - hepu_logo_w) / 2;
+        /* 整块内容(logo + 标题 + 三项 + 倒计时 + 提示)约 500px 高, 按内容居中,
+         * 而不是按屏幕百分比拍一个 y —— 1080p 下按百分比会把整块顶到上面,
+         * 下面空出一大片。 */
+        int ly = (H - 500) / 2;
+        if (ly < 40) ly = 40;
+        gop_draw_alpha_bitmap(lx, ly, hepu_logo_alpha, hepu_logo_w, hepu_logo_h, 0x00FFFFFF);
+
+        const char *title = "Hepu OS Boot Menu";
+        int tw = gop_string_width_scaled(title, 2);
+        int ty = ly + hepu_logo_h + 26;
+        gop_draw_string_scaled((W - tw) / 2, ty, title, 0x0090A0A8, 2);
+
+        int line_w = W * 46 / 100;
+        int line_y = ty + 32 + 14;
+        gop_fill_rect((W - line_w) / 2, line_y, line_w, 2, 0x00404040);
+
+        int item_w = 660; if (item_w > W - 96) item_w = W - 96;
+        int item_h = 56;
+        int ix = (W - item_w) / 2;
+        int iy = line_y + 34;
+
+        for (int i = 0; i < MODE_COUNT; i++) {
+            int y = iy + i * (item_h + 10);
+            int on = avail[i];
+            int sel = (i == selected) && on;
+
+            if (sel) {
+                gop_fill_rect(ix, y, item_w, item_h, 0x00E8EAEC);
+                gop_fill_rect(ix, y, 6, item_h, 0x0000C8B4);
+            } else {
+                gop_fill_rect(ix, y, item_w, item_h, 0x001C2024);
+                gop_fill_rect(ix, y, 6, item_h, on ? 0x00505860 : 0x00C04040);
+            }
+
+            char label[64];
+            label[0] = (char)('1' + i);
+            label[1] = '.'; label[2] = ' ';
+            int li = 3;
+            const char *p = labels[i];
+            while (*p && li < 60) label[li++] = *p++;
+            label[li] = 0;
+
+            UINT32 fg  = sel ? 0x00101418 : (on ? 0x00D8DEE2 : 0x00565C62);
+            UINT32 nfg = sel ? 0x00404A50 : (on ? 0x007A8890 : 0x00464C52);
+            gop_draw_string_scaled(ix + 22, y + (item_h - 32) / 2, label, fg, 2);
+            gop_draw_string_scaled(ix + 330, y + (item_h - 16) / 2, notes[i], nfg, 1);
+
+            if (!on) {
+                gop_draw_string_scaled(ix + item_w - 132, y + (item_h - 16) / 2,
+                    i == MODE_64 ? "no KERNEL64.BIN" : "no KERNEL32.BIN", 0x00B05050, 1);
+            }
+        }
+
+        int foot = iy + MODE_COUNT * (item_h + 10) + 14;
+
+        if (fail_count > 0) {
+            char fbuf[48];
+            int fi = 0;
+            const char *pfx = "[!] previous boot failures: ";
+            while (*pfx) fbuf[fi++] = *pfx++;
+            char num[12]; u32_to_str(fail_count, num);
+            for (int k = 0; num[k]; k++) fbuf[fi++] = num[k];
+            if (fail_count >= 3) {
+                const char *suf = "  -> protection mode forced";
+                while (*suf) fbuf[fi++] = *suf++;
+            }
+            fbuf[fi] = 0;
+            int fw = gop_string_width_scaled(fbuf, 1);
+            gop_draw_string_scaled((W - fw) / 2, foot, fbuf, 0x00E06060, 1);
+            foot += 22;
+        }
+
+        char cbuf[48];
+        {
+            int ci = 0;
+            const char *pfx = "Auto-boot in ";
+            while (*pfx) cbuf[ci++] = *pfx++;
+            char num[12]; u32_to_str((UINT32)countdown, num);
+            for (int k = 0; num[k]; k++) cbuf[ci++] = num[k];
+            const char *suf = "s";
+            while (*suf) cbuf[ci++] = *suf++;
+            cbuf[ci] = 0;
+        }
+        int cw = gop_string_width_scaled(cbuf, 2);
+        gop_draw_string_scaled((W - cw) / 2, foot + 6, cbuf, 0x00E0C040, 2);
+
+        const char *hint = "arrows move   Enter boot   1/2/3 pick   C clear";
+        int hw = gop_string_width_scaled(hint, 1);
+        gop_draw_string_scaled((W - hw) / 2, foot + 44, hint, 0x006A7278, 1);
+
+        /* 脚注: 版本 + 仓库。放在屏幕底部, 和菜单主体分开 */
+        char ver[64];
+        {
+            int i = 0;
+            const char *pfx = "Hepu OS 0.60.7   HepuBoot UEFI v";
+            while (*pfx && i < 60) ver[i++] = *pfx++;
+            const char *v = HEPBOOT_UEFI_VERSION;
+            while (*v && i < 60) ver[i++] = *v++;
+            ver[i] = 0;
+        }
+        int vw = gop_string_width_scaled(ver, 1);
+        gop_draw_string_scaled((W - vw) / 2, H - 48, ver, 0x00404649, 1);
+        return;
+    }
+
+    /* ---- 文本控制台（GOP 不可用时）---- */
+    clear_screen();
+    set_color(EFI_LIGHTCYAN, EFI_BLACK);
+    print_str(L"\r\n");
+    print_str(L"                            #   # ####  ####  #   #\r\n");
+    print_str(L"                            #   # #     #  #  #   #\r\n");
+    print_str(L"                            ##### ###   ####  #   #\r\n");
+    print_str(L"                            #   # #     #     #   #\r\n");
+    print_str(L"                            #   # ####  #      ### \r\n\r\n");
+    set_color(EFI_WHITE, EFI_BLACK);
+    print_str(L"                            Hepu OS Boot Menu\r\n");
+    set_color(EFI_LIGHTCYAN, EFI_BLACK);
+    print_str(L"  ================================================\r\n\r\n");
+
+    if (fail_count > 0) {
+        set_color(EFI_RED, EFI_BLACK);
+        print_str(L"  [!] Previous boot failures: ");
+        CHAR16 fbuf[8]; UINT32 fc = fail_count; int fi = 6; fbuf[7] = 0;
+        if (fc == 0) fbuf[--fi] = '0';
+        while (fc > 0 && fi > 0) { fbuf[--fi] = (CHAR16)('0' + (fc % 10)); fc /= 10; }
+        print_str(&fbuf[fi]);
+        if (fail_count >= 3) print_str(L"  -> Protection Mode forced\r\n");
+        else print_str(L"\r\n");
+        set_color(EFI_LIGHTGRAY, EFI_BLACK);
+        print_str(L"  Press C to clear the counter\r\n\r\n");
+    }
+
+    static const CHAR16 *witems[MODE_COUNT] = {
+        L"  1. Hepu OS 64-bit        ",
+        L"  2. Hepu OS 32-bit        ",
+        L"  3. Protection Mode       "
+    };
+    static const CHAR16 *wnotes[MODE_COUNT] = {
+        L"graphical desktop",
+        L"graphical desktop",
+        L"terminal only, no graphics"
+    };
+    for (int i = 0; i < MODE_COUNT; i++) {
+        if (!avail[i]) {
+            set_color(EFI_DARKGRAY, EFI_BLACK);
+            print_str(witems[i]);
+            print_str(L" [unavailable: ");
+            print_str(i == MODE_64 ? L"no KERNEL64.BIN" : L"no KERNEL32.BIN");
+            print_str(L"]\r\n");
+            continue;
+        }
+        if (i == selected) { set_color(EFI_BLACK, EFI_WHITE); print_str(L">"); }
+        else { set_color(EFI_LIGHTGRAY, EFI_BLACK); print_str(L" "); }
+        print_str(witems[i]);
+        print_str(L"  ");
+        print_str(wnotes[i]);
+        if (i == selected) set_color(EFI_LIGHTGRAY, EFI_BLACK);
+        print_str(L"\r\n");
+    }
+
+    set_color(EFI_YELLOW, EFI_BLACK);
+    print_str(L"\r\n  Auto-boot in ");
+    CHAR16 numbuf[4]; int t = countdown, ni = 2; numbuf[3] = 0;
+    if (t <= 0) numbuf[--ni] = '0';
+    while (t > 0 && ni >= 0) { numbuf[ni--] = (CHAR16)('0' + (t % 10)); t /= 10; }
+    print_str(&numbuf[ni + 1]);
+    print_str(L"s.  Up/Down move, Enter boot, 1/2/3 pick, C clear\r\n");
+}
+
 static int show_boot_menu(void)
 {
     int avail[MODE_COUNT];
@@ -876,85 +1106,8 @@ static int show_boot_menu(void)
     int countdown = g_config.timeout;
     /* 只有三个模式都不可用（介质坏了）时才真的无处可去，那也走保护模式，由内核报错。 */
 
-    const CHAR16 *items[MODE_COUNT] = {
-        L"  1. Hepu OS 64-bit        ",
-        L"  2. Hepu OS 32-bit        ",
-        L"  3. Protection Mode       "
-    };
-    const CHAR16 *notes[MODE_COUNT] = {
-        L"graphical desktop",
-        L"graphical desktop",
-        L"terminal only, no graphics"
-    };
-
     while (1) {
-        clear_screen();
-        set_color(EFI_LIGHTCYAN, EFI_BLACK);
-        /* 标题改成 ASCII 艺术字。
-         * 只用 '#' 和空格这两种标准 ASCII —— 试过 '_ | / \\' 的 figlet 写法, 在
-         * UEFI 固定点阵字体上会散成一堆符号(下划线落基线、竖线偏左, 字母之间空隙大);
-         * 也试过 Unicode 块字符(█ ╔ ═), 但固件字形表不保证有, 缺字形会印成方框。
-         * '#' 是刻度为满格的字符, 拼起来是连续的实心，任何 console 都安全。
-         * 五行严格等宽 23 列, 在 80 列 console 上前后各留 28 格居中。 */
-        set_color(EFI_LIGHTCYAN, EFI_BLACK);
-        print_str(L"\r\n");
-        print_str(L"                            #   # ####  ####  #   #\r\n");
-        print_str(L"                            #   # #     #  #  #   #\r\n");
-        print_str(L"                            ##### ###   ####  #   #\r\n");
-        print_str(L"                            #   # #     #     #   #\r\n");
-        print_str(L"                            #   # ####  #      ### \r\n\r\n");
-        set_color(EFI_WHITE, EFI_BLACK);
-        print_str(L"                            Hepu OS Boot Menu\r\n");
-        set_color(EFI_LIGHTCYAN, EFI_BLACK);
-        print_str(L"  ================================================\r\n\r\n");
-
-        if (fail_count > 0) {
-            set_color(EFI_RED, EFI_BLACK);
-            print_str(L"  [!] Previous boot failures: ");
-            CHAR16 fbuf[8]; UINT32 fc = fail_count; int fi = 6; fbuf[7] = 0;
-            if (fc == 0) fbuf[--fi] = '0';
-            while (fc > 0 && fi > 0) { fbuf[--fi] = (CHAR16)('0' + (fc % 10)); fc /= 10; }
-            print_str(&fbuf[fi]);
-            if (fail_count >= 3) {
-                print_str(L"  -> Protection Mode forced\r\n");
-            } else {
-                print_str(L"\r\n");
-            }
-            set_color(EFI_LIGHTGRAY, EFI_BLACK);
-            print_str(L"  Press C to clear the counter\r\n\r\n");
-        }
-
-        for (int i = 0; i < MODE_COUNT; i++) {
-            if (!avail[i]) {
-                /* 不可用：灰色 + 明确写出原因，并拒绝被选中 */
-                set_color(EFI_DARKGRAY, EFI_BLACK);
-                print_str(items[i]);
-                print_str(L" [unavailable: ");
-                print_str(i == MODE_64 ? L"no KERNEL64.BIN" : L"no KERNEL32.BIN");
-                print_str(L"]\r\n");
-                continue;
-            }
-            if (i == selected) {
-                set_color(EFI_BLACK, EFI_WHITE);
-                print_str(L">");
-            } else {
-                set_color(EFI_LIGHTGRAY, EFI_BLACK);
-                print_str(L" ");
-            }
-            print_str(items[i]);
-            print_str(L"  ");
-            print_str(notes[i]);
-            if (i == selected) set_color(EFI_LIGHTGRAY, EFI_BLACK);
-            print_str(L"\r\n");
-        }
-
-        set_color(EFI_YELLOW, EFI_BLACK);
-        print_str(L"\r\n  Auto-boot in ");
-        CHAR16 numbuf[4]; int t = countdown, ni = 2; numbuf[3] = 0;
-        if (t <= 0) numbuf[--ni] = '0';
-        while (t > 0 && ni >= 0) { numbuf[ni--] = (CHAR16)('0' + (t % 10)); t /= 10; }
-        print_str(&numbuf[ni + 1]);
-        print_str(L"s.  \x18\x19 move, Enter boot, 1/2/3 pick, C clear\r\n");
+        boot_menu_render(avail, selected, countdown, fail_count, g_gop_ready);
 
         EFI_EVENT timer;
         uefi_call_wrapper(BS->CreateEvent, 5, EVT_TIMER, 0, NULL, NULL, &timer);
@@ -1387,6 +1540,11 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
         set_color(EFI_YELLOW, EFI_BLACK);
         print_str(L"  [Loading config...]\r\n");
         set_color(EFI_LIGHTGRAY, EFI_BLACK);
+        /* 菜单要画在 GOP 上, 所以 GOP 初始化必须提到菜单之前 —— 原来它在
+         * "选完模式、内核已加载"之后才调, 那时已经来不及做图形菜单了。
+         * 提前也安全: 原注释要求 GOP 早于 GetMemoryMap, 现在只是更早一点。 */
+        g_gop_ready = init_gop();
+
         load_config();
 
         /* 显示引导菜单 */
@@ -1458,7 +1616,7 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
         set_color(EFI_YELLOW, EFI_BLACK);
         print_str(L"  [Initializing GOP graphics...]\r\n");
         set_color(EFI_LIGHTGRAY, EFI_BLACK);
-        int gop_ok = init_gop();
+        int gop_ok = g_gop_ready ? 1 : init_gop();
         if (!gop_ok) {
             set_color(EFI_YELLOW, EFI_BLACK);
             print_str(L"  [GOP not available, using UEFI text mode]\r\n");
@@ -1477,15 +1635,7 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
             print_str(L"  [OK] GOP high resolution mode enabled\r\n");
             set_color(EFI_LIGHTGRAY, EFI_BLACK);
 
-            /* 方案A启动画面 */
-            extern void gop_init(EFI_GRAPHICS_OUTPUT_PROTOCOL *);
-            extern void gop_clear(UINT32);
-            extern void gop_draw_string(int, int, const char *, UINT32);
-            extern void gop_printf(int, int, UINT32, const char *, ...);
-            extern void gop_progress_bar(int, int, int, int, int, UINT32);
-            extern UINT32 gop_get_width(void);
-            extern UINT32 gop_get_height(void);
-
+            /* 方案A启动画面（gop_* 的原型来自 hepboot_gop.h） */
             EFI_GRAPHICS_OUTPUT_PROTOCOL *gop = NULL;
             uefi_call_wrapper(BS->LocateProtocol, 3,
                               &gEfiGraphicsOutputProtocolGuid, NULL, (VOID **)&gop);

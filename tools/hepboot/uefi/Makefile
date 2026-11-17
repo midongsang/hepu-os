@@ -28,8 +28,8 @@ LIBS = -lgnuefi -lefi
 
 # 目标文件
 TARGET = hepboot_uefi.efi
-OBJECT = hepboot_uefi.o hepboot_gop.o jump_kernel.o jump_kernel_64.o
-SOURCE = hepboot_uefi.c hepboot_gop.c
+OBJECT = hepboot_uefi.o hepboot_gop.o hepboot_logo.o jump_kernel.o jump_kernel_64.o
+SOURCE = hepboot_uefi.c hepboot_gop.c hepboot_logo.c
 
 # 默认目标
 all: $(TARGET)
@@ -39,6 +39,9 @@ hepboot_uefi.o: hepboot_uefi.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
 hepboot_gop.o: hepboot_gop.c hepboot_gop.h
+	$(CC) $(CFLAGS) -c $< -o $@
+
+hepboot_logo.o: hepboot_logo.c hepboot_logo.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
 # 编译汇编
