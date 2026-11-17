@@ -705,7 +705,7 @@ desk_select("mine");       /* 切过去 */
 | 开机进锁屏，补齐「锁屏 → 登录 → 桌面」链路 | `ebf3e05` | `kernel/arch/x86_64/hpdesk.c`：开机置锁（`:7486-7489`）、状态三态（`:4554`）、键处理（`:7201-7234`） | 同日实测实例 `docsrec2`：锁屏帧 → 空格进登录页（`f0107`）→ 回车进桌面（`f0143`/`f0199`）；证据 `evidence-docs-sync/rec-sendkey/` | 已闭环（64 位图形路径） |
 | 系统加载屏；`load_config` 先于 `init_gop` 顺序换回 | `5d890c4` | `tools/hepboot/uefi/hepboot_uefi.c`：`:1658` → `:1663`；加载屏阶段 `:1163/:1365/:1739/:1754/:1771` | 同日实测实例 `nodisp4`（`-display none`，2026-11-17 21:19）：`FBDESC w=1920 h=1080`、`Desktop initialized: 1920x1080`；PPM 头 `P6 1920 1080`；证据 `evidence-docs-sync/nodisp-none/` | 已闭环 |
 | 加载屏留到桌面；自检不再把屏幕刷成绿/红 | `57aba61` | `kernel/arch/x86_64/gfx64.c`、`kernel/kernel_main_64.c`、`tools/hepboot/uefi/hepboot_uefi.c` | 同日实测 `docsrec2` 帧序列：加载屏过渡到桌面第一帧覆盖，无绿/红刷屏；证据 `evidence-docs-sync/rec-sendkey/` | 已闭环（64 位图形路径） |
-| net32 `RCTL.BSIZE` 位段写错 | `5f93c2d` | `kernel/drivers/e1000.c`：BSIZE 位域 bit9:8；MMIO `volatile` + 屏障 | 源码核实位域写入。端到端复核（`472eafb`/`0264c58`，2026-11-17）：32 位 DHCP 收包打通（Offer op=2/xid 匹配/msg_type=2、RDH=2、两帧上送 UDP）；实测根因实为发送侧字节序/校验和错误，不是 BSIZE 常量本身。**未复测**：32 位 ICMP echo reply、TCP 路径 | 代码已修；DHCP 收包已取证，ICMP/TCP 未复测 |
+| net32 `RCTL.BSIZE` 位段写错 | `5f93c2d` | `kernel/drivers/e1000.c`：BSIZE 位域 bit9:8；MMIO `volatile` + 屏障 | 源码核实位域写入。端到端复核（基线 `61c53fa` 重出证，`b34a5bc`/`ff5d603`）：32 位 DHCP 收包打通（`evidence-rxnet-2026-11-17/serial/rxnet-rebase-61c53fa.log` RDH=2、rx_cur=2、两帧上送 UDP；Offer 字段解析见旧档 `evidence-rxnet-2026-11-17/serial/rxnet-dbg2.log`）；实测根因实为发送侧字节序/校验和错误，不是 BSIZE 常量本身。**未复测**：32 位 ICMP echo reply、TCP 路径 | 代码已修；DHCP 收包已取证，ICMP/TCP 未复测 |
 | 保护模式按实际架构跳转，不再误走 32 位交接 | `9d39038` | `tools/hepboot/uefi/hepboot_uefi.c`：跳转判定 `:1960` 起 | 源码核实；端到端引用同日独立验证 `evidence-combined/REPORT.md` E5（64 protect）、E7（32 protect），HEAD `fd469e1` 含本条 | 已闭环（引用同日独立验证） |
 | uproc 统一加载 ABI（契约头 / 32 位 / 64 位 + argv 上栈 / 真实 pid 回传） | `d1dd19d`、`5096f0a`、`421d358`、`fd469e1` | `kernel/include/uproc.h`；`services/compat/uproc32.c`、`services/compat/binfmt*.c`（`f3b3c78` 由 `kernel/compat/` 迁出）；`kernel/arch/x86_64/user_process.c`、`user_stack64.c` 等 | 同日独立验证 E6：四条程序 rc=100；不存在文件 rc=-2；pid=100 slot=0 active=1；契约见 `evidence-uproc/REPORT.md` | 已闭环 |
 | 保护模式文本 shell 独立枚举 USB HID，双源合流键盘 | `8a0af11` | `kernel/arch/x86_64/shell64.c`、`kernel/kernel_main_64.c:1389-1398` | 源码核实；**未验证**：保护模式 USB 键盘端到端输入未单独复测，E5 未区分按键来源 | 代码已修；保护模式 USB 输入端到端未单独复测 |
@@ -717,7 +717,7 @@ desk_select("mine");       /* 切过去 */
   本轮 `d1dd19d`/`5096f0a`/`421d358`/`fd469e1` 只统一了入口契约、返回口径与 argv 栈布局，
   加载器主体与 framebuffer 所有权仍在内核侧；把兼容层整块搬到用户态仍是开放大工程，
   D-6、P3-6 状态保持不变。
-- **32 位网络残留债**：`472eafb`/`0264c58` 打通了 DHCP 收包并修通 MAC/link；32 位 ICMP
+- **32 位网络残留债**：`b34a5bc`/`ff5d603` 打通了 DHCP 收包并修通 MAC/link；32 位 ICMP
   echo reply、TCP 路径本轮未复测，网络类既有开放条目不据此关闭。
 
 ## 第二批闭环 / 降级批次（基线 `3d0bd23`，2026-11-17）
@@ -742,27 +742,40 @@ desk_select("mine");       /* 切过去 */
   与 `0202461` 关掉的两处常驻负载是两类东西，台账不得混记。
 - `ed68299` 为展示页补实拍素材，非缺陷修复，不计入闭环。
 
-## 第三批（网络线 + 回归线观察，基线 `a787a01`，2026-11-17）
+## 第三批（网络线 + 回归线观察，基线 `61c53fa`，2026-11-18 重出证）
 
-> 网络线来自分支 `fix/rxnet-2026-11-17`；回归线观察来自 `test/regress-2026-11-17`（`cc10817`）。
+> 网络线来自分支 `fix/rxnet-2026-11-17`（`61c53fa` 上重新出证，哈希为 rebase 后版本）；
+> 回归线观察来自 `test/regress-2026-11-17`（`cc10817`）。
 > 既有 D-/P-/N-/OPEN-/BUG- 条目编号与状态未改动。
 
 | 项 | 提交 | 代码位置 | 验证方式与证据 | 状态 |
 |---|---|---|---|---|
-| 32 位 IP/UDP/DHCP 字节序 + IP 校验和修正，打通 DHCP 收包 | `472eafb` | `kernel/net/ip.c`、`kernel/net/udp.c`、`kernel/net/dhcp.c` | 直载 e1000 取证：Offer op=2、xid 匹配、msg_type=2、RDH=2、两帧上送 UDP；证据 `evidence-rxnet-2026-11-17/serial/rxnet-dbg2.log`、`rxnet-final.log`。根因是发送侧小端直写 + 校验和小端取字，非硬件未收到、非 BSIZE 常量问题。**ICMP/TCP 未复测** | 已闭环（32 位 DHCP 收包） |
-| BUG-58：RAL/RAH 对齐 32 位写 + 只读诊断 dump | `0264c58` | `kernel/drivers/e1000.c`、`kernel/net/net_selftest.c` | 双架构编译 0 error；串口 MAC `52:54:00:12:34:56`、link up | 已闭环 |
-| OPEN-04 子项：安装器白名单改绝对路径整串匹配 | `b8509c0` | `kernel/arch/x86_64/user_process.c` | 仅 64 位编译 0 error；**运行时安装流程未复测**；拷贝系统文件核心缺口仍开放 | 部分闭环（编译验证级） |
-| OPEN-02：三处 TD 发布前加写屏障 | `e2b811f` | `kernel/drivers/usb/uhci.c` | 当前 QEMU 无 UHCI 控制器，路径未执行；仅 32 位编译 0 error；复现需 `-device piix3-usb-uhci` | 未关闭（加固，运行时未验证） |
+| 32 位 IP/UDP/DHCP 字节序 + IP 校验和修正，打通 DHCP 收包 | `b34a5bc` | `kernel/net/ip.c`、`kernel/net/udp.c`、`kernel/net/dhcp.c` | 直载 e1000 取证：`evidence-rxnet-2026-11-17/serial/rxnet-rebase-61c53fa.log` RDH=2、rx_cur=2、两帧上送 UDP、MAC `52:54:00:12:34:56`、link up；`evidence-rxnet-2026-11-17/build32-rebase-61c53fa.log`/`evidence-rxnet-2026-11-17/build64-rebase-61c53fa.log` 0 error；Offer op=2/xid/msg_type=2 字段解析见旧档 `evidence-rxnet-2026-11-17/serial/rxnet-dbg2.log`。根因是发送侧小端直写 + 校验和小端取字，非硬件未收到、非 BSIZE 常量问题。**ICMP/TCP 未复测** | 已闭环（32 位 DHCP 收包） |
+| BUG-58：RAL/RAH 对齐 32 位写 + 只读诊断 dump | `ff5d603` | `kernel/drivers/e1000.c`、`kernel/net/net_selftest.c` | `evidence-rxnet-2026-11-17/build32-rebase-61c53fa.log`、`evidence-rxnet-2026-11-17/build64-rebase-61c53fa.log` 0 error；`evidence-rxnet-2026-11-17/serial/rxnet-rebase-61c53fa.log` 串口 MAC `52:54:00:12:34:56`、link up | 已闭环 |
+| OPEN-04 子项（误授权）：匹配条件收紧为规范绝对路径整串匹配 | `0e30c70` | `kernel/arch/x86_64/user_process.c:2544`（`INSTALLER_CANON_PATH "/bin/install64.elf"`）、`:2547-2557`（先判 `path[0]=='/'`，再整串逐字节比、长度相等） | 只收紧匹配条件，非加白名单配置、非编译期排除；无配置项/默认清单，唯一可信路径是编译期单值宏。64 位编译 0 error + 静态核对两个镜像脚本写 `/bin/install64.elf`、autostart 绝对路径 exec；**没跑过真实安装**，未在双盘 QEMU 验证目标盘文件齐全。主体（真实安装流程）仍开放 | **子项（误授权匹配）已修；主体真实安装流程仍开放，运行时未验证** |
+| OPEN-02：三处 TD 发布前加写屏障 | `4524f79` | `kernel/drivers/usb/uhci.c` | 当前 QEMU 无 UHCI 控制器，路径未执行；仅 32 位编译 0 error；复现需 `-device piix3-usb-uhci` | 未关闭（加固，运行时未验证） |
 
 ### 第三批残留债与现状限制（勿误关）
 
-- **安装器拷贝系统文件**：`b8509c0` 只收窄了白名单匹配口径；安装流程把根文件系统写入 P1
-  的步骤仍不存在，运行时安装流程未复测（见 OPEN-04）。
+- **安装器真实安装流程**：`0e30c70` 只收紧了内核侧匹配条件；内核侧命中后只授 PID 不做拷贝，
+  扇区克隆在用户态 `user/apps/install64/install64.c`（`clone_region:165-187`、引导链 `:280-294`、
+  rootfs 到 P1 `:299-308`、P2/P3 mkfs `:312-321`）。该流程未在双盘 QEMU 跑过，目标盘 P1
+  `/bin` 齐全性未核对，运行时未验证（见 OPEN-04）。
 - **OPEN-02 UHCI 竞态**：写屏障不消除其余疑点（`frame_list[0]` 单点抢占、超时裸循环、
   端口复位保持时长、链接指针类型位），运行时未复现；分析见
   `evidence-rxnet-2026-11-17/OPEN-02-uhci-analysis.md`。
-- **32 位桌面下半屏纯黑（OBS-05）**：NONBLACK 786,399 / 2,073,600（约 38%），根因未定位，
-  证据 `evidence-regress-2026-11-17/old-3d0bd23/frames32/desktop_1..4.png`；下一步按行统计非黑分布、
-  对比 64 位 present 路径、dump 双缓冲边界行像素。
+- **OBS-05 已撤销（取帧时机问题）**：旧值 786,399/2,073,600（≈38%）系首帧稀疏帧，
+  `61c53fa` 直启两帧实测 2,073,598/2,073,600（≈100.00%），现象不复现；不再按渲染缺陷跟踪。
+  过渡画面本身的问题见 OBS-06。
 - **32 位锁屏 / 登录路径未触发**：32 位兜底关闭锁屏、直进旧桌面，登录页未拉起；这是现状
   限制，不记为已通过；要复现需先具备拉起 32 位登录页的入口。
+- **OBS-07 32 位 `linuxhello` 用户态崩溃（既有不稳定项）**：直启退出 / UEFI 重启回灌菜单；
+  未隔离编译验证，不判本次合并回归；证据
+  `evidence-regress-2026-11-17/frames32-direct/ser.log`、`frames32/ser.log`。
+- **主机端测试链接清单（脚手架，非内核缺陷）**：ASan/UBSan 7 过 1 败，失败项 `elf` 缺
+  `compat_gate.c`/进程表依赖；待办是修测试链接清单，不是修内核。
+- **32 位 KUnit 既有基线失败**：4 套件 6 用例失败，与
+  `evidence-regress-2026-11-17/old-a787a01/tests/baseline/a787a01-kunit32.txt` 快照逐条一致，
+  `new_fails` 空；非本轮新增，不在本轮债项内关闭。
+- **64 位空口令拒登为预期行为**：已配置账户分支空 Enter 被拒两次，夹具口令 `hepu123`
+  仅为回归夹具、非内置默认口令；不记为缺陷。

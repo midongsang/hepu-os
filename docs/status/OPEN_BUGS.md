@@ -2,7 +2,7 @@
 title: 赫普OS 未关闭问题清单
 status: active
 sys_version: 0.60.7
-updated: 2026-11-17（驱动层整固：新增 BUG-52~56 并逐项给出实测证据；BUG-49「已关闭」更正为不成立；OPEN-02 复现未成功并写明下一步夹具）
+updated: 2026-11-18（OBS-05 撤销为取帧时机问题；登记 OBS-07 linuxhello 崩溃、64 空口令拒登、ASan/UBSan 链接清单失败、32 KUnit 既有基线失败。历史：驱动层整固 BUG-52~56；BUG-49 更正为不成立；OPEN-02 复现未成功并写明下一步夹具）
 owner: status
 source_of_truth: kernel/arch/x86_64/
 ---
@@ -51,9 +51,9 @@ source_of_truth: kernel/arch/x86_64/
 | BUG-48 | INT13 磁盘重置在关中断下调用 | tools/hepboot/hepboot.S | **已闭环（2026-11-17 代码核实）** |
 | N-1 | **2560×1600 壁纸缓存压 32MB 内核堆，余量偏薄**（原登记：`hs_wallpaper_build_cache` 按 `w*h*4` 再吃 16MB，叠加双缓冲合计打满 32MB 堆，后续分配失败 → 撕裂/壁纸全黑）。**tip 61c53fa 实测未复现 OOM**：2560×1600 稳态 kheap used 25,174,208 / 33,554,432、余 8,380,224 B、`fail=0`、无 `[KHEAP] OOM`，NONBLACK 4,095,993/4,096,000=100.0%。**口径更正**：64 位 UEFI 路径后台缓冲走 `pmm64_alloc_pages` 物理页（`[GFX-BB] pages=0xFA0 bytes=0xFA0000`），不经 kheap；原"双缓冲 16MB 吃 kheap"对 64 位不成立（仅 32 位 vga_gfx 后台缓冲走堆）。**处置（方案 a）**：壁纸缓存宽度封顶 1920、高度按屏幕全高（纵向不降精度），cover-fit 裁剪/居中几何仍按屏幕宽高重算，渲染时缓存横向均匀放大回屏幕宽；整屏与局部重铺两条路径同步改映射。改后 2560 缓存 12,288,000 B（省 4,096,000 B），稳态 used 21,078,208、余 12,476,224 B、`fail=0`、NONBLACK 100.0%；1920×1080 数字与改前完全一致（无回归），1280×800 正常；32 位冒烟 `serial=1 initrd=1 net=1 desk=1 fault=0 bound=1` PASS。证据：`evidence-membudget/`（串口日志、截图、像素统计、前后内存对比表） | `hpdesk.c` `hs_wallpaper_build_cache` / `hs_wallpaper_render` / `hs_wallpaper_render_rect`；commit 见分支 `fix/gfx-membudget-2026-11-18` | **部分修（风险缓解）**：tip 上原 OOM/全黑/撕裂未复现，倾向原报告把 64 位后台缓冲口径误记为吃 kheap；已降低缓存占用、抬高堆余量，但未做大分辨率写实壁纸/内存压力极限压测 |
 | OPEN-01 | **QEMU 高 LBA(P2/P3) 写成功读全 0** —— **实测不复现，关闭（v0.59.1）**。新增 `ide64_selftest_high_lba()`：在独立 slave 测试盘（QEMU `-drive if=ide,index=1`，256MB）上对 LBA `0 / 0x1000 / 0x20000 / 0x3FFFF / 0x7F000` 逐个写入递增 pattern → 读回逐字节比对，外加一段 8 扇区连续读写的多扇区回环。实测 `[ATA] high-lba selftest drive=0x1 cases=0x5 fails=0x0`，多扇区回环无 mismatch。历史现象最可能来自 0.13.57 时期「逐扇区发命令 + 写后未等 FLUSH 完成」，这两点在 v0.59.1 的 BUG-13 修复里已一并处理。注：自检只用 slave 盘，不碰系统盘 | `ide64.c ide64_selftest_high_lba()`；QEMU 双盘实跑；`fails=0x0` | 已关闭 |
-| OPEN-02 | UHCI 写路径时序竞态 | 0.13.42 遗留；**v0.59.2 尝试复现未成功**：按约束只挂 `-device piix3-usb-uhci -device usb-kbd`，没有 bulk 设备，BOT 的 CBW/CSW 批量写路径整条未进入；既有缓解（命令级重试、CSW 重读、帧同步重挂 QH、8 深 scratch 轮转）仍在位，HID 中断 IN 两次按键各 1 条队列项、无 TD err/stall。**`e2b811f` 加固（未关闭）**：control/bulk/interrupt 三处 TD 发布前补 `uhci_wmb()` 写屏障，防止编译器把帧列表指针发布重排到 TD 字段写入之前。**运行时未验证**：当前 QEMU 配置为 xhci + usb-kbd/mouse，无 UHCI 控制器，`uhci_detect` 不命中，传输路径未被执行；其余疑点（`frame_list[0]` 单点抢占、超时裸循环、端口复位保持时长、链接指针类型位）未改，分析见 `evidence-rxnet-2026-11-17/OPEN-02-uhci-analysis.md`。**复现条件**：需挂 `-device piix3-usb-uhci` 并带 usb-storage 夹具做满扇区 bulk 写压测 | **未关闭（写屏障已加，运行时未验证）** |
+| OPEN-02 | UHCI 写路径时序竞态 | 0.13.42 遗留；**v0.59.2 尝试复现未成功**：按约束只挂 `-device piix3-usb-uhci -device usb-kbd`，没有 bulk 设备，BOT 的 CBW/CSW 批量写路径整条未进入；既有缓解（命令级重试、CSW 重读、帧同步重挂 QH、8 深 scratch 轮转）仍在位，HID 中断 IN 两次按键各 1 条队列项、无 TD err/stall。**`4524f79` 加固（未关闭）**：control/bulk/interrupt 三处 TD 发布前补 `uhci_wmb()` 写屏障，防止编译器把帧列表指针发布重排到 TD 字段写入之前。**运行时未验证**：当前 QEMU 配置为 xhci + usb-kbd/mouse，无 UHCI 控制器，`uhci_detect` 不命中，传输路径未被执行；其余疑点（`frame_list[0]` 单点抢占、超时裸循环、端口复位保持时长、链接指针类型位）未改，分析见 `evidence-rxnet-2026-11-17/OPEN-02-uhci-analysis.md`。**复现条件**：需挂 `-device piix3-usb-uhci` 并带 usb-storage 夹具做满扇区 bulk 写压测 | **未关闭（写屏障已加，运行时未验证）** |
 | OPEN-03 | ~~QEMU sendkey 不被键盘驱动读取~~ **已关闭（非真 bug，旧测量误解）**。PS/2 与 USB HID 两条键盘链路端到端可用，无需先点击聚焦。四重实测证据（ef3c7cc 内核，PS/2 配置未挂 USB）：① 中断级 `g_kbd_irq_count`（符号地址 0x1f29f4）每次按键 +2（按下/释放各 1 次），键盘环形缓冲 head/tail 同步前移且条目被消费；`sendkey 2` 后计数 11→13、缓冲指针 3→4；② 界面级 `sendkey 2` 使 OOBE 由 1/4 推进到 2/4（截屏像素差 73616 px），账户创建页输入 h/e/p/u，用户名框真实回显 "hepu"；③ USB HID 键盘对照（`-device piix3-usb-uhci -device usb-kbd`）sendkey 改走 USB 队列（此时 PS/2 IRQ1 静默），同样推进向导、回显 hepu、Tab 切换输入框焦点（像素差 3008 px）。**应用层边界（避免再误判）**：OOBE 语言页只绑定数字键 `1`/`2`，Tab/方向键/回车在该页未绑定，属应用设计；旧「按了没反应」源于此，加之此前缺中断级取证，把「界面没变化」误判为「驱动没收到键」 | `g_kbd_irq_count` 中断计数 + 环形缓冲指针；OOBE 页面推进与文本回显；USB HID 对照链路 | 已关闭（非缺陷） |
-| OPEN-04 | 安装器不拷贝系统文件 —— **已修，端到端实测通过（2026-11-18，commit 61c53fa）**。旧条目「280 行、无 rootfs 拷贝步骤、装完盘是空的」系过时描述：现 `user/apps/install64/install64.c` 为 335 行，流程 `[1/5]` 读源盘分区表 → `[2/5]` 目标盘布局 → `[3/5]` 克隆引导链(MBR+GPT+ESP) → `[4/5]` 源盘 rootfs 按扇区 `clone_region` 进目标 P1（245,760 扇区）→ `[5/5]` 格式化 P2/P3（P1 不 mkfs）；修复落地于先前提交 `3cca450`，本轮未改源码；`b8509c0` 的白名单路径整串匹配保留，本轮实测内核侧一次放行成功、无需补白名单 | 双盘 QEMU 实测走完 5 步并主动重启；宿主机独立核对：目标 P1 与源 P1 扇区级 `cmp` 差异 0 字节，ESP 的 KERNEL64.BIN/KERNEL32.BIN/HEPBOOT.CFG/BOOTX64.EFI 逐字节一致，`/system.conf`、`/account.conf`、`/bin/install64.elf`、`/bin/shell.elf` 等关键文件大小/块数两侧一致；目标盘单盘独立启动进桌面（串口 `[Hepu Desktop] loaded`/`Initialized (1920x1080)`，像素判定 DESKTOP）。证据：`evidence-installer/`（REPORT.md、`serial/`、`rootfs-list/`、`esp/`、`shots/`） | **已修 / 已验证** |
+| OPEN-04 | 安装器不拷贝系统文件 —— **已修，端到端实测通过（2026-11-18，commit 61c53fa）**。旧条目「280 行、无 rootfs 拷贝步骤、装完盘是空的」系过时描述：现 `user/apps/install64/install64.c` 为 335 行，流程 `[1/5]` 读源盘分区表 → `[2/5]` 目标盘布局 → `[3/5]` 克隆引导链(MBR+GPT+ESP) → `[4/5]` 源盘 rootfs 按扇区 `clone_region` 进目标 P1（245,760 扇区）→ `[5/5]` 格式化 P2/P3（P1 不 mkfs）；扇区克隆与引导链落地在 `install64.c` 的 `clone_region:165-187`、引导链 `:280-294`、rootfs 到 P1 `:299-308`、P2/P3 mkfs `:312-321`；修复落地于先前提交 `3cca450`，本轮未改源码；`b8509c0` 的白名单路径整串匹配保留（`user_process.c:2544` 宏 `INSTALLER_CANON_PATH "/bin/install64.elf"`，`installer_name_match:2547-2557` 先要求 `path[0]=='/'` 再整串逐字节比、长度必须相等，拒裸名/相对路径/前缀同名），本轮实测内核侧一次放行成功、无需补白名单 | 双盘 QEMU 实测走完 5 步并主动重启；宿主机独立核对：目标 P1 与源 P1 扇区级 `cmp` 差异 0 字节，ESP 的 KERNEL64.BIN/KERNEL32.BIN/HEPBOOT.CFG/BOOTX64.EFI 逐字节一致，`/system.conf`、`/account.conf`、`/bin/install64.elf`、`/bin/shell.elf` 等关键文件大小/块数两侧一致；目标盘单盘独立启动进桌面（串口 `[Hepu Desktop] loaded`/`Initialized (1920x1080)`，像素判定 DESKTOP）。证据：`evidence-installer/`（REPORT.md、`serial/`、`rootfs-list/`、`esp/`、`shots/`） | **已修 / 已验证** |
 | SEC-01 | ~~用户程序可直接读写内核内存~~ **隔离主路径已修复**：私有 PML4/PDPT 默认开（`Makefile:205` `USER_ISOLATION ?= 1`）、SMEP+SMAP 按 CR4 真实状态门控、brk 分页+NX(W^X)；QEMU 512MB 隔离模式到桌面、sec_test 通过。**边界口径（勿与下文混淆）**：物理内存 >1GB 时内核恒等映射覆盖用户窗口，自动退回旧模式（`user_aspace64.c:76-77`）；fork 的 COW 复制已落地（`uaspace_fork_copy`），clone 仍共享父页表，见 SEC-02（部分）。**v0.33.0 补**：用户堆/TLS 预留区搬入用户窗口私有分区（PDPT[1]，原落在内核共享 PDPT[0] 树导致用户态写自己堆 #PF）；大页不可当页表写（新增 vmm64_split_huge_pde）；PMM 显式保留内核栈页（原与用户栈物理重叠） | user_aspace64.c:76-77；user_access64.c/vmm64.c/pmm64.c；Makefile:205；提交 3375fbe | 已关闭（隔离主路径；RAM>1GB 退回旧模式与 fork 复制见 SEC-02） |
 | SEC-02 | **状态精确化（2026-11-12 源码复核）**：① **fork 已接入 COW** —— `sys_fork`（`syscall64_full.c:1875`）调 `uaspace_fork_copy`（`user_aspace64.c:165`），深拷贝 PML4/PDPT/PD/PT、物理页共享 + `cow_ref` + 清 W 位 + 打 `UA_COW` 标记，缺页走 `vmm64_try_cow`（`vmm64.c:432-457`，PAGE_COW bit9）。旧表述「fork 未接入」不成立。② **clone 未实现（返回 ENOSYS）** —— 原 `sys_clone` 用错误的结构体偏移（`+8` 写 active 实际落在 rip、`+24` 写页表实际落在 rflags、真正的 `active(+4)`/`page_table(+32)` 从未赋值），导致子槽**永远不会被调度**，clone 只是返回一个 pid 的空实现；一旦把 active 改对，子线程会带脏页表启动。v0.57.1 已改为明确返回 `-38 ENOSYS`，真线程需 trampoline + 独立内核栈 + 子 rax 清零 + 共享页表引用计数（见 `FIXES_0_57_0.md` §1.82）。③ 旧模式（非隔离）下页表/用户页帧仍不释放（隔离模式已回收） | `syscall64_full.c:915-953`、`user_aspace64.c:165`、`vmm64.c:426-457`、`user_process.c user_process_release` | 部分（fork COW 已闭环；**clone 已诚实化为 ENOSYS**，真线程未实现） |
 | SEC-03 | fork 父子进程调度。**v0.34.0 已修复**：根因是 schedule() 里 `if (old && old->stack)` 跳过上下文切换，去掉后子进程可调度；子进程exit后通过 fork_return_to_parent 切换到父进程CR3+恢复GPR快照+sysret回父用户态。forktest端到端通过：CHILD输出可见、g_shared隔离正确、PARENT恢复运行、干净exit(0)。 | process64_full.c, syscall64_full.c, entry_64.S | 已关闭 |
@@ -201,7 +201,7 @@ source_of_truth: kernel/arch/x86_64/
 
 - **用户进程 PID 恒 ≥100**：`user_process.c:289`/`:629` `proc->pid = idx + 100`；clone 子线程为 `200 + idx`（`syscall64_full.c:930`、`:940`、`:952`）。不存在 PID=0 的真实用户进程。
 - 因此 reboot/mkfs/disk 路径上的 **PID==0 临时闸对所有真实用户进程一律拒绝**；这与既有 `sys_disk_read`/`sys_disk_write` 的 `pid != 0` 闸（`syscall64_full.c:2572`、`:2587`）是**同一口径的有意策略**，不是闸没生效。
-- 用户态 install64（调 disk 26/27、mkfs 31、reboot 28）与 mbrtool 的 reboot 路径，本就被既有 disk 闸阻断，且 OPEN-04「安装器不拷贝系统文件」仍标待解决，属**已知不完整遗留路径**。
+- 用户态 install64（调 disk 26/27、mkfs 31、reboot 28）与 mbrtool 的 reboot 路径，本就被既有 disk 闸阻断；OPEN-04 主体（真实安装流程）未在双盘 QEMU 跑过、目标盘文件齐全性未核对，属**已知不完整遗留路径**。
 - 长期授权安装流需随未来 uid/capability 能力模型一并解决；本轮临时闸不搭 cred/capability 大体系。
 
 ## 已复核关闭条目（实测定论）
@@ -504,13 +504,13 @@ diag1/diag2/move/sb_up/hand），但系统目前只有 4 个形态场景，映�
 
 1. **TCP 无真正重传**：`net64_tcp.c` 的定时器只累加重试计数、减半 cwnd，超上限直接关连接，**不重发未确认段**；SYN_SENT 不进定时器。一次握手成功即可，丢包路径无回归。
 2. **DHCP 无续租/重绑定**：未保存 lease time，REQUESTING 超时退回 INIT 重发 Discover 而非重发 Request。
-3. **32 位网络收发（部分打通）**：`472eafb` 修正 IP/UDP/DHCP 整数字节序与 IP 校验和后，32 位 DHCP 收包已打通（Offer 到 68 端口、op=2、xid 与本地事务 ID 一致、选项 53 msg_type=2；RDH=0→2、两帧上送 UDP）；`0264c58` 后 MAC 回读 `52:54:00:12:34:56`、link up。**未复测**：32 位 ICMP echo reply 与 TCP 路径本轮未取证；此前"硬件没收到"的判断被推翻——根因是发送侧小端直写 + 校验和按小端取字，对端按大端解析判非法帧丢弃，不是硬件未收到，也不是 `5f93c2d` 的 BSIZE 常量问题。
+3. **32 位网络收发（部分打通）**：`b34a5bc` 修正 IP/UDP/DHCP 整数字节序与 IP 校验和后，32 位 DHCP 收包已打通（`evidence-rxnet-2026-11-17/serial/rxnet-rebase-61c53fa.log`：RDH=0→2、rx_cur=2、两帧 UDP 上送；Offer op=2/xid 匹配/msg_type=2 的字段解析见旧档 `evidence-rxnet-2026-11-17/serial/rxnet-dbg2.log`）；`ff5d603` 后 MAC 回读 `52:54:00:12:34:56`、link up。**未复测**：32 位 ICMP echo reply 与 TCP 路径本轮未取证；此前"硬件没收到"的判断被推翻——根因是发送侧小端直写 + 校验和按小端取字，对端按大端解析判非法帧丢弃，不是硬件未收到，也不是 `5f93c2d` 的 BSIZE 常量问题。
 4. **AHCI 未接中断、未做 FLUSH CACHE**：完成靠轮询 CI；单 PRDT 条目；只扫 bus 0；掉电持久化语义未验证；SERR 统计与端口软复位未做。
 5. **LBA48 只读不写**：两侧 IDE 读写命令仍是 0x20/0x30（LBA28），>128 GB 盘写入不可用；32 位 `total_sectors` 还是 uint32。
 6. **HPET 只有"当基准"**：主计数器用来校准 APIC 频率，**没有装比较器/中断路由**，即没有作为 tick 源。PIT ch0 + APIC 定时器已能提供 1 kHz tick，故属可选缺口而非阻塞。
 7. **串口只出不进**：`uart64.c` 置了 IER_RDI 但没有注册 IRQ4 处理程序，RX 中断路径空挂（TX 控制台不受影响）。
 8. **PCI 枚举只验证过扁平拓扑**：本 QEMU 拓扑里 8086:7113 桥的下游为空，桥递归未真正下钻；真实多级桥拓扑待验证。显示类 BAR 大小探测被有意禁用（写全 1 会打坏 LFB），故 `bar_size=0`。
-9. **OPEN-02 仍未闭环**：`e2b811f` 只在三处 TD 发布前补写屏障，运行时未验证（当前 QEMU 无 UHCI 控制器）；复现需 `-device piix3-usb-uhci` 并带 usb-storage 满扇区 bulk 写夹具。
+9. **OPEN-02 仍未闭环**：`4524f79` 只在三处 TD 发布前补写屏障，运行时未验证（当前 QEMU 无 UHCI 控制器）；复现需 `-device piix3-usb-uhci` 并带 usb-storage 满扇区 bulk 写夹具。
 10. **AHCI/真机差异**：只在 QEMU ich9-ahci 上实测；不同厂商控制器的 ABAR 落点与端口复位流程未做硬件验证。
 
 **判据（本轮总验收，均跑在合并后的正式树）**
@@ -543,7 +543,7 @@ diag1/diag2/move/sb_up/hand），但系统目前只有 4 个形态场景，映�
 （64 位走 UEFI，32 位走 QEMU `-kernel`/GRUB），所以即使有遗留问题也不影响
 双架构镜像。真机从 BIOS 介质启动时的行为本轮没有实测，这一点标注在这里。
 
-## BUG-58 e1000 RAL 写回循环错位 —— **已关闭（`0264c58`，2026-11-17）**
+## BUG-58 e1000 RAL 写回循环错位 —— **已关闭（`ff5d603`，2026-11-17）**
 
 **位置**：`kernel/drivers/e1000.c`（原 `:309-312`）
 
@@ -552,13 +552,13 @@ diag1/diag2/move/sb_up/hand），但系统目前只有 4 个形态场景，映�
 这个偏移跨在 RAL 高半与 RAH 低半之间，写出来的过滤地址是高半错位拼出来的；
 紧接着又无条件重写一次 RAH，把上一步刚拼的内容盖掉。
 
-**修复（`0264c58`）**：RAL（0x5400）放 `mac[0..3]`，RAH（0x5404）低 16 位放
+**修复（`ff5d603`）**：RAL（0x5400）放 `mac[0..3]`，RAH（0x5404）低 16 位放
 `mac[4..5]` 且 AV（bit31）=1，两个对齐 32 位写，不再未对齐访问/跨寄存器；
 另补只读 `e1000_diag_dump`（`kernel/net/net_selftest.c`）打印 PCI_CMD/MASTER、
 环基地址、RCTL/STATUS/RDH/RDT/RDLEN、MMC 收包计数与前 8 个 RX 描述符。
 
-**验证**：64 位 `make -C kernel/arch/x86_64`、32 位根目录 `make` 均 0 error；
-after-init 串口回读 MAC `52:54:00:12:34:56`、link up。
+**验证**：`evidence-rxnet-2026-11-17/build32-rebase-61c53fa.log`、`evidence-rxnet-2026-11-17/build64-rebase-61c53fa.log` 0 error；
+`evidence-rxnet-2026-11-17/serial/rxnet-rebase-61c53fa.log` after-init 串口回读 MAC `52:54:00:12:34:56`、link up。
 
 ## 观察项：fd 写不再隐式截断（2026-11-17）
 
@@ -574,11 +574,11 @@ after-init 串口回读 MAC `52:54:00:12:34:56`、link up。
 1. **`lib_shared.c` 调用方不是 0**：64 位 `lib64.c` 有 3 个薄包装共 5 处调用点
    （`shared_memcmp`×1、`shared_itoa`×3、`shared_strncpy`×1），其余 12 个函数才是 0；
    32 位全仓 0。原「调用方为 0」是只数了 32 位。
-2. **32 位 `net=1` 冒烟口径（2026-11-17 复核）**：`regress32.sh` 不带网卡，`eth.c`
+2. **32 位 `net=1` 冒烟口径（基线 `61c53fa` 复核）**：`regress32.sh` 不带网卡，`eth.c`
    从不绑定 e1000 ops，串口里那条 `[ETH] eth0 MAC: 00:1A:36:5D:A7:C9` 是默认模拟 MAC，
-   冒烟 `net=1` 不代表真实收发。真实收发以 `472eafb`/`0264c58` 的直载取证为准：
-   DHCP Offer 已收到并上送 UDP、MAC 回读正确、link up；**ICMP echo reply 与 TCP 路径
-   本轮未复测**，不能据冒烟 `net=1` 记为已通。
+   冒烟 `net=1` 不代表真实收发。真实收发以 `b34a5bc`/`ff5d603` 的直载取证为准
+   （`evidence-rxnet-2026-11-17/serial/rxnet-rebase-61c53fa.log`）：两帧 UDP 上送、MAC 回读正确、link up；
+   **ICMP echo reply 与 TCP 路径本轮未复测**，不能据冒烟 `net=1` 记为已通。
 
 ## 本轮闭环批次（2026-11-17，分支 `docs/sync-2026-11-17`）
 
@@ -592,7 +592,7 @@ after-init 串口回读 MAC `52:54:00:12:34:56`、link up。
 | 开机进锁屏，补齐「锁屏 → 登录 → 桌面」链路 | `ebf3e05` | `kernel/arch/x86_64/hpdesk.c`：开机置 `g_locked=1`（`:7486-7489`）；状态三态（`:4554`）；锁屏/登录键处理（`:7201-7234`） | 同日实测（实例 `docsrec2`，2026-11-17 23:11）：首帧为锁屏时钟画面；QMP 注入空格后帧 `f0107` 进入登录页（头像 `U` / 用户名 `hepu` / Unlock 按钮）；两次回车后帧 `f0143`、`f0199` 进入桌面（顶栏 + Settings 窗口）。证据：`evidence-docs-sync/rec-sendkey/boot_docsrec.mp4`、帧目录 `.toolchain/run/inst/docsrec2/frames/`、`record.log` | 已闭环（64 位图形路径） |
 | 菜单与内核之间的系统加载屏；`load_config` 先于 `init_gop` 的顺序换回 | `5d890c4` | `tools/hepboot/uefi/hepboot_uefi.c`：`load_config()`（`:1658`）→ `init_gop()`（`:1663`）；加载屏 `ld_begin`（`:1163`）、读镜像（`:1365`）、CRC 校验（`:1739`）、预热页（`:1754`）、交接准备（`:1771`） | 同日实测（实例 `nodisp4`，2026-11-17 21:19，`-display none`）：串口 `[FBDESC] phys=0x80000000 w=1920 h=1080 pitch=7680 bpp=32`、`[DESKTOP64] Desktop initialized: 1920x1080`；`screendump` 原始 PPM 头 `P6 1920 1080`。证据：`evidence-docs-sync/nodisp-none/nodisp4-serial.txt`、`nodisp4-1920x1080.png`；顺序回归/修复提交见 `65483b4`（回归）与本条 | 已闭环 |
 | 加载屏留到桌面；拔掉开机自检程序把屏幕刷成绿/红 | `57aba61` | `kernel/arch/x86_64/gfx64.c`、`kernel/kernel_main_64.c`、`tools/hepboot/uefi/hepboot_uefi.c` | 同日实测（实例 `docsrec2`）：帧序列从引导加载屏过渡到桌面第一帧覆盖，中途无绿/红自检刷屏；桌面帧 `f0143`。证据：`evidence-docs-sync/rec-sendkey/` 帧序列与 mp4 | 已闭环（64 位图形路径） |
-| net32 `RCTL.BSIZE` 位段写错（接收缓冲实际只有 256B，RX 等不到完成位） | `5f93c2d` | `kernel/drivers/e1000.c`：`BSIZE=0x00030000` 位于 RCTL bit9:8；MMIO 改 `volatile` + 屏障 | 源码核实：RCTL.BSIZE 按位域写入。**端到端复核（2026-11-17，`472eafb`/`0264c58`）**：32 位 DHCP 收包已打通（Offer op=2、xid 匹配、msg_type=2、RDH=2、两帧上送 UDP）；此前"RX 等不到完成位"的实测根因实为发送侧字节序/校验和错误（见 `472eafb`），不是 BSIZE 常量本身。**未复测**：32 位 ICMP echo reply、TCP 路径。修前基线串口 `evidence-rxnet-2026-11-17/serial/rxnet-baseline.log` | 代码已修；DHCP 收包已取证，ICMP/TCP 未复测 |
+| net32 `RCTL.BSIZE` 位段写错（接收缓冲实际只有 256B，RX 等不到完成位） | `5f93c2d` | `kernel/drivers/e1000.c`：`BSIZE=0x00030000` 位于 RCTL bit9:8；MMIO 改 `volatile` + 屏障 | 源码核实：RCTL.BSIZE 按位域写入。**端到端复核（基线 `61c53fa` 重出证，`b34a5bc`/`ff5d603`）**：32 位 DHCP 收包已打通（`evidence-rxnet-2026-11-17/serial/rxnet-rebase-61c53fa.log` RDH=2、rx_cur=2、两帧上送 UDP；Offer 字段解析见旧档 `evidence-rxnet-2026-11-17/serial/rxnet-dbg2.log`）；此前"RX 等不到完成位"的实测根因实为发送侧字节序/校验和错误（见 `b34a5bc`），不是 BSIZE 常量本身。**未复测**：32 位 ICMP echo reply、TCP 路径。修前基线串口 `evidence-rxnet-2026-11-17/serial/rxnet-baseline.log` | 代码已修；DHCP 收包已取证，ICMP/TCP 未复测 |
 | 保护模式按实际内核架构跳转，不再误走 32 位交接 | `9d39038` | `tools/hepboot/uefi/hepboot_uefi.c`：跳转判定（`:1960` 起），按解析出的 `use32` 选 64/32 交接 | 源码核实：保护模式不再误走 32 位交接。端到端引用同日独立验证 `evidence-combined/REPORT.md`：E5（64 位保护模式 `[PROTECT] arch=x86_64`，无 desktop64/hpdesk/gfx64 初始化行，`help`/`ls` 回显可见）、E7（32 位保护模式 `[PROTECT] arch=i386`，无桌面初始化行，`help` 有输出）。该验证 HEAD `fd469e1` 含本条提交 | 已闭环（引用同日独立验证） |
 | uproc 统一用户程序加载 ABI（契约头 / 32 位适配 / 64 位适配 + argv 上栈 / 成功路径回传真实 pid） | `d1dd19d`、`5096f0a`、`421d358`、`fd469e1` | `kernel/include/uproc.h`（契约头、错误码、栈布局）；32 位 `services/compat/uproc32.c`、`services/compat/binfmt*.c`（`f3b3c78` 由 `kernel/compat/` 迁出）、`kernel/arch/x86/kernel.c`；64 位 `kernel/arch/x86_64/user_process.c`、`user_stack64.c`、`shell64.c` 等 | 同日独立验证 `evidence-combined/REPORT.md` E6：hello/sec_test/clone_test/ps 四条 rc=100；`/bin/no_such_uproc.elf` rc=-2；pid=100 slot=0 active=1。契约条文见 `evidence-uproc/REPORT.md` | 已闭环 |
 | 保护模式文本 shell 独立枚举 USB HID，双源合流键盘输入 | `8a0af11` | `kernel/arch/x86_64/shell64.c`、`kernel/kernel_main_64.c`（保护/文本分支独立 `usb64_init()`，`:1389-1398`） | 源码核实：保护/文本分支单独枚举 USB HID，与 PS/2 兜底双源合流。**未验证**：保护模式下 USB 键盘端到端输入本轮未单独复测；E5 仅验证 `help`/`ls` 命令回显，未区分按键来源是 USB 还是 PS/2 | 代码已修；保护模式 USB 输入端到端未单独复测 |
@@ -624,17 +624,17 @@ after-init 串口回读 MAC `52:54:00:12:34:56`、link up。
 - 真正持续过的常驻探针是 SB-08 每 5 帧负载与 shell 四程序 autostart，已由 `0202461` 关闭；
   `kernel_main_64.c` 启动期一次的 BSP 浮点自检保留，不算持续负载。
 
-## 第三批（网络线，基线 `a787a01`，分支 `fix/rxnet-2026-11-17`，2026-11-17）
+## 第三批（网络线，基线 `61c53fa`，分支 `fix/rxnet-2026-11-17`，2026-11-18 重出证）
 
-> 本批为网络线 4 个提交的台账登记。状态分：**已闭环（附验证级别）**、**未关闭（加固/未验证）**。
-> 既有网络类开放条目编号未改动。
+> 本批为网络线 4 个提交的台账登记（`61c53fa` 上重新出证，哈希已替换为 rebase 后版本）。
+> 状态分：**已闭环（附验证级别）**、**未关闭（加固/未验证）**。既有网络类开放条目编号未改动。
 
 | 修复项 | 提交 | 代码位置 | 验证方式与证据 | 状态 |
 |---|---|---|---|---|
-| 32 位 IP/UDP/DHCP 整数字节序 + IP 校验和修正，打通 DHCP 收包 | `472eafb` | `kernel/net/ip.c`（total_length/id/src_ip/dest_ip/checksum 发送侧 `htons/htonl`、接收侧 `ntohs/ntohl`，校验和按 RFC1071 大端拼字）；`kernel/net/udp.c`（端口/长度 `htons/ntohs`）；`kernel/net/dhcp.c`（xid/flags/magic_cookie `htonl/htons`/`ntohl`，Discover 复用 `iface->xid`） | 直载 `qemu-system-i386 -kernel build_v250/kernel.elf -nic user,model=e1000`；`evidence-rxnet-2026-11-17/serial/rxnet-dbg2.log`：Offer 到 68 端口、op=2、xid 与本地事务 ID 一致、选项 53 msg_type=2；`rxnet-final.log` 干净代码复跑 RDH=2、两帧上送 UDP。**根因**：发送侧小端直写 + 校验和按小端 u16 取字，slirp 按大端解析判非法帧丢弃；**不是硬件没收到，也不是 `5f93c2d` 的 BSIZE 常量问题**。**未复测**：32 位 ICMP echo reply、TCP 路径 | 已闭环（32 位 DHCP 收包路径；ICMP/TCP 未复测） |
-| BUG-58：e1000 RAL/RAH 改对齐 32 位写，补只读 RX 诊断 dump | `0264c58` | `kernel/drivers/e1000.c`（RAL 0x5400 放 mac[0..3]，RAH 0x5404 低 16 位放 mac[4..5]、AV bit31=1）；`kernel/net/net_selftest.c`（`e1000_diag_dump`） | 64 位 `make -C kernel/arch/x86_64`、32 位根目录 `make` 均 0 error；after-init 串口 MAC 回读 `52:54:00:12:34:56`、link up | 已闭环（编译 + 串口 MAC/link 取证） |
-| OPEN-04 子项：安装器白名单改规范绝对路径整串匹配 | `b8509c0` | `kernel/arch/x86_64/user_process.c`：只接受 `/bin/install64.elf` 整串相等（必须 `/` 开头、逐字节相等；裸 basename/相对路径/前缀同名拒绝） | **编译验证级**：64 位 `make -C kernel/arch/x86_64` 0 error；现有启动链路传绝对路径 `/bin/install64.elf`，无回归。**运行时安装流程未复测**；安装器拷贝系统文件核心缺口仍开放（见 OPEN-04 行） | **部分闭环（编译验证级；运行时未复测）** |
-| OPEN-02：三处 TD 发布帧列表指针前加写屏障 | `e2b811f` | `kernel/drivers/usb/uhci.c`：control/bulk/interrupt 三处发布前 `uhci_wmb()` 编译器屏障 | **未验证**：当前 QEMU 配置 xhci + usb-kbd/mouse，无 UHCI 控制器，`uhci_detect` 不命中，传输路径未执行；仅 32 位根目录 `make` 0 error（uhci.o 重编）。复现需 `-device piix3-usb-uhci` 并带 usb-storage 夹具；其余疑点（`frame_list[0]` 单点抢占、超时裸循环、端口复位保持时长、链接指针类型位）未改，分析见 `evidence-rxnet-2026-11-17/OPEN-02-uhci-analysis.md` | **未关闭（写屏障加固；运行时未验证）** |
+| 32 位 IP/UDP/DHCP 整数字节序 + IP 校验和修正，打通 DHCP 收包 | `b34a5bc` | `kernel/net/ip.c`（total_length/id/src_ip/dest_ip/checksum 发送侧 `htons/htonl`、接收侧 `ntohs/ntohl`，校验和按 RFC1071 大端拼字）；`kernel/net/udp.c`（端口/长度 `htons/ntohs`）；`kernel/net/dhcp.c`（xid/flags/magic_cookie `htonl/htons`/`ntohl`，Discover 复用 `iface->xid`） | 直载 `qemu-system-i386 -kernel build_v250/kernel.elf -nic user,model=e1000`；`evidence-rxnet-2026-11-17/serial/rxnet-rebase-61c53fa.log`：after-dhcp-poll `RDH=0→2`、`rx_cur=2`、两帧 UDP 上送、MAC `52:54:00:12:34:56`、link up；构建 `evidence-rxnet-2026-11-17/build32-rebase-61c53fa.log`、`evidence-rxnet-2026-11-17/build64-rebase-61c53fa.log` 0 error。Offer 字段级解析（op=2、xid 匹配、msg_type=2）见旧档 `evidence-rxnet-2026-11-17/serial/rxnet-dbg2.log`。**根因**：发送侧小端直写 + 校验和按小端 u16 取字，slirp 按大端解析判非法帧丢弃；**不是硬件没收到，也不是 `5f93c2d` 的 BSIZE 常量问题**。**未复测**：32 位 ICMP echo reply、TCP 路径 | 已闭环（32 位 DHCP 收包路径；ICMP/TCP 未复测） |
+| BUG-58：e1000 RAL/RAH 改对齐 32 位写，补只读 RX 诊断 dump | `ff5d603` | `kernel/drivers/e1000.c`（RAL 0x5400 放 mac[0..3]，RAH 0x5404 低 16 位放 mac[4..5]、AV bit31=1）；`kernel/net/net_selftest.c`（`e1000_diag_dump`） | 构建 `evidence-rxnet-2026-11-17/build32-rebase-61c53fa.log`、`evidence-rxnet-2026-11-17/build64-rebase-61c53fa.log` 0 error；`evidence-rxnet-2026-11-17/serial/rxnet-rebase-61c53fa.log` 串口 MAC 回读 `52:54:00:12:34:56`、link up | 已闭环（编译 + 串口 MAC/link 取证） |
+| OPEN-04 子项（误授权）：匹配条件收紧为规范绝对路径整串匹配 | `0e30c70` | `kernel/arch/x86_64/user_process.c`：宏 `INSTALLER_CANON_PATH "/bin/install64.elf"`（`:2544`）；`installer_name_match`（`:2547-2557`）先要求 `path[0]=='/'`，再整串逐字节比、长度必须相等，拒绝裸名/相对路径/前缀同名。改动类型是只收紧匹配条件，不是加白名单配置、也不是编译期排除；无配置项、无默认清单，唯一可信路径是编译期单值宏 | 64 位 `make -C kernel/arch/x86_64` 0 error；静态核对 `tools/make_hybrid_img.sh`、`tools/make_single_img64.sh` 写到 `/bin/install64.elf`、autostart 绝对路径 exec。**没跑过真实安装**：未在双盘 QEMU 跑安装流程，未检查目标盘系统文件是否齐全；主体（安装器拷贝系统文件的真实安装流程）仍开放，详见 OPEN-04 行 | **子项（误授权匹配）已修；主体真实安装流程仍开放，运行时未验证** |
+| OPEN-02：三处 TD 发布帧列表指针前加写屏障 | `4524f79` | `kernel/drivers/usb/uhci.c`：control/bulk/interrupt 三处发布前 `uhci_wmb()` 编译器屏障 | **未验证**：当前 QEMU 配置 xhci + usb-kbd/mouse，无 UHCI 控制器，`uhci_detect` 不命中，传输路径未执行；仅 32 位根目录 `make` 0 error（uhci.o 重编）。复现需 `-device piix3-usb-uhci` 并带 usb-storage 夹具；其余疑点（`frame_list[0]` 单点抢占、超时裸循环、端口复位保持时长、链接指针类型位）未改，分析见 `evidence-rxnet-2026-11-17/OPEN-02-uhci-analysis.md` | **未关闭（写屏障加固；运行时未验证）** |
 
 > 取证工具与基线报告：`cc10817`（分支 `test/regress-2026-11-17`，基线 `3d0bd23`）落库
 > `tools/regress/` 串行构建/全链路/保护模式/加载屏录像/NONBLACK 度量与报告编排，
@@ -674,49 +674,43 @@ after-init 串口回读 MAC `52:54:00:12:34:56`、link up。
 
 ---
 
-## OBS-05 32 位桌面帧非黑占比约 38%，下半屏纯黑（2026-11-17 登记，根因未定位）
+## OBS-05 32 位桌面非黑占比 —— **已撤销：测量方法/取帧时机问题，现象不复现（2026-11-18 改判）**
 
-**现象（实测确认）**：32 位旧桌面到达后，4 张桌面帧 NONBLACK 均为
-**786,399 / 2,073,600 像素（约 37.9%，≈38%）**；画面上半为深蓝色壁纸，下半约 60%
-为纯黑，无顶栏/面板/窗口等元素。帧尺寸 1920×1080，`[BD-VBE]` 模式与 pitch 已设到
-`1920×1080@32bpp`、双缓冲就绪。
+**改判结论**：2026-11-17 登记的"32 位桌面只画 38%、下半屏纯黑"在基线 `61c53fa` 上
+**不成立**。32 位 multiboot 直启两帧实测 NONBLACK **2,073,598 / 2,073,600（≈100.00%）**，
+九宫格 9 格占比≈1.00。旧值 **786,399（37.9%）系首帧未整帧上色的稀疏帧（取帧时机过早），
+勿再引用**；本条按"测量方法/取帧时机问题"撤销，不再作为渲染缺陷跟踪。
 
-**证据**：`/home/user/Doubao/chats/38452875115179010/evidence-regress-2026-11-17/old-3d0bd23/frames32/desktop_1.png`、
-`desktop_2.png`、`desktop_3.png`、`desktop_4.png`；串口同目录 `ser.log`；回归报告
-`evidence-regress-2026-11-17/old-3d0bd23/REPORT.md`（32-桌面行）。
+**2026-11-18 重测（基线 `61c53fa`，回归分支 `test/regress-2026-11-17`：`93c3147` 61c53fa 复跑与九宫格度量、`0f4b9d4` 采帧时序降级）**：
 
-**2026-11-18 复核（结论：原判据取错了帧）**：按当前 main（`fb178ff`）在
-1920×1080 上重跑 32 位启动并连续取帧，得到：
+- 32 位直启：`evidence-regress-2026-11-17/frames32-direct/desktop_1.png` = 2,073,598/2,073,600，
+  `desktop_2.png` = 2,073,598/2,073,600；九宫格仅右上格 230,398/230,400，其余 8 格 230,400/230,400。
+- 64 位桌面/锁屏各 4 帧 strict NONBLACK 最低 2,073,597/2,073,600，九宫格无黑块分区。
+- UEFI 链路那 4 帧 `evidence-regress-2026-11-17/frames32/desktop_1..4.png` 是 `linuxhello`
+  崩溃后回灌菜单的残留，**不代表桌面**，不计入任何桌面度量；UEFI 链路 32 位桌面记 **UNVERIFIED**。
 
-| 时点 | 帧尺寸 | NONBLACK | 判读 |
-|---|---|---|---|
-| 选完 32 位 +1.5 s | 1920×1080 | 2,073,600 | 引导器加载屏/菜单 |
-| +4.5 s | 1920×1080 | **786,399** | **启动过渡期（与 OBS-05 原数一致）** |
-| +9.5 s | 1920×1080 | **2,073,600** | 桌面终态（满屏） |
+**旧记录（保留备查，结论已作废）**：2026-11-17 旧档
+`evidence-regress-2026-11-17/old-3d0bd23/frames32/desktop_1..4.png` NONBLACK 均为
+786,399/2,073,600（≈37.9%），上半深蓝、下半纯黑。该数值来自启动过渡期（选完 32 位
++4.5 s 前后）的稀疏帧，不是桌面终态；过渡画面本身的问题记录在 OBS-06。
 
-即 786,399 这个数出现在**桌面到达之前**，是启动过渡画面，不是桌面终态；
-桌面到达后 NONBLACK 为 2,073,600（100%）。OBS-05 原来的 4 张"desktop"帧应
-是取在过渡期。**因此"32 位桌面只画 38%"不成立**，32 位桌面渲染本身满屏。
+### 测量口径（2026-11-18 复核）
 
-这个 786,399 过渡画面真正的问题记录在 OBS-06（它是 32 位早期 VGA 文本输出
-盖掉引导器加载屏造成的）。**OBS-05 建议降级为"取证时机问题"，不再作为渲染缺陷跟踪。**
-
-**口径说明**：回归报告对 32 位旧桌面不套 1080p 全量非黑阈值（阈值 N/A），该帧在报告里
-记 `PASS`；本条 OBS 单独记录"下半屏纯黑、非黑未铺满"这一可观测现象，与报告豁免口径并存，
-不把它写成 32 位桌面已达全量渲染。
-
-**取证基线**：本条帧来自回归分支 `test/regress-2026-11-17`（`cc10817`，基线 `3d0bd23`）。
-后续 `53e53cb` 修了 32 位 l10n 空串桩（把 `l10n64.c` 纳入 32 位构建白名单，删两个假桩），
-属文案层改动，未涉及下半屏帧缓冲填充；本条 38% 填充现象在 `53e53cb` 上未复跑。
-
-**根因**：未定位。已排除：VBE 模式/pitch 设置、双缓冲未就绪（串口 `linear framebuffer ready`、
-`[GFX] framebuffer -> draw target (double-buffer)` 在场）。未排除：32 位桌面绘制坐标/
-裁剪与旧稀疏桌面布局、下半屏图层未上屏、双缓冲 present 只刷新了部分行。
-
-**下一步验证手段**：
-1. 在 32 位桌面帧上按行统计非黑像素分布，确认黑色边界是水平固定行还是随重绘漂移；
-2. 对比 64 位同参数桌面帧的图层绘制顺序与 present 路径，定位下半屏是未绘制还是绘制后被清黑；
-3. 逐帧 dump 双缓冲前后缓冲在该边界行的像素值，判断是绘制缺失还是 present 覆盖。
+1. **截图**：32 直启 `frames32-direct/desktop_1.png`、`desktop_2.png`；64 位
+   `frames64/desktop_1..4.png`、`frames64/lock_1..4.png`、`frames64/login_1..4.png`；
+   九宫格叠加图在 `evidence-regress-2026-11-17/obs05/`（如
+   `32-desktop_desktop_1_grid.png`）。
+2. **采集参数**：1920×1080，未缩放、未裁剪。64 位实例
+   `qemu-system-x86_64 -m 1024 -smp 2`，挂 256MB raw 镜像 `snapshot=on`、私有 OVMF 副本、
+   VNC 5902、USB 键鼠；32 位直启
+   `qemu-system-i386 -kernel build_v250/kernel.elf -m 256 -smp 1`，不挂盘、`-no-reboot`。
+   抓图走 unix monitor `screendump` 出 PPM 再转 PNG，帧间隔 1.5–2 s，串口等待上限 60–70 s。
+3. **分子/分母**：strict 口径 RGB 三通道全 0 才判黑（`!= (0,0,0)`），不排除背景色、不裁剪；
+   near 参考口径任一通道 ≥16；分母整帧 2,073,600，九宫格每格 640×360 = 230,400。
+4. **九宫格**：32 直启 9 格≈1.00（TR 230,398），64 位锁屏/桌面各格≥1.00、无黑块分区；
+   红框网格与占比画在副本上，原图不回写。
+5. **复核结论**：`61c53fa` 上 32 位桌面 2,073,598≈100.00%，与旧 38% 不一致，差异来自
+   取帧时机，非分区回退。
 
 ### 32 位锁屏 / 登录路径现状限制（2026-11-17 实测）
 
@@ -725,3 +719,47 @@ after-init 串口回读 MAC `52:54:00:12:34:56`、link up。
   `login_unlock_screen` / `mu_private_unlock` 三处桩路径未触发，串口无 LOGIN WARNING。
 - 这是**现状限制**，不是 32 位锁屏/认证已通过；要复现该路径需先具备拉起 32 位登录页的入口。
   证据：`evidence-regress-2026-11-17/old-3d0bd23/frames32/ser.log`、`old-3d0bd23/REPORT.md` 32-锁屏 / 32-登录行。
+
+## 回归线实测登记（基线 `61c53fa`，分支 `test/regress-2026-11-17`：`576c6c1` → `93c3147` → `0f4b9d4`）
+
+> 本节登记 2026-11-18 复跑回归线的四条实测；三态口径 PASS / FAIL / UNVERIFIED，
+> 证据目录 `evidence-regress-2026-11-17/`。
+
+### OBS-07 32 位 `linuxhello` 用户态崩溃（FAIL，既有不稳定项，未隔离编译验证）
+
+**现象**：直启与 UEFI 两条路径都在 `[AUTO] linuxhello start` 后退出/重启回灌菜单：直启
+`-no-reboot` 下 QEMU 退出（`frames32-direct/state.txt` `CRASHED=1`）；UEFI 路径重启回灌
+引导菜单。
+**定性**：既有不稳定项；未做隔离编译验证，**不判为本次合并回归**。对照上一基线 `a787a01`，
+同位置 `linuxhello` 故障被回收（rc=3 继续跑后续应用），本轮 escalate 为重启；`53e53cb`
+仅修 32 位文案空串兜底、`61c53fa` 仅统一顶栏 bar_height，未改动 32 位内核执行路径。
+**证据**：`evidence-regress-2026-11-17/frames32-direct/ser.log`、
+`frames32/ser.log`、`frames32-direct/state.txt`。
+
+### 64 位空 Enter 拒登（预期行为，非回归）
+
+- `/account.conf` 已配置账户时，空口令两次被拒：串口 `[LOCK] login: auth failed`（两次），
+  画面红条 "Wrong password"；输入夹具口令后 `login -> desktop (auth ok)`、解锁进桌面。
+  这是 `hpdesk.c` `hs_login_submit()` 三分支的预期行为，非回归。
+- **口令口径**：当前 64 位认证走 auth64（`/account.conf`，hash 由 OOBE 首设），仓库不内置
+  可登录的默认口令；`hepu123` 仅是本回归夹具口令，**非内置默认口令**。
+- 证据：`evidence-regress-2026-11-17/frames64/ser.log`、`frames64/login_reject_1.png`、
+  `frames64/login_1..4.png`、`frames64/desktop_1..4.png`。
+
+### 主机端 ASan/UBSan：7 过 1 败（FAIL，测试脚手架链接清单问题，非内核运行时缺陷）
+
+- 通过 7 / 失败 1；唯一失败项 `elf`：主机测试链接清单只编 `elf64.c`，缺 `compat_gate.c`
+  （定义 `compat_gate_detect_elf`）及进程表依赖，链接报
+  `undefined reference to compat_gate_detect_elf`，属测试脚手架链接清单未随源码重构同步；
+  未做隔离编译验证，不据此判定内核运行时回归。
+- **待办**：修主机测试链接清单（补 `compat_gate.c` 与进程表依赖），不是修内核缺陷。
+- 证据：`evidence-regress-2026-11-17/tests/host-tests.log`。
+
+### 32 位 KUnit：4 套件 / 6 用例失败（既有基线项，非本轮新增）
+
+- 失败套件：`syscall deep`（1 用例）、`user scenario`（3 用例）、`integration`（1 用例）、
+  `security E2E`（1 用例），共 4 套件 6 用例。与
+  `evidence-regress-2026-11-17/old-a787a01/tests/baseline/a787a01-kunit32.txt` 快照逐条一致，
+  `new_fails` 空、`fixed_fails` 空；属既有基线项，非本轮新增。
+- 证据：`evidence-regress-2026-11-17/tests/ser32.txt`、
+  `tests/baseline/61c53fa-kunit32.txt`、`tests/results.json`。

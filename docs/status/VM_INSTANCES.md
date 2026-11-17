@@ -111,10 +111,10 @@ mcopy -o -i /tmp/x_menu.img@@1M /tmp/cfg30.cfg ::/HEPBOOT.CFG
 
 - **现象**：QEMU 6.2 构建里 e1000 的 MMC 收包计数器（`PRC`/`MPTC`/`MPC`/`RFC`/`ROC`/
   `RUC`/`RLEC`/`CRCERR`）在串口诊断 dump 中恒为 `0x00000000`；同期 `RDH` 已从 0 推进到 2、
-  `rx_cur=2`、两帧已上送 UDP（DHCP Offer op=2、xid 匹配、msg_type=2）。
+  `rx_cur=2`、两帧已上送 UDP（Offer op=2/xid/msg_type=2 字段解析见旧档 `evidence-rxnet-2026-11-17/serial/rxnet-dbg2.log`）。
 - **口径**：在本 QEMU 构建里，**MMC 计数器不能作为"硬件是否收到帧"的判据**；PRC=0 不代表
   网卡没收到包。收包是否成功以 `RDH`/`RDT` 推进、`rx_cur` 增长、帧上送 UDP 与 Offer 字段
   核对为准。
-- **证据**：`evidence-rxnet-2026-11-17/serial/rxnet-final.log`（RDH=2/rx_cur=2 时 MMC 全 0）、
-  `rxnet-dbg2.log`（Offer 字段）；修前基线 `rxnet-baseline.log` MMC 同样全 0。
+- **证据**：`evidence-rxnet-2026-11-17/serial/rxnet-rebase-61c53fa.log`（RDH=2/rx_cur=2 时
+  MMC 全 0）；`evidence-rxnet-2026-11-17/serial/rxnet-dbg2.log`（Offer 字段）；修前基线 `evidence-rxnet-2026-11-17/serial/rxnet-baseline.log` MMC 同样全 0。
 - 下次排查网络收发时，不要因 MMC PRC=0 判"硬件没收到"；先看 RDH/RDT 与上层 UDP 上送记录。
