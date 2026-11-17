@@ -894,11 +894,18 @@ void x86_64_kernel_main(void)
          * acquire -> 画 -> flip -> release 走一遍。这个程序覆盖的是「双缓冲
          * 下 acquire 拿到的是后台、flip 才上屏」这条语义 —— 也是整个 §5-4
          * 唯一能证明"接口真的能用"的地方。 */
-        vga_puts("[FBSYN] Running /bin/fbsyn.elf...\n");
-        if (user_process_exec("/bin/fbsyn.elf") < 0) {
-            vga_puts("[FBSYN] fbsyn.elf not available (optional)\n");
+        /* 注意: 这个实证程序为了"颜色明显不同于桌面", 直接把整屏画成
+         * 左半纯绿(0x0000FF00)右半纯红(0x00FF0000)。开机自动跑过一次之后,
+         * 那块花屏会一直留在显存里, 直到桌面第一帧把它盖掉 —— 实拍就是启动
+         * 后那 6 秒"左右各一半绿红"。它是一次性判据, 不是常驻功能, 所以
+         * 默认不跑; 要复核 §5-4 双缓冲语义时把下面的 0 改 1 再编一次即可。 */
+        if (0) {
+            vga_puts("[FBSYN] Running /bin/fbsyn.elf...\n");
+            if (user_process_exec("/bin/fbsyn.elf") < 0) {
+                vga_puts("[FBSYN] fbsyn.elf not available (optional)\n");
+            }
+            vga_puts("[FBSYN] returned\n");
         }
-        vga_puts("[FBSYN] returned\n");
 
         /* TECH_DEBT_ROUTE §5-5 第 2 批前置: struct stat 布局探针。
          * 切 sys_stat 之前必须先能"看见"字段偏移 —— 偏移错了不会编译报错,

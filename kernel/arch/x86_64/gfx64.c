@@ -44,6 +44,13 @@ static int back_buf_alloc_ok = 0;
 static uint8_t *front_buffer = (uint8_t *)0;
 static uint8_t *gfx_target = (uint8_t *)0;   /* 当前渲染目标（默认=帧缓冲） */
 
+/* 引导器在 0x6010 放了这个 magic, 表示"屏幕上已经有一块画好的启动/加载界面,
+ * 内核接管后不要清屏、也不要把启动日志画到帧缓冲上 —— 让它一路留到桌面第一帧
+ * 覆盖"。没有这个 magic(传统 GRUB/stage2 路径)就保持原来的行为: 清成深蓝 +
+ * 打初始化标题 + 把内核日志镜像到 fb。 */
+#define HEPU_HOLD_SCREEN_MAGIC 0x484C4459u   /* "HLDY" */
+static int g_hold_bootscreen = 0;
+
 /* V0.59.13 分段计时: rdtsc 取周期数, 只用于定位瓶颈, 不影响渲染逻辑 */
 static inline uint64_t gfx_rdtsc(void)
 {
@@ -157,6 +164,17 @@ void gfx64_set_target_back(void)
         uint64_t phys = pmm64_alloc_pages(pages);
         if (phys) {
             back_buffer = (uint8_t *)(uintptr_t)phys;
+            /* 关键: pmm 给的是"可用的物理页", 不是"清零的页" —— 里面留着上一个
+             * 用主/固件/早期图形的垃圾。首帧 present 会把这整块原样推到屏幕上,
+             * 于是开机第一帧看到的是花屏(实拍过: 左半纯绿 #00FF00、右半纯红
+             * #FF0000, 各 960x1080, 分界正好在屏幕中线)。
+             * 这里按 8 字节填 0, 让首帧是干净的黑, 桌面第一帧再整屏盖上去。 */
+            {
+                uint64_t n = pages * 4096 / 8;
+                uint64_t *q = (uint64_t *)back_buffer;
+                uint64_t k;
+                for (k = 0; k < n; k++) q[k] = 0;
+            }
             extern void klog64_log(const char *);
             extern void serial_puts(uint16_t, const char *);
             extern void serial_puthex(uint16_t, uint32_t);
@@ -1358,6 +1376,16 @@ void early_fb_text_init_from_bootloader(void)
 {
     /* VBE/GOP信息存储在0x6000: w(2)h(2)pitch(2)bpp(1) + fb(4) + fb_hi(4) */
     volatile uint16_t *v = (volatile uint16_t *)0x6000;
+
+    /* 引导器交付了"活的加载界面": 这时把早期文本镜像关掉。
+     * 否则内核的 [PCI64]/[APIC] 那几十行会直接打在加载屏上(实拍过: 半秒的
+     * 日志叠层, 左下角还把进度条盖掉), 观感是"跳到内核就崩了一下"。
+     * 关掉之后这些日志仍然完整地进串口, 诊断能力不丢。 */
+    if (*(volatile uint32_t *)(0x6000 + 16) == HEPU_HOLD_SCREEN_MAGIC) {
+        g_hold_bootscreen = 1;
+        vga_puts("[GFX64] bootloader holds the boot screen, kernel text goes to serial only\n");
+        return;
+    }
     uint16_t w = v[0], h = v[1], pitch = v[2];
     uint8_t bpp = *(volatile uint8_t *)(0x6000 + 6);
     uint64_t fb = (uint64_t)*(volatile uint32_t *)(0x6000 + 8)
@@ -1470,12 +1498,27 @@ int gfx64_init(void)
         vga_puts("[GFX64] CJK font load failed\n");
     }
 
-    /* 清屏为深蓝色 */
-    gfx64_clear(0x000080);
+    if (g_hold_bootscreen) {
+        /* 引导器画着的加载屏还在屏幕上, 这里不能清 —— 一清就露出深蓝底,
+         * 用户看到的是"加载屏闪一下变成纯色屏再变桌面"。什么都不做, 让桌面
+         * 第一帧直接盖上去, 视觉上就是 加载屏 -> 桌面。
+         * 注意: 早期 fb 文本镜像已经被 early_fb_text_init_from_bootloader 关掉,
+         * 所以这里也不会冒日志。 */
+        /* 用加载屏的底色(LD_BG 0x00120A0A)整屏清一次: 和引导器那块背景同色,
+         * 用户视觉上看不出变化, 但能把"接管瞬间"可能留在屏上的脏字节盖掉
+         * (实拍是整屏左绿右红各 960x1080, 分界正好在屏幕中线 —— 直接读显存
+         *  0x80000000 得到的就是 0x0000FF00 重复, 确实是被人写进去的)。
+         * 不清屏 = 原样保留那帧花屏, 那才是"跳到内核就花一下"的来源。 */
+        gfx64_clear(0x00120A0A);
+        vga_puts("[GFX64] holding bootloader screen (repainted with LD_BG)\n");
+    } else {
+        /* 清屏为深蓝色 */
+        gfx64_clear(0x000080);
 
-    /* 绘制标题 */
-    gfx64_put_string(10, 10, "HepuOS 64-bit Graphics", 0xFFFFFF);
-    gfx64_put_string(10, 30, "VBE Linear Framebuffer", 0x00FF00);
+        /* 绘制标题 */
+        gfx64_put_string(10, 10, "HepuOS 64-bit Graphics", 0xFFFFFF);
+        gfx64_put_string(10, 30, "VBE Linear Framebuffer", 0x00FF00);
+    }
 
     vga_puts("[OK] Graphics initialized\n");
     return 0;

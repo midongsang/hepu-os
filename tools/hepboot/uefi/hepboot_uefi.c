@@ -1162,6 +1162,9 @@ static void ld_tick(void)
 /* 画首屏。返回 1 = 图形加载屏已上屏, 0 = 走文本回退 */
 static int ld_begin(int use32, int protect)
 {
+    /* 保护模式要的是能看见的终端: 画一块图形加载屏只会把后面 VGA 文本盖住,
+     * 用户还会以为"卡在加载界面"。这里直接走文本路径。 */
+    if (protect) return 0;
     if (!g_gop_ready) return 0;
     EFI_GRAPHICS_OUTPUT_PROTOCOL *gop = NULL;
     uefi_call_wrapper(BS->LocateProtocol, 3,
@@ -1919,6 +1922,16 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
          * 格式与stage2(vbe_info@0x6000)完全一致: w(2)+h(2)+pitch(2)+bpp(1)+fb(4) */
         if (g_gop_info.available) {
             volatile UINT16 *v = (volatile UINT16 *)0x6000;
+            /* 0x6010 放一个 magic, 告诉内核"屏幕上正停着引导器的加载界面":
+             * 内核据此不激活早期 fb 文本镜像、也不清屏打初始化标题,
+             * 加载屏就一路留到桌面第一帧覆盖 —— 不然内核那几十行
+             * [PCI64]/[APIC] 日志会直接糊在加载屏上。保护模式不写:
+             * 那种模式下内核根本不碰图形, 写了只会误导。 */
+            if (!protect) {
+                *(volatile UINT32 *)(0x6000 + 16) = 0x484C4459u;   /* "HLDY" */
+            } else {
+                *(volatile UINT32 *)(0x6000 + 16) = 0;
+            }
             v[0] = (UINT16)g_gop_info.width;
             v[1] = (UINT16)g_gop_info.height;
             v[2] = (UINT16)(g_gop_info.pixels_per_scanline * (g_gop_info.bpp / 8));
