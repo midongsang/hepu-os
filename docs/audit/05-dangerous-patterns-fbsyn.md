@@ -1,10 +1,11 @@
 # 5. 危险模式、静默成功假实现，以及 fbsyn 事故机制复盘
 
 - 审计基线：`5f93c2d`；行号为该基线编号。
-- main 复核状态：基线之后 main 已前进到 `3d0bd23`。本报告在相关条目后标注 main 上的修复状态与提交哈希：
+- main 复核状态：基线之后 main 已前进到 `a787a01`。本报告在相关条目后标注 main 上的修复状态与提交哈希：
   - `0202461` 关掉两处常驻验收探针（桌面循环 SB-08、文本 shell autostart 四程序）；
   - `0de2133` 32 位三处认证假实现改为显式告警/声明未实现；
-  - `3d0bd23` 安全启动三处空桩改为返回 `SB_ERR_NOT_IMPLEMENTED(-2)`。
+  - `3d0bd23` 安全启动三处空桩改为返回 `SB_ERR_NOT_IMPLEMENTED(-2)`；
+  - `9e8f2a3`（并入 `261a027`、`a787a01`）64 位登录页接入账户密码三分支认证；`10e42fa` 修正 OOBE/锁屏优先级。
   - 未被上述提交触及的条目，状态仍为基线结论。
 
 ## 5.1 判定口径
@@ -77,13 +78,34 @@
 
 `login_authenticate` 被登录路径调用：`login.c:291`。
 
-**main 状态（`0de2133`，复核于 `3d0bd23`）：已改为显式告警、声明未实现，真实校验仍未做。**
+**main 状态（复核于 `a787a01`）：仍未接线。三处保持 `0de2133` 的"显式告警 + 返回放行"状态；`3d0bd23..a787a01` 区间无提交触及 `login.c` / `multi_user.c`。**
 - 改动性质是"诚实化"而非"实现"：三处仍保留"未设密码即放行"的既有行为（32 位冒烟口径 `desk=1` 依赖它），但每次调用打一行 `[LOGIN]/[MULTI_USER] WARNING: ... NOT implemented`，不再静默假装成功。
-- main 行号：`login.c:85`（`login_authenticate`，告警 `:88`）、`login.c:164`（`login_unlock_screen`，告警 `:167`）、`multi_user.c:232`（`mu_private_unlock`，告警 `:235`）。
-- 缺口根因（提交说明）：32 位 `mu_user_t` 结构里没有密码/hash 字段，`multi_user` 全模块没有密码存储与持久化；硬接校验只会变成另一种伪装。真要实现，需先给用户结构加 hash 字段 + 持久化，属独立工程。
-- 严重度调整：不再是"静默假成功"（调用方/用户能看到未实现告警），但**认证仍然不存在**，任何口令都能进入；未达到可接受状态。
+- a787a01 行号：`login.c:85`（`login_authenticate`，`(void)password` `:87`，告警 `:88`，用户存在即 `return 0` `:100`）、`login.c:164`（`login_unlock_screen`，`(void)password` `:166`，告警 `:167`）、`multi_user.c:232`（`mu_private_unlock`，`(void)password` `:234`，告警 `:235`，`return 0` `:236`）。
+- 并行存在但未接到桌面 UI 的内核 syscall 路径：`sys_user.c:103` `sys_verify_password` 做 sha256 真比对（`hash_password` `:118` + `memcmp` 32 字节 `:119`；未设密码 `:112-113` 放行）；仅被 `sys_switch_user` `:136`、`sys_unlock_user` `:229` 内部调用；syscall 号 213（`include/syscall.h:163`，表项 `syscall.c:233`）。`user/apps/` grep 无该号调用方（**待验证**：是否有运行时程序经内联 syscall 触发）。桌面登录/解锁 UI（本节三处）未接此路径。
+- 缺口根因（提交说明）：32 位 `mu_user_t` 结构里没有密码/hash 字段；`sys_user.c` 的 `password_hashes[16][32]` 仅内存态、无持久化。硬接校验只会变成另一种伪装。真要实现，需先给用户结构加 hash 字段 + 持久化，属独立工程。
+- 严重度：不再是"静默假成功"（调用方/用户能看到未实现告警），但**桌面 UI 认证仍然不存在**，任意口令都能进入；未达到可接受状态。
 
-### 5.4.2 安全启动验签/验哈希为空桩，且未接启动链路
+### 5.4.2 64 位登录/锁屏：三分支校验已接线（`9e8f2a3`，并入 `a787a01`），含绕过分支
+
+状态机：`g_locked` 0=桌面 / 1=锁屏 / 2=登录（`hpdesk.c:4554`）；锁屏→登录 `:5716-5717`、`:7300-7301`；ESC 回锁屏 `:7311-7313`。
+
+| 分支 | 证据（a787a01） | 行为 |
+|------|----------------|------|
+| ① 未配置账户 | `hpdesk.c:4604-4606` `!auth64_is_configured()` → `return 1` | 放行进桌面，保证干净 rootfs 不被锁死；`is_configured` = `g_role != ROLE_NONE`（`auth64.c:316`），账户配置读失败/缺失时落入此分支 |
+| ② 已配置校验通过 | `hpdesk.c:4608-4610` `auth64_verify_password(g_password)` → `return 1`；`auth64.c:321-327` sha256 比对 | `hs_login_unlock` 置 `g_locked=0`（`hpdesk.c:4621-4628`） |
+| ③ 校验失败 | `hpdesk.c:4612-4613` → `return 0` | `hs_login_reject` 留 `g_locked=2`，清密码、置错误提示（`:4631-4636`），不退回锁屏 |
+
+两个提交入口都接了同一校验：登录按钮点击 `hpdesk.c:5839-5845`；回车 `:7317-7322`。
+
+**已确认的绕过面（接线后残留）：**
+- 锁屏关闭开关：`hepu.lock=0` cmdline 或 `/system.conf` 含 `lock=0` → `lock_cfg_disabled()` 返 1（`hpdesk.c:4563-4577`），开机 `g_locked=0` 直进桌面（`:7596-7599`），整段锁屏/登录不出现；能改启动参数或 system.conf 即可绕过。
+- 未配置账户分支（上表①）：配置缺失/损坏时降级为放行。
+- 32 位编译分支：`hpdesk.c:4614-4616` `#else` 直接 `return 1` 解锁（32 位无 auth64，避免链接断链）。
+- `auth64_deelevate`（`auth64.c:364`）回退角色不要求密码。
+
+**旧结论作废**：基于 `5f93c2d` 与 `3d0bd23` 的"64 位登录/锁屏未接密码校验、verify 只被 elevate 调用"结论在 `9e8f2a3`（并入 `a787a01`）后已过期；当前为**已接线但可绕过**。
+
+### 5.4.3 安全启动验签/验哈希为空桩，且未接启动链路
 
 基线（`5f93c2d`）行为，`kernel/arch/x86/secure_boot.c`：
 
@@ -96,7 +118,7 @@
 
 调用点核查：`sb_verify_stage` / `sb_verify_signature` / `sb_verify_hash` / `sb_verify_certificate` / `sb_start_boot` / `sb_complete_boot` 在 `kernel/` 内除本文件外**无调用方**（grep 无命中）。基线状态是休眠框架 + 空验证两层叠加：即使将来接线，现有实现也会对任意输入放行。
 
-**main 状态（`3d0bd23`，复核于 `3d0bd23`）：三处空桩改为显式返回未实现，真实验签/验哈希仍未做。**
+**main 状态（`3d0bd23` 改为显式失败；复核于 `a787a01`：`3d0bd23..a787a01` 区间 `secure_boot.c` 无提交触及）：三处空桩显式返回未实现，真实验签/验哈希仍未做。**
 - 新增 `#define SB_ERR_NOT_IMPLEMENTED (-2)`（`secure_boot.c:49`），"接口存在但算法未实现，绝不返回 0 冒充通过"。
 - `sb_verify_signature`（main `:93`）、`sb_verify_hash`（main `:105`）：打 `[SECBOOT] WARNING` 后返回 `SB_ERR_NOT_IMPLEMENTED`（`:102`、`:111`），不再返回 0 冒充通过。
 - `sb_verify_stage`（main `:51`）：度量（`sb_measure`）仍真做；非严格模式警告后继续启动（返回 0，不改变现有启动行为），严格模式置 `boot_failed=1` 并返回 `-2`（`:62-68`）。
@@ -171,14 +193,14 @@
 2. 64 位 `MAP_PHYS` 建表路径是否可被用户态 syscall 触发（帧缓冲映射是否只对 owner 开放）：需读 `wrap_fb_acquire` 与 mmap `MAP_PHYS` 的权限检查链确认。
 3. fbsyn 关闭后，release→桌面首帧之间的显存残留窗口在当前留屏 magic 流程下是否还会暴露：需 QEMU 录制 boot 全流程复核。
 
-## 5.9 必须马上修（按严重度，含 main `3d0bd23` 复核状态）
+## 5.9 必须马上修（按严重度，含 main `a787a01` 复核状态）
 
-| 序 | 问题 | 基线证据 | main 状态 | 剩余动作 |
+| 序 | 问题 | 基线证据 | main 状态（a787a01） | 剩余动作 |
 |----|------|----------|-----------|----------|
-| 1 | **64 位登录/锁屏未接密码校验**：`auth64_verify_password` 只被提权 `elevate` 调用；进入桌面不校验，持久化角色被直接信任 | `auth64.c:321,357`；`desktop64.c:242-246` | **未修**（`3d0bd23` 复核：verify 仍只有 elevate 一个内部调用方，无外部登录调用） | 把校验接入会话建立/锁屏解锁路径；补 hash 持久化与失败锁定策略 |
-| 2 | **32 位认证无真实校验**：登录/解锁/私密空间三处忽略密码 | `login.c:76-91,151-168`；`multi_user.c:230-232` | **已改为显式告警/声明未实现（`0de2133`）**；返回仍放行，真实校验未实现 | 给 `mu_user_t` 加 hash 字段 + 持久化，再接真校验；在此之前告警必须保留，不得回退成静默 return 0 |
-| 3 | **安全启动无真实验签/验哈希**：空桩曾恒返回通过 | `secure_boot.c:49-99` | **已改为显式失败（`3d0bd23`）**：签名/哈希返回 `-2`，stage 严格模式返回 `-2`；算法仍未实现 | 接入真实签名/哈希算法；`sb_verify_certificate` 同样待核；接线前不得认为有启动完整性保护 |
-| 4 | **生产启动路径仍跑测试程序**：autorun 四程序 + 两个 uproc 取证探针 | `kernel_main_64.c:1339-1342,1365,1369` | **未关闭**（`3d0bd23` 复核仍在无条件 autorun 块内） | 移入 `HEPU_BOOT_SELFTEST` 类编译期/运行时开关，或仅在诊断镜像执行；去掉重复的 `sec_test` |
+| 1 | **32 位桌面认证无真实校验**：登录/解锁/私密空间三处忽略密码，任意口令进入 | `login.c:76-91,151-168`；`multi_user.c:230-232` | **仍未接线**：`0de2133` 改为显式告警/声明未实现，返回仍放行；`3d0bd23..a787a01` 无改动（`login.c:85-101,164-170`；`multi_user.c:232-237`）。内核另有 syscall 级 `sys_verify_password`（`sys_user.c:103-126`）未接桌面 UI | 给 `mu_user_t` 加 hash 字段 + 持久化，再把桌面 UI 接到真校验；在此之前告警必须保留，不得回退成静默 return 0 |
+| 2 | **安全启动无真实验签/验哈希**：空桩曾恒返回通过 | `secure_boot.c:49-99` | **已改为显式失败（`3d0bd23`）**：签名/哈希返回 `-2`，stage 严格模式返回 `-2`；算法仍未实现 | 接入真实签名/哈希算法；`sb_verify_certificate` 同样待核；接线前不得认为有启动完整性保护 |
+| 3 | **64 位登录已接线，但残留绕过面**：三分支校验在 `9e8f2a3` 接入；未配置账户放行、`lock=0` 开关直进桌面、32 位 `#else` 直解 | `auth64.c:321,357`；`desktop64.c:242-246` | **已接线但可绕过**（`9e8f2a3`/`a787a01`）：`hpdesk.c:4598-4618` 登录提交调 `auth64_verify_password`；绕过点 `:4563-4577,7596-7599`（锁屏开关）、`:4604-4606`（未配置放行）、`:4614-4616`（32 位直解） | 评估未配置账户分支在非首启场景是否应收紧；`lock=0` 开关的来源与权限收口；`a_streq`（`auth64.c:35-38`）为早退逐字符比较、非恒定时间，如需抗时序侧信道改为恒定时间比较；`deelevate` 回补密码校验 |
+| 4 | **生产启动路径仍跑测试程序**：autorun 四程序 + 两个 uproc 取证探针 | `kernel_main_64.c:1339-1342,1365,1369` | **未关闭**（`a787a01` 复核仍在无条件 autorun 块内） | 移入 `HEPU_BOOT_SELFTEST` 类编译期/运行时开关，或仅在诊断镜像执行；去掉重复的 `sec_test` |
 | 5 | **一批 syscall 空桩返回成功**：mremap/prlimit64/fcntl/clock_nanosleep/epoll_*/link/vfork/… | `syscall64_full.c:795-1448`；32 位 `sys_fs.c:274-342` | **未修** | 未实现桩应返回 `-ENOSYS`（或对应负错误码），不得 `return 0`；修 `wrap_*` 丢失参数问题 |
 | 6 | **fb release 不清显存**：探针像素残留到桌面首帧 | `syscall64_full.c:2620-2628` | **未修** | release 或桌面首帧前加显存回读/清屏断言 |
 | 7 | **能力句柄只增不减**：`cap_revoke`/`cap_list_domain` 不可达 | `capability.c:111,193`；`capability64.c:117,146` | **未修** | 补设备回收时的能力撤销路径，或明确标注不支持并从接口移除 |

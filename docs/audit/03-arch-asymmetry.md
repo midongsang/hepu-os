@@ -13,7 +13,7 @@
 | 3 | seccomp 系统调用过滤 | `kernel/arch/x86_64/seccomp64.c`：`init/allow/deny/enable_strict/set_filter/guard_current`；接入点 `syscall64_full.c:987-1017`（设过滤器）、`:3012`（`seccomp64_guard_current` 拦截）、`user_process.c:2415-2418`（槽位复用前 reset） | `kernel/arch/x86/app_container.c:49,290-293` 仅有 `seccomp_enabled` 标志位与 `ac_seccomp_set()` 开关；全仓 32 位无过滤器校验执行路径 | **缺失（32）** | 32 位进程无系统调用白/黑名单强制执行；标志位可能被误以为已隔离 |
 | 4 | 私有用户地址空间（隔离页表） | `kernel/arch/x86_64/user_aspace64.c`；宏 `-DHEPU_USER_ISOLATION=1`（`kernel/arch/x86_64/Makefile:245`）；内置 hello 在隔离模式跳过（`kernel_main_64.c:873-878`） | `kernel/arch/x86/kernel.c:506` 仅 `paging_init_memory_isolation()` 解析启动参数；无私有页表分配/切换实现文件 | **缺失（32）** | 32 位用户态地址空间隔离强度低于 64 位 |
 | 5 | SMP / AP 启动 | `kernel/arch/x86_64/smp.c`、`ap_trampoline.S`、`ap_trampoline_data.h`（列入 `x86_64/Makefile`）；`kernel_main_64.c:861` 注释 AP 侧 FPU 探针 | `kernel/arch/x86/` 目录无 smp/ap 相关文件（grep 无命中） | **缺失（32）** | 32 位单核；FPU 上下文保存/恢复路径不同（`kernel_init.c:302-316` 注释说明 32 位不保存 FPU 状态） |
-| 6 | 账户持久化与密码提权 | `kernel/arch/x86_64/auth64.c`：config 读写、sha256 hash、`elevate/deelevate`；OOBE `oobe64.c`/`hs_oobe64.c` | `kernel/arch/x86/login.c`、`multi_user.c`：登录/解锁存在，但密码参数被忽略（见报告 05 §2）；无 hash 持久化 | **能力不对称** | 详见报告 04、05：64 位密码校验只接提权路径；32 位认证为空桩 |
+| 6 | 账户持久化与密码提权 | `kernel/arch/x86_64/auth64.c`：config 读写、sha256 hash、`elevate/deelevate`；登录提交 `hpdesk.c:4598-4618` 已接 `auth64_verify_password`（`9e8f2a3`/`a787a01`）；OOBE `oobe64.c`/`hs_oobe64.c` | `kernel/arch/x86/login.c`、`multi_user.c`：登录/解锁存在，但密码参数被忽略（见报告 05 §5.4.1）；无 hash 持久化；另有 syscall 级 `sys_verify_password`（`sys_user.c:103-126`）未接桌面 UI | **能力不对称** | 详见报告 04、05：64 位登录与提权路径均已接线（含绕过分支）；32 位桌面认证仍为空桩放行 |
 | 7 | 双缓冲后台帧 | `gfx64.c:42` `back_buffer`，pmm 动态分配；fb_desc flags 双缓冲位（`:1428`） | `sys_fb.c:100` `d.flags = 0u`（单缓冲直写 LFB） | **设计不对称** | 32 位用户态/内核直写显存，撕裂与并发写保护依赖"owner 期间内核不 present" |
 | 8 | 网卡驱动 | `kernel/arch/x86_64/e1000_64.c`、`rtl8139_64.c`（`x86_64/Makefile:45-46`）；接线 `kernel_main_64.c:1187-1188` | `kernel/drivers/e1000.c`、`kernel/drivers/rtl8139.c`；接线 `kernel_init.c:526-530` | **双份实现** | 两份驱动独立演化，寄存器/轮询逻辑可能不一致；任务基线提交 `5f93c2d` 修的正是 32 位 e1000 RCTL.BSIZE 错位 |
 | 9 | AHCI/SATA 驱动 | `kernel/arch/x86_64/ahci64.c`；ext2 块设备切换 `kernel_main_64.c:1128-1133` | `kernel/drivers/ahci.c` | **双份实现** | 驱动能力（NCQ/端口枚举/错误恢复）需逐一对齐 |
@@ -30,7 +30,7 @@
 |------|-----------|-----------|------|
 | 网卡 + 静态 IP + MAC 回写 | `kernel_main_64.c:1184-1206` | `kernel_init.c:524-530`（pci_scan_all → rtl8139 → e1000） | 64 位有 `eth64_update_mac()` 修正硬编码 MAC（`:1194-1195`）；32 位对应路径未见等价回写 |
 | 网络 HAL / BSD Socket | `kernel_main_64.c:1212-1217` | `init_sequence.c:343-353`（socket_init 等） | 两侧协议栈文件不同 |
-| 账户加载 / OOBE | `kernel_main_64.c:1252-1259`；`desktop64.c:242-246` | `init_sequence.c:372` `permission_manager_init()`；`login.c` | 64 位开机只判 configured，不弹密码；32 位登录界面密码不校验 |
+| 账户加载 / OOBE | `kernel_main_64.c:1252-1259`；`desktop64.c:242-246`；登录页三分支校验 `hpdesk.c:4598-4618` | `init_sequence.c:372` `permission_manager_init()`；`login.c` | 64 位未配置账户走 OOBE 建号，已配置账户在登录页做 sha256 比对；32 位登录界面密码不校验 |
 | 桌面 extras（锁/动画/主题/插件） | `kernel_main_64.c:1156-1164` | 无对应集中初始化调用点 | 32 位桌面依赖桩降级（`hpdesk32_deps.c:1-10`） |
 | 驱动注册表 / 驱动管理器 / GPS / 本地化 | `kernel_main_64.c:1167-1176`（`drv_register_all64/reg64_init/gps64_init/l10n64_init/drv_mgr64_init`） | `init_sequence.c` 对应 `unified_driver_init`（`kernel_init.c:132`）等 | 命名与注册粒度不同 |
 | 大量内核子系统自测 | 桌面成功后 3 个一次性探针（`kernel_main_64.c:1291,1375,1381`） | `kernel_init.c`/`init_sequence.c` 内联 20+ 个 `*_selftest()`（见报告 01 §1.3） | 32 位自测在启动路径上密度显著更高 |

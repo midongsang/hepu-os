@@ -14,19 +14,19 @@
 
 ## 4.2 64 位：认证与沙箱
 
-### 4.2.1 `auth64_verify_password` —— 部分接线，登录路径未接（已确认）
+### 4.2.1 `auth64_verify_password` —— 提权路径 + 64 位登录提交路径均已接线（a787a01 复核）
 
 | 项 | 证据 |
 |----|------|
-| 定义 | `kernel/arch/x86_64/auth64.c:321` `int auth64_verify_password(const char *user, const char *password)`：取持久化 hash，sha256 计算后比较，`:343-352` |
-| 唯一内部调用方 | `auth64_elevate()` `:357`（提权"su"路径） |
-| 外部调用方 | 0（全 `kernel/` grep 除 `auth64.c` 无命中） |
-| 会话/登录路径 | 无。开机后只调 `auth64_is_configured()` 判是否首启（`kernel/arch/x86_64/desktop64.c:242-246`）；已配置账号直接进入桌面，不弹密码；`g_role` 由 `auth64_init()` 从配置直接加载（`auth64.c:255-274`） |
-| 判定 | **预留接口（提权路径已接，登录/锁屏路径未接）**。密码只在提权时校验，开机进入桌面不校验 |
-| 影响 | 拿到会话即可使用持久化账号角色；`deelevate`（`:372`）无密码回退保护 |
-| main 复核 | `3d0bd23` 上仍未接登录/锁屏路径：`auth64_verify_password` 唯一调用方仍是 `auth64_elevate`（`auth64.c:357`）；函数签名在 main 上为 `(const char *pass)`（基线为 `(user, password)`）。状态未修，见报告 05 §5.9 第 1 项 |
+| 定义 | `kernel/arch/x86_64/auth64.c:321` `int auth64_verify_password(const char *pass)`：g_hash 空/口令空或超 55 字节返 0（`:323-324`），否则 `hash_password` 后 `a_streq` 比对（`:325-327`） |
+| 调用方 1：提权 | `auth64_elevate()` `:357`（提权"su"路径） |
+| 调用方 2：登录提交 | `hpdesk.c:4608` `hs_login_submit()` 内：已配置账户时调 `auth64_verify_password(g_password)`；入口为登录按钮点击 `hpdesk.c:5839-5845` 与回车 `:7317-7322`（提交 `9e8f2a3`，并入 `a787a01`） |
+| 三分支 | `hpdesk.c:4598-4618`：① `!auth64_is_configured()` 返 1 放行（`:4604-4606`）；② verify 通过返 1（`:4608-4610`）；③ 失败返 0，留登录页（`:4612-4613`）。通过后 `hs_login_unlock` 置 `g_locked=0`（`:4621-4628`），失败 `hs_login_reject` 留 `g_locked=2`（`:4631-4636`） |
+| 判定 | **已接线，但含设计内/配置内绕过分支**（详见报告 05 §5.4.2、§5.9 第 3 项）：`hepu.lock=0` 或 `/system.conf lock=0` 直进桌面（`hpdesk.c:4563-4577,7596-7599`）；账户未配置放行；32 位编译 `#else` 直接解锁（`:4614-4616`） |
+| 残留影响 | `deelevate`（`:364`）无密码回退保护；未配置账户分支下拿到会话即可使用持久化角色 |
+| 旧结论作废 | 基于 `3d0bd23` 的"登录/锁屏路径未接、verify 只有 elevate 一个调用方"结论已作废：`9e8f2a3` 后登录页已接入校验。基线 `5f93c2d` 与 `3d0bd23` 上该结论成立 |
 
-其余 auth64 可达性：`auth64_create_account`（`:311`）由 OOBE 调用（`oobe64.c:137` 写配置）；`auth64_write_config/read_config`（`:124,173`）OOBE/l10n 使用；`auth64_deelevate`（`:372`）、`auth64_current_user/current_role`（`:380`）有桌面/提权面板调用。
+其余 auth64 可达性（a787a01 行号）：`auth64_create_account`（`:331`）由 OOBE 调用（`oobe64.c:208`、`hs_oobe64.c:224`）；`auth64_write_config/read_config`（`:373,375`）OOBE/l10n 使用（`oobe64.c:137,140`）；`auth64_deelevate`（`:364`）由 `hs_apps.c:438,447`、`shell64.c:3243,3253` 调用；`auth64_current_user/current_role`（`:317,318`）有桌面/提权面板调用。
 
 ### 4.2.2 seccomp 公开包装未接 syscall 路径（已确认）
 
