@@ -7478,6 +7478,16 @@ int hpdesk_init(int width, int height)
         }
     }
 
+    /* 开机停在锁屏。链路是 引导菜单 -> 加载屏 -> 锁屏 -> 桌面; 之前 g_locked
+     * 初始为 0, 除了按 L 手动锁之外从不置位, 所以开机直接躺在桌面上, 锁屏在
+     * 正式启动里等于不存在。
+     * OOBE 没走完时不锁: 那时还没有账号可"锁", 首设向导自己会接管画面。
+     * 顺带把"桌面壁纸还没铺满"那段黑底盖掉 —— 锁屏第一帧就是整屏填 bg。 */
+    {
+        g_locked = 1;
+        vga_puts("[Hepu Desktop] booting to lock screen\n");
+    }
+
     vga_puts("[Hepu Desktop] Initialized (");
     char buf[8];
     itoa_hs(width, buf);
