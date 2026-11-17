@@ -76,7 +76,7 @@ source_of_truth: kernel/arch/x86_64/
 正确**的（它们指向的是原大页那块物理内存，本就不该给用户态访问），
 而每个真正要映射的栈页由 `map_page` 自己写入并带 USER 位，不会被继承值
 覆盖。故此项不改代码，记录为「已排查、非缺陷」。
-**端到端已复现验证（v0.59.1）**：用编译开关 `HEPU_SEC19_PROBE` 在桌面起来后真跑一次 `/bin/ps.elf`（SEC-19 的原始复现程序），串口完整打印 `PID PPID STATE PRI PAGES NAME` 4 行进程列表，`Process exited with code 0`，全程无 `#PF`、`EXC=0`。（默认不编译该探针，回归不执行）剩余待办：`split_huge_pde` 继承 U=0 的 flags 修正（暂不动，观察是否复现） |
+**端到端已复现验证（v0.59.1）**：用编译开关 `HEPU_SEC19_PROBE` 在桌面起来后真跑一次 `/bin/ps.elf`（SEC-19 的原始复现程序），串口完整打印 `PID PPID STATE PRI PAGES NAME` 4 行进程列表，`Process exited with code 0`，全程无 `#PF`、`EXC=0`。（默认不编译该探针，回归不执行）剩余待办：`split_huge_pde` 继承 U=0 的 flags 修正（暂不动，观察是否复现）。**2026-11-17 复核（基线 `2b1cf9f`，`HEPU_SEC19_PROBE` 两轮独立启动）**：每次 exec 的 256 页栈自检均无 `[SEC19] stack pages not user-accessible`、无 `map failed`、无 `stack PD entry STILL a huge page` 告警；探针真跑 `/bin/ps.elf`，串口打印 `PID PPID STATE PRI PAGES NAME` 及 5 行进程列表（`idle`/`idle1`/`kbeat`/`khouse`/`kstat`），`Process exited with code 0`、`probe done ret=0x0`，全程无 `#PF`/`EXC`。结论维持「已修复」，本次复核未改代码 |
 | SEC-13 | **v0.33.0 新开**：**用户态 ABI 约定的三处违背**（均由 v0.33.0 定位并修复，登记备查）：① 入口 GPR 未清零（同 SEC-10）② **用户栈 16 字节对齐**：内核给的初始 RSP 曾为 ≡0(mod16)，而 gcc 生成的 `_start` prologue 固定减少 0x38 字节，随后 `movaps %xmm0,(%rsp)` 要求 RSP≡0 ⇒ 实际落在 ≡8 ⇒ `#GP`（error code bit0=0 = 对齐检查失败）。按 SysV 约定改为 **RSP ≡ 8 (mod 16)** ③ **CR4.OSFXSR/OSXMMEXCPT 从未置位**：用户态执行任何 SSE 指令直接 `#GP`；x86-64 架构要求 SSE2，glibc/gcc 默认生成 SSE 指令 ⇒ 这不是可选加速而是用户态 ABI 硬要求（Linux `start_thread` 同样置位）。现三项均已修，启动打印 `hardware state: SMEP=.. SMAP=.. SSE=..` | user_switch.S、user_stack64.c、x86_64.c | 已关闭 |
 | SEC-09 | ~~进程正常退出后记录仍 active，槽位不回收~~ **已修复（0.14.0）**：user_return_cleanup 正常退出也 release 槽位（active=0、释放内核栈、清 fd 表）；QEMU 连续 10 次 exec 无「No free process」、空闲页 delta=0 | user_process.c:user_return_cleanup | 已关闭 |
 

@@ -49,6 +49,8 @@ typedef struct {
 #define DHCP_OPT_DHCP_MSG     53
 #define DHCP_OPT_SERVER_ID    54
 #define DHCP_OPT_PARAM_LIST   55
+#define DHCP_OPT_RENEWAL      58
+#define DHCP_OPT_REBINDING    59
 #define DHCP_OPT_END          255
 
 /* DHCP状态 */
@@ -108,6 +110,11 @@ static uint32_t dhcp_netmask = 0;
 static uint32_t dhcp_gateway = 0;
 static uint32_t dhcp_dns = 0;
 static int dhcp_udp_sock = -1;
+/* 租约计时：lease=获租秒数，t1=续租(T1)秒数；bound_tick 为拿到 ACK 时的
+ * 内核毫秒 tick（g_kernel_tick64）。T1 未下发时按租约一半计（DHCP 规范）。 */
+static uint32_t dhcp_lease_time = 0;
+static uint32_t dhcp_t1 = 0;
+static uint64_t dhcp_bound_tick = 0;
 
 /* 初始化DHCP */
 void dhcp64_init(void)
@@ -197,6 +204,44 @@ static int dhcp_send_request(uint32_t requested_ip, uint32_t server_ip)
     return rc2;
 }
 
+/* 续租（T1 到点）：单播给 DHCP 服务器，ciaddr 填当前已持有的地址，
+ * 不再请求新地址；服务器回 ACK 即续租成功，回 NAK 则释放回 INIT 重新发现。 */
+static int dhcp_send_renew(void)
+{
+    uint8_t packet[sizeof(dhcp_packet_t)];
+    dhcp_packet_t *dhcp = (dhcp_packet_t *)packet;
+    dhcp_memset(packet, 0, sizeof(packet));
+
+    dhcp->op = 1;
+    dhcp->htype = 1;
+    dhcp->hlen = 6;
+    dhcp_xid++;
+    dhcp->xid = htonl32(dhcp_xid);
+    dhcp->flags = 0;  /* 续租走单播，不置广播位 */
+    dhcp->ciaddr = htonl32(dhcp_offered_ip);  /* 已持有的地址 */
+    eth64_get_mac(dhcp->chaddr);
+    dhcp->magic = htonl32(0x63825363);
+
+    int opt_idx = 0;
+    dhcp->options[opt_idx++] = DHCP_OPT_DHCP_MSG;
+    dhcp->options[opt_idx++] = 1;
+    dhcp->options[opt_idx++] = DHCP_REQUEST;
+    /* 服务器 ID（续租明确指向当前服务器） */
+    dhcp->options[opt_idx++] = DHCP_OPT_SERVER_ID;
+    dhcp->options[opt_idx++] = 4;
+    uint32_t sip = htonl32(dhcp_server_ip);
+    dhcp_memcpy(&dhcp->options[opt_idx], &sip, 4);
+    opt_idx += 4;
+    dhcp->options[opt_idx++] = DHCP_OPT_END;
+
+    int rc2 = udp64_send(dhcp_server_ip, DHCP_CLIENT_PORT, DHCP_SERVER_PORT,
+                         packet, 240 + opt_idx);
+    vga_puts("[DHCP64] renew request rc=");
+    vga_put_hex((uint64_t)rc2);
+    vga_puts("\n");
+    return rc2;
+}
+
 /* 解析DHCP选项 */
 static void dhcp_parse_options(const uint8_t *options, int len)
 {
@@ -230,6 +275,18 @@ static void dhcp_parse_options(const uint8_t *options, int len)
                 break;
             case DHCP_OPT_DHCP_MSG:
                 /* 消息类型在处理函数中判断 */
+                break;
+            case DHCP_OPT_LEASE_TIME:
+                if (opt_len == 4) {
+                    dhcp_memcpy(&dhcp_lease_time, &options[i + 2], 4);
+                    dhcp_lease_time = ntohl32(dhcp_lease_time);
+                }
+                break;
+            case DHCP_OPT_RENEWAL:
+                if (opt_len == 4) {
+                    dhcp_memcpy(&dhcp_t1, &options[i + 2], 4);
+                    dhcp_t1 = ntohl32(dhcp_t1);
+                }
                 break;
         }
         i += 2 + opt_len;
@@ -292,6 +349,13 @@ static int dhcp_handle_ack(const uint8_t *packet, int len)
     uint32_t assigned_ip = ntohl32(dhcp->yiaddr);
     dhcp_parse_options(dhcp->options, len - 240);
 
+    /* T1 未下发时按租约一半计（DHCP 规范 RENEWING 起点）。 */
+    if (dhcp_t1 == 0 && dhcp_lease_time > 0) dhcp_t1 = dhcp_lease_time / 2;
+    {
+        extern uint64_t g_kernel_tick64;
+        dhcp_bound_tick = g_kernel_tick64;
+    }
+
     /* 设置网络配置 */
     eth64_set_ip(assigned_ip, dhcp_netmask, dhcp_gateway);
     dhcp_state = DHCP_STATE_BOUND;
@@ -310,6 +374,10 @@ static int dhcp_handle_ack(const uint8_t *packet, int len)
     vga_puts("[DHCP64] gateway: "); vga_puts(buf); vga_puts("\n");
     dhcp_format_ip(dhcp_dns, buf);
     vga_puts("[DHCP64] DNS: "); vga_puts(buf); vga_puts("\n");
+
+    /* 租约分段取证：租约时长与 T1 续租点（秒） */
+    vga_puts("[DHCP64] lease: "); vga_put_hex(dhcp_lease_time);
+    vga_puts("s T1: "); vga_put_hex(dhcp_t1); vga_puts("s\n");
 
     /* V0.13.33: 网络连接通知 */
     {
@@ -420,13 +488,54 @@ int dhcp64_poll(void)
             break;
         }
 
-        case DHCP_STATE_BOUND:
+        case DHCP_STATE_BOUND: {
             /* 拿到租约后跑一轮端到端探测（ARP/ICMP/TCP 分段取证） */
             {
                 extern void net64_postup_probe(void);
                 net64_postup_probe();
             }
+            /* T1 到点 → 进入 RENEWING，单播续租。 */
+            extern uint64_t g_kernel_tick64;
+            if (dhcp_t1 > 0) {
+                uint64_t elapsed_ms = g_kernel_tick64 - dhcp_bound_tick;
+                if (elapsed_ms >= (uint64_t)dhcp_t1 * 1000ULL) {
+                    vga_puts("[DHCP64] T1 reached, renewing (unicast)...\n");
+                    dhcp_send_renew();
+                    dhcp_state = DHCP_STATE_RENEWING;
+                }
+            }
             return 1;  /* 已绑定 */
+        }
+
+        case DHCP_STATE_RENEWING: {
+            int len = udp64_recv(dhcp_udp_sock, buffer, sizeof(buffer), &src_ip, &src_port);
+            if (len > 0 && src_port == DHCP_SERVER_PORT) {
+                dhcp_packet_t *dhcp = (dhcp_packet_t *)buffer;
+                if (len >= 240 && ntohl32(dhcp->xid) == dhcp_xid) {
+                    const uint8_t *opts = dhcp->options;
+                    int i = 0;
+                    while (i < 308) {
+                        if (opts[i] == DHCP_OPT_END) break;
+                        if (opts[i] == DHCP_OPT_PAD) { i++; continue; }
+                        if (i + 2 > 308) break;
+                        if (opts[i] == DHCP_OPT_DHCP_MSG && opts[i+1] == 1) {
+                            if (i + 3 > 308) break;
+                            if (opts[i+2] == DHCP_ACK) {
+                                vga_puts("[DHCP64] renew ACK, lease refreshed\n");
+                                dhcp_handle_ack(buffer, len);
+                                return 1;
+                            } else if (opts[i+2] == DHCP_NAK) {
+                                vga_puts("[DHCP64] renew NAK, restarting\n");
+                                dhcp_state = DHCP_STATE_INIT;
+                            }
+                            break;
+                        }
+                        i += 2 + opts[i+1];
+                    }
+                }
+            }
+            break;
+        }
     }
 
     return 0;  /* 进行中 */

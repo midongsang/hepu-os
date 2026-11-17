@@ -63,6 +63,16 @@ static uart_device_t uart_devices[4] = {
 int uart64_putc(int com, char c);
 int uart64_puts(int com, const char *str);
 
+/* IRQ4 接收路径：RX 环形缓冲 + 计数。
+ * 旧实现只在 IER 里打开了接收中断使能，却从未向中断控制器注册 IRQ4 处理函数，
+ * RX 字符只能堆在 16550 FIFO 里，任何轮询/中断路径都读不到。 */
+#define UART_RX_RING 64
+static volatile uint8_t  uart_rx_ring[UART_RX_RING];
+static volatile uint32_t uart_rx_head = 0;
+static volatile uint32_t uart_rx_tail = 0;
+volatile uint32_t g_uart_rx_irq_count = 0;
+volatile uint32_t g_uart_rx_char_count = 0;
+
 /* IO端口读写 */
 static inline uint8_t uart_inb(uint16_t port)
 {
@@ -185,6 +195,60 @@ int uart64_getc_nonblock(int com)
     /* 读取数据 */
     return uart_inb(port + UART_RX);
 }
+
+/* 排空 COM1 接收 FIFO：入环形缓冲并回显。回显让主机侧能直接验证接收路径
+ * 真的被触发（收到什么发回什么），同时不依赖上层消费者是否就绪。 */
+static void uart64_drain_rx(uint16_t port)
+{
+    while (uart_inb(port + UART_LSR) & UART_LSR_DR) {
+        uint8_t c = uart_inb(port + UART_RX);
+        g_uart_rx_char_count++;
+        uint32_t next = (uart_rx_head + 1) % UART_RX_RING;
+        if (next != uart_rx_tail) {
+            uart_rx_ring[uart_rx_head] = c;
+            uart_rx_head = next;
+        }
+        /* 回显到 TX（不经过 uart64_putc 的 com 校验，handler 上下文直接发） */
+        int timeout = 100000;
+        while (!(uart_inb(port + UART_LSR) & UART_LSR_THRE)) {
+            if (--timeout == 0) break;
+        }
+        uart_outb(port + UART_TX, c);
+    }
+}
+
+/* IRQ4 中断处理函数（COM1, 0x3F8）。由 irq64_init 注册到中断向量 36。 */
+void uart64_irq_handler(void)
+{
+    uart_device_t *dev = &uart_devices[0];
+    if (!dev->initialized) return;
+    uint16_t port = dev->port;
+    g_uart_rx_irq_count++;
+    /* IIR bit0=1 表示无挂起中断，直接返回（spurious 兜底） */
+    if (uart_inb(port + UART_IIR) & 0x01) return;
+    uart64_drain_rx(port);
+}
+
+/* 接收缓冲是否有字符（供上层轮询读取） */
+int uart64_haschar(int com)
+{
+    if (com < 0 || com >= 4) return 0;
+    return uart_rx_head != uart_rx_tail;
+}
+
+/* 从接收缓冲取一个字符，无数据返回 -1 */
+int uart64_getchar(int com)
+{
+    if (com < 0 || com >= 4) return -1;
+    if (uart_rx_head == uart_rx_tail) return -1;
+    uint8_t c = uart_rx_ring[uart_rx_tail];
+    uart_rx_tail = (uart_rx_tail + 1) % UART_RX_RING;
+    return (int)c;
+}
+
+/* 接收中断/字符计数（诊断与回归取证用） */
+uint32_t uart64_rx_irq_count(void)  { return g_uart_rx_irq_count; }
+uint32_t uart64_rx_char_count(void){ return g_uart_rx_char_count; }
 
 /* 接收一个字符（阻塞） */
 char uart64_getc(int com)
