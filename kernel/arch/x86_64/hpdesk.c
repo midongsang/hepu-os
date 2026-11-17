@@ -3959,11 +3959,20 @@ static int hs_panel_bounds(int idx, int *ox, int *oy, int *ow, int *oh)
         return 1;
     }
     case HS_PANEL_WEATHER: {
-        /* 实测桌面天气卡在右下角(不是右上), 见 docs 里 V0.59.19 的截图 */
+        /* 实测桌面天气卡在右下角(不是右上), 见 docs 里 V0.59.19 的截图。
+         *
+         * 锚点必须和 hs_weather_widget_render() / 阴影那处 hs_sh_paint(3, ...) 一致：
+         * 它们都把 weather_margin_right 当成"卡片左边界到屏右缘的距离"，
+         * 即 wx = sw - margin_right，卡片再往右铺 ww 宽。
+         * 原来这里按"右边距"理解（sw - ww - margin_right - 24），于是层区域
+         * 落在卡片左边一大截，和卡片只有 4px 重叠 —— 台账记的"差 24px"就是它，
+         * 实际差的是接近一整张卡宽。阴影/玻璃底因此画在空处。
+         * 统一成"卡片矩形 + pad"。 */
         int ww = hs_sx(g_shell.ui.weather_width), wh = hs_sy(g_shell.ui.weather_height);
-        *ox = sw - ww - hs_sx(g_shell.ui.weather_margin_right) - hs_sx(24);
-        *oy = sh - wh - hs_sy(140);
-        *ow = ww + hs_sx(48); *oh = wh + hs_sy(160);
+        int pad = hs_sx(24);
+        *ox = sw - hs_sx(g_shell.ui.weather_margin_right) - pad;
+        *oy = sh - hs_sy(g_shell.ui.weather_margin_bottom) - pad;
+        *ow = ww + pad * 2; *oh = wh + pad * 2;
         if (*ox < 0) *ox = 0;
         if (*oy < 0) *oy = 0;
         if (*oy + *oh > sh) *oh = sh - *oy;
