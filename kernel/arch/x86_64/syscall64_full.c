@@ -24,6 +24,19 @@ extern int copy_str_from_user(char *kernel_dst, const char *user_src, size_t max
 /* V0.54.12(R4): 用户地址窗口校验（含溢出检查），用于危险 syscall 入口 */
 extern int hepu_is_user_address(uintptr_t addr, size_t size);
 
+/* OPEN-04 / SEC-04: 高危操作（裸盘读写 / mkfs / reboot）闸口。
+ * 原闸口只放行 PID==0（内核 idle 上下文）。安装器是用户态唯一需要这些操作的
+ * 程序: exec 阶段按可执行文件名精确匹配后把 PID 记入白名单（见 user_process.c）。
+ * 这里仅放行「内核上下文」或「白名单内的安装器进程」，其余用户进程维持原拒绝；
+ * 不拆除整道闸，不做全局 capability 放宽。 */
+static inline int syscall_installer_allowed(void)
+{
+    extern int user_process_get_current_pid(void);
+    extern int user_process_is_installer(void);
+    int p = user_process_get_current_pid();
+    return p == 0 || user_process_is_installer();
+}
+
 /* 安全修复：从用户空间复制路径字符串
  * 旧实现固定拷贝 255/256 字节且不保证 NUL 结尾（超长路径会让后续 strlen/strcpy
  * 越过栈缓冲区），并在字符串靠近映射页末尾时误报 EFAULT。
@@ -579,15 +592,18 @@ int fs_fd_release(int fd)
     return ok ? 0 : -1;
 }
 
-/* sys_mkfs: 安装器格式化分区为 ext2。a1=lba a2=sectors a3=label(ptr,可空) */
+/* sys_mkfs: 安装器格式化分区为 ext2。a1=lba a2=sectors a3=label(ptr,可空)
+ * a4=magic a5=drive(0=master 1=slave; 缺省 0, 不改变既有调用语义)。 */
 extern int ext2_64_mkfs(uint32_t part_lba, uint32_t part_sectors, const char *label);
-static int64_t sys_mkfs(uint32_t lba, uint32_t sectors, const char *label, uint32_t magic)
+static int64_t sys_mkfs(uint32_t lba, uint32_t sectors, const char *label, uint32_t magic, int drive)
 {
     /* 安全：mkfs 是高危操作。V0.54.12(R4 SC-04) 在原魔数之外加 PID==0
-       临时闸——魔数是源码内可见常量，单独不足以鉴权；完整能力模型待后续。 */
-    extern int user_process_get_current_pid(void);
-    if (user_process_get_current_pid() != 0) return -1;
+       临时闸——魔数是源码内可见常量，单独不足以鉴权；完整能力模型待后续。
+       OPEN-04: 安装器白名单进程一并放行（见 syscall_installer_allowed）。 */
+    if (!syscall_installer_allowed()) return -1;
     if (magic != 0x4D4B4653u) return -1;
+    extern void ide64_set_drive(int drive);
+    ide64_set_drive(drive ? 1 : 0);
     char klabel[16]; klabel[0] = 0;
     if (label) copy_str_from_user(klabel, label, sizeof(klabel));
     return ext2_64_mkfs(lba, sectors, klabel[0] ? klabel : "hps");
@@ -750,7 +766,9 @@ static int64_t sys_getegid(void) { return g_cred_egid; }
 /* V0.20.55: sched_yield */
 static int64_t sys_sched_yield(void) {
     extern void process64_yield(void);
+    extern void user_process_heartbeat(void);
     process64_yield();
+    user_process_heartbeat();   /* OPEN-04: 协作式长任务刷新看门狗计时 */
     return 0;
 }
 
@@ -2255,8 +2273,8 @@ static int64_t wrap_readdir(int64_t a1, int64_t a2, int64_t a3, int64_t a4, int6
     return sys_readdir((const char*)a1, (char*)a2, (int)a3);
 }
 static int64_t wrap_mkfs(int64_t a1, int64_t a2, int64_t a3, int64_t a4, int64_t a5, int64_t a6) {
-    (void)a5; (void)a6;
-    return sys_mkfs((uint32_t)a1, (uint32_t)a2, (const char*)a3, (uint32_t)a4);
+    (void)a6;
+    return sys_mkfs((uint32_t)a1, (uint32_t)a2, (const char*)a3, (uint32_t)a4, (int)a5);
 }
 static int64_t wrap_stat(int64_t a1, int64_t a2, int64_t a3, int64_t a4, int64_t a5, int64_t a6) {
     (void)a3; (void)a4; (void)a5; (void)a6;
@@ -2551,9 +2569,8 @@ static int64_t wrap_getcwd(int64_t a1, int64_t a2, int64_t a3, int64_t a4, int64
  * sys_disk_write(lba, user_buf, count): 从用户缓冲写 count 个扇区 */
 static int64_t sys_disk_read(uint64_t lba, void *user_buf, uint64_t count, int drive)
 {
-    /* SEC-04: 裸盘读写需特权 */
-    extern int user_process_get_current_pid(void);
-    if (user_process_get_current_pid() != 0) return -1;
+    /* SEC-04: 裸盘读写需特权。OPEN-04: 安装器白名单进程一并放行。 */
+    if (!syscall_installer_allowed()) return -1;
     if (count < 1 || count > 64 || lba > 0xFFFFFFFFULL - count) return -1;  /* lba 会被截断为32位 */
     static uint8_t kb[64 * 512];   /* 最多64扇区=32KB */
     extern int ide64_read_sectors(uint32_t lba, uint8_t count, uint8_t *buffer);
@@ -2572,9 +2589,8 @@ static int64_t sys_disk_read(uint64_t lba, void *user_buf, uint64_t count, int d
 
 static int64_t sys_disk_write(uint64_t lba, void *user_buf, uint64_t count, int drive)
 {
-    /* SEC-04: 裸盘写需特权 */
-    extern int user_process_get_current_pid(void);
-    if (user_process_get_current_pid() != 0) return -1;
+    /* SEC-04: 裸盘写需特权。OPEN-04: 安装器白名单进程一并放行。 */
+    if (!syscall_installer_allowed()) return -1;
     if (count < 1 || count > 64 || lba > 0xFFFFFFFFULL - count) return -1;  /* lba 会被截断为32位 */
     static uint8_t kb[64 * 512];
     extern int ide64_write_sectors(uint32_t lba, uint8_t count, const uint8_t *buffer);
@@ -2605,9 +2621,8 @@ static int64_t sys_reboot(void)
 {
     /* V0.54.12(R4 SC-03): 临时权限闸，PID==0 才允许重启。
        完整 cred/capability 模型留作后续架构项；内核内安装/文本 shell 走
-       直接调用不经过本分发，不受影响。 */
-    extern int user_process_get_current_pid(void);
-    if (user_process_get_current_pid() != 0) return -1;
+       直接调用不经过本分发，不受影响。OPEN-04: 安装器白名单一并放行。 */
+    if (!syscall_installer_allowed()) return -1;
     vga_puts("[SYSCALL] Rebooting system...\n");
     /* 8042 键盘控制器复位脉冲 */
     __asm__ volatile("outb %0, %1" : : "a"((uint8_t)0xFE), "Nd"((uint16_t)0x64));
