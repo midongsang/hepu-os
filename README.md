@@ -52,7 +52,7 @@
 
 *Hepu OS v0.60.7 桌面（1920×1080）：顶栏、Settings、8 色圆、网络通知*
 
-![任务管理器：Processes 页](docs/assets/taskmgr-grid-processes-0.59.5.png)
+![任务管理器：Processes 页](docs/assets/taskmgr-grid-processes-0.59.5.jpg)
 *任务管理器 Processes 页：八列 + 七条列竖线，标签栏固定在顶部*
 
 **线程自检实证**（串口，同一镜像）：

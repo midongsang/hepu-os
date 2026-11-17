@@ -1114,7 +1114,7 @@ run4 desk=1 EXC=0 PASS=1 FAIL=0 timercal=0
 run5 desk=1 EXC=0 PASS=1 FAIL=0 timercal=0
 ```
 
-桌面截图入库 `docs/assets/smp-sb17-0.58.6.png`（Info 面板 Uptime 0s、
+桌面截图入库 `docs/assets/smp-sb17-0.58.6.jpg`（Info 面板 Uptime 0s、
 Kernel 64-bit SMP、CPU 2 cores、Memory 976 MB）。
 
 ### 附带修掉的镜像构建问题
@@ -1207,7 +1207,7 @@ SB-17 的双核 dump 看着正常（0x23CA00 / 0x23CA60），是因为 AP 那条
 **AP 拿到自己的 ID=1** —— 这是改造前做不到的（旧代码这里恒为 0）。
 `timer calibration failed` 出现 2 次，属已知 OBS-01（约 16% 概率），非本轮引入。
 
-截图入库 `docs/assets/smp-sb19-0.58.7.png`。
+截图入库 `docs/assets/smp-sb19-0.58.7.jpg`。
 
 ---
 
@@ -1286,7 +1286,7 @@ void vga_puts(const char *str)           /* 对外入口 */
 - 追加 `-smp 12`：`desk=1 exc=0 fpuerr=0`，11 个 AP 全部打出 `[SB19]`，无 FPU 越界；
 - `-smp 4`：3 个 AP，同样干净。
 
-截图入库 `docs/assets/smp-sb04-08-0.58.8.png`（Net RX 772 KB/s 持续刷新，
+截图入库 `docs/assets/smp-sb04-08-0.58.8.jpg`（Net RX 772 KB/s 持续刷新，
 日志无半行交错，说明打印锁生效）。
 
 ### 环境侧：工具链迁出 /tmp
@@ -1385,7 +1385,7 @@ void     print_lock_release(uint64_t flags);
   读不到时显示 `--` 而不是 `0%`。
 
 实机数值 4% / 9% 与用户原始截图完全一致，说明数据源本来就对，只是展示方式重复。
-截图入库 `docs/assets/info-panel-0.58.9.png`。
+截图入库 `docs/assets/info-panel-0.58.9.jpg`。
 
 ---
 
@@ -1434,8 +1434,8 @@ Hepu OS v0.58.0  |  64-bit SMP  |  2 cores  |  DSK 9%
   下面 MEM/PROC/DRV、CPU/MEM/UP、THREADS 各行位置不变；
 - 3/3 轮回归 `desk=1 EXC=0 PASS=1 FAIL=0 SPINERR=0`，`TEMP-` 标记残留检查为 0。
 
-截图入库：`docs/assets/sidebar-2tabs-0.59.0.png`（侧栏两标签）、
-`docs/assets/taskmgr-sysinfo-0.59.0.png`（任务管理器新摘要行）。
+截图入库：`docs/assets/sidebar-2tabs-0.59.0.jpg`（侧栏两标签）、
+`docs/assets/taskmgr-sysinfo-0.59.0.jpg`（任务管理器新摘要行）。
 
 ---
 
@@ -1491,7 +1491,7 @@ PID  NAME      CPU  MEM  STATE
   NET 两个速率在一行且与曲线同一行、idle 行 CPU 列为 `--`；
 - `TEMP-` 标记残留检查为 0。
 
-截图入库 `docs/assets/taskmgr-redesign-0.59.1.png`。
+截图入库 `docs/assets/taskmgr-redesign-0.59.1.jpg`。
 
 ### 遗留
 
@@ -1643,7 +1643,7 @@ static void m_bar_c(int x, int y, ...) { 同上 }
 - 另做过一次"强制滚到底"的临时验证（滚轮模拟不便），确认内容整体上移、
   顶部规格行滚出视口并被正确裁剪（不越界绘制）。
 
-截图入库 `docs/assets/window-scrollbar-0.59.2.png`。
+截图入库 `docs/assets/window-scrollbar-0.59.2.jpg`。
 
 ### 遗留
 
@@ -1714,7 +1714,7 @@ TX    0K   [曲线]
 - 截图确认：规格行含 `979 MB`（不再是 0 MB）、四条视图左端对齐、MEM 有曲线、
   每条数值紧贴其视图左侧、THREADS 单行、`PROC 4  DRV 9` 在服务区右对齐。
 
-截图入库 `docs/assets/taskmgr-curves-0.59.3.png`。
+截图入库 `docs/assets/taskmgr-curves-0.59.3.jpg`。
 
 ### 遗留
 
@@ -1782,7 +1782,7 @@ TX    0K   [曲线]
 - Devices 页是通过**真实调用 `hs_taskmgr_click`** 切过去的，同时验证了命中几何
   （第一次算错：把点击点放在了两个标签的交界缝里，正好不命中，改到右半标签中心才进）。
 
-截图入库 `docs/assets/taskmgr-tabs-processes-0.59.4.png`、`taskmgr-tabs-devices-0.59.4.png`。
+截图入库 `docs/assets/taskmgr-tabs-processes-0.59.4.jpg`、`taskmgr-tabs-devices-0.59.4.jpg`。
 
 ### 遗留
 
@@ -1835,7 +1835,7 @@ TX    0K   [曲线]
 - 截图两张：Processes 页（八列 + 七条列竖线 + 行线，`PRIO 2 / CORE 1`、`TIME 5m` 有数据）、
   Devices 页（`DRIVER | STATE` 两列 + 竖线 + `PROC 4 DRV 9`）。
 
-截图入库 `docs/assets/taskmgr-grid-processes-0.59.5.png`、`taskmgr-grid-devices-0.59.5.png`。
+截图入库 `docs/assets/taskmgr-grid-processes-0.59.5.jpg`、`taskmgr-grid-devices-0.59.5.jpg`。
 
 ### 遗留
 
@@ -1884,7 +1884,7 @@ TEMP 注入的窗口这轮又出现"创建成功但屏幕上没有"。上一轮�
 - 3/3 轮 `desk=1 EXC=0 PASS=1 FAIL=0 SPINERR=0`，`TEMP-SHOT` 残留 0；
 - 截图：MEM 紫色面积带、CPU 绿色、RX/TX 均**满宽**，不再是右端一截。
 
-截图入库 `docs/assets/taskmgr-curve-fix-0.59.6.png`。
+截图入库 `docs/assets/taskmgr-curve-fix-0.59.6.jpg`。
 
 ### 说明
 
@@ -1954,7 +1954,7 @@ for py: for px: for dy(-r..r): for dx(-r..r): gfx64_get_pixel(...)
 - 1 轮 `desk=1 EXC=0 PASS=1 FAIL=0 SPINERR=0`；
 - 截图：Settings 与侧栏周围是连续衰减的暗影，三条色带消失。
 
-截图入库 `docs/assets/window-shadow-0.59.7.png`。
+截图入库 `docs/assets/window-shadow-0.59.7.jpg`。
 
 ### 遗留
 
@@ -2033,7 +2033,7 @@ a = (d1<dist ? 0 : (d1-dist)²*a1/d1²) + (d2<dist ? 0 : (d2-dist)²*a2/d2²);
 - 彻底删掉 contact 层，紧贴窗口处不再有硬边；
 - 覆盖范围仍只算窗口外侧的环，约 13 万次 blend/窗口，启动到桌面 15s 未变。
 
-截图 `docs/assets/window-shadow-soft-0.60.0.png`。
+截图 `docs/assets/window-shadow-soft-0.60.0.jpg`。
 
 ### 还没做的
 
@@ -2082,7 +2082,7 @@ a = (d1<dist ? 0 : (d1-dist)²*a1/d1²) + (d2<dist ? 0 : (d2-dist)²*a2/d2²);
 另外阴影色从纯黑换成偏冷的 `0x0A1620` —— 纯黑按比例乘暗会把 RGB 同步压低、暗部
 发灰失相；真阴影是环境光缺失，带一点天空散射的蓝。
 
-截图 `docs/assets/window-shadow-gauss-0.60.1.png`。
+截图 `docs/assets/window-shadow-gauss-0.60.1.jpg`。
 
 ### 内存不够时
 
