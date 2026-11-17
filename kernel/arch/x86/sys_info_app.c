@@ -172,9 +172,9 @@ static void format_bytes(uint64_t bytes, char *buf, int buf_size)
 /* 绘制UI */
 void sys_info_draw_ui(int x, int y, int width, int height)
 {
-    gfx_color_t bg={30,30,40,255}, fg={220,220,220,255}, accent={100,180,255,255};
-    gfx_color_t green={100,220,100,255}, yellow={220,200,100,255};
-    gfx_color_t gray={130,130,130,255}, label_color={150,170,200,255};
+    gfx_color_t bg = GFX_RGB(30, 30, 40), fg = GFX_RGB(220, 220, 220), accent = GFX_RGB(100, 180, 255);
+    gfx_color_t green = GFX_RGB(100, 220, 100), yellow = GFX_RGB(220, 200, 100);
+    gfx_color_t gray = GFX_RGB(130, 130, 130), label_color = GFX_RGB(150, 170, 200);
 
     gfx_fill_rect(x, y, width, height, bg);
 
@@ -189,9 +189,9 @@ void sys_info_draw_ui(int x, int y, int width, int height)
         if (i == si.current_tab) {
             gfx_fill_rect(tx, tab_y, 65, 22, accent);
             gfx_draw_string_font(tx+15, tab_y+5, tabs[i],
-                                 (gfx_color_t){0,0,0,255}, 12);
+                                 GFX_RGB(0, 0, 0), 12);
         } else {
-            gfx_fill_rect(tx, tab_y, 65, 22, (gfx_color_t){50,55,65,255});
+            gfx_fill_rect(tx, tab_y, 65, 22, GFX_RGB(50, 55, 65));
             gfx_draw_string_font(tx+15, tab_y+5, tabs[i], gray, 12);
         }
     }
@@ -303,7 +303,7 @@ void sys_info_draw_ui(int x, int y, int width, int height)
 
         /* 内存使用条 */
         int bar_x = x+20, bar_y = cy+135, bar_w = width-40, bar_h = 16;
-        gfx_fill_rect(bar_x, bar_y, bar_w, bar_h, (gfx_color_t){50,50,60,255});
+        gfx_fill_rect(bar_x, bar_y, bar_w, bar_h, GFX_RGB(50, 50, 60));
         float mem_pct = (float)si.memory.used_kb / si.memory.total_kb;
         gfx_fill_rect(bar_x, bar_y, (int)(bar_w*mem_pct), bar_h,
                       mem_pct>0.8?yellow:green);
@@ -329,7 +329,7 @@ void sys_info_draw_ui(int x, int y, int width, int height)
             int sy = cy + 22 + i * 90;
 
             gfx_fill_rect(x+15, sy, width-30, 80,
-                          (gfx_color_t){40,45,55,255});
+                          GFX_RGB(40, 45, 55));
 
             snprintf(line, sizeof(line), "%s (%s) - 挂载于 %s",
                      st->device, st->fs_type, st->mount_point);
@@ -346,7 +346,7 @@ void sys_info_draw_ui(int x, int y, int width, int height)
             /* 使用条 */
             int sb_x = x+25, sb_y = sy+48, sb_w = width-50, sb_h = 10;
             gfx_fill_rect(sb_x, sb_y, sb_w, sb_h,
-                          (gfx_color_t){50,50,60,255});
+                          GFX_RGB(50, 50, 60));
             float pct = (float)st->used_bytes / st->total_bytes;
             gfx_fill_rect(sb_x, sb_y, (int)(sb_w*pct), sb_h,
                           pct>0.8?yellow:green);
@@ -385,7 +385,7 @@ void sys_info_draw_ui(int x, int y, int width, int height)
         int prev_x = x + width - 180, prev_y = cy + 20;
         int prev_w = 160, prev_h = 120;
         gfx_fill_rect(prev_x, prev_y, prev_w, prev_h,
-                      (gfx_color_t){20,30,50,255});
+                      GFX_RGB(20, 30, 50));
         gfx_draw_rect(prev_x, prev_y, prev_w, prev_h, accent);
         snprintf(line, sizeof(line), "%dx%d", si.display.width,
                  si.display.height);

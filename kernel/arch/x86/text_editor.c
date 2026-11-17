@@ -384,12 +384,12 @@ static int is_keyword(const char *word)
 static void draw_syntax_line(int x, int y, const char *text,
                              int cursor_col, int is_current)
 {
-    gfx_color_t normal = {220, 220, 220, 255};
-    gfx_color_t keyword = {100, 150, 255, 255};
-    gfx_color_t comment = {100, 200, 100, 255};
-    gfx_color_t string = {200, 150, 100, 255};
-    gfx_color_t number = {200, 100, 200, 255};
-    gfx_color_t cursor_bg = {60, 80, 120, 255};
+    gfx_color_t normal = GFX_RGB(220, 220, 220);
+    gfx_color_t keyword = GFX_RGB(100, 150, 255);
+    gfx_color_t comment = GFX_RGB(100, 200, 100);
+    gfx_color_t string = GFX_RGB(200, 150, 100);
+    gfx_color_t number = GFX_RGB(200, 100, 200);
+    gfx_color_t cursor_bg = GFX_RGB(60, 80, 120);
 
     int len = strlen(text);
     int col = 0;
@@ -469,10 +469,10 @@ static void draw_syntax_line(int x, int y, const char *text,
 /* 绘制UI */
 void text_editor_draw_ui(int x, int y, int width, int height)
 {
-    gfx_color_t bg={25,25,30,255}, fg={220,220,220,255}, accent={100,180,255,255};
-    gfx_color_t line_num_bg={35,35,40,255}, line_num_fg={100,100,120,255};
-    gfx_color_t status_bg={40,40,50,255}, gray={130,130,130,255};
-    gfx_color_t modified_color={220,180,80,255};
+    gfx_color_t bg = GFX_RGB(25, 25, 30), fg = GFX_RGB(220, 220, 220), accent = GFX_RGB(100, 180, 255);
+    gfx_color_t line_num_bg = GFX_RGB(35, 35, 40), line_num_fg = GFX_RGB(100, 100, 120);
+    gfx_color_t status_bg = GFX_RGB(40, 40, 50), gray = GFX_RGB(130, 130, 130);
+    gfx_color_t modified_color = GFX_RGB(220, 180, 80);
 
     gfx_fill_rect(x, y, width, height, bg);
 
@@ -518,14 +518,14 @@ void text_editor_draw_ui(int x, int y, int width, int height)
         if (line == ed.cursor_line) {
             gfx_fill_rect(text_x - 2, ly - 1, width - text_x - 5,
                           line_height - 1,
-                          (gfx_color_t){35,40,55,255});
+                          GFX_RGB(35, 40, 55));
         }
         /* 搜索匹配高亮 */
         for (int m = 0; m < ed.match_count; m++) {
             if (ed.matches[m].line == line) {
                 gfx_fill_rect(text_x + ed.matches[m].col * 8, ly,
                               ed.matches[m].length * 8, 14,
-                              (gfx_color_t){80,60,20,255});
+                              GFX_RGB(80, 60, 20));
             }
         }
         draw_syntax_line(text_x, ly, ed.lines[line].text,

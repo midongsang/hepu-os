@@ -14,6 +14,15 @@
 /* 颜色：32bit ARGB */
 typedef uint32_t gfx_color_t;
 
+/* 颜色宏（与 kernel/shared/gfx/gfx_shared.h 保持同一套定义；ifndef 守卫避免重复定义） */
+#ifndef GFX_ARGB
+#define GFX_ARGB(a, r, g, b) \
+    (((uint32_t)(a) << 24) | ((uint32_t)(r) << 16) | ((uint32_t)(g) << 8) | (uint32_t)(b))
+#endif
+#ifndef GFX_RGB
+#define GFX_RGB(r, g, b) GFX_ARGB(0xFF, r, g, b)
+#endif
+
 /* 图形后端类型 */
 typedef enum {
     GFX_BACKEND_NONE = 0,

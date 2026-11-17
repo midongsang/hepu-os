@@ -299,7 +299,7 @@ void image_viewer_draw(int x, int y, int width, int height)
                 uint8_t r = (color >> 16) & 0xFF;
                 uint8_t g = (color >> 8) & 0xFF;
                 uint8_t b = color & 0xFF;
-                gfx_color_t c = {r, g, b, 255};
+                gfx_color_t c = GFX_RGB(r, g, b);
                 if (draw_x + px >= x && draw_x + px < x + width &&
                     draw_y + py >= y && draw_y + py < y + height) {
                     gfx_put_pixel(draw_x + px, draw_y + py, c);
@@ -312,10 +312,10 @@ void image_viewer_draw(int x, int y, int width, int height)
 /* 绘制UI */
 void image_viewer_draw_ui(int x, int y, int width, int height)
 {
-    gfx_color_t bg = {30, 30, 40, 255};
-    gfx_color_t fg = {255, 255, 255, 255};
-    gfx_color_t accent = {100, 150, 255, 255};
-    gfx_color_t gray = {150, 150, 150, 255};
+    gfx_color_t bg = GFX_RGB(30, 30, 40);
+    gfx_color_t fg = GFX_RGB(255, 255, 255);
+    gfx_color_t accent = GFX_RGB(100, 150, 255);
+    gfx_color_t gray = GFX_RGB(150, 150, 150);
 
     /* 背景 */
     gfx_fill_rect(x, y, width, height, bg);
