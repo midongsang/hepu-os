@@ -122,6 +122,13 @@ void mm_init(uint32_t mem_kb, uint32_t bitmap_addr)
                mem_kb, total_pages, bitmap_words);
 }
 
+/* 物理内存上限(字节): 超出此范围的虚地址不可能是真实 RAM,
+ * 典型来源是把 PCI MMIO BAR 当指针直接用 —— 必须拒绝按需分配. */
+uint32_t mm_phys_limit(void)
+{
+    return (uint32_t)((uint64_t)memory_size_kb * 1024ULL);
+}
+
 /* 注册内存区域（用于保留内核/MMIO区域） */
 int mm_add_region(uint32_t start_addr, uint32_t size, uint8_t type)
 {

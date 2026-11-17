@@ -519,12 +519,17 @@ u32 sys_mmap(u32 addr, u32 length, u32 prot, u32 flags)
  * 用物理 0x100000 做探针是不挑的: 它一定在内核映像里, identity map 已映射,
  * 复制到 0x60000000 后读出来的第一个字就是内核代码头。只要不 #PF、且值非 0,
  * 就证明这条路径真的建立了映射 —— 这正是 sys_fb_desc + SYS_MMAP 给桌面用的同一条。 */
+/* BSS 阈值实验探针: 只加这 1 KB 静态, 其余一切不动, 看是否复现崩溃 */
+volatile unsigned char g_bss_probe[2048];
+
+
 void sys_mmap_selftest(void)
 {
     extern process_t *current;
     extern void paging_switch_dir(page_directory_t *dir);
     extern page_directory_t *paging_get_kernel_dir(void);
     extern void *memset(void *, int, unsigned);
+    g_bss_probe[0] = 1;   /* 触碰一下, 防止被优化掉 */
 
     page_directory_t *tmp = paging_create_dir();
     if (!tmp) {
@@ -536,19 +541,18 @@ void sys_mmap_selftest(void)
     /* 内核态 current 通常是空的, 而 sys_mmap 的第一句就要求有 current 和 page_dir
      * (它本来只服务用户进程)。所以这里造一个临时进程结构来"扮演调用者" ——
      * 不这么做测到的只是"内核态没人调 mmap", 什么也证明不了。 */
-    extern void *kmalloc(unsigned);
-    process_t *fake = (process_t *)kmalloc((unsigned)sizeof(process_t));
-    if (!fake) { extern void serial_puts(uint16_t, const char *); serial_puts(0x3F8, "[MMAPTEST] no mem\n"); return; }
+    process_t *fake_p = (process_t *)kmalloc((unsigned)sizeof(process_t));   /* 临时结构: 走堆, 不新增 BSS */
     process_t *save_cur = current;
     page_directory_t *save_dir = current ? current->page_dir : 0;
     uint32_t save_next = current ? current->mmap_next : 0;
 
-    memset(fake, 0, (unsigned)sizeof(process_t));
-    fake->page_dir = tmp;
-    fake->pid = 7;   /* 扮演一个用户进程, 而不是内核上下文 */
+    if (!fake_p) return;
+    memset(fake_p, 0, (unsigned)sizeof(process_t));
+    fake_p->page_dir = tmp;
+    fake_p->pid = 7;   /* 扮演一个用户进程, 而不是内核上下文 */
 
     paging_switch_dir(tmp);
-    current = fake;
+    current = fake_p;
 
     uint32_t v = sys_mmap(0x100000u, PAGE_SIZE, 0, MAP_PHYS);
     uint32_t probe = 0;
@@ -563,7 +567,7 @@ void sys_mmap_selftest(void)
         extern int desk_fb_owner_pid(void);
         extern void serial_puts(uint16_t, const char *);
 
-        current = fake;      /* release 里要读 current->pid, 先放回去 */
+        current = fake_p;      /* release 里要读 current->pid, 先放回去 */
         uint32_t a1 = sys_fb_acquire(PAGE_SIZE, 0, 0, 0);
         uint32_t a2 = sys_fb_acquire(0, 0, 0, 0);
         int busy_ok = (a1 != 0) && (a2 == (uint32_t)-16) && (desk_fb_owner_pid() == 7);
@@ -580,6 +584,7 @@ void sys_mmap_selftest(void)
     }
 
     current = save_cur;
+    kfree(fake_p);
     if (save_cur) { save_cur->page_dir = save_dir; save_cur->mmap_next = save_next; }
     paging_switch_dir(save_dir ? save_dir : paging_get_kernel_dir());
     paging_free_dir(tmp);

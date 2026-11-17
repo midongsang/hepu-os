@@ -343,6 +343,37 @@ void paging_free_dir(page_directory_t *dir)
 static int handle_demand_paging(uint32_t fault_addr)
 {
     uint32_t virt = fault_addr & ~(PAGE_SIZE - 1);
+
+    /* MMIO 陷阱: 超出物理内存上限的地址不是合法按需分页目标.
+     * 若照旧 alloc_frame() 并映射, 写该"寄存器"就会随机篡改一块真实物理内存
+     * (历史表现: 32 位 e1000 把 BAR 物理址当指针, 写 MMIO 却踩坏内核堆,
+     *  引发 kmalloc free list 损坏 -> 布局敏感的启动失败).
+     * 正确做法: 一律映射到同一个哑页, 写入只污染哑页, 不碰真实内存. */
+    {
+        extern uint32_t mm_phys_limit(void);
+        extern void serial_puts(uint16_t, const char *);
+        extern void serial_puthex(uint16_t, uint32_t);
+        if (fault_addr >= mm_phys_limit()) {
+            static uint32_t poison_phys = 0;
+            static uint32_t poison_hits = 0;
+            if (!poison_phys) {
+                poison_phys = alloc_frame();
+                if (!poison_phys) return -1;
+                memset((void *)poison_phys, 0, PAGE_SIZE);
+            }
+            if (paging_map(current_dir, virt, poison_phys,
+                           PAGE_PRESENT | PAGE_WRITE) < 0) return -1;
+            if (poison_hits < 8) {
+                poison_hits++;
+                serial_puts(0x3F8, "[PF] MMIO trap addr=0x");
+                serial_puthex(0x3F8, fault_addr);
+                serial_puts(0x3F8, " -> poison page (no real mem touched)\n");
+            }
+            pf_demand_alloc++;
+            return 0;
+        }
+    }
+
     uint32_t phys = alloc_frame();
     if (!phys) return -1;
 

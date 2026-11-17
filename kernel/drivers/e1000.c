@@ -232,23 +232,30 @@ int e1000_init(void)
     serial_puts(0x3F8, "\n");
 
     /* 分配接收描述符和缓冲区 */
-    extern void *kmalloc(unsigned int);
-    e1000_dev.rx_descs = (e1000_rx_desc_t *)kmalloc(NUM_RX_DESC * sizeof(e1000_rx_desc_t) + 16);
-    e1000_dev.rx_bufs = (uint8_t *)kmalloc(NUM_RX_DESC * 2048 + 16);
-    e1000_dev.tx_descs = (e1000_tx_desc_t *)kmalloc(NUM_TX_DESC * sizeof(e1000_tx_desc_t) + 16);
-    e1000_dev.tx_bufs = (uint8_t *)kmalloc(NUM_TX_DESC * 2048 + 16);
+    /* DMA 缓冲必须页对齐、页级独占分配:
+     * 用 kmalloc 的堆块做 DMA 目标时, 块被 split 后紧邻其它块头,
+     * 任何越界/硬件写入都会踩坏下一个 block_header, 破坏 kmalloc 链表
+     * (实测表现: kmalloc 遍历到 magic=0 的伪块 -> #PF -> triple fault).
+     * mm_alloc_pages() 返回连续物理页; 32 位 identity map 覆盖 256MB,
+     * 故物理地址可直接当虚拟地址使用. */
+    extern uint32_t mm_alloc_pages(uint32_t count);
+    {
+        uint32_t p;
+        p = mm_alloc_pages(1);                      /* 512B: 1 页 */
+        e1000_dev.rx_descs = (e1000_rx_desc_t *)(uintptr_t)p;
+        p = mm_alloc_pages(16);                     /* 64KB: 16 页 */
+        e1000_dev.rx_bufs = (uint8_t *)(uintptr_t)p;
+        p = mm_alloc_pages(1);                      /* 128B: 1 页 */
+        e1000_dev.tx_descs = (e1000_tx_desc_t *)(uintptr_t)p;
+        p = mm_alloc_pages(4);                      /* 16KB: 4 页 */
+        e1000_dev.tx_bufs = (uint8_t *)(uintptr_t)p;
+    }
 
     if (!e1000_dev.rx_descs || !e1000_dev.rx_bufs ||
         !e1000_dev.tx_descs || !e1000_dev.tx_bufs) {
         serial_puts(0x3F8, "[e1000] buffer alloc failed\n");
         return -1;
     }
-
-    /* 对齐到16字节 */
-    e1000_dev.rx_descs = (e1000_rx_desc_t *)(((uint32_t)e1000_dev.rx_descs + 15) & ~15);
-    e1000_dev.rx_bufs = (uint8_t *)(((uint32_t)e1000_dev.rx_bufs + 15) & ~15);
-    e1000_dev.tx_descs = (e1000_tx_desc_t *)(((uint32_t)e1000_dev.tx_descs + 15) & ~15);
-    e1000_dev.tx_bufs = (uint8_t *)(((uint32_t)e1000_dev.tx_bufs + 15) & ~15);
 
     memset(e1000_dev.rx_descs, 0, NUM_RX_DESC * sizeof(e1000_rx_desc_t));
     memset(e1000_dev.tx_descs, 0, NUM_TX_DESC * sizeof(e1000_tx_desc_t));

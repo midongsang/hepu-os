@@ -294,6 +294,10 @@ void *kmalloc(size_t size)
 
     block_header_t *cur = heap_start;
     while (cur) {
+        /* 防御: header.magic 不符说明该块已被越界写破坏(heap overflow).
+         * 此时不能再信它的 size/next, 直接停止遍历, 返回失败,
+         * 避免解引用坏指针把整个系统打死. */
+        if (cur->magic != HEADER_MAGIC) break;
         if (!cur->used && cur->size >= size) {
             split_block(cur, size);
             cur->used = 1;
