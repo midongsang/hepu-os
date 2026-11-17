@@ -14,7 +14,7 @@ supersedes: null
 > 引导器三种模式语义、加载屏各阶段对应的实际工作、交接内存约定、锁屏与登录流程。
 > 每条结论标注源码位置；代码未实现的部分如实标注，不假设 32/64 对称。
 >
-> 适用基线：`5f93c2d`（2026-11-17）。legacy BIOS 引导链不在当前交付路径上，
+> 适用基线：`3d0bd23`（2026-11-17）。legacy BIOS 引导链不在当前交付路径上，
 > 见文末「边界与未验证项」。
 
 ## 一、三种引导模式（菜单里的代码命名）
@@ -146,10 +146,14 @@ supersedes: null
 再判 OOBE：`!auth64_is_configured() && !hpdesk_skip_oobe()` 时先弹图形首设向导
 `hs_oobe_begin()`（`desktop64.c:241-247`）。
 
-桌面壳初始化末尾置锁（`kernel/arch/x86_64/hpdesk.c:7481-7489`）：
+桌面壳初始化末尾置锁（`kernel/arch/x86_64/hpdesk.c:7526-7530`）：
 
-- 开机 `g_locked = 1`，打印 `[Hepu Desktop] booting to lock screen`；
-- OOBE 未走完时不在这里强制锁——首设向导自己接管画面。
+- 默认开机 `g_locked = 1`，打印 `[Hepu Desktop] booting to lock screen`；
+- 关闭开关 `lock_cfg_disabled()`（`hpdesk.c:4563`，32 位兜底 `:4580`）：cmdline
+  `hepu.lock=0`（`bootopts_lock_disabled()`）或 `/system.conf` 里 `lock=0` 任一为真，
+  则 `g_locked = 0` 直进桌面；两者都没有才置锁；
+- OOBE 未走完时不在这里强制锁——首设向导自己接管画面；
+- 32 位兜底锁屏关闭，保持既有旧桌面行为（`hpdesk.c:4580`）。
 
 ### 5.2 状态机
 
@@ -161,26 +165,31 @@ supersedes: null
 | 1 | 锁屏 | 深色半透明底 + 大时钟 + 日期 + 底部提示（`hs_lock_screen_render()` `:4561-4595`） |
 | 2 | 登录 | 头像 + 用户名 `hepu` + 密码框 + Unlock 按钮（`hs_login_screen_render()` `:4598-`） |
 
-### 5.3 按键流转（`hpdesk_handle_key()` `:7201-7234`）
+### 5.3 状态流转（键盘 `hpdesk_handle_key()`；鼠标 `hpdesk_handle_click()`）
 
 ```
-锁屏(1) ──任意键──▶ 登录(2)
-登录(2) ──ESC──▶ 锁屏(1)
+锁屏(1) ──任意键──▶ 登录(2)            键盘 :7240-7244
+锁屏(1) ──点击任意位置──▶ 登录(2)      鼠标 :5664-5668
+登录(2) ──ESC──▶ 锁屏(1)              键盘 :7249-7252
 登录(2) ──可打印字符──▶ 写入密码缓冲（退格删除）
-登录(2) ──回车(\n / \r / 0x1C)──▶ 解锁 → 桌面(0)
+登录(2) ──回车(\n / \r / 0x1C)──▶ 桌面(0)  键盘 :7257-7260
+登录(2) ──点 Unlock 按钮──▶ 桌面(0)     鼠标 :5778-5782
 桌面(0) ──L 键──▶ 锁屏(1)
 ```
 
+键盘与鼠标共用同一 `g_locked` 状态机，各迁移点打 `[LOCK] state: ...` 日志。
 输入合流在 `kernel/arch/x86_64/hsinput.c:206-236`：USB HID 优先、PS/2 兜底，
 0xE0 扩展键前缀归一化后再下发 `hpdesk_handle_key()`。
 
 ### 5.4 现状限制（如实记录）
 
-- **登录校验尚未接密码比对**：登录页回车即解锁（`hpdesk.c:7215-7220` 注释
-  「简单验证：任意密码都可以解锁」）。`auth64_verify_password` 接入是后续工作，
+- **64 位登录校验尚未接密码比对**：登录页回车或点 Unlock 即解锁
+  （`hpdesk.c:7257-7260`）。`auth64_verify_password` 接入是后续工作，
   本文不把当前行为写成「已校验凭据」。
-- 本基线（`5f93c2d`）锁屏→登录的鼠标点击路径不在主树；键盘任意键进入登录页
-  是本基线可用路径。
+- **32 位认证为显式未实现**：`login_authenticate` / `login_unlock_screen` /
+  `mu_private_unlock` 保留「未设密码即放行」行为，但每次调用打未实现警告，
+  不返回假装成功；真接校验需先给 `mu_user_t` 加 hash 字段与持久化，属独立工程
+  （见 `0de2133`）。
 
 ## 六、总流程图
 
