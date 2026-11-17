@@ -890,6 +890,16 @@ void x86_64_kernel_main(void)
         }
         vga_puts("[FBDESC] returned\n");
 
+        /* KERNEL_SCOPE §5-4 第 2~4 步的实证: 光有 DESC 不够, 要有人真的
+         * acquire -> 画 -> flip -> release 走一遍。这个程序覆盖的是「双缓冲
+         * 下 acquire 拿到的是后台、flip 才上屏」这条语义 —— 也是整个 §5-4
+         * 唯一能证明"接口真的能用"的地方。 */
+        vga_puts("[FBSYN] Running /bin/fbsyn.elf...\n");
+        if (user_process_exec("/bin/fbsyn.elf") < 0) {
+            vga_puts("[FBSYN] fbsyn.elf not available (optional)\n");
+        }
+        vga_puts("[FBSYN] returned\n");
+
         /* TECH_DEBT_ROUTE §5-5 第 2 批前置: struct stat 布局探针。
          * 切 sys_stat 之前必须先能"看见"字段偏移 —— 偏移错了不会编译报错,
          * 标准回归也照样全绿, 只有 ld.so 会默默把 libc 认成主程序。 */
