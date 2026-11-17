@@ -202,6 +202,7 @@ int tt_font_load(uint8_t *data, uint32_t size)
         uint32_t tag = tt_read32((uint8_t*)&tables[i].tag);
         uint32_t offset_val = tt_read32((uint8_t*)&tables[i].offset);
         uint32_t length = tt_read32((uint8_t*)&tables[i].length);
+        (void)length;
 
         switch (tag) {
             case TT_TAG_HEAD:
@@ -276,6 +277,7 @@ uint16_t tt_char_to_glyph(uint32_t codepoint)
 
     uint8_t *cmap = tt_font.data + tt_font.cmap_offset;
     uint16_t version = tt_read16(cmap);
+    (void)version;
     uint16_t num_tables = tt_read16(cmap + 2);
 
     /* 查找platform=3, encoding=1的cmap子表（Microsoft Unicode BMP） */
@@ -492,6 +494,7 @@ static void tt_scanline_fill(tt_point_t *points, int num_points,
         int winding = 0;
         for (int i = 0; i < num_intersections; i++) {
             int old_winding = winding;
+            (void)old_winding;
             winding += intersections[i].dir;
 
             /* 如果当前区域环绕数非零，填充从当前交点到下一个交点 */
@@ -532,6 +535,8 @@ static int tt_render_simple_internal(uint8_t *glyph_data,
     /* 简化：直接调用主渲染逻辑的简单字形部分
      * 这里复用tt_render_glyph的简单字形处理
      */
+    (void)glyph_data; (void)bitmap; (void)bitmap_w; (void)bitmap_h;
+    (void)offset_x; (void)offset_y; (void)scale_x; (void)scale_y;
     return 0;  /* 占位，实际渲染在主函数中完成 */
 }
 

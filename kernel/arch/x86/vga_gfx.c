@@ -915,6 +915,7 @@ void gfx_black_screen(void)
     /* V2.61: 直接填黑显存 (休眠灭屏) */
     volatile uint8_t *fb = (volatile uint8_t *)gfx_fb_addr;
     int bytes_per_pixel = (gfx_bpp == 8) ? 1 : (gfx_bpp == 24) ? 3 : 4;
+    (void)bytes_per_pixel;
     int total = gfx_pitch * gfx_height;
     for (int i = 0; i < total; i++) {
         fb[i] = 0x00;

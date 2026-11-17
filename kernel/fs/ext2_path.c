@@ -210,6 +210,7 @@ int ext2_path_rename(const char *old_path, const char *new_path)
             prev = entry;
             pos += entry->rec_len;
         }
+        (void)prev;
         offset += to_read;
     }
     return -1;

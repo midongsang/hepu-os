@@ -332,6 +332,7 @@ void blk_mq_selftest(void)
 
     /* 测试4：请求合并（相邻LBA） */
     int id3 = blk_mq_submit(BLK_MQ_OP_WRITE, 216, 8, data_buf);
+    (void)id3;
     /* 200+16=216，应该合并到id2 */
     blk_mq_stats_t stats;
     blk_mq_get_stats(&stats);

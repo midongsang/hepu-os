@@ -87,6 +87,7 @@ static int drm_backend_set_mode(uint32_t crtc_id, drm_mode_t *mode, uint32_t fb_
 /* 页翻转 */
 static int drm_backend_page_flip(uint32_t crtc_id, uint32_t fb_id)
 {
+    (void)crtc_id;
     if (fb_id == 0) return -1;
 
     /* 查找帧缓冲 */

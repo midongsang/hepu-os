@@ -163,14 +163,14 @@ static void process_single_touch(touch_point_t *p, uint32_t timestamp)
             uint32_t duration = timestamp - gs.down_time;
 
             if (!gs.moved && total_dist < config.tap_max_distance &&
-                duration < config.tap_max_duration) {
+                duration < (uint32_t)config.tap_max_duration) {
                 /* 点击 */
                 emit_gesture(GESTURE_TAP, GESTURE_STATE_COMPLETED,
                             p->x, p->y, 0, 0, 1.0f, 0);
 
                 /* 双击检测 */
                 if (gs.last_tap_valid &&
-                    (timestamp - gs.last_tap_time) < config.double_tap_max_interval &&
+                    (timestamp - gs.last_tap_time) < (uint32_t)config.double_tap_max_interval &&
                     abs_int(p->x - gs.last_tap_x) < config.tap_max_distance &&
                     abs_int(p->y - gs.last_tap_y) < config.tap_max_distance) {
                     emit_gesture(GESTURE_DOUBLE_TAP, GESTURE_STATE_COMPLETED,
@@ -183,7 +183,7 @@ static void process_single_touch(touch_point_t *p, uint32_t timestamp)
                     gs.last_tap_valid = 1;
                 }
             } else if (gs.moved && total_dist > config.swipe_min_distance &&
-                       duration < config.swipe_max_duration) {
+                       duration < (uint32_t)config.swipe_max_duration) {
                 /* 滑动 */
                 gesture_type_t swipe_type;
                 if (abs_int(dx) > abs_int(dy)) {
@@ -238,7 +238,7 @@ static void process_single_touch(touch_point_t *p, uint32_t timestamp)
 
     /* 长按检测 */
     if (!gs.moved && !gs.long_press_triggered &&
-        (timestamp - gs.down_time) > config.long_press_min_duration) {
+        (timestamp - gs.down_time) > (uint32_t)config.long_press_min_duration) {
         gs.long_press_triggered = 1;
         emit_gesture(GESTURE_LONG_PRESS, GESTURE_STATE_COMPLETED,
                     p->x, p->y, 0, 0, 1.0f, 0);

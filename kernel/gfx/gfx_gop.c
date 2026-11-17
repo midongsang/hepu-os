@@ -90,6 +90,7 @@ static void gop_shutdown(void)
 static int gop_set_mode(uint32_t w, uint32_t h, uint32_t bpp)
 {
     /* GOP模式在引导时已设置，运行时不支持动态切换 */
+    (void)w; (void)h; (void)bpp;
     gop_width = gfx_width;
     gop_height = gfx_height;
     gop_bpp = gfx_bpp;

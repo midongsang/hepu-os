@@ -246,6 +246,7 @@ static void vvram_auto_mount_storage_vram(void)
 
 int vvram_create_partition(uint32_t dev, uint32_t start_block, uint32_t size_blocks)
 {
+    (void)dev; (void)start_block; (void)size_blocks;
     /* 简化版：内存模拟，不实际写入磁盘 */
     /* 后续实现：在存储设备上格式化虚拟显存分区 */
     return 0;
@@ -253,6 +254,7 @@ int vvram_create_partition(uint32_t dev, uint32_t start_block, uint32_t size_blo
 
 int vvram_mount_partition(uint32_t dev, uint32_t start_block)
 {
+    (void)dev; (void)start_block;
     /* 简化版：内存模拟 */
     return 0;
 }
@@ -260,6 +262,7 @@ int vvram_mount_partition(uint32_t dev, uint32_t start_block)
 /* 在指定区域分配内存（位图分配） */
 static int vvram_alloc_in_region(vvram_region_t *r, uint32_t size, uint32_t flags)
 {
+    (void)flags;
     if (!r || !r->initialized || !r->is_virtual) return -1;
 
     uint32_t block_count = r->size / VVRAM_BLOCK_SIZE;

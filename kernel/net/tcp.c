@@ -191,6 +191,7 @@ int tcp_process_packet(uint32_t src_ip, const uint8_t *data, uint32_t length)
     uint16_t dest_port = tcp->dest_port;
     uint32_t seq_num = tcp->seq_num;
     uint32_t ack_num = tcp->ack_num;
+    (void)ack_num;
     uint8_t flags = tcp->flags;
 
     /* 查找匹配的连接 */
@@ -289,6 +290,7 @@ int tcp_connect(uint32_t remote_ip, uint16_t remote_port, uint16_t local_port)
 /* 监听 */
 int tcp_listen(uint16_t local_port, int backlog)
 {
+    (void)backlog;
     if (!tcp_initialized) return -1;
 
     int fd = tcp_find_free();

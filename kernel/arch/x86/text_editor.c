@@ -473,6 +473,7 @@ void text_editor_draw_ui(int x, int y, int width, int height)
     gfx_color_t line_num_bg = GFX_RGB(35, 35, 40), line_num_fg = GFX_RGB(100, 100, 120);
     gfx_color_t status_bg = GFX_RGB(40, 40, 50), gray = GFX_RGB(130, 130, 130);
     gfx_color_t modified_color = GFX_RGB(220, 180, 80);
+    (void)modified_color;
 
     gfx_fill_rect(x, y, width, height, bg);
 

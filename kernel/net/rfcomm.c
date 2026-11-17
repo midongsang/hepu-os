@@ -232,6 +232,7 @@ static void rfcomm_l2cap_conn_cb(uint16_t cid, uint16_t result, void *user_data)
 static void rfcomm_l2cap_data_cb(uint16_t cid, const uint8_t *data,
                                   uint16_t len, void *user_data)
 {
+    (void)user_data;
     rfcomm_process_l2cap_data(cid, data, len);
 }
 
@@ -385,6 +386,7 @@ static void handle_uih(rfcomm_session_t *sess, uint8_t dlci,
     /* 检查是否是MCC命令（控制信道） */
     if (dlci == RFCOMM_DLCI_CONTROL) {
         uint8_t mcc_type = data[0] & 0xFE;
+        (void)mcc_type;
         /* 简化：忽略MCC命令 */
         return;
     }

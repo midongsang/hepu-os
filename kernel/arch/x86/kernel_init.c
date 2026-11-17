@@ -377,6 +377,7 @@ void hepu_mem_init(uint32_t mem_kb)
     }
     syscall_dbg_check("after-mm-init");
     extern char __bss_end[];
+    (void)__bss_end;
     {
         extern uint8_t __kernel_end[];
         uint32_t kern_reserve_end = ((uint32_t)__kernel_end + 0xFFF) & ~0xFFF;

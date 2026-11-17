@@ -230,7 +230,7 @@ void net_poll(void)
     int len = eth_receive("eth0", packet, sizeof(packet));
     if (len > 0) {
         /* 解析以太网头，判断协议类型 */
-        if (len >= sizeof(eth_header_t)) {
+        if (len >= (int)sizeof(eth_header_t)) {
             const eth_header_t *eth_hdr = (const eth_header_t *)packet;
             if (eth_hdr->ethertype == 0x0008) {  /* IPv4 */
                 ip_process_packet(packet, len);

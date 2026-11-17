@@ -72,6 +72,7 @@ static void uhci_writel(uhci_controller_t *uhci, uint16_t reg, uint32_t val)
 static int uhci_wait_td_complete(uhci_td_t *td, int timeout_ms)
 {
     uint32_t start = 0;  /* 简化：使用固定循环 */
+    (void)start;
     int loops = timeout_ms * 1000;
 
     while (loops-- > 0) {

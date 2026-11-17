@@ -15,6 +15,7 @@ static kunit_result_t test_boot_chain_complete(void)
     /* 验证启动链各阶段都已完成 */
     extern int boot_get_stage_info(int *, int *, char (*)[64], uint64_t *);
     int cur=0,total=0; char names[8][64]; uint64_t times[8]; boot_get_stage_info(&cur, &total, names, times); int stage = cur;
+    (void)stage;
     KUNIT_ASSERT(cur >= 0, " boot stage valid ");
     return KUNIT_PASS;
 }

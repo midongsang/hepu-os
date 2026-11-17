@@ -96,7 +96,7 @@ static void draw_tabs(void)
 
     for (int i = 0; i < 4; i++) {
         int tx = i * tab_width;
-        if (current_view == i) {
+        if ((int)current_view == i) {
             /* 选中标签 */
             gfx_fillrect(tx, tab_y, tab_width, TAB_HEIGHT - 2, STORE_PANEL);
             gfx_fillrect(tx, tab_y + TAB_HEIGHT - 3, tab_width, 3, STORE_ACCENT);

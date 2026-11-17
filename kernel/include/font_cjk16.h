@@ -16,7 +16,7 @@ typedef struct {
 } cjk_glyph_t;
 
 /* 子集: 中 文 言 系 已 用 */
-static const cjk_glyph_t hepu_cjk_font[] = {
+static const cjk_glyph_t hepu_cjk_font[] __attribute__((unused)) = {
     /* 中 U+4E2D */
     { 0x4E2D, {
         0x0F, 0xF0, 0x1F, 0xF8, 0x0F, 0xF0, 0x0F, 0xF0,

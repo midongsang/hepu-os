@@ -50,6 +50,7 @@ static uint8_t aa_coverage(uint8_t ch, int tx, int ty, int scale)
 /* 绘制抗锯齿字符 */
 void gfx_putc_aa(int x, int y, char ch, uint8_t fg_color, uint8_t bg_color)
 {
+    (void)bg_color;
     /* 简化版抗锯齿：对边缘像素进行模糊 */
     for (int row = 0; row < 16; row++) {
         for (int col = 0; col < 8; col++) {
@@ -76,6 +77,7 @@ void gfx_putc_aa(int x, int y, char ch, uint8_t fg_color, uint8_t bg_color)
                 } else {
                     /* 边缘像素：根据邻居数量混合 */
                     uint8_t mix = (uint8_t)(neighbors * 255 / 8);
+                    (void)mix;
                     /* 简单混合：边缘像素使用稍暗的颜色 */
                     gfx_putpixel(x + col, y + row, fg_color);
                 }

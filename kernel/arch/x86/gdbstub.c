@@ -155,6 +155,7 @@ static int regs_to_hex(char *out, int out_max) {
 static void gdb_handle_command(const char *cmd) {
     char *out = g_tx_buf;
     int out_len = 0;
+    (void)out_len;
 
     if (cmd[0] == '?') {
         /* 查询停止原因：SIGTRAP=5 */
@@ -260,6 +261,7 @@ void gdbstub_init(uint16_t serial_base) {
 
 /* 处理异常（在断点/异常中断中调用） */
 void gdbstub_handle_exception(uint32_t exception_type, uint32_t *regs) {
+    (void)exception_type;
     if (g_state == GDBSTUB_STATE_DISCONNECTED) {
         /* 首次异常，等待GDB连接 */
         g_state = GDBSTUB_STATE_CONNECTED;

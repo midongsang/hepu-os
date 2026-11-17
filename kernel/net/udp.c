@@ -103,6 +103,7 @@ int udp_sendto(int sockfd, uint32_t dest_ip, uint16_t dest_port,
     /* 获取本机IP */
     extern uint32_t ip_get_local(void);
     uint32_t src_ip = ip_get_local();
+    (void)src_ip;
     uint16_t src_port = udp_sockets[sockfd].local_port;
 
     /* 构造UDP包 */
@@ -136,6 +137,7 @@ int udp_sendto(int sockfd, uint32_t dest_ip, uint16_t dest_port,
 int udp_recvfrom(int sockfd, uint8_t *buf, uint32_t max_len,
                  uint32_t *src_ip, uint16_t *src_port)
 {
+    (void)src_ip; (void)src_port;
     if (!udp_initialized || sockfd < 0 || sockfd >= UDP_MAX_SOCKETS) return -1;
     if (!udp_sockets[sockfd].used || !buf) return -1;
 
@@ -154,11 +156,13 @@ int udp_recvfrom(int sockfd, uint8_t *buf, uint32_t max_len,
 /* 处理接收到的UDP包（由IP层调用） */
 int udp_process_packet(uint32_t src_ip, const uint8_t *data, uint32_t length)
 {
+    (void)src_ip;
     if (!udp_initialized || !data || length < sizeof(udp_header_t)) return -1;
 
     const udp_header_t *udp = (const udp_header_t *)data;
     uint16_t dest_port = udp->dest_port;
     uint16_t src_port = udp->src_port;
+    (void)src_port;
     uint32_t data_len = length - sizeof(udp_header_t);
     const uint8_t *payload = data + sizeof(udp_header_t);
 

@@ -103,6 +103,7 @@ int wifi_80211_to_eth(const uint8_t *wifi_frame, int wifi_len,
     /* uint16_t frame_control = wifi_frame[0] | (wifi_frame[1] << 8); */
     /* uint16_t duration = wifi_frame[2] | (wifi_frame[3] << 8); */
     const uint8_t *addr1 = wifi_frame + 4;   /* 接收地址 (BSSID) */
+    (void)addr1;
     const uint8_t *addr2 = wifi_frame + 10;  /* 发送地址 (TA) */
     const uint8_t *addr3 = wifi_frame + 16;  /* 目标地址 (DA) */
     /* uint16_t seq_ctrl = wifi_frame[22] | (wifi_frame[23] << 8); */
@@ -149,6 +150,7 @@ int wifi_eth_to_80211(const uint8_t *eth_frame, int eth_len,
     /* 解析以太网帧头 */
     const uint8_t *da = eth_frame;      /* 目标地址 */
     const uint8_t *ta = eth_frame + 6;  /* 源地址 */
+    (void)ta;
     uint16_t ethertype = eth_frame[12] | (eth_frame[13] << 8);
 
     /* 以太网负载 */

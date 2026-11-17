@@ -252,6 +252,7 @@ int mail_client_move(mail_folder_t from, int index, mail_folder_t to)
 
 int mail_client_mark_read(mail_folder_t folder, int index, int read)
 {
+    (void)folder; (void)index; (void)read;
     if (!g_initialized) return -1;
     /* 简化：标记已读/未读 */
     return 0;
@@ -259,6 +260,7 @@ int mail_client_mark_read(mail_folder_t folder, int index, int read)
 
 int mail_client_star(mail_folder_t folder, int index, int star)
 {
+    (void)folder; (void)index; (void)star;
     if (!g_initialized) return -1;
     /* 简化：标记星标 */
     return 0;

@@ -87,6 +87,7 @@ static void hotplug_uevent_callback(uint8_t bus, const char *name,
                                     uint32_t dev_id, uint8_t event_type,
                                     void *data)
 {
+    (void)data;
     uevent_enqueue(event_type, bus, name, dev_id);
 }
 

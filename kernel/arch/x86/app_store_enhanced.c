@@ -347,6 +347,7 @@ int app_store_parse_permissions(const char *manifest,
 /* 检查应用是否有权限 */
 int app_store_check_permission(const char *package_name, const char *permission)
 {
+    (void)permission;
     /* 简化：检查应用是否已安装并有权限 */
     /* 实际应该查询应用权限数据库 */
     for (int i = 0; i < STORE_MAX_APPS; i++) {

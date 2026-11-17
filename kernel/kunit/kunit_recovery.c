@@ -14,6 +14,7 @@ static kunit_result_t test_recovery_null_dereference(void)
 {
     /* 空指针解引用恢复 */
     volatile uint32_t *p = 0;
+    (void)p;
     KUNIT_ASSERT(1, " null deref handled ");
     return KUNIT_PASS;
 }
@@ -22,6 +23,7 @@ static kunit_result_t test_recovery_divide_by_zero(void)
 {
     /* 除零恢复 */
     volatile int a = 10, b = 0;
+    (void)a; (void)b;
     KUNIT_ASSERT(1, " div by zero handled ");
     return KUNIT_PASS;
 }
@@ -54,6 +56,7 @@ static kunit_result_t test_error_invalid_fd(void)
     extern uint32_t sys_read(uint32_t, uint32_t, uint32_t, uint32_t);
     uint8_t buf[16];
     uint32_t r = sys_read(0xFFFFFFFF, (uint32_t)buf, 16, 0);
+    (void)r;
     KUNIT_ASSERT(1, " invalid fd handled ");
     return KUNIT_PASS;
 }
@@ -63,6 +66,7 @@ static kunit_result_t test_error_invalid_pointer(void)
     /* 无效指针 */
     extern uint32_t sys_write(uint32_t, uint32_t, uint32_t, uint32_t);
     uint32_t r = sys_write(1, 0x0, 100, 0);
+    (void)r;
     KUNIT_ASSERT(1, " invalid pointer handled ");
     return KUNIT_PASS;
 }

@@ -146,7 +146,7 @@ void cjk_init(void)
     }
     /* V4.23-E68: 静态加载大库前 (32-6)=26 字 (核心文案) */
     int npre = 26;
-    if (HEPU_CJK_BIG_COUNT < npre) npre = (int)HEPU_CJK_BIG_COUNT;
+    if (HEPU_CJK_BIG_COUNT < (unsigned)npre) npre = (int)HEPU_CJK_BIG_COUNT;
     for (int i = 0; i < npre; i++) {
         cjk_load_glyph((int)HEPU_CJK_FONT_COUNT + i, &hepu_cjk_big[i]);
     }

@@ -69,6 +69,7 @@ static kunit_result_t test_input_invalid_pointer(void)
     /* 无效指针 */
     extern uint32_t sys_write(uint32_t, uint32_t, uint32_t, uint32_t);
     uint32_t r = sys_write(1, 0x0, 100, 0);
+    (void)r;
     KUNIT_ASSERT(1, " invalid pointer not crash ");
     return KUNIT_PASS;
 }
@@ -79,6 +80,7 @@ static kunit_result_t test_input_negative_length(void)
     extern uint32_t sys_read(uint32_t, uint32_t, uint32_t, uint32_t);
     uint8_t buf[16];
     uint32_t r = sys_read(0, (uint32_t)buf, 0xFFFFFFFF, 0);
+    (void)r;
     KUNIT_ASSERT(1, " negative length not crash ");
     return KUNIT_PASS;
 }

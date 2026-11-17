@@ -470,6 +470,7 @@ int gfx_move_window_to_monitor(int window_x, int window_y,
                                 uint32_t target_monitor,
                                 int *new_x, int *new_y)
 {
+    (void)window_x; (void)window_y;
     if (!initialized) gfx_multi_monitor_init();
 
     gfx_monitor_t monitors[GFX_MAX_MONITORS];
