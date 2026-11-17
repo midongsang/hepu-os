@@ -85,7 +85,11 @@ rows.append(("64-菜单", "64",
 rows.append(("64-加载屏（连续视频）", "64",
              "PASS" if os.path.exists(os.path.join(EV, "loading", "loading.mp4")) else "UNVERIFIED",
              os.path.join(EV, "loading", "loading.mp4"),
-             "加载过程连续录屏；TCG + 外部抢核下阶段推进很快，见抽帧明细"))
+             "加载过程连续录屏；TCG + 外部抢核下阶段推进很快，见抽帧明细。"))
+rows.append(("64-加载屏静态帧", "64", "UNVERIFIED",
+             "、".join(frames("64", "loading")[:4]),
+             "首轮 4 帧采样晚于 splash（TCG 下加载屏一闪而过），loading_1..4 画面已是解锁/锁屏页，"
+             "不是加载屏快照，不计入加载屏取证；加载阶段以录像与 handoff 抽帧为准。"))
 
 stage_files = sorted(glob.glob(os.path.join(EV, "loading", "stage_*.png")))
 captured = []
