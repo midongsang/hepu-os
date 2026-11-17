@@ -67,6 +67,7 @@ HP_DESK_SHARED = $(KERNEL_DIR)/arch/x86_64/hpdesk.c
 HP_DESK_DEPS = $(HP_DESK_SHARED) \
                $(KERNEL_DIR)/arch/x86_64/hs_ui.c \
                $(KERNEL_DIR)/arch/x86_64/hsqml.c \
+               $(KERNEL_DIR)/arch/x86_64/l10n64.c \
                $(KERNEL_DIR)/arch/x86_64/png64.c
 C_SRCS = $(filter-out $(KERNEL_DIR)/sched/scheduler.c $(KERNEL_DIR)/arch/x86_64/%,$(shell find $(KERNEL_DIR) -name "*.c")) $(HP_DESK_DEPS)
 

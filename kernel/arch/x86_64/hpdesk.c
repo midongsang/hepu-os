@@ -211,20 +211,44 @@ static void hs_date_label(char *out, int max)
     static const char *WD[] = {
         "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"
     };
+    /* 中文日期：月份/星期名不在 L10N_STR_* 表里（那是整句文案），
+     * 这里按当前语言选表。l10n64_get_lang(): 0=zh, 1=en。 */
+    static const char *MON_ZH[] = {
+        "1月", "2月", "3月", "4月", "5月", "6月",
+        "7月", "8月", "9月", "10月", "11月", "12月"
+    };
+    /* 用"周X"而不是"星期X"：内置 CJK 子集只有 724 字，"星"不在其中，
+     * 渲染会留一个空白（2026-11-18 实拍确认）。"周"与"一二三四五六日"都在，
+     * 而改文案比重建字体子集体积风险小得多（64 位内核离 1MB 上限只剩 79KB）。 */
+    static const char *WD_ZH[] = {
+        "周日", "周一", "周二", "周三", "周四", "周五", "周六"
+    };
+    extern int l10n64_get_lang(void);
+    int zh = (l10n64_get_lang() == 0);
     int mo = (int)rtc64_get_month(), d = (int)rtc64_get_day(), w = (int)rtc64_get_weekday();
     if (mo < 1 || mo > 12) mo = 1;
     if (d < 1 || d > 31) d = 1;
     if (w < 1 || w > 7) w = 1;
-    const char *mn = MON[mo - 1];
-    const char *wn = WD[w - 1];
     int n = 0;
-    for (const char *q = mn; *q && n < max - 1; q++) out[n++] = *q;
-    if (n < max - 1) out[n++] = ' ';
-    if (d >= 10 && n < max - 2) out[n++] = (char)('0' + (d / 10));
-    if (n < max - 1) out[n++] = (char)('0' + (d % 10));
-    if (n < max - 1) out[n++] = ',';
-    if (n < max - 1) out[n++] = ' ';
-    for (const char *q = wn; *q && n < max - 1; q++) out[n++] = *q;
+    if (zh) {
+        /* "11月18日 星期三" —— 中文按 月/日/星期 顺序，不用逗号 */
+        for (const char *q = MON_ZH[mo - 1]; *q && n < max - 1; q++) out[n++] = *q;
+        if (d >= 10 && n < max - 2) out[n++] = (char)('0' + (d / 10));
+        if (n < max - 1) out[n++] = (char)('0' + (d % 10));
+        if (n < max - 1) out[n++] = '日';
+        if (n < max - 1) out[n++] = ' ';
+        for (const char *q = WD_ZH[w - 1]; *q && n < max - 1; q++) out[n++] = *q;
+    } else {
+        const char *mn = MON[mo - 1];
+        const char *wn = WD[w - 1];
+        for (const char *q = mn; *q && n < max - 1; q++) out[n++] = *q;
+        if (n < max - 1) out[n++] = ' ';
+        if (d >= 10 && n < max - 2) out[n++] = (char)('0' + (d / 10));
+        if (n < max - 1) out[n++] = (char)('0' + (d % 10));
+        if (n < max - 1) out[n++] = ',';
+        if (n < max - 1) out[n++] = ' ';
+        for (const char *q = wn; *q && n < max - 1; q++) out[n++] = *q;
+    }
     out[n] = 0;
 }
 

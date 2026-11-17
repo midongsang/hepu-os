@@ -129,8 +129,11 @@ uint32_t smp_get_cpu_count(void) { if (!g_d_smp) { g_d_smp = 1; note("smp_get_cp
 /* 注册表 / 本地化: 给空值, 桌面走默认文案 */
 int reg64_count(void)                        { return 0; }
 int reg64_get_int(const char *key, int def)  { (void)key; return def; }
-int l10n64_get_lang(void)                    { return 0; }
-const char *l10n64_tr(int id)                { (void)id; return ""; }
+/* 多语言文案原先在这里返回空串 —— 32 位编进 hpdesk.c 后，锁屏/登录/顶栏
+ * 所有 L10N_STR_* 文案都渲染成空白，但当时 32 位没开锁屏，没人看到，
+ * 于是这个"空串兜底"一直留着。现在 l10n64.c 已加入 32 位构建（Makefile 的
+ * HP_DESK_DEPS），真表可用，两个桩删除。32 位默认语言仍是 en（registry 无
+ * sys.lang），文案显示英文；若 registry 设 sys.lang=zh 则走中文表。 */
 
 /* png64.c 内部用 pmm64_alloc_pages 拿连续页做 inflate 输出缓冲,
  * 返回物理地址后直接当指针用(依赖 identity map, 32 位满足)。 */
