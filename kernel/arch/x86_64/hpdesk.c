@@ -4583,7 +4583,57 @@ static int lock_cfg_disabled(void) { return 1; }
 static char g_password[32] = {0};
 static int g_password_len = 0;
 static int g_vkb_visible = 0;  /* V0.13.39: 锁屏虚拟键盘 */
+static int g_login_err = 0;     /* 认证失败标记: 登录页显示错误提示, 不退回锁屏 */
 /* V0.55.1: 虚拟键盘尚未实现 shift 状态(该变量从未被读写), 已移除声明。 */
+
+/* 登录提交认证: 三分支。
+ * ① 未配置账户(首次启动没有 hash) → 放行进桌面;
+ * ② 已配置 → auth64 sha256 比对密码;
+ * ③ 比对失败 → 留在登录页, 由调用方清空密码并置错误提示(不退回锁屏)。
+ * 返回 1=放行解锁, 0=认证失败留在登录页。
+ *
+ * 注意: auth64_verify_password 在 g_hash 为空时返回 0(失败), 所以必须先判
+ * is_configured, 绝不能无条件接上去。32 位没有 auth64 且故意不开锁屏, 走
+ * #else 保持旧的直接解锁行为, 否则 32 位链接会断。 */
+static int hs_login_submit(void)
+{
+#ifdef __x86_64__
+    extern int auth64_is_configured(void);
+    extern int auth64_verify_password(const char *pass);
+
+    if (!auth64_is_configured()) {
+        vga_puts("[LOCK] login -> desktop (no account configured)\n");
+        return 1;
+    }
+    if (auth64_verify_password(g_password)) {
+        vga_puts("[LOCK] login -> desktop (auth ok)\n");
+        return 1;
+    }
+    vga_puts("[LOCK] login: auth failed\n");
+    return 0;
+#else
+    vga_puts("[LOCK] login -> desktop (32-bit direct unlock)\n");
+    return 1;
+#endif
+}
+
+/* 认证通过: 退出登录页, 清掉密码/虚拟键盘/错误提示 */
+static void hs_login_unlock(void)
+{
+    g_locked = 0;
+    g_password_len = 0;
+    g_password[0] = 0;
+    g_vkb_visible = 0;
+    g_login_err = 0;
+}
+
+/* 认证失败: 留在登录页(g_locked 仍为 2), 清空已输入密码, 置错误提示 */
+static void hs_login_reject(void)
+{
+    g_password_len = 0;
+    g_password[0] = 0;
+    g_login_err = 1;
+}
 
 /* 锁屏界面：模糊背景+大时钟 */
 static void hs_lock_screen_render(void)
@@ -4675,6 +4725,13 @@ static void hs_login_screen_render(void)
                        center_x - hs_sx(80), btn_y + btn_h + hs_sy(30),
                        l10n64_tr(L10N_STR_ESC_LOCK), 0x888888, hs_s(12));
 
+    /* 认证失败提示: 仅失败时显示, 红色; 留在登录页不退回锁屏 */
+    if (g_login_err) {
+        font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                           center_x - hs_sx(130), btn_y + btn_h + hs_sy(58),
+                           l10n64_tr(L10N_STR_LOGIN_ERROR), 0xCC4444, hs_s(13));
+    }
+
     /* V0.13.39: 右下角 关机键 + 虚拟键盘键 */
     {
         int kb_x = g_shell.screen_width - hs_sx(200);
@@ -4682,7 +4739,7 @@ static void hs_login_screen_render(void)
         hs_fill_rounded_rect(kb_x, kb_y, hs_sx(88), hs_sy(34), hs_s(8), g_shell.colors.titlebar_bg);
         hs_draw_rounded_rect(kb_x, kb_y, hs_sx(88), hs_sy(34), hs_s(8), g_shell.colors.accent);
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           kb_x + hs_sx(14), kb_y + hs_sy(8), "VKB", g_shell.colors.panel_fg, hs_s(16));
+                           kb_x + hs_sx(14), kb_y + hs_sy(8), l10n64_tr(L10N_STR_VKB_BTN), g_shell.colors.panel_fg, hs_s(16));
         int po_x = kb_x + hs_sx(104);
         hs_fill_rounded_rect(po_x, kb_y, hs_sx(88), hs_sy(34), hs_s(8), 0x6E3A3A);
         hs_draw_rounded_rect(po_x, kb_y, hs_sx(88), hs_sy(34), hs_s(8), g_shell.colors.accent);
@@ -5653,20 +5710,23 @@ void hpdesk_handle_click(int x, int y)
     if (g_files_drag_consumed) { g_files_drag_consumed = 0; return; }
 
     hpdesk_mark_dirty();   /* P0: 交互发生, 内容需重绘 */
-    /* V0.55 P3-GUI: 首启向导模态拦截点击 */
-    {
-        extern int hs_oobe_active(void);
-        extern int hs_oobe_handle_click(int x, int y);
-        if (hs_oobe_active()) { hs_oobe_handle_click(x, y); return; }
-    }
 
-    /* 锁屏: 点击任意位置进入登录页(鼠标解锁路径), 不落到桌面窗口交互 */
+    /* 锁屏: 点击任意位置进入登录页(鼠标解锁路径), 不落到桌面窗口交互。
+     * 优先级: 锁屏/登录态优先于 OOBE —— 向导在这两层既不渲染也不抢点击。 */
     if (g_locked == 1) {
         g_locked = 2;
         g_password_len = 0;
         g_password[0] = 0;
+        g_login_err = 0;
         vga_puts("[LOCK] state: lock -> login (click)\n");
         return;
+    }
+
+    /* 桌面态: 未完成的首启向导模态拦截点击(登录页 g_locked==2 不放行到这里) */
+    if (g_locked == 0) {
+        extern int hs_oobe_active(void);
+        extern int hs_oobe_handle_click(int x, int y);
+        if (hs_oobe_active()) { hs_oobe_handle_click(x, y); return; }
     }
 
     /* 右键菜单开着: 无论点哪儿都先归菜单, 点空白则关闭 */
@@ -5735,6 +5795,7 @@ void hpdesk_handle_click(int x, int y)
                         int ky = kb_y + r * hs_sy(38);
                         if (x >= kx && x <= kx + key_w && y >= ky && y <= ky + hs_sy(32)) {
                             if (g_password_len < 31) {
+                                g_login_err = 0;
                                 g_password[g_password_len++] = vkb_rows[r][c];
                                 g_password[g_password_len] = 0;
                             }
@@ -5775,11 +5836,12 @@ void hpdesk_handle_click(int x, int y)
             int btn_x = center_x - btn_w / 2;
             int btn_y = input_y + input_h + hs_sy(20);
             if (x >= btn_x && x <= btn_x + btn_w && y >= btn_y && y <= btn_y + btn_h) {
-                g_locked = 0;
-                g_password_len = 0;
-                g_password[0] = 0;
-                g_vkb_visible = 0;
-                vga_puts("[LOCK] state: login -> desktop (button click)\n");
+                if (hs_login_submit()) {
+                    hs_login_unlock();
+                    vga_puts("[LOCK] state: login -> desktop (button click)\n");
+                } else {
+                    hs_login_reject();
+                }
                 return;
             }
         }
@@ -6279,10 +6341,10 @@ void hpdesk_update_mouse(int x, int y)
 /* 鼠标按下：检测窗口标题栏启动拖拽 */
 void hpdesk_mouse_down(int x, int y)
 {
-    /* V0.55 P3-GUI: 首启向导期间禁止拖拽桌面窗口 */
+    /* V0.55 P3-GUI: 首启向导期间禁止拖拽桌面窗口(仅桌面态; 锁屏/登录不拦截) */
     {
         extern int hs_oobe_active(void);
-        if (hs_oobe_active()) return;
+        if (g_locked == 0 && hs_oobe_active()) return;
     }
     /* 顶栏右上角齿轮 = 控制中心开关。齿轮是从右数第二个图标(power 最右)。
      * 命中区必须跟 hs_top_bar_render 里同一套几何算, 否则缩放后点不中。 */
@@ -6630,7 +6692,7 @@ static int hs_cursor_kind_at(int x, int y)
     if (g_ctx.open && hs_ctx_hit_item(x, y) >= 0) return CUR_LINK;
     {
         extern int hs_oobe_active(void);
-        if (hs_oobe_active()) return CUR_LINK;
+        if (g_locked == 0 && hs_oobe_active()) return CUR_LINK;
     }
     {
         extern int hs_files_cursor_kind(int x, int y);
@@ -7138,11 +7200,13 @@ static void hpdesk_render_inner(void)
         hs_switcher_render();
     }
 
-    /* V0.55 P3-GUI: 首启图形向导覆盖在桌面之上 (模态, 独占输入) */
+    /* V0.55 P3-GUI: 首启图形向导覆盖在桌面之上 (模态, 独占输入)。
+     * 优先级规则: 只在桌面态(g_locked==0)渲染。锁屏/登录帧在上面的分支已提前
+     * return, 走不到这里; 向导与桌面内容同画在后台缓冲, 帧末 present 整屏提交。 */
     {
         extern int hs_oobe_active(void);
         extern void hs_oobe_render(void *fb, int w, int h);
-        if (hs_oobe_active()) {
+        if (g_locked == 0 && hs_oobe_active()) {
             hs_oobe_render(hs_get_framebuffer(),
                            g_shell.screen_width, g_shell.screen_height);
         }
@@ -7229,18 +7293,15 @@ void hpdesk_render(void)
 void hpdesk_handle_key(int key)
 {
     hpdesk_mark_dirty();   /* P0: 交互发生, 内容需重绘 */
-    /* V0.55 P3-GUI: 首启向导优先消费全部按键 */
-    {
-        extern int hs_oobe_active(void);
-        extern int hs_oobe_handle_key(int key);
-        if (hs_oobe_active()) { hs_oobe_handle_key(key); return; }
-    }
 
-    /* 锁屏状态：任意键进入登录界面 */
+    /* 锁屏状态：任意键进入登录界面。
+     * 优先级: 锁屏/登录态优先于 OOBE —— 向导在这两层不抢按键, 否则解锁键被
+     * 向导吞掉, 锁屏进不去登录页, 向导自己也画不出来, 两层互相抵消。 */
     if (g_locked == 1) {
         g_locked = 2;
         g_password_len = 0;
         g_password[0] = 0;
+        g_login_err = 0;
         vga_puts("[LOCK] state: lock -> login (key)\n");
         return;
     }
@@ -7253,11 +7314,12 @@ void hpdesk_handle_key(int key)
             return;
         }
         if (key == '\n' || key == '\r' || key == 0x1C) {  /* 回车登录 */
-            /* 简单验证：任意密码都可以解锁 */
-            g_locked = 0;
-            g_password_len = 0;
-            g_password[0] = 0;
-            vga_puts("[LOCK] state: login -> desktop (unlocked)\n");
+            if (hs_login_submit()) {
+                hs_login_unlock();
+                vga_puts("[LOCK] state: login -> desktop (unlocked)\n");
+            } else {
+                hs_login_reject();
+            }
             return;
         }
         if (key == '\b' || key == 0x0E) {  /* 退格 */
@@ -7268,10 +7330,18 @@ void hpdesk_handle_key(int key)
             return;
         }
         if (g_password_len < 31 && key >= 32 && key < 127) {
+            g_login_err = 0;
             g_password[g_password_len++] = (char)key;
             g_password[g_password_len] = 0;
         }
         return;
+    }
+
+    /* 桌面态: 未完成的首启向导模态独占键盘(登录页已在上面放行/拦截完毕) */
+    if (g_locked == 0) {
+        extern int hs_oobe_active(void);
+        extern int hs_oobe_handle_key(int key);
+        if (hs_oobe_active()) { hs_oobe_handle_key(key); return; }
     }
 
     if (g_shell.launcher_visible) {

@@ -38,6 +38,8 @@ static const char *g_str[2][L10N_STR_COUNT] = {
         "\xe8\xa7\xa3\xe9\x94\x81",                                              /* 解锁 */
         "ESC \xe9\x94\x81\xe5\xb1\x8f",                                          /* ESC 锁屏 */
         "%02d:%02d %04d-%02d-%02d",                                              /* 时钟格式 */
+        "\xe5\xaf\x86\xe7\xa0\x81\xe9\x94\x99\xe8\xaf\xaf\xef\xbc\x8c\xe8\xaf\xb7\xe9\x87\x8d\xe6\x96\xb0\xe8\xbe\x93\xe5\x85\xa5", /* 密码错误，请重新输入 */
+        "\xe9\x94\xae\xe7\x9b\x98",                                              /* 键盘 */
     },
     /* en_US */
     {
@@ -55,6 +57,8 @@ static const char *g_str[2][L10N_STR_COUNT] = {
         "Unlock",
         "ESC to lock",
         "%02d:%02d %04d-%02d-%02d",
+        "Wrong password, please try again",
+        "VKB",
     }
 };
 
