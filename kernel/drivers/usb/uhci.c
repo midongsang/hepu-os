@@ -47,6 +47,17 @@ static uint32_t virt_to_phys(void *addr)
     return (uint32_t)addr;
 }
 
+/* 编译器写屏障: TD 的 token/status/link/buffer 全部写进内存后, 再把帧列表
+ * 指针指向这条 TD 链。否则编译器可能把 frame_list[0] 的发布存储重排到 TD
+ * 字段写入之前, 控制器在帧边界取到一条半初始化的 TD。
+ * 注: 本驱动在当前 QEMU 配置(xhci + usb-kbd/mouse, 无 UHCI 控制器)下不会被
+ * probe, 该顺序加固未在真机/可复现 UHCI 用例上验证, 仅按 UHCI 规范的描述符
+ * 发布顺序做最小修正。 */
+static inline void uhci_wmb(void)
+{
+    __asm__ volatile("" ::: "memory");
+}
+
 /* 读取UHCI寄存器 */
 static uint16_t uhci_readw(uhci_controller_t *uhci, uint16_t reg)
 {
@@ -138,6 +149,7 @@ int uhci_control_transfer(usb_controller_t *ctrl,
 
     /* 将第一个TD加入帧列表的第0帧 */
     uint32_t old_frame0 = uhci->frame_list[0];
+    uhci_wmb();  /* TD 字段落内存后再发布帧列表指针 */
     uhci->frame_list[0] = virt_to_phys(&tds[0]) | 0x04;  /* TD标志 */
 
     /* 轮询等待最后一个TD完成 */
@@ -227,6 +239,7 @@ int uhci_bulk_transfer(usb_controller_t *ctrl,
 
     /* 将第一个TD加入帧列表的第0帧 */
     uint32_t old_frame0 = uhci->frame_list[0];
+    uhci_wmb();  /* TD 字段落内存后再发布帧列表指针 */
     uhci->frame_list[0] = virt_to_phys(&bulk_tds[0]) | 0x04;
 
     /* 轮询等待最后一个TD完成 */
@@ -286,6 +299,7 @@ int uhci_interrupt_transfer(usb_controller_t *ctrl,
     int_td.link = 0x7F;
 
     uint32_t old_frame0 = uhci->frame_list[0];
+    uhci_wmb();  /* TD 字段落内存后再发布帧列表指针 */
     uhci->frame_list[0] = virt_to_phys(&int_td) | 0x04;
 
     int timeout = 1000000;

@@ -43,18 +43,19 @@ static uint32_t netmask = 0;
 static uint32_t gateway = 0;
 static int ip_initialized = 0;
 
-/* 计算IP校验和 */
+/* 计算IP校验和: 按 RFC1071 把头部当作大端 16 位字求和。
+ * 旧实现直接按原生 uint16_t 解引用, 小端机上每个字被字节翻转, 累加出来的
+ * 校验和本身就是错的; 与 arch/x86_64/net64_ip.c 的 ip_checksum 对齐, 显式
+ * 用 data[i]<<8 | data[i+1] 拼大端字。 */
 static uint16_t ip_checksum(const uint8_t *data, uint32_t length)
 {
     uint32_t sum = 0;
-    const uint16_t *ptr = (const uint16_t *)data;
-
-    while (length > 1) {
-        sum += *ptr++;
-        length -= 2;
+    for (uint32_t i = 0; i + 1 < length; i += 2) {
+        uint16_t word = ((uint16_t)data[i] << 8) | data[i + 1];
+        sum += word;
     }
-    if (length == 1) {
-        sum += *(const uint8_t *)ptr;
+    if (length & 1) {
+        sum += (uint16_t)data[length - 1] << 8;
     }
 
     while (sum >> 16) {
@@ -63,6 +64,19 @@ static uint16_t ip_checksum(const uint8_t *data, uint32_t length)
 
     return (uint16_t)(~sum);
 }
+
+/* 主机序 <-> 网络序 (与 arch/x86_64/net64_ip.c 同约定)。
+ * 以太网/IP/UDP 头里的 16/32 位整数字段线上一律大端; 本机小端直写会被
+ * 对端按大端解析成颠倒值(total_length/id/端口/长度离谱), 帧在对端协议层
+ * 即被丢弃, 表现为本机 RX 环永远等不到完成位、MMC PRC 不涨。 */
+static inline uint16_t htons16(uint16_t v) { return (uint16_t)((v >> 8) | (v << 8)); }
+static inline uint16_t ntohs16(uint16_t v) { return htons16(v); }
+static inline uint32_t htonl32(uint32_t v)
+{
+    return ((v & 0xFF) << 24) | ((v & 0xFF00) << 8) |
+           ((v & 0xFF0000) >> 8) | ((v & 0xFF000000) >> 24);
+}
+static inline uint32_t ntohl32(uint32_t v) { return htonl32(v); }
 
 /* 初始化IP层 */
 void ip_init(void)
@@ -138,17 +152,17 @@ int ip_send(uint32_t dest_ip, uint8_t protocol, const uint8_t *data, uint32_t da
     ip_header_t *ip_hdr = (ip_header_t *)(packet + sizeof(eth_header_t));
     ip_hdr->version_ihl = 0x45;  /* IPv4, 头长20字节 */
     ip_hdr->tos = 0;
-    ip_hdr->total_length = sizeof(ip_header_t) + data_len;
-    ip_hdr->id = 0x1234;
+    ip_hdr->total_length = htons16((uint16_t)(sizeof(ip_header_t) + data_len));
+    ip_hdr->id = htons16(0x1234);
     ip_hdr->flags_frag = 0;
     ip_hdr->ttl = 64;
     ip_hdr->protocol = protocol;
     ip_hdr->checksum = 0;
-    ip_hdr->src_ip = local_ip;
-    ip_hdr->dest_ip = dest_ip;
+    ip_hdr->src_ip = htonl32(local_ip);
+    ip_hdr->dest_ip = htonl32(dest_ip);
 
-    /* 计算IP校验和 */
-    ip_hdr->checksum = ip_checksum((uint8_t *)ip_hdr, sizeof(ip_header_t));
+    /* 计算IP校验和: 字段已按网络序落内存, 校验和结果再转网络序写入。 */
+    ip_hdr->checksum = htons16(ip_checksum((uint8_t *)ip_hdr, sizeof(ip_header_t)));
 
     /* 复制数据 */
     memcpy(packet + sizeof(eth_header_t) + sizeof(ip_header_t), data, data_len);
@@ -178,19 +192,17 @@ int ip_process_packet(const uint8_t *packet, uint32_t length)
     /* 解析IP头 */
     ip_header_t *ip_hdr = (ip_header_t *)(packet + sizeof(eth_header_t));
 
-    /* 验证校验和 */
-    uint16_t recv_checksum = ip_hdr->checksum;
-    ip_hdr->checksum = 0;
-    uint16_t calc_checksum = ip_checksum((uint8_t *)ip_hdr, sizeof(ip_header_t));
-    if (recv_checksum != calc_checksum) {
-        serial_puts(0x3F8, "[IP] checksum mismatch\n");
-        return -1;
-    }
-    ip_hdr->checksum = recv_checksum;
-
-    /* 提取数据 */
+    /* 接收侧字段是网络序, 转主机序再解析。 */
     uint32_t ip_header_len = (ip_hdr->version_ihl & 0x0F) * 4;
-    uint32_t data_len = ip_hdr->total_length - ip_header_len;
+    if (ip_header_len < 20) return -1;
+    uint32_t total_len = ntohs16(ip_hdr->total_length);
+    uint32_t data_len = total_len - ip_header_len;
+    /* 安全: 对端自报长度必须钳制到实际帧长, 避免越界读。 */
+    if (data_len > length - sizeof(eth_header_t) - ip_header_len)
+        data_len = length - sizeof(eth_header_t) - ip_header_len;
+    if (data_len > 1500) return -1;
+    uint32_t src_ip = ntohl32(ip_hdr->src_ip);
+    uint32_t dst_ip = ntohl32(ip_hdr->dest_ip);
     const uint8_t *data = packet + sizeof(eth_header_t) + ip_header_len;
 
     /* 根据协议分发 */
@@ -205,13 +217,13 @@ int ip_process_packet(const uint8_t *packet, uint32_t length)
             serial_puts(0x3F8, "[IP] UDP packet received\n");
             /* 调用UDP处理 */
             extern int udp_process_packet(uint32_t src_ip, const uint8_t *data, uint32_t length);
-            udp_process_packet(ip_hdr->src_ip, data, data_len);
+            udp_process_packet(src_ip, data, data_len);
             break;
         case IP_PROTO_TCP:
             serial_puts(0x3F8, "[IP] TCP packet received\n");
             /* 调用TCP处理 */
             extern int tcp_process_packet(uint32_t src_ip, const uint8_t *data, uint32_t length);
-            tcp_process_packet(ip_hdr->src_ip, data, data_len);
+            tcp_process_packet(src_ip, data, data_len);
             break;
         default:
             serial_puts(0x3F8, "[IP] unknown protocol\n");

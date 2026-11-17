@@ -18,6 +18,10 @@ typedef struct {
     uint16_t checksum;
 } __attribute__((packed)) udp_header_t;
 
+/* 主机序 <-> 网络序 (与 net64_udp.c 同约定)。 */
+static inline uint16_t htons16(uint16_t v) { return (uint16_t)((v >> 8) | (v << 8)); }
+static inline uint16_t ntohs16(uint16_t v) { return htons16(v); }
+
 /* UDP套接字 */
 #define UDP_MAX_SOCKETS 8
 typedef struct {
@@ -113,9 +117,9 @@ int udp_sendto(int sockfd, uint32_t dest_ip, uint16_t dest_port,
     memset(udp_packet, 0, sizeof(udp_packet));
 
     udp_header_t *udp = (udp_header_t *)udp_packet;
-    udp->src_port = src_port;
-    udp->dest_port = dest_port;
-    udp->length = udp_len;
+    udp->src_port = htons16(src_port);
+    udp->dest_port = htons16(dest_port);
+    udp->length = htons16((uint16_t)udp_len);
     udp->checksum = 0;
     memcpy(udp_packet + sizeof(udp_header_t), data, data_len);
 
@@ -160,8 +164,8 @@ int udp_process_packet(uint32_t src_ip, const uint8_t *data, uint32_t length)
     if (!udp_initialized || !data || length < sizeof(udp_header_t)) return -1;
 
     const udp_header_t *udp = (const udp_header_t *)data;
-    uint16_t dest_port = udp->dest_port;
-    uint16_t src_port = udp->src_port;
+    uint16_t dest_port = ntohs16(udp->dest_port);
+    uint16_t src_port = ntohs16(udp->src_port);
     (void)src_port;
     uint32_t data_len = length - sizeof(udp_header_t);
     const uint8_t *payload = data + sizeof(udp_header_t);

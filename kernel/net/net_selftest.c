@@ -61,5 +61,11 @@ void network_selftest(void)
         net_poll();
     }
 
+    /* RX 实测取证: DHCP/ICMP 轮询结束后, 落一次 MMC 计数与环/描述符状态。 */
+    {
+        extern void e1000_diag_dump(const char *tag);
+        e1000_diag_dump("after-dhcp-poll");
+    }
+
     serial_puts(0x3F8, "[NET-TEST] === Self-Test Complete ===\n");
 }

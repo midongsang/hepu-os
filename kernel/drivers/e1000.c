@@ -53,6 +53,17 @@
 #define REG_RAL       0x5400  /* 接收地址低 */
 #define REG_RAH       0x5404  /* 接收地址高 */
 
+/* MMC 统计计数器(82540EM, 32-bit 只读): 用于把 RX 不通落到
+ * "硬件没收到 / 收到但环没给完成位 / 完成位被清错" 三类。 */
+#define MMC_RUC       0x01510  /* 接收小帧(undersize)计数 */
+#define MMC_ROC       0x01514  /* 接收超大帧(oversize)计数 */
+#define MMC_RLEC      0x01518  /* 接收长度错误计数 */
+#define MMC_CRCERRS   0x0151C  /* 接收 CRC 错误计数 */
+#define MMC_MPTC      0x01520  /* 接收单播帧计数 */
+#define MMC_MPC       0x01524  /* 接收多播帧计数 */
+#define MMC_PRC       0x01530  /* 接收帧总数(Packets Received Count) */
+#define MMC_RFC       0x0153C  /* 接收碎片(fragment)计数 */
+
 /* 驱动实际访问到的最高寄存器偏移: RAH(0x5404) 占 4 字节,
  * MMIO 映射窗口覆盖到 0x5408, 再按页对齐向上取整。 */
 #define E1000_MMIO_WINDOW 0x5408u
@@ -145,6 +156,7 @@ typedef struct {
     int      present;
     volatile uint32_t *mmio_base;   /* MMIO 窗口, 必须 volatile */
     int      irq;
+    uint8_t  bus, dev, func;
     uint8_t  mac[6];
     e1000_rx_desc_t *rx_descs;
     e1000_tx_desc_t *tx_descs;
@@ -192,6 +204,84 @@ static int e1000_read_mac(void)
     return 0;
 }
 
+/* 只读诊断: 打印环寄存器 + MMC 收包计数 + 前若干 RX 描述符状态。
+ * 不改动任何硬件状态, 仅用于实测 RX 不通时把根因分类:
+ *   PRC 不涨            -> 硬件/过滤层没收到帧;
+ *   PRC 涨但 desc DD 不置 -> 收到了但环没回写完成位;
+ *   DD 曾置后被清       -> 完成位/写回被误清(结合 rx_cur 与 RDT 归还判断)。 */
+void e1000_diag_dump(const char *tag)
+{
+    if (!e1000_dev.present) {
+        serial_puts(0x3F8, "[e1000-diag] ");
+        serial_puts(0x3F8, tag);
+        serial_puts(0x3F8, " device absent\n");
+        return;
+    }
+    serial_puts(0x3F8, "[e1000-diag] === ");
+    serial_puts(0x3F8, tag);
+    serial_puts(0x3F8, " ===\n");
+
+    uint32_t pci_cmd = pci_config_read(e1000_dev.bus, e1000_dev.dev, e1000_dev.func, 0x04);
+    serial_puts(0x3F8, "[e1000-diag] PCI_CMD=");
+    serial_puthex(0x3F8, pci_cmd);
+    serial_puts(0x3F8, " MASTER=");
+    serial_puthex(0x3F8, (pci_cmd & 0x04) ? 1u : 0u);
+    serial_puts(0x3F8, " RDBAL=");
+    serial_puthex(0x3F8, e1000_read(REG_RDBAL));
+    serial_puts(0x3F8, " RDBAH=");
+    serial_puthex(0x3F8, e1000_read(REG_RDBAH));
+    serial_puts(0x3F8, " TDBAL=");
+    serial_puthex(0x3F8, e1000_read(REG_TDBAL));
+    serial_puts(0x3F8, " TDBAH=");
+    serial_puthex(0x3F8, e1000_read(REG_TDBAH));
+    serial_puts(0x3F8, " RCTL=");
+    serial_puthex(0x3F8, e1000_read(REG_RCTL));
+    serial_puts(0x3F8, " STATUS=");
+    serial_puthex(0x3F8, e1000_read(REG_STATUS));
+    serial_puts(0x3F8, " RDH=");
+    serial_puthex(0x3F8, e1000_read(REG_RDH));
+    serial_puts(0x3F8, " RDT=");
+    serial_puthex(0x3F8, e1000_read(REG_RDT));
+    serial_puts(0x3F8, " RDLEN=");
+    serial_puthex(0x3F8, e1000_read(REG_RDLEN));
+    serial_puts(0x3F8, " rx_cur=");
+    serial_puthex(0x3F8, (uint32_t)e1000_dev.rx_cur);
+    serial_puts(0x3F8, "\n");
+
+    serial_puts(0x3F8, "[e1000-diag] MMC PRC=");
+    serial_puthex(0x3F8, e1000_read(MMC_PRC));
+    serial_puts(0x3F8, " MPTC=");
+    serial_puthex(0x3F8, e1000_read(MMC_MPTC));
+    serial_puts(0x3F8, " MPC=");
+    serial_puthex(0x3F8, e1000_read(MMC_MPC));
+    serial_puts(0x3F8, " RFC=");
+    serial_puthex(0x3F8, e1000_read(MMC_RFC));
+    serial_puts(0x3F8, " ROC=");
+    serial_puthex(0x3F8, e1000_read(MMC_ROC));
+    serial_puts(0x3F8, " RUC=");
+    serial_puthex(0x3F8, e1000_read(MMC_RUC));
+    serial_puts(0x3F8, " RLEC=");
+    serial_puthex(0x3F8, e1000_read(MMC_RLEC));
+    serial_puts(0x3F8, " CRCERR=");
+    serial_puthex(0x3F8, e1000_read(MMC_CRCERRS));
+    serial_puts(0x3F8, "\n");
+
+    for (int i = 0; i < NUM_RX_DESC && i < 8; i++) {
+        e1000_rx_desc_t *d = &e1000_dev.rx_descs[i];
+        serial_puts(0x3F8, "[e1000-diag] desc[");
+        serial_puthex(0x3F8, (uint32_t)i);
+        serial_puts(0x3F8, "] status=");
+        serial_puthex(0x3F8, d->status);
+        serial_puts(0x3F8, " err=");
+        serial_puthex(0x3F8, d->errors);
+        serial_puts(0x3F8, " len=");
+        serial_puthex(0x3F8, d->length);
+        serial_puts(0x3F8, " addr=");
+        serial_puthex(0x3F8, (uint32_t)d->addr);
+        serial_puts(0x3F8, "\n");
+    }
+}
+
 /* 初始化e1000 */
 int e1000_init(void)
 {
@@ -208,6 +298,9 @@ int e1000_init(void)
     }
 
     pci_device_t *pci = &pci_devices[idx];
+    e1000_dev.bus  = pci->bus;
+    e1000_dev.dev  = pci->dev;
+    e1000_dev.func = pci->func;
     serial_puts(0x3F8, "[e1000] found at PCI ");
     serial_puthex(0x3F8, pci->bus);
     serial_puts(0x3F8, ":");
@@ -314,11 +407,24 @@ int e1000_init(void)
     e1000_write(REG_TDH, 0);
     e1000_write(REG_TDT, 0);
 
-    /* 设置MAC地址过滤 */
-    for (int i = 0; i < 6; i += 2) {
-        e1000_write(REG_RAL + i, *(uint32_t *)&e1000_dev.mac[i]);
-    }
-    e1000_write(REG_RAH, (*(uint16_t *)&e1000_dev.mac[4]) | 0x80000000);
+    /* 设置MAC地址过滤: RA0 由 RAL(0x5400, 32-bit) + RAH(0x5404, 32-bit)
+     * 两个对齐寄存器组成。RAL 放 mac[0..3] 小端, RAH 低 16 位放 mac[4..5],
+     * bit31 为 AV(地址有效)。
+     *
+     * 旧实现按 i+=2 步进写 `REG_RAL + i`: e1000_write 是 32 位字写(按
+     * reg/4 索引), i=2 时目标字节偏移 0x5402 未对齐, 整数除 4 后又落回 RAL,
+     * 用 mac[2..5] 覆盖了 RAL; i=4 又跨进 RAH。即"按字节步进"越过 RAL 边界
+     * 写到了相邻的 RAH 寄存器, 属溢出/错位写。这里改为两个对齐 32 位写, 不再
+     * 做未对齐访问, 也不再跨寄存器。 */
+    uint32_t ral = (uint32_t)e1000_dev.mac[0]
+                 | ((uint32_t)e1000_dev.mac[1] << 8)
+                 | ((uint32_t)e1000_dev.mac[2] << 16)
+                 | ((uint32_t)e1000_dev.mac[3] << 24);
+    uint32_t rah = (uint32_t)e1000_dev.mac[4]
+                 | ((uint32_t)e1000_dev.mac[5] << 8)
+                 | 0x80000000u;  /* AV=1 */
+    e1000_write(REG_RAL, ral);
+    e1000_write(REG_RAH, rah);
 
     /* 清除多播表 */
     for (int i = 0; i < 128; i++) {
@@ -355,6 +461,7 @@ int e1000_init(void)
     eth_set_mac("eth0", e1000_dev.mac);
 
     serial_puts(0x3F8, "[e1000] initialization complete\n");
+    e1000_diag_dump("after-init");
     return 0;
 }
 
