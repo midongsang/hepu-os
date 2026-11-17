@@ -692,3 +692,30 @@ desk_select("mine");       /* 切过去 */
 **64 位三条真 bug 修复后的桌面**（同一份二进制，1920×1080）：
 
 ![warn64 真 bug 修复](docs/assets/warn64-realbugs-0.60.7.jpg)
+
+## 本轮闭环批次（2026-11-17，分支 `docs/sync-2026-11-17`）
+
+> 本批为 2026-11-17 已合入基线 `5f93c2d` 的修复项。既有 D-1…D-8、P0/P1/P2/P3、
+> N-1…N-5 条目的编号与状态一律未改动；下表只登记本轮新增闭环及其验证方式。
+> 验证口径：**已闭环** = 有同日实测证据；**代码已修 / 端到端未复测** = 源码改动经核实，
+> 端到端场景本轮未重跑，缺口在备注写明。
+
+| 修复项 | 提交 | 代码位置 | 验证方式与证据 | 状态 |
+|---|---|---|---|---|
+| 开机进锁屏，补齐「锁屏 → 登录 → 桌面」链路 | `ebf3e05` | `kernel/arch/x86_64/hpdesk.c`：开机置锁（`:7486-7489`）、状态三态（`:4554`）、键处理（`:7201-7234`） | 同日实测实例 `docsrec2`：锁屏帧 → 空格进登录页（`f0107`）→ 回车进桌面（`f0143`/`f0199`）；证据 `evidence-docs-sync/rec-sendkey/` | 已闭环（64 位图形路径） |
+| 系统加载屏；`load_config` 先于 `init_gop` 顺序换回 | `5d890c4` | `tools/hepboot/uefi/hepboot_uefi.c`：`:1658` → `:1663`；加载屏阶段 `:1163/:1365/:1739/:1754/:1771` | 同日实测实例 `nodisp4`（`-display none`，2026-11-17 21:19）：`FBDESC w=1920 h=1080`、`Desktop initialized: 1920x1080`；PPM 头 `P6 1920 1080`；证据 `evidence-docs-sync/nodisp-none/` | 已闭环 |
+| 加载屏留到桌面；自检不再把屏幕刷成绿/红 | `57aba61` | `kernel/arch/x86_64/gfx64.c`、`kernel/kernel_main_64.c`、`tools/hepboot/uefi/hepboot_uefi.c` | 同日实测 `docsrec2` 帧序列：加载屏过渡到桌面第一帧覆盖，无绿/红刷屏；证据 `evidence-docs-sync/rec-sendkey/` | 已闭环（64 位图形路径） |
+| net32 `RCTL.BSIZE` 位段写错 | `5f93c2d` | `kernel/drivers/e1000.c`：BSIZE 位域 bit9:8；MMIO `volatile` + 屏障 | 源码核实位域写入。**未验证**：32 位 e1000 端到端 RX/DHCP/ICMP 本轮未复测；缺修后 32 位网络串口证据。网络类既有条目状态不变 | 代码已修；端到端未复测 |
+| 保护模式按实际架构跳转，不再误走 32 位交接 | `9d39038` | `tools/hepboot/uefi/hepboot_uefi.c`：跳转判定 `:1960` 起 | 源码核实；端到端引用同日独立验证 `evidence-combined/REPORT.md` E5（64 protect）、E7（32 protect），HEAD `fd469e1` 含本条 | 已闭环（引用同日独立验证） |
+| uproc 统一加载 ABI（契约头 / 32 位 / 64 位 + argv 上栈 / 真实 pid 回传） | `d1dd19d`、`5096f0a`、`421d358`、`fd469e1` | `kernel/include/uproc.h`；`kernel/compat/uproc32.c`、`binfmt*.c`；`kernel/arch/x86_64/user_process.c`、`user_stack64.c` 等 | 同日独立验证 E6：四条程序 rc=100；不存在文件 rc=-2；pid=100 slot=0 active=1；契约见 `evidence-uproc/REPORT.md` | 已闭环 |
+| 保护模式文本 shell 独立枚举 USB HID，双源合流键盘 | `8a0af11` | `kernel/arch/x86_64/shell64.c`、`kernel/kernel_main_64.c:1389-1398` | 源码核实；**未验证**：保护模式 USB 键盘端到端输入未单独复测，E5 未区分按键来源 | 代码已修；保护模式 USB 输入端到端未单独复测 |
+| `hepu.graphics=0` 保护模式：32/64 跳过图形进文本终端 | `db4cf31` | `kernel/arch/x86_64/bootopts64.c`、`kernel/arch/x86/init_sequence.c`、`kernel/boot/multiboot.c`、`kernel/kernel_main_64.c` 等 | 同日独立验证 E5/E7：64/32 保护模式均进文本终端、无图形后端初始化行；HEAD `fd469e1` 含本条 | 已闭环（引用同日独立验证） |
+
+### 与既有技术债条目的边界（勿误关）
+
+- **D-6 / P3-6「兼容层加载器 / framebuffer 所有权，整块搬用户态」未被本次 uproc ABI 关闭**：
+  本轮 `d1dd19d`/`5096f0a`/`421d358`/`fd469e1` 只统一了入口契约、返回口径与 argv 栈布局，
+  加载器主体与 framebuffer 所有权仍在内核侧；把兼容层整块搬到用户态仍是开放大工程，
+  D-6、P3-6 状态保持不变。
+- **32 位网络端到端收发**：`5f93c2d` 修的是 RCTL.BSIZE 位段；32 位 e1000 的 RX/DHCP/ICMP
+  端到端本轮未复测，网络类既有开放条目不据此关闭。

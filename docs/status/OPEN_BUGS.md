@@ -578,3 +578,21 @@ BAR 映射是两个独立问题，混在一个提交里会让人分不清哪处�
 2. **32 位 `net=1` 是假绿**：`regress32.sh` 不带网卡，`eth.c` 从不绑定 e1000 ops，
    串口里那条 `[ETH] eth0 MAC: 00:1A:36:5D:A7:C9` 是默认模拟 MAC。e1000 修好前
    冒烟同样是 `net=1`。**端到端收发仍不通**：无 DHCP offer、无 ICMP reply。
+
+## 本轮闭环批次（2026-11-17，分支 `docs/sync-2026-11-17`）
+
+> 本批为 2026-11-17 已合入基线 `5f93c2d` 的修复项台账。每条记录提交哈希、代码位置、
+> 验证方式与证据；既有 SEC/BUG/OBS 开放条目的编号与状态一律未改动。
+> 验证口径分两档：**已闭环** = 有同日实测证据；**代码已修 / 端到端未复测** = 代码改动
+> 经源码核实，但对应端到端场景本轮未重跑，缺什么证据在备注里写明。
+
+| 修复项 | 提交 | 代码位置 | 验证方式与证据 | 状态 |
+|---|---|---|---|---|
+| 开机进锁屏，补齐「锁屏 → 登录 → 桌面」链路 | `ebf3e05` | `kernel/arch/x86_64/hpdesk.c`：开机置 `g_locked=1`（`:7486-7489`）；状态三态（`:4554`）；锁屏/登录键处理（`:7201-7234`） | 同日实测（实例 `docsrec2`，2026-11-17 23:11）：首帧为锁屏时钟画面；QMP 注入空格后帧 `f0107` 进入登录页（头像 `U` / 用户名 `hepu` / Unlock 按钮）；两次回车后帧 `f0143`、`f0199` 进入桌面（顶栏 + Settings 窗口）。证据：`evidence-docs-sync/rec-sendkey/boot_docsrec.mp4`、帧目录 `.toolchain/run/inst/docsrec2/frames/`、`record.log` | 已闭环（64 位图形路径） |
+| 菜单与内核之间的系统加载屏；`load_config` 先于 `init_gop` 的顺序换回 | `5d890c4` | `tools/hepboot/uefi/hepboot_uefi.c`：`load_config()`（`:1658`）→ `init_gop()`（`:1663`）；加载屏 `ld_begin`（`:1163`）、读镜像（`:1365`）、CRC 校验（`:1739`）、预热页（`:1754`）、交接准备（`:1771`） | 同日实测（实例 `nodisp4`，2026-11-17 21:19，`-display none`）：串口 `[FBDESC] phys=0x80000000 w=1920 h=1080 pitch=7680 bpp=32`、`[DESKTOP64] Desktop initialized: 1920x1080`；`screendump` 原始 PPM 头 `P6 1920 1080`。证据：`evidence-docs-sync/nodisp-none/nodisp4-serial.txt`、`nodisp4-1920x1080.png`；顺序回归/修复提交见 `65483b4`（回归）与本条 | 已闭环 |
+| 加载屏留到桌面；拔掉开机自检程序把屏幕刷成绿/红 | `57aba61` | `kernel/arch/x86_64/gfx64.c`、`kernel/kernel_main_64.c`、`tools/hepboot/uefi/hepboot_uefi.c` | 同日实测（实例 `docsrec2`）：帧序列从引导加载屏过渡到桌面第一帧覆盖，中途无绿/红自检刷屏；桌面帧 `f0143`。证据：`evidence-docs-sync/rec-sendkey/` 帧序列与 mp4 | 已闭环（64 位图形路径） |
+| net32 `RCTL.BSIZE` 位段写错（接收缓冲实际只有 256B，RX 等不到完成位） | `5f93c2d` | `kernel/drivers/e1000.c`：`BSIZE=0x00030000` 位于 RCTL bit9:8；MMIO 改 `volatile` + 屏障 | 源码核实：RCTL.BSIZE 按位域写入。**未验证**：32 位 e1000 端到端 RX / DHCP / ICMP 本轮未复测；修前基线串口 `evidence-rxnet-2026-11-17/serial/rxnet-baseline.log` 无 DHCP offer、无 ICMP reply，缺修后 32 位网络串口证据。本表网络类既有开放条目状态不变 | 代码已修；端到端未复测 |
+| 保护模式按实际内核架构跳转，不再误走 32 位交接 | `9d39038` | `tools/hepboot/uefi/hepboot_uefi.c`：跳转判定（`:1960` 起），按解析出的 `use32` 选 64/32 交接 | 源码核实：保护模式不再误走 32 位交接。端到端引用同日独立验证 `evidence-combined/REPORT.md`：E5（64 位保护模式 `[PROTECT] arch=x86_64`，无 desktop64/hpdesk/gfx64 初始化行，`help`/`ls` 回显可见）、E7（32 位保护模式 `[PROTECT] arch=i386`，无桌面初始化行，`help` 有输出）。该验证 HEAD `fd469e1` 含本条提交 | 已闭环（引用同日独立验证） |
+| uproc 统一用户程序加载 ABI（契约头 / 32 位适配 / 64 位适配 + argv 上栈 / 成功路径回传真实 pid） | `d1dd19d`、`5096f0a`、`421d358`、`fd469e1` | `kernel/include/uproc.h`（契约头、错误码、栈布局）；32 位 `kernel/compat/uproc32.c`、`binfmt*.c`、`kernel/arch/x86/kernel.c`；64 位 `kernel/arch/x86_64/user_process.c`、`user_stack64.c`、`shell64.c` 等 | 同日独立验证 `evidence-combined/REPORT.md` E6：hello/sec_test/clone_test/ps 四条 rc=100；`/bin/no_such_uproc.elf` rc=-2；pid=100 slot=0 active=1。契约条文见 `evidence-uproc/REPORT.md` | 已闭环 |
+| 保护模式文本 shell 独立枚举 USB HID，双源合流键盘输入 | `8a0af11` | `kernel/arch/x86_64/shell64.c`、`kernel/kernel_main_64.c`（保护/文本分支独立 `usb64_init()`，`:1389-1398`） | 源码核实：保护/文本分支单独枚举 USB HID，与 PS/2 兜底双源合流。**未验证**：保护模式下 USB 键盘端到端输入本轮未单独复测；E5 仅验证 `help`/`ls` 命令回显，未区分按键来源是 USB 还是 PS/2 | 代码已修；保护模式 USB 输入端到端未单独复测 |
+| `hepu.graphics=0` 保护模式：32/64 跳过图形进文本终端 | `db4cf31` | `kernel/arch/x86_64/bootopts64.c`、`kernel/arch/x86/init_sequence.c`、`kernel/boot/multiboot.c`、`kernel/kernel_main_64.c` 等 | 同日独立验证 `evidence-combined/REPORT.md`：E5（64 位保护模式进文本终端、无图形后端初始化行）、E7（32 位保护模式进文本终端、无桌面初始化行）。该验证 HEAD `fd469e1` 含本条提交 | 已闭环（引用同日独立验证） |
