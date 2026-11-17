@@ -45,6 +45,16 @@
 #define USER_VDSO_LO    0x7FFF0000ULL   /* vDSO 页 [0x7FFF0000,0x7FFF1000) */
 #define USER_VDSO_HI    0x7FFF1000ULL
 
+/* MAP_PHYS: 自定义 flag, addr 解释为**物理地址**而非提示虚拟地址。
+ * 与 32 位 kernel/arch/x86/sys_mem.c 的同名 flag 取同一个值, 让同一份用户态
+ * 代码在双架构下行为一致。
+ *
+ * 用途: framebuffer 显存 / 设备 MMIO 窗口 —— 这些物理区间本来就存在,
+ * 不需要也不应该 alloc 物理帧。所以这条路径**不分配物理页、不 charge
+ * 物理页配额**(否则会把 MMIO 算成进程内存, 逼进程提前 OOM), 只建页表。
+ */
+#define MAP_PHYS        0x1000ULL
+
 /* 区间 [start,end) 必须非空且完整落在用户窗口内 */
 static int user_va_range_ok(uint64_t start, uint64_t end)
 {
@@ -83,6 +93,41 @@ static int user_va_is_reserved(uint64_t start, uint64_t end)
     static uint64_t mmap_heap = USER_MMAP_BASE;
     uint64_t pml4 = user_process_current_pml4();
     if (!pml4) return -1;
+
+    /* ---- MAP_PHYS: 把一段**已存在的**物理区间映射进当前进程 ---- */
+    if (flags & MAP_PHYS) {
+        uint64_t phys = addr & ~0xFFFULL;
+        uint64_t bytes = (length + 0xFFFULL) & ~0xFFFULL;
+        if (bytes == 0 || bytes > USER_MMAP_LIMIT - USER_MMAP_BASE) return -1;
+        if (phys + bytes < phys) return -1;          /* 物理地址回绕 */
+
+        uint64_t virt = mmap_heap;
+        if (virt + bytes < virt) return -1;
+        if (virt + bytes > USER_MMAP_LIMIT) return -1;
+        if (!user_va_range_ok(virt, virt + bytes)) return -1;
+        if (user_va_is_reserved(virt, virt + bytes)) return -1;
+
+        /* 权限: 只按 prot 给 READ/WRITE; MMIO 必须 NX(不可执行),
+         * 即使调用方传 PROT_EXEC 也不清 NX —— 可执行 MMIO 没有任何正当用途,
+         * 只会把设备窗口变成跳转目标。 */
+        uint64_t pte_flags = 0x001 | 0x004;  /* PRESENT | USER */
+        if (prot & 2) pte_flags |= 0x002;
+        pte_flags |= (1ULL << 63);           /* NX 恒置 */
+
+        uint64_t done = 0;
+        for (; done < bytes; done += 4096) {
+            if (vmm64_map_page(pml4, virt + done, phys + done, pte_flags) != 0) {
+                /* 半途失败: 撤掉已建的那几页, 不留半个映射 */
+                for (uint64_t back = 0; back < done; back += 4096) {
+                    extern void vmm64_unmap_page(uint64_t pml4, uint64_t virt);
+                    vmm64_unmap_page(pml4, virt + back);
+                }
+                return -1;
+            }
+        }
+        mmap_heap = virt + bytes;
+        return (int64_t)virt;
+    }
 
     /* 文件映射：glibc 的 ld.so 用 mmap(fd, offset, MAP_PRIVATE|MAP_FIXED)
      * 把 .so 的每个 PT_LOAD 段映射进用户空间。旧实现无条件当作匿名映射，
