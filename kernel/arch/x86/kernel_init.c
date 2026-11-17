@@ -393,8 +393,11 @@ void hepu_mem_init(uint32_t mem_kb)
      * 加上阴影缓存(单个最大 3MB, 3 个面板)在 16MB 下会 OOM, 表现是
      * [LY] no surface —— 顶栏没有半透明、面板也没有阴影。 */
     if (mem_kb < 128 * 1024) heap_size = 8 * 1024 * 1024;
-    else if (mem_kb < 256 * 1024) heap_size = 32 * 1024 * 1024;
-    else if (mem_kb < 512 * 1024) heap_size = 32 * 1024 * 1024;
+    /* N-1: 2560x1600 双缓冲 16MB + 壁纸缓存 16MB = 32MB, 正好吃满 32MB 堆,
+     * 后续分配全失败(画面撕裂/壁纸全黑). 256MB/512MB 两档提到 48MB.
+     * <128MB 档保持 8MB —— 那个档机器本身就装不下 2560, 提了也没意义还挤内存. */
+    else if (mem_kb < 256 * 1024) heap_size = 48 * 1024 * 1024;
+    else if (mem_kb < 512 * 1024) heap_size = 48 * 1024 * 1024;
     else if (mem_kb < 1024 * 1024) heap_size = 64 * 1024 * 1024;
     mm_add_region(heap_base, heap_size, MEM_REGION_RESERVED);
     /* V6.60: 调试输出内存参数 */

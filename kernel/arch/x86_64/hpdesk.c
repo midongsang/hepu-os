@@ -594,7 +594,7 @@ static const char *default_config =
 "    dock_height: 64\n"
 "    dock_margin_bottom: 12\n"
 "    dock_icon_size: 44\n"
-"    corner_radius: 12\n"
+"    corner_radius: 10\n"
 "    sidebar_collapsed: 1\n"
 "    font_small: 12\n"
 "    font_normal: 14\n"
@@ -686,7 +686,7 @@ static void load_ui_from_config(hsqml_node_t *ui)
     if (g_ui_scale_pct < 100) g_ui_scale_pct = 100;
     if (g_ui_scale_pct > 250) g_ui_scale_pct = 250;
     g_shell.ui.cc_height = hsqml_get_number(ui, "cc_height", 440);
-    g_shell.ui.bar_height = hsqml_get_number(ui, "bar_height", 40);
+    g_shell.ui.bar_height = hsqml_get_number(ui, "bar_height", 36);
     g_shell.ui.island_width = hsqml_get_number(ui, "island_width", 120);
     g_shell.ui.island_height = hsqml_get_number(ui, "island_height", 28);
     g_shell.ui.island_y = hsqml_get_number(ui, "island_y", 6);
@@ -695,7 +695,7 @@ static void load_ui_from_config(hsqml_node_t *ui)
     g_shell.ui.dock_height = hsqml_get_number(ui, "dock_height", 64);
     g_shell.ui.dock_margin_bottom = hsqml_get_number(ui, "dock_margin_bottom", 12);
     g_shell.ui.dock_icon_size = hsqml_get_number(ui, "dock_icon_size", 44);
-    g_shell.ui.corner_radius = hsqml_get_number(ui, "corner_radius", 12);
+    g_shell.ui.corner_radius = hsqml_get_number(ui, "corner_radius", 10);
     g_sidebar_collapsed = hsqml_get_number(ui, "sidebar_collapsed", 1);
     g_shell.ui.font_small = hsqml_get_number(ui, "font_small", 12);
     g_shell.ui.font_normal = hsqml_get_number(ui, "font_normal", 14);
