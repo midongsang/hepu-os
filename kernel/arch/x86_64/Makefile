@@ -225,8 +225,12 @@ CFLAGS = \
     -D__x86_64__ \
     -DHEPU_KERNEL_64
 
-# 可选：启动时自动运行 /bin/sec_test.elf 安全回归。发布构建默认关闭；
-# 需要时： make BOOT_SELFTEST=1
+# 可选：启动时自动运行 sec_test 自检电池（含 /bin/sec_test.elf 等用户程序）。
+# 默认关闭：本 ifeq 不成立时不定义 HEPU_BOOT_SELFTEST，源码侧
+# kernel_main_64.c 的 `#if defined(HEPU_BOOT_SELFTEST) && HEPU_BOOT_SELFTEST`
+# 守卫因此整段不编入发布内核。需要跑电池： make BOOT_SELFTEST=1。
+# 注意：这是编译期开关，不是运行时常驻探针；默认构建串口不应出现
+# PIEPROBE/FBSYN/FBDESC/STATP 等电池输出。
 ifeq ($(BOOT_SELFTEST),1)
 CFLAGS += -DHEPU_BOOT_SELFTEST
 endif

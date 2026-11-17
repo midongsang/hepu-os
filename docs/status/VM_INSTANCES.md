@@ -55,17 +55,37 @@ QEMU 没有内建录屏，这台机也没有 X 装 vnc2mpg 一类工具。走 QM
 合成用 `concat` + 每帧真实 `duration`，所以**视频时长 == 真实启动时长**，
 不会因为 TCG 下抓帧不稳而变成快放。
 
-### 一个必须知道的坑：`-display none` 会锁死 640×480
+### 历史结论（已作废）：曾以为 `-display none` 会锁死 640×480
 
-`-display none` 时 QEMU 的 VGA surface 停在固件默认的 640×480，
-**即使 Guest 内部已经是 1920×1080**（引导器日志里明明写着
-`[GFX64] Mode set: 1920x1080 fb=0x80000000`），`screendump` 出来的还是 640×480。
+> 以下是 2026-11-17 早些时候的错误判断，保留作经验记录，**不要再引用为现状**。
+>
+> ~~`-display none` 时 QEMU 的 VGA surface 停在固件默认的 640×480，即使 Guest 内部
+> 已经是 1920×1080，`screendump` 出来的还是 640×480；必须挂真实 display 后端
+> （`-vnc 127.0.0.1:<port>`），surface 才会跟随 VGA 模式变化。~~
 
-必须挂真实 display 后端（`-vnc 127.0.0.1:<port>`），surface 才会跟随 VGA 模式变化。
-三个脚本（shot / bootmenu / record）都已改成 VNC，端口按 slot 分配（5900+slot）。
+### 真实根因：引导器 cfg 加载顺序 bug（`init_gop` 早于 `load_config`）
 
-另外启动途中分辨率会从 640×480 跳到 1920×1080，所以录制时每帧都
-**等比缩放后居中贴到 1280×720 画布**，两边留黑边不变形 ——
+- **现象**：`-display none` 下 `screendump` 分辨率停在 640×480，而 Guest 日志已报
+  1920×1080。
+- **根因**：`tools/hepboot/uefi/hepboot_uefi.c` 里 `init_gop()` 被调到 `load_config()`
+  之前。`init_gop` 选模式要用 `g_config.res_w/res_h`（来自 cfg 的 `resolution=1920x1080`，
+  覆盖评分见 `hepboot_uefi.c:426-429`）；配置还没读进来，目标分辨率拿不到，于是回退到
+  固件默认 640×480。这是 cfg 解析顺序问题，**与 `-display none` / VGA surface 无关**。
+- **回归引入**：`65483b4`（引导菜单搬到 GOP 图形模式）把 `init_gop()` 提前到
+  `load_config()` 之前。
+- **修复**：`5d890c4`（系统加载屏）把两者换回 `load_config()` → `init_gop()`，并在代码
+  注释写明顺序关键（`hepboot_uefi.c:1655-1658`；现行调用点 `:1658`、`:1663`）。
+- **修复后实测**：`-display none` 实例 `nodisp4`（2026-11-17 21:19）串口记录
+  `[FBDESC] phys=0x80000000 w=1920 h=1080 pitch=7680 bpp=32`、
+  `[DESKTOP64] Desktop initialized: 1920x1080`；`screendump` 原始 PPM 头
+  `P6 1920 1080`。
+  - 串口摘录：`evidence-docs-sync/nodisp-none/nodisp4-serial.txt`
+  - 原始帧转存：`evidence-docs-sync/nodisp-none/nodisp4-1920x1080.png`（1920×1080）
+- **现状**：`-display none` 下可拿到 1920×1080 真桌面。脚本默认挂 VNC 是为了交互与
+  录屏观察，不是因为 none 后端会锁分辨率。
+
+另外启动途中分辨率会从 640×480（固件/文本阶段）跳到 1920×1080（GOP 生效后），所以
+录制时每帧都**等比缩放后居中贴到 1280×720 画布**，两边留黑边不变形 ——
 直接 thumbnail 会让不同尺寸的帧混进 concat，ffmpeg 要么报错要么退化到第一帧尺寸。
 
 ## 减少启动次数（比并行更有效）
@@ -86,3 +106,15 @@ mcopy -o -i /tmp/x_menu.img@@1M /tmp/cfg30.cfg ::/HEPBOOT.CFG
 - **没有 KVM**（`/dev/kvm` 不存在），全部走 TCG，所以 20 秒级启动是下限，不是配置问题。
 - `snapshot=on` 下实例跑完**不落盘**。需要保留改动后的镜像就显式 `cp` 出来，别指望 QEMU 帮你保存。
 - 磁盘镜像必须能被多个实例同时以只读打开；如果某个流程需要写镜像（`mkfs`/`mcopy`），**那一步仍应独占**，写完再交给截图脚本。
+
+## 网络取证判据：本构建 e1000 MMC 计数器恒读 0，不能当收包证据（2026-11-17 核实）
+
+- **现象**：QEMU 6.2 构建里 e1000 的 MMC 收包计数器（`PRC`/`MPTC`/`MPC`/`RFC`/`ROC`/
+  `RUC`/`RLEC`/`CRCERR`）在串口诊断 dump 中恒为 `0x00000000`；同期 `RDH` 已从 0 推进到 2、
+  `rx_cur=2`、两帧已上送 UDP（DHCP Offer op=2、xid 匹配、msg_type=2）。
+- **口径**：在本 QEMU 构建里，**MMC 计数器不能作为"硬件是否收到帧"的判据**；PRC=0 不代表
+  网卡没收到包。收包是否成功以 `RDH`/`RDT` 推进、`rx_cur` 增长、帧上送 UDP 与 Offer 字段
+  核对为准。
+- **证据**：`evidence-rxnet-2026-11-17/serial/rxnet-final.log`（RDH=2/rx_cur=2 时 MMC 全 0）、
+  `rxnet-dbg2.log`（Offer 字段）；修前基线 `rxnet-baseline.log` MMC 同样全 0。
+- 下次排查网络收发时，不要因 MMC PRC=0 判"硬件没收到"；先看 RDH/RDT 与上层 UDP 上送记录。

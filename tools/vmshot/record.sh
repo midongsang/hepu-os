@@ -1,7 +1,37 @@
 #!/bin/bash
 # 录制系统启动：QMP 循环 screendump -> PNG 帧 -> ffmpeg 按真实时间戳合成
 #
-# 用法: bash shots/.record.sh <TAG> [DUR_SEC] [FPS] [OUT.mp4]
+# 用法: bash tools/vmshot/record.sh <TAG> [DUR_SEC] [FPS] [OUT.mp4] [KEYSPEC]
+#
+#   TAG      实例短名（独立实例目录 run/inst/<TAG>，重复跑只清自己）
+#   DUR_SEC  录制总时长（秒，默认 45）
+#   FPS      目标帧率（默认 4）
+#   OUT.mp4  产物路径（默认 shots/boot_<TAG>.mp4）
+#   KEYSPEC  可选：录制中途经 QMP send-key 定时注入按键，格式见下；留空则不注入。
+#
+# KEYSPEC 格式（多个事件用分号分隔，每个事件 "@<秒>=<键>[,<键>...]"）：
+#   @12=ret                 录制到第 12 秒按一次回车
+#   @10=down;@11=ret        10 秒按方向下，11 秒按回车（选菜单项）
+#   @15=shift,2             组合键：先 shift 再按 2（keys 数组顺序即按下顺序）
+#
+# 支持的键名（QEMU QKeyCode 标准键名；脚本内置少量别名映射）：
+#   回车 ret/enter/return；上 up/uparrow；下 down/downarrow；左 left/leftarrow；
+#   右 right/rightarrow；空格 spc/space；制表 tab；ESC esc/escape；
+#   退格 backspace/bs；字母 a-z；数字 0-9；修饰键 shift/alt/ctrl/altgr/meta。
+#   未在映射表里的名字原样透传给 QEMU，QEMU 不认会在 QMP 回复里报错（脚本记一条
+#   warning，不中断录制）。
+#   内部按 QEMU 6.2 的 send-key 协议把每个键包成 KeyValue 对象
+#   {"type":"qcode","data":<键名>}；调用方只写键名，不接触这个结构。
+#
+# 限制（必读）：
+#   1. **时间是宿主机墙钟，不是 Guest 时钟**。TCG 软件模拟下 Guest 跑得比宿主机慢，
+#      "@N 秒"对应的 Guest 进度（菜单/加载屏/锁屏）只是近似，不同轮次会漂移。
+#      要稳妥推进界面，宁可把事件时刻留早一点、多排一个重复键。
+#   2. 按键走 QMP `send-key`（USB/PS2 键盘都接在同一 QEMU 键盘设备上），不依赖
+#      VNC 聚焦；Guest 侧是否消费取决于当时界面绑没绑这个键（与 OPEN-03 记录的
+#      应用层边界一致）。
+#   3. 组合键只发一次 keys 数组，不做按下-保持-释放的时序展开；修饰键用于单键
+#      组合，连续文本输入请排多个独立事件。
 #
 # 为什么不用 VNC: 这台机器没有 X，装 vnc2mpg 一类工具不现实；QEMU 本身没有内建录屏。
 # screendump 是唯一不依赖外部显示的抓帧通道，启动过程帧率要求低，够用。
@@ -14,6 +44,7 @@ TAG=${1:-rec}
 DUR=${2:-45}
 FPS=${3:-4}
 OUT=${4:-$CHAT/shots/boot_$TAG.mp4}
+KEYSPEC=${5:-}
 INST=$RUN/inst/$TAG
 IMG=${HEPU_IMG:-$RUN/shot.img}
 
@@ -41,10 +72,11 @@ if [ -z "$SLOT" ]; then
   flock -w 900 "$fd" || { echo "[record] 等不到 QEMU 额度" >&2; exit 1; }
   SLOT=1; SLOT_FD=$fd
 fi
-# 必须有真实 display 后端：-display none 时 QEMU 的 VGA surface 永远停在固件默认
-# 640x480，screendump 抓出来的也是 640x480 —— 尽管 Guest 内部已经是 1920x1080
-# (引导器日志里有 [GFX64] Mode set: 1920x1080 fb=0x80000000)。挂 VNC 之后 surface
-# 才跟随 VGA 模式变化，screendump 才会是真实分辨率。
+# 挂 VNC 作为显示后端：screendump 从活动 VGA surface 抓帧，有显示后端时 surface
+# 跟随 Guest 切到的 GOP 模式。早期曾把 "-display none 下抓到 640x480" 归因于
+# "QEMU surface 被锁死"，核实后真实根因是引导器 cfg 加载顺序 bug（init_gop 早于
+# load_config，resolution= 读不到），与显示后端无关；修复后 -display none 同样能
+# 拿到 1920x1080（见 docs/status/VM_INSTANCES.md 的经验记录）。
 VNCPORT=$((5900 + SLOT))
 echo "[record] tag=$TAG slot=$SLOT/$SLOTS dur=${DUR}s target=${FPS}fps vnc=:$VNCPORT -> $OUT"
 
@@ -62,14 +94,56 @@ qemu-system-x86_64 -L $B/pkg/datadir \
 # 等 QMP 起来
 for i in $(seq 1 30); do [ -S "$INST/qmp.sock" ] && break; sleep 1; done
 
-python3 - "$INST" "$DUR" "$FPS" <<'PY'
+python3 - "$INST" "$DUR" "$FPS" "$KEYSPEC" <<'PY'
 import json, os, socket, sys, time
 from PIL import Image
 
 inst, dur, fps = sys.argv[1], float(sys.argv[2]), float(sys.argv[3])
+keyspec = sys.argv[4] if len(sys.argv) > 4 else ""
 sock_path = os.path.join(inst, "qmp.sock")
 frames_dir = os.path.join(inst, "frames")
 raw = os.path.join(inst, "frame.ppm")
+
+# 别名 -> QEMU send-key 标准键名（见脚本头注释的键名集合）
+KEY_ALIAS = {
+    "enter": "ret", "return": "ret", "ret": "ret",
+    "uparrow": "up", "up": "up",
+    "downarrow": "down", "down": "down",
+    "leftarrow": "left", "left": "left",
+    "rightarrow": "right", "right": "right",
+    "space": "spc", "spc": "spc",
+    "escape": "esc", "esc": "esc",
+    "bs": "backspace", "backspace": "backspace",
+    "tab": "tab",
+}
+
+def parse_keyspec(spec):
+    """解析 '@12=ret;@10=down,ret' -> [(12.0, ['ret']), (10.0, ['down','ret'])]，
+    按时刻升序；空串返回 []。格式错的事件跳过并打印 warning，不抛异常。"""
+    events = []
+    if not spec:
+        return events
+    for ev in spec.split(";"):
+        ev = ev.strip()
+        if not ev:
+            continue
+        if "=" not in ev:
+            print("[keys] 跳过格式错误的事件: %r" % ev); continue
+        ts, keys = ev.split("=", 1)
+        try:
+            t = float(ts.lstrip("@").strip())
+        except ValueError:
+            print("[keys] 时刻不是数字: %r" % ev); continue
+        names = [KEY_ALIAS.get(k.strip().lower(), k.strip()) for k in keys.split(",") if k.strip()]
+        if names:
+            events.append((t, names))
+    events.sort(key=lambda e: e[0])
+    return events
+
+events = parse_keyspec(keyspec)
+t0_global = time.time()
+if events:
+    print("[keys] 计划注入: " + ", ".join("@%.1fs=%s" % (t, "+".join(k)) for t, k in events))
 
 s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 s.connect(sock_path)
@@ -81,8 +155,29 @@ def recv():
         raise RuntimeError("qmp closed")
     return json.loads(line)
 
+def recv_reply():
+    """读到下一条命令回复；跳过中间夹杂的异步 event（dict 带 "event" 键）。"""
+    while True:
+        msg = recv()
+        if "event" not in msg:
+            return msg
+
 recv()
-f.write(b'{"execute":"qmp_capabilities"}\n'); f.flush(); recv()
+f.write(b'{"execute":"qmp_capabilities"}\n'); f.flush(); recv_reply()
+
+def send_key(keys):
+    """经 QMP send-key 发一组键。QEMU 6.2 的 send-key 每个键是 KeyValue 对象
+    {"type":"qcode","data":<键名>}，不能直接传字符串（否则报
+    Invalid parameter type for 'keys[0]', expected: object）。
+    读回 reply，error 只打 warning 不中断录制。"""
+    kv = [{"type": "qcode", "data": k} for k in keys]
+    cmd = {"execute": "send-key", "arguments": {"keys": kv}}
+    f.write((json.dumps(cmd) + "\n").encode()); f.flush()
+    reply = recv_reply()
+    if "error" in reply:
+        print("[keys] QMP 拒绝 %s: %s" % (keys, reply["error"].get("desc", reply["error"])))
+    else:
+        print("[keys] @%.1fs 发送 %s" % (time.time() - t0_global, "+".join(keys)))
 
 def grab():
     """抓一帧。QEMU 的 screendump 是异步写盘，而且分辨率切换(640x480 -> 1920x1080)
@@ -94,7 +189,7 @@ def grab():
                 os.unlink(raw)
             f.write(('{"execute":"screendump","arguments":{"filename":"%s"}}\n' % raw).encode())
             f.flush()
-            recv()
+            recv_reply()
             prev = -1
             for _ in range(90):
                 if os.path.exists(raw):
@@ -116,7 +211,13 @@ idx = 0
 times = []
 t0 = time.time()
 interval = 1.0 / fps
+ev_i = 0
 while time.time() - t0 <= dur:
+    # 到点的按键事件先注入（墙钟时刻；TCG 下 Guest 进度为近似，见头注释限制 1）
+    now = time.time() - t0_global
+    while ev_i < len(events) and events[ev_i][0] <= now:
+        send_key(events[ev_i][1])
+        ev_i += 1
     im = grab()
     if im is None:
         print("frame %d dropped" % idx)

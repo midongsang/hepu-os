@@ -16,7 +16,7 @@ supersedes: null
 > 下表模块清单是**目标契约 + 实际文件落点**的混合记录，`xxx_ops` 目前只有 `storage_ops`
 > 一族被 `storage_hal64.c` 真正统一接入；`cpu_ops` / `irq_ops` / `input_ops` 多为薄封装或直调函数。
 > 另两处与"分层"相关的现状偏差，请先读 `DESIGN.md` 约束一注记与 `planning/MODULARITY.md`：
-> ① 兼容层（`kernel/compat/*`、`linux_map[350]`）**编在内核里**，不是独立上层服务；
+> ① 兼容层（`services/compat/*`、`linux_map[350]`；`f3b3c78` 由 `kernel/compat/` 迁出）**编在内核里**，不是独立上层服务；
 > ② 桌面（`gfx64`→`hepushell`/`hpdesk`→`hs_apps`）也在内核里，ring3 没有窗口/输入契约。
 
 ## 一、64位内核分层架构

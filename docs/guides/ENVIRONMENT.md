@@ -192,3 +192,32 @@ mouse_button 0
 ```
 
 > ⚠️ `-vga none` 下 QEMU 没有图形控制台输入路径，`sendkey` 不会被键盘驱动收到——这不是键盘驱动 bug。
+
+### 录屏脚本的定时按键注入（`tools/vmshot/record.sh`）
+
+`record.sh` 在 QMP 循环 `screendump` 抓帧合成 mp4 的基础上，支持录制中途定时注入按键。
+第 5 个位置参数 `KEYSPEC` 留空则不注入。
+
+```bash
+# 用法: bash tools/vmshot/record.sh <TAG> [DUR_SEC] [FPS] [OUT.mp4] [KEYSPEC]
+# 例：录制 80 秒、4fps，第 26 秒按空格进登录页，第 32/36 秒各按一次回车解锁
+bash tools/vmshot/record.sh docsrec2 80 4 boot.mp4 "@26=spc;@32=ret;@36=ret"
+```
+
+`KEYSPEC` 格式：多个事件用分号分隔，每个事件 `@<秒>=<键>[,<键>...]`。
+
+- 键名（QEMU QKeyCode，脚本内置别名）：回车 `ret/enter/return`；方向 `up/down/left/right`；
+  空格 `spc/space`；`tab`；`esc/escape`；退格 `backspace/bs`；字母 `a-z`；数字 `0-9`；
+  修饰键 `shift/alt/ctrl/altgr/meta`。未识别的名字原样透传，QEMU 不认会在 QMP 回复里报错，
+  脚本记一条 warning，不中断录制。
+- 内部按 QEMU 6.2 `send-key` 协议把每个键包成 KeyValue 对象
+  `{"type":"qcode","data":<键名>}`；调用方只写键名。
+
+限制：
+
+1. **时间是宿主机墙钟，不是 Guest 时钟**。TCG 软件模拟下 Guest 跑得比宿主机慢，
+   `@N 秒`对应的 Guest 进度只是近似，不同轮次会漂移；稳妥做法是把事件时刻留早一点、
+   多排一个重复键。
+2. 按键走 QMP `send-key`，不依赖 VNC 聚焦；Guest 侧是否消费取决于当时界面绑没绑这个键。
+3. 组合键只发一次 keys 数组，不做按下-保持-释放的时序展开；连续文本输入请排多个独立事件。
+4. 键码集合以 QEMU 6.2 `QKeyCode` 为准；超出该集合的键名 QMP 会拒绝。

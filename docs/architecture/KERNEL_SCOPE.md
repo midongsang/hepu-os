@@ -109,7 +109,7 @@
    `hpdesk_switch_workspace` 九个入口。自检 `[DESKOWN] zorder/focus selftest PASS
    pass=0x2 reject=0x0`；冷启动 3/3、`-smp 12` 1/1 全绿。
 3. **兼容层出内核**（`DESIGN.md` 约束一，权重最高 —— 该文档明确写"违反视为架构级事故"）：
-   `kernel/compat/`（`binfmt_elf` / `binfmt_pe` / `linux_abi` / `binfmt_macho`）与
+   `services/compat/`（`binfmt_elf` / `binfmt_pe` / `linux_abi` / `binfmt_macho`；`f3b3c78` 由 `kernel/compat/` 迁出）与
    `syscall64_full.c` 的 `linux_map[350]` 全部编在内核里，没有独立用户态服务。
    化解路径是 `PHILOSOPHY.md` 7.2 阶段 2（用户态 ELF 加载器 + syscall 翻译）。
    排序理由：这是唯一被设计文档定性为"架构级事故"的条目，不应排在任何优化之后。

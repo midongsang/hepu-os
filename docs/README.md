@@ -2,7 +2,7 @@
 title: 赫普OS 文档索引
 status: active
 sys_version: 0.60.7
-updated: 2026-11-17
+updated: 2026-11-18
 generator: tools/gen_docs_index.py
 source_of_truth: frontmatter of docs/*
 ---
@@ -17,6 +17,7 @@ source_of_truth: frontmatter of docs/*
 
 - [ANTI_BURDEN](architecture/ANTI_BURDEN.md)
 - [ARCHITECTURE_LAYERS](architecture/ARCHITECTURE_LAYERS.md)
+- [BOOT_FLOW](architecture/BOOT_FLOW.md)
 - [BRAND_GUIDE](architecture/BRAND_GUIDE.md)
 - [赫普OS 系统设计（现行）](architecture/DESIGN.md)
 - [DESKTOP_INTERFACE](architecture/DESKTOP_INTERFACE.md)
