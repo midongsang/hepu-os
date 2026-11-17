@@ -142,4 +142,4 @@ make -C tools/hepboot/uefi       # 出 hepboot_uefi.efi
 - `docs/guides/REAL_HARDWARE_TEST.md`（真机缺口清单）
 - 源码：`tools/hepboot/*.S`、`tools/hepboot/uefi/*`、`kernel/arch/x86_64/multiboot_entry.S`、`kernel/arch/x86_64/Makefile`、`tools/build_uefi_dual.py`、`tools/make_single_img64.sh`
 - 实测：`make -C tools/gnu-efi && make -C tools/hepboot/uefi` → 75,835 B PE32+ EFI 应用
-- 实测（后续）：`tools/build_uefi_dual.py` + OVMF 端到端启动到桌面成功，见 `docs/status/FIXES_0_57_0.md` §1.31
+- 实测（后续）：`tools/build_uefi_dual.py` + OVMF 端到端启动到桌面成功，见 `docs/history/fixes/FIXES_0_57_0.md` §1.31

@@ -1,8 +1,8 @@
 ---
 title: 赫普OS 文档索引
 status: active
-sys_version: 0.59.0
-updated: 2026-11-13
+sys_version: 0.60.7
+updated: 2026-11-17
 generator: tools/gen_docs_index.py
 source_of_truth: frontmatter of docs/*
 ---
@@ -19,16 +19,21 @@ source_of_truth: frontmatter of docs/*
 - [ARCHITECTURE_LAYERS](architecture/ARCHITECTURE_LAYERS.md)
 - [BRAND_GUIDE](architecture/BRAND_GUIDE.md)
 - [赫普OS 系统设计（现行）](architecture/DESIGN.md)
+- [DESKTOP_INTERFACE](architecture/DESKTOP_INTERFACE.md)
 - [DESKTOP_SHELL](architecture/DESKTOP_SHELL.md)
 - [GRAPHICS](architecture/GRAPHICS.md)
+- [GRAPHICS_BOUNDARY](architecture/GRAPHICS_BOUNDARY.md)
+- [GRAPHICS_STACK](architecture/GRAPHICS_STACK.md)
 - [GUI](architecture/GUI.md)
 - [KERNEL](architecture/KERNEL.md)
+- [KERNEL_SCOPE](architecture/KERNEL_SCOPE.md)
 - [MEMORY_STORAGE](architecture/MEMORY_STORAGE.md)
 - [OVERVIEW](architecture/OVERVIEW.md)
 - [Hepu OS 核心哲学与原生契约](architecture/PHILOSOPHY.md)
 - [Hepu Shell 设计原则](architecture/SHELL_DESIGN.md)
 - [UNIFIED_SOURCE_TREE](architecture/UNIFIED_SOURCE_TREE.md)
 - [USB 与无线输入支持（V0.13.62）](architecture/USB.md)
+- [VISUAL_SPEC](architecture/VISUAL_SPEC.md)
 
 ## specs
 
@@ -60,6 +65,7 @@ source_of_truth: frontmatter of docs/*
 - [SMP 硬化包进度对齐与阶段 5（SB-25）前置设计](planning/SMP_PROGRESS_0_58_4.md)
 - [STORAGE_MEMORY](planning/STORAGE_MEMORY.md)
 - [SYSTEM_VERIFICATION](planning/SYSTEM_VERIFICATION.md)
+- [TECH_DEBT_ROUTE](planning/TECH_DEBT_ROUTE.md)
 - [TECH_ROADMAP](planning/TECH_ROADMAP.md)
 - [双视图交互方案（VIEW_SWITCH）](planning/VIEW_SWITCH.md)
 
@@ -76,21 +82,15 @@ source_of_truth: frontmatter of docs/*
 - [AUDIT_64BIT](security/AUDIT_64BIT.md)
 - [64位内核安全审计（第二轮）](security/AUDIT_64BIT_R2.md)
 - [AUDIT_DESKTOP_STABILITY_R3](security/AUDIT_DESKTOP_STABILITY_R3.md)
+- [AUDIT_R3](security/AUDIT_R3.md)
 - [BUG_FIX_GUIDELINES](security/BUG_FIX_GUIDELINES.md)
 - [FIX_SECURITY_BUNDLE_A_R4](security/FIX_SECURITY_BUNDLE_A_R4.md)
 - [OPEN_SOURCE_POLICY](security/OPEN_SOURCE_POLICY.md)
 
 ## status
 
-- [编译告警清理与真实缺陷修复记录（0.55.1）](status/FIXES_0_55_1.md)
-- [fsck 接入 inode 检查与欢迎引导开关（0.56.0）](status/FIXES_0_56_0.md)
-- [任务管理器假数据与天气组件空白修复（0.56.1）](status/FIXES_0_56_1.md)
-- [FIXES_0_56_2](status/FIXES_0_56_2.md)
-- [FIXES 0.57.0](status/FIXES_0_57_0.md)
-- [FIXES 0.58.0](status/FIXES_0_58_0.md)
 - [赫普OS 未关闭问题清单](status/OPEN_BUGS.md)
-- [PROGRESS_0_59](status/PROGRESS_0_59.md)
-- [V0.33 开发路线板](status/PROGRESS_V033.md)
+- [SYSTEM_TOOLS](status/SYSTEM_TOOLS.md)
 - [VERSIONING](status/VERSIONING.md)
 
 ## history
