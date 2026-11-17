@@ -144,7 +144,7 @@ void irq64_init(void)
             "movb $0x20, %al\noutb %al, $0x21\n"   /* ICW2: 向量32 */
             "movb $0x04, %al\noutb %al, $0x21\n"   /* ICW3 */
             "movb $0x01, %al\noutb %al, $0x21\n"   /* ICW4 */
-            "movb $0xFC, %al\noutb %al, $0x21\n"   /* OCW1: 启用IRQ0(PIT)+IRQ1(键盘) */
+            "movb $0xEC, %al\noutb %al, $0x21\n"   /* OCW1: 启用IRQ0(PIT)+IRQ1(键盘)+IRQ4(COM1) */
         );
         /* 从PIC */
         __asm__ volatile(
@@ -215,9 +215,11 @@ void irq64_init(void)
     extern void irq64_register_handler(int irq, void (*handler)(void));
     extern void pit64_interrupt(void);
     extern void keyboard64_interrupt(void);
+    extern void uart64_irq_handler(void);
     irq64_register_handler(0, pit64_interrupt);      /* IRQ0: PIT定时器 */
     irq64_register_handler(1, keyboard64_interrupt);  /* IRQ1: 键盘 */
-    vga_puts("[IRQ64] PIT+keyboard handlers registered\n");
+    irq64_register_handler(4, uart64_irq_handler);    /* IRQ4: COM1 串口接收 */
+    vga_puts("[IRQ64] PIT+keyboard+UART handlers registered\n");
 
     /* 启用中断 */
     if (use_apic) {

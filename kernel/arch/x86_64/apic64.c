@@ -496,6 +496,8 @@ int apic64_switch_to_apic_mode(void)
     apic64_enable_irq((uint8_t)acpi_irq_to_gsi(0), 0x20);
     /* 键盘 -> vector 33 (0x21) */
     apic64_enable_irq((uint8_t)acpi_irq_to_gsi(1), 0x21);
+    /* COM1 串口 -> vector 36 (0x24) */
+    apic64_enable_irq((uint8_t)acpi_irq_to_gsi(4), 0x24);
     /* IRQ2: 级联（通常不需要） */
     /* PS/2鼠标 -> vector 44 (0x2C) */
     if (ioapic_max_redir >= 12) {
