@@ -272,6 +272,11 @@ static void pci64_scan_bus(uint8_t bus)
         if (htype == PCI_HDR_BRIDGE) {
             uint8_t secondary = pci_config_read8(bus, (uint8_t)dev, 0, PCI_SECONDARY_BUS);
             uint8_t subordinate = pci_config_read8(bus, (uint8_t)dev, 0, PCI_SUBORD_BUS);
+            vga_puts("[PCI64] bridge bus="); vga_put_hex(bus);
+            vga_puts(" dev="); vga_put_hex((uint8_t)dev);
+            vga_puts(" secondary="); vga_put_hex(secondary);
+            vga_puts(" subordinate="); vga_put_hex(subordinate);
+            vga_puts("\n");
             if (secondary && secondary <= subordinate && secondary != bus) {
                 for (uint8_t b = secondary; b <= subordinate; b++)
                     pci64_scan_bus(b);
