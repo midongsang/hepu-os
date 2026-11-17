@@ -4583,7 +4583,57 @@ static int lock_cfg_disabled(void) { return 1; }
 static char g_password[32] = {0};
 static int g_password_len = 0;
 static int g_vkb_visible = 0;  /* V0.13.39: 锁屏虚拟键盘 */
+static int g_login_err = 0;     /* 认证失败标记: 登录页显示错误提示, 不退回锁屏 */
 /* V0.55.1: 虚拟键盘尚未实现 shift 状态(该变量从未被读写), 已移除声明。 */
+
+/* 登录提交认证: 三分支。
+ * ① 未配置账户(首次启动没有 hash) → 放行进桌面;
+ * ② 已配置 → auth64 sha256 比对密码;
+ * ③ 比对失败 → 留在登录页, 由调用方清空密码并置错误提示(不退回锁屏)。
+ * 返回 1=放行解锁, 0=认证失败留在登录页。
+ *
+ * 注意: auth64_verify_password 在 g_hash 为空时返回 0(失败), 所以必须先判
+ * is_configured, 绝不能无条件接上去。32 位没有 auth64 且故意不开锁屏, 走
+ * #else 保持旧的直接解锁行为, 否则 32 位链接会断。 */
+static int hs_login_submit(void)
+{
+#ifdef __x86_64__
+    extern int auth64_is_configured(void);
+    extern int auth64_verify_password(const char *pass);
+
+    if (!auth64_is_configured()) {
+        vga_puts("[LOCK] login -> desktop (no account configured)\n");
+        return 1;
+    }
+    if (auth64_verify_password(g_password)) {
+        vga_puts("[LOCK] login -> desktop (auth ok)\n");
+        return 1;
+    }
+    vga_puts("[LOCK] login: auth failed\n");
+    return 0;
+#else
+    vga_puts("[LOCK] login -> desktop (32-bit direct unlock)\n");
+    return 1;
+#endif
+}
+
+/* 认证通过: 退出登录页, 清掉密码/虚拟键盘/错误提示 */
+static void hs_login_unlock(void)
+{
+    g_locked = 0;
+    g_password_len = 0;
+    g_password[0] = 0;
+    g_vkb_visible = 0;
+    g_login_err = 0;
+}
+
+/* 认证失败: 留在登录页(g_locked 仍为 2), 清空已输入密码, 置错误提示 */
+static void hs_login_reject(void)
+{
+    g_password_len = 0;
+    g_password[0] = 0;
+    g_login_err = 1;
+}
 
 /* 锁屏界面：模糊背景+大时钟 */
 static void hs_lock_screen_render(void)
@@ -4674,6 +4724,13 @@ static void hs_login_screen_render(void)
     font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                        center_x - hs_sx(80), btn_y + btn_h + hs_sy(30),
                        l10n64_tr(L10N_STR_ESC_LOCK), 0x888888, hs_s(12));
+
+    /* 认证失败提示: 仅失败时显示, 红色; 留在登录页不退回锁屏 */
+    if (g_login_err) {
+        font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                           center_x - hs_sx(130), btn_y + btn_h + hs_sy(58),
+                           l10n64_tr(L10N_STR_LOGIN_ERROR), 0xCC4444, hs_s(13));
+    }
 
     /* V0.13.39: 右下角 关机键 + 虚拟键盘键 */
     {
@@ -5665,6 +5722,7 @@ void hpdesk_handle_click(int x, int y)
         g_locked = 2;
         g_password_len = 0;
         g_password[0] = 0;
+        g_login_err = 0;
         vga_puts("[LOCK] state: lock -> login (click)\n");
         return;
     }
@@ -5735,6 +5793,7 @@ void hpdesk_handle_click(int x, int y)
                         int ky = kb_y + r * hs_sy(38);
                         if (x >= kx && x <= kx + key_w && y >= ky && y <= ky + hs_sy(32)) {
                             if (g_password_len < 31) {
+                                g_login_err = 0;
                                 g_password[g_password_len++] = vkb_rows[r][c];
                                 g_password[g_password_len] = 0;
                             }
@@ -5775,11 +5834,12 @@ void hpdesk_handle_click(int x, int y)
             int btn_x = center_x - btn_w / 2;
             int btn_y = input_y + input_h + hs_sy(20);
             if (x >= btn_x && x <= btn_x + btn_w && y >= btn_y && y <= btn_y + btn_h) {
-                g_locked = 0;
-                g_password_len = 0;
-                g_password[0] = 0;
-                g_vkb_visible = 0;
-                vga_puts("[LOCK] state: login -> desktop (button click)\n");
+                if (hs_login_submit()) {
+                    hs_login_unlock();
+                    vga_puts("[LOCK] state: login -> desktop (button click)\n");
+                } else {
+                    hs_login_reject();
+                }
                 return;
             }
         }
@@ -7241,6 +7301,7 @@ void hpdesk_handle_key(int key)
         g_locked = 2;
         g_password_len = 0;
         g_password[0] = 0;
+        g_login_err = 0;
         vga_puts("[LOCK] state: lock -> login (key)\n");
         return;
     }
@@ -7253,11 +7314,12 @@ void hpdesk_handle_key(int key)
             return;
         }
         if (key == '\n' || key == '\r' || key == 0x1C) {  /* 回车登录 */
-            /* 简单验证：任意密码都可以解锁 */
-            g_locked = 0;
-            g_password_len = 0;
-            g_password[0] = 0;
-            vga_puts("[LOCK] state: login -> desktop (unlocked)\n");
+            if (hs_login_submit()) {
+                hs_login_unlock();
+                vga_puts("[LOCK] state: login -> desktop (unlocked)\n");
+            } else {
+                hs_login_reject();
+            }
             return;
         }
         if (key == '\b' || key == 0x0E) {  /* 退格 */
@@ -7268,6 +7330,7 @@ void hpdesk_handle_key(int key)
             return;
         }
         if (g_password_len < 31 && key >= 32 && key < 127) {
+            g_login_err = 0;
             g_password[g_password_len++] = (char)key;
             g_password[g_password_len] = 0;
         }
