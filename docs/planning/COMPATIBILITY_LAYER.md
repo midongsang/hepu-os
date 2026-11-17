@@ -20,7 +20,7 @@ supersedes: null
 
 | 组件 | 文件 | 规模 | 实现度 |
 |---|---|---|---|
-| 多格式注册 binfmt | kernel/compat/binfmt.c | 160 | ELF32 完整；PE/Mach-O 仅 probe |
+| 多格式注册 binfmt | services/compat/binfmt.c（`f3b3c78` 由 `kernel/compat/` 迁出） | 160 | ELF32 完整；PE/Mach-O 仅 probe |
 | ELF32 加载器 | binfmt_elf.c | 548 | 完整（静态 ELF） |
 | ELF 动态链接 | binfmt_elf_dynamic.c | 484 | .so 加载/符号解析基础版 |
 | PE 加载器 | binfmt_pe.c + stub + util | 354+75+162 | 子集：用户态 stub 桥接 write/read/exit 等，内核零改动 |
