@@ -6,7 +6,7 @@
 
 - 扫描范围：`kernel/` 下 auth、security、capability、domain、mac、seccomp、permission、secure_boot、biometric、keystore 命名模块。
 - 引用计数口径：函数名按词法 grep 全 `kernel/`，排除定义所在文件；计数为 0 = 仓库内无其他调用方。
-- **重要限定**：32 位 Makefile 用 `--gc-sections`（`Makefile:27`），未引用的目标段会在链接期丢弃；静态 0 引用 ≠ 已编译进最终镜像。是否真被链接进内核，属 **待验证**（需符号表/编译产物）。
+- **重要限定**：32 位 Makefile 用 `--gc-sections`（`Makefile:26`），未引用的目标段会在链接期丢弃；静态 0 引用 ≠ 已编译进最终镜像。是否真被链接进内核，属 **待验证**（需符号表/编译产物）。
 - 分类：
   - **预留接口**：有框架初始化路径接入、或存在 syscall/应用层接入意图，但个别子函数未被走到。
   - **死代码倾向**：无初始化接入、无 syscall 登记、无测试调用，仓库内完全不可达。
@@ -14,19 +14,21 @@
 
 ## 4.2 64 位：认证与沙箱
 
-### 4.2.1 `auth64_verify_password` —— 提权路径 + 64 位登录提交路径均已接线（a787a01 复核）
+### 4.2.1 `auth64_verify_password` —— 提权路径 + 64 位登录提交路径均已接线（61c53fa 复核）
+
+> **归属说明**：登录页三分支认证是 main 上既有提交合入的实现，不是审计新增改动。实现提交为 `9e8f2a3`（feat(login): 登录页接入账户密码三分支认证，父提交 `f3b3c78`），经 `261a027`（merge oobe）并入分支线，再由合并提交 `a787a01` 合入 main；本节行号与"仍在原位"的判断为审计在 `61c53fa` 工作树上 grep/读码复核所得。提权 `elevate` 调用方为基线即有。
 
 | 项 | 证据 |
 |----|------|
 | 定义 | `kernel/arch/x86_64/auth64.c:321` `int auth64_verify_password(const char *pass)`：g_hash 空/口令空或超 55 字节返 0（`:323-324`），否则 `hash_password` 后 `a_streq` 比对（`:325-327`） |
-| 调用方 1：提权 | `auth64_elevate()` `:357`（提权"su"路径） |
-| 调用方 2：登录提交 | `hpdesk.c:4608` `hs_login_submit()` 内：已配置账户时调 `auth64_verify_password(g_password)`；入口为登录按钮点击 `hpdesk.c:5839-5845` 与回车 `:7317-7322`（提交 `9e8f2a3`，并入 `a787a01`） |
-| 三分支 | `hpdesk.c:4598-4618`：① `!auth64_is_configured()` 返 1 放行（`:4604-4606`）；② verify 通过返 1（`:4608-4610`）；③ 失败返 0，留登录页（`:4612-4613`）。通过后 `hs_login_unlock` 置 `g_locked=0`（`:4621-4628`），失败 `hs_login_reject` 留 `g_locked=2`（`:4631-4636`） |
-| 判定 | **已接线，但含设计内/配置内绕过分支**（详见报告 05 §5.4.2、§5.9 第 3 项）：`hepu.lock=0` 或 `/system.conf lock=0` 直进桌面（`hpdesk.c:4563-4577,7596-7599`）；账户未配置放行；32 位编译 `#else` 直接解锁（`:4614-4616`） |
+| 调用方 1：提权 | `auth64_elevate()` `:357`（提权"su"路径，基线即有） |
+| 调用方 2：登录提交 | `hpdesk.c:4632` `hs_login_submit()` 内：已配置账户时调 `auth64_verify_password(g_password)`；入口为登录按钮点击 `hpdesk.c:5863-5868` 与回车 `:7341-7346` |
+| 三分支 | `hpdesk.c:4622-4642`：① `!auth64_is_configured()` 返 1 放行（`:4628-4631`）；② verify 通过返 1（`:4632-4635`）；③ 失败返 0，留登录页（`:4636-4637`）。通过后 `hs_login_unlock` 置 `g_locked=0`（`:4645-4652`，`:4647`），失败 `hs_login_reject` 留 `g_locked=2`（`:4655-4659`） |
+| 判定 | **已接线，但含设计内/配置内绕过分支**（详见报告 05 §5.4.2、§5.9 第 3 项）：`hepu.lock=0` 或 `/system.conf lock=0` 直进桌面（`hpdesk.c:4587-4601,7624-7627`）；账户未配置放行；32 位编译 `#else` 直接解锁（`:4638-4640`） |
 | 残留影响 | `deelevate`（`:364`）无密码回退保护；未配置账户分支下拿到会话即可使用持久化角色 |
 | 旧结论作废 | 基于 `3d0bd23` 的"登录/锁屏路径未接、verify 只有 elevate 一个调用方"结论已作废：`9e8f2a3` 后登录页已接入校验。基线 `5f93c2d` 与 `3d0bd23` 上该结论成立 |
 
-其余 auth64 可达性（a787a01 行号）：`auth64_create_account`（`:331`）由 OOBE 调用（`oobe64.c:208`、`hs_oobe64.c:224`）；`auth64_write_config/read_config`（`:373,375`）OOBE/l10n 使用（`oobe64.c:137,140`）；`auth64_deelevate`（`:364`）由 `hs_apps.c:438,447`、`shell64.c:3243,3253` 调用；`auth64_current_user/current_role`（`:317,318`）有桌面/提权面板调用。
+其余 auth64 可达性（61c53fa 行号）：`auth64_create_account`（`:331`）由 OOBE 调用（`oobe64.c:208`、`hs_oobe64.c:224`）；`auth64_write_config/read_config`（`:373,375`）OOBE/l10n 使用（`oobe64.c:137,140`）；`auth64_deelevate`（`:364`）由 `hs_apps.c:438,447`、`shell64.c:3243,3253` 调用；`auth64_current_user/current_role`（`:317,318`）有桌面/提权面板调用。
 
 ### 4.2.2 seccomp 公开包装未接 syscall 路径（已确认）
 
@@ -72,7 +74,7 @@
 
 ## 4.3 32 位 / 共享：未接线的安全框架
 
-下列文件经顶层 Makefile `find kernel -name "*.c"` 编入 32 位构建（`Makefile:71`）；64 位显式清单未包含它们（`x86_64/Makefile` C_SOURCES）。
+下列文件经顶层 Makefile `find kernel -name "*.c"` 编入 32 位构建（`Makefile:72`）；64 位显式清单未包含它们（`x86_64/Makefile` C_SOURCES）。
 
 ### 4.3.1 密钥库与生物识别（`kernel/security/security2.c`）
 

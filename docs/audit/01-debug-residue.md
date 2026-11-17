@@ -1,7 +1,7 @@
 # 1. 调试残留清查：自检程序与开机自动 exec 调用点
 
 - 审计基线：`5f93c2d`；行号为该基线编号。
-- main 复核状态：基线之后 main 已到 `a787a01`。其中 (D) 桌面循环常驻探针、(F) 文本 shell autostart 已由 `0202461` 默认关闭；其余条目状态见 §1.2、§1.6。
+- main 复核状态：基线之后 main 已到 `61c53fa`。其中 (D) 桌面循环常驻探针、(F) 文本 shell autostart 已由 `0202461` 默认关闭；其余条目状态见 §1.2、§1.6。
 
 ## 1.1 结论速览
 
@@ -147,7 +147,7 @@
 |------|------|------|
 | `kernel/arch/x86/hpkg.c:235` | TODO | `install_time = 0`，未取当前时间 |
 | `kernel/arch/x86/hpkg.c:348,354` | TODO | 包数据库仅内存态，未持久化 |
-| `kernel/arch/x86_64/hpdesk.c:7704` | TODO | 时间戳未接 RTC |
+| `kernel/arch/x86_64/hpdesk.c:7844` | TODO | 时间戳未接 RTC |
 | `kernel/arch/x86_64/hsservices.c:72,398` | TODO | 未写 AC97 音量寄存器；未检查文件 mtime |
 | `kernel/block/blk_mq.c:173,218` | TODO | 时间戳未填 |
 | `kernel/drivers/touch_hw.c:39,46,141` | `TODO_HW` | I2C 时序/复位 GPIO/坐标寄存器为框架占位，真机未接 |
@@ -161,4 +161,4 @@
 
 1. **发布镜像是否带 `HEPU_BOOT_SELFTEST`**：静态构建脚本默认不传 `BOOT_SELFTEST=1`（`x86_64/Makefile:230`）；quiet 实例串口日志实测 `PIEPROBE/FBSYN/FBDESC/STATP` 命中数 = 0，与"默认关"一致。仍需核对的是：镜像打包脚本 `tools/build_uefi_dual.py:281-301` 把 `user/build`、`user/build/legacy` 下全部 `.elf` 扁平化写入 `/bin`，若某条发布命令打开了 `BOOT_SELFTEST=1`，电池程序即可在镜像里找到。验证方法：检查实际构建命令行是否含 `BOOT_SELFTEST=1`；在 QEMU 串口日志中搜 `[PIEPROBE]`、`[STATP]`、`[FBDESC]`、`[FBSYN]` 等电池标签。
 2. **未列目标的应用目录是否经 initrd/hug 打包**：`tools/mkinitrd.py`、`tools/mkhug.py` 的输入清单需逐目录核对；当前仅静态判断未进 `user/Makefile`。
-3. **`gdbstub.c`/`kdbg_gdb.c`/`kdebug.c` 是否被链接进 32 位内核**：顶层 Makefile 用 `--gc-sections`（`Makefile:27`），无引用的目标文件会被丢弃；需一次 32 位链接产物（`kernel.elf` 符号表）确认是否保留这些调试入口。
+3. **`gdbstub.c`/`kdbg_gdb.c`/`kdebug.c` 是否被链接进 32 位内核**：顶层 Makefile 用 `--gc-sections`（`Makefile:26`），无引用的目标文件会被丢弃；需一次 32 位链接产物（`kernel.elf` 符号表）确认是否保留这些调试入口。
