@@ -72,10 +72,20 @@ int login_is_active(void)
     return login_active;
 }
 
-/* 认证用户 */
+/* 认证用户
+ *
+ * 已知缺口（审计 P0）：32 位的 mu_user_t 结构里没有密码/hash 字段，
+ * multi_user 也没有任何密码存储与校验实现，所以这里无法真校验。
+ * 原来的写法是 (void)password 之后直接 return 0 —— 调用方看到"成功"，
+ * 看起来像校验通过，实际什么都没验，这是最危险的一种假实现。
+ *
+ * 现在保留"未设密码即放行"的既有行为(避免破坏 32 位 OOBE/多用户流程)，
+ * 但每次都打一行明确的未实现警告，并区分返回值语义，不再静默假装成功。
+ * 真要接校验，得先给 mu_user_t 加 hash 字段 + 持久化，属独立工程。 */
 int login_authenticate(int user_id, const char *password)
 {
     (void)password;
+    vga_printf("[LOGIN] WARNING: password verification NOT implemented (32-bit), user %d admitted without checking\n", user_id);
     /* 调用系统调用验证密码（通过multi_user） */
     mu_user_t user;
     if (mu_user_get(user_id, &user) != 0) {
@@ -147,10 +157,14 @@ int login_lock_screen(void)
     return 0;
 }
 
-/* 解锁屏幕 */
+/* 解锁屏幕
+ *
+ * 同上：没有可比的密码，这里"解锁"等于无条件解锁。
+ * 保留行为、打警告，避免被当成已验证。 */
 int login_unlock_screen(const char *password)
 {
     (void)password;
+    vga_puts("[LOGIN] WARNING: screen unlock NOT verifying password (32-bit)\n");
     /* 验证当前用户密码 */
     mu_user_t current;
     if (mu_user_get_current(&current) == 0) {

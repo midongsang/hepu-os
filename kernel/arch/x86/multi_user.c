@@ -227,9 +227,12 @@ int mu_private_set_config(const mu_private_config_t *config)
     return 0;
 }
 
+/* 同 login.c 的已知缺口：没有密码存储，无法校验。保留未设密码即解锁的行为，
+ * 但显式打警告，不再静默当作"验证通过"。 */
 int mu_private_unlock(const char *password)
 {
     (void)password;
+    vga_puts("[MULTI_USER] WARNING: private space unlock without password check (32-bit)\n");
     return 0;
 }
 
