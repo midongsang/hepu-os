@@ -54,6 +54,11 @@ static int g_storage_dev_sel = 0;
 void storage_hal_set_device(int sel) { g_storage_dev_sel = sel; }
 int storage_hal_get_device(void) { return g_storage_dev_sel; }
 
+/* AHCI 是否持有根分区：只有探测到根分区魔数的 AHCI 盘才允许抢占原始读/写路径；
+ * 仅挂了一块无根分区的旁路 SATA 盘时，rootfs 仍走 IDE/USB，避免读错盘。 */
+static int g_ahci_root = 0;
+void storage_hal_set_ahci_root(int on) { g_ahci_root = on ? 1 : 0; }
+
 /* 读取扇区（通过驱动框架, 无缓存原始路径） */
 int storage_hal_raw_read(uint32_t lba, uint8_t count, uint8_t *buffer)
 {
@@ -71,7 +76,7 @@ int storage_hal_raw_read(uint32_t lba, uint8_t count, uint8_t *buffer)
     {
         extern int ahci64_disk_present(void);
         extern int ahci64_read_disk(uint32_t, uint8_t, uint8_t *);
-        if (ahci64_disk_present()) return ahci64_read_disk(lba, count, buffer);
+        if (g_ahci_root && ahci64_disk_present()) return ahci64_read_disk(lba, count, buffer);
     }
 
     /* 通过驱动框架调用 */
@@ -102,7 +107,7 @@ int storage_hal_raw_write(uint32_t lba, uint8_t count, const uint8_t *buffer)
     {
         extern int ahci64_disk_present(void);
         extern int ahci64_write_disk(uint32_t, uint8_t, const uint8_t *);
-        if (ahci64_disk_present()) return ahci64_write_disk(lba, count, buffer);
+        if (g_ahci_root && ahci64_disk_present()) return ahci64_write_disk(lba, count, buffer);
     }
 
     /* 通过驱动框架调用 */

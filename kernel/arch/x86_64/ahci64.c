@@ -75,12 +75,12 @@ typedef struct {
     uint32_t i:1;
 } __attribute__((packed)) ahci_prdt_t;
 
-/* AHCI命令表 */
+/* AHCI命令表：CFIS 0x00..0x3F，ACMD 0x40..0x4F，保留 0x50..0x7F，PRDT 起点 0x80。 */
 typedef struct {
     uint8_t  cfis[64];
     uint8_t  acmd[16];
-    uint8_t  reserved[16];   /* 0x50..0x5F，PRDT 规范起点 0x60 */
-    ahci_prdt_t prdt[1];
+    uint8_t  reserved[48];   /* 0x50..0x7F */
+    ahci_prdt_t prdt[1];     /* 0x80 */
 } __attribute__((packed)) ahci_cmd_table_t;
 
 /* 端口信息 */
@@ -147,6 +147,17 @@ static inline void ahci_writel(volatile void *reg, uint32_t val)
     *(volatile uint32_t *)reg = val;
 }
 
+/* 分页内核下数据缓冲(.bss/栈)非恒等映射；DMA PRDT 必须填物理地址，
+ * 否则 HBA 把数据写到虚拟地址对应的错误物理页，缓冲读回全 0。 */
+static uint64_t ahci_virt_to_phys(void *p)
+{
+    extern uint64_t vmm64_virt_to_phys(uint64_t pml4_addr, uint64_t virt);
+    uint64_t cr3;
+    __asm__ volatile("mov %%cr3, %0" : "=r"(cr3));
+    uint64_t phys = vmm64_virt_to_phys(cr3, (uint64_t)(uintptr_t)p);
+    return phys ? phys : (uint64_t)(uintptr_t)p;
+}
+
 static void ahci_memset(void *dst, uint8_t val, int n)
 {
     uint8_t *d = (uint8_t*)dst;
@@ -211,7 +222,8 @@ static void ahci64_register_irq(void)
         vga_puts("[AHCI64] no PCI IRQ line assigned, keep polling fallback\n");
         return;
     }
-    irq64_install_gate(AHCI_IRQ_VECTOR, (uint64_t)ahci64_irq_handler);
+    extern void irq_entry_65(void);
+    irq64_install_gate(AHCI_IRQ_VECTOR, (uint64_t)irq_entry_65);
     /* PCI INTx：低电平有效(polarity=1)、级别触发(trigger=1)，物理投递到 BSP。 */
     int rc = apic64_set_irq_redirect(ahci_irq_line, AHCI_IRQ_VECTOR,
                                      0, 0, 1, 1, (uint8_t)apic64_get_id());
@@ -298,8 +310,8 @@ static int ahci64_identify_port(ahci_port_t *port, int port_num, ahci_port_info_
 {
     static uint16_t ident[256];
     for (int i = 0; i < 256; i++) ident[i] = 0;
-    if (ahci64_exec_cmd(port, port_num, 0xEC, 0, (uint8_t *)ident, 1, 0) != 0)
-        return -1;
+    int exrc = ahci64_exec_cmd(port, port_num, 0xEC, 0, (uint8_t *)ident, 1, 0);
+    if (exrc != 0) return -1;
 
     uint32_t lba28 = (uint32_t)ident[60] | ((uint32_t)ident[61] << 16);
     uint64_t lba48 = 0;
@@ -489,7 +501,7 @@ static int ahci64_exec_cmd(ahci_port_t *port, int port_num,
     cfis[14] = 0;                                  /* ICC */
     cfis[15] = 0;                                  /* control */
 
-    cmd_tbl->prdt[0].dba = (uint64_t)buffer;
+    cmd_tbl->prdt[0].dba = ahci_virt_to_phys(buffer);
     cmd_tbl->prdt[0].dbc = (count * 512) - 1;
     cmd_tbl->prdt[0].i = 1;
 
