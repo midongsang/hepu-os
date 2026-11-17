@@ -4552,6 +4552,34 @@ static void hs_weather_widget_render(void)
 
 /* 锁屏状态 */
 static int g_locked = 0;       /* 0=桌面, 1=锁屏, 2=登录 */
+
+#ifdef __x86_64__
+/* cmdline hepu.lock=0 关闭开机锁屏(与保护模式共用 bootopts 解析管道) */
+extern int bootopts_lock_disabled(void);
+
+/* 锁屏关闭判定: cmdline hepu.lock=0 或 /system.conf lock=0, 任一为真则不锁;
+ * 两者都没有则默认开机锁屏。UEFI 引导器不回传 cfg cmdline, 配置文件是
+ * UEFI 路径下的等价开关。 */
+static int lock_cfg_disabled(void)
+{
+    if (bootopts_lock_disabled()) return 1;
+    extern int ext2_64_read_file(const char *path, uint8_t *buffer, uint32_t max_size);
+    char lbuf[512];
+    int ln = ext2_64_read_file("/system.conf", (uint8_t *)lbuf, sizeof(lbuf) - 1);
+    if (ln > 0) {
+        lbuf[ln] = 0;
+        for (int i = 0; i + 6 <= ln; i++) {
+            if (lbuf[i]=='l' && lbuf[i+1]=='o' && lbuf[i+2]=='c' && lbuf[i+3]=='k' &&
+                lbuf[i+4]=='=' && lbuf[i+5]=='0') return 1;
+        }
+    }
+    return 0;
+}
+#else
+/* 32 位不编 bootopts64.c / ext2_64: 兜底"锁屏关闭", 保持 32 位旧桌面行为 */
+static int lock_cfg_disabled(void) { return 1; }
+#endif
+
 static char g_password[32] = {0};
 static int g_password_len = 0;
 static int g_vkb_visible = 0;  /* V0.13.39: 锁屏虚拟键盘 */
@@ -5632,6 +5660,15 @@ void hpdesk_handle_click(int x, int y)
         if (hs_oobe_active()) { hs_oobe_handle_click(x, y); return; }
     }
 
+    /* 锁屏: 点击任意位置进入登录页(鼠标解锁路径), 不落到桌面窗口交互 */
+    if (g_locked == 1) {
+        g_locked = 2;
+        g_password_len = 0;
+        g_password[0] = 0;
+        vga_puts("[LOCK] state: lock -> login (click)\n");
+        return;
+    }
+
     /* 右键菜单开着: 无论点哪儿都先归菜单, 点空白则关闭 */
     if (g_ctx.open) {
         int idx = hs_ctx_hit_item(x, y);
@@ -5742,6 +5779,7 @@ void hpdesk_handle_click(int x, int y)
                 g_password_len = 0;
                 g_password[0] = 0;
                 g_vkb_visible = 0;
+                vga_puts("[LOCK] state: login -> desktop (button click)\n");
                 return;
             }
         }
@@ -7203,6 +7241,7 @@ void hpdesk_handle_key(int key)
         g_locked = 2;
         g_password_len = 0;
         g_password[0] = 0;
+        vga_puts("[LOCK] state: lock -> login (key)\n");
         return;
     }
 
@@ -7210,6 +7249,7 @@ void hpdesk_handle_key(int key)
     if (g_locked == 2) {
         if (key == 27) {  /* ESC返回锁屏 */
             g_locked = 1;
+            vga_puts("[LOCK] state: login -> lock (ESC)\n");
             return;
         }
         if (key == '\n' || key == '\r' || key == 0x1C) {  /* 回车登录 */
@@ -7217,6 +7257,7 @@ void hpdesk_handle_key(int key)
             g_locked = 0;
             g_password_len = 0;
             g_password[0] = 0;
+            vga_puts("[LOCK] state: login -> desktop (unlocked)\n");
             return;
         }
         if (key == '\b' || key == 0x0E) {  /* 退格 */
@@ -7478,12 +7519,13 @@ int hpdesk_init(int width, int height)
         }
     }
 
-    /* 开机停在锁屏。链路是 引导菜单 -> 加载屏 -> 锁屏 -> 桌面; 之前 g_locked
-     * 初始为 0, 除了按 L 手动锁之外从不置位, 所以开机直接躺在桌面上, 锁屏在
-     * 正式启动里等于不存在。
-     * OOBE 没走完时不锁: 那时还没有账号可"锁", 首设向导自己会接管画面。
+    /* 开机停在锁屏。链路是 引导菜单 -> 加载屏 -> 锁屏 -> 桌面。
+     * 关闭开关: cmdline hepu.lock=0 或 /system.conf lock=0 任一为真则直进桌面;
+     * 默认开机锁屏。OOBE 没走完时不另在此处强制锁, 首设向导自己接管画面。
      * 顺带把"桌面壁纸还没铺满"那段黑底盖掉 —— 锁屏第一帧就是整屏填 bg。 */
-    {
+    if (lock_cfg_disabled()) {
+        g_locked = 0;
+    } else {
         g_locked = 1;
         vga_puts("[Hepu Desktop] booting to lock screen\n");
     }
