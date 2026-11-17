@@ -37,7 +37,8 @@ TARGETS := $(BUILD_DIR)/hello.elf $(BUILD_DIR)/shell.elf $(BUILD_DIR)/forktest.e
            $(BUILD_DIR)/statprobe.elf \
            $(BUILD_DIR)/fdstress.elf \
            $(BUILD_DIR)/mmprobe.elf \
-           $(BUILD_DIR)/rwprobe.elf
+           $(BUILD_DIR)/rwprobe.elf \
+           $(BUILD_DIR)/install64.elf
 
 # 全量构建目标：原生用户程序 + Linux 兼容层 PIE 测试程序 + 历史测试程序（SEC-12）
 # 注意：真正的 all 目标在**文件末尾**定义 —— GNU Make 在**读取规则时**就展开
@@ -124,6 +125,14 @@ $(BUILD_DIR)/ps.o: $(USER_DIR)apps/ps.c | $(BUILD_DIR)
 
 $(BUILD_DIR)/ps.elf: $(BUILD_DIR)/ps.o $(LDSCRIPT)
 	$(LD) $(LDFLAGS) -T $(LDSCRIPT) -o $@ $<
+
+# install64: 系统安装向导（OPEN-04）
+$(BUILD_DIR)/install64.o: $(USER_DIR)apps/install64/install64.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/install64.elf: $(BUILD_DIR)/install64.o $(LDSCRIPT)
+	$(LD) $(LDFLAGS) -T $(LDSCRIPT) -o $@ $<
+	@echo "Built user ELF: $@"
 
 $(BUILD_DIR)/clone_test.o: $(USER_DIR)apps/clone_test.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
