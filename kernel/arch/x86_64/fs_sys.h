@@ -90,6 +90,15 @@ int64_t fs_do_close(int fd);
 int fs_fd_alloc(const char *kpath, int mode);
 int fs_fd_release(int fd);
 
+/* §5-5 第 1 批: 目录类 syscall 实现切到 fs_dir_sys.c, 原型在此统一对外声明。
+ * 原型与 fs_dir_sys.c 定义逐字一致:
+ *   int64_t sys_unlink(const char *path);
+ *   int64_t sys_mkdir(const char *path, int mode);
+ *   int64_t sys_rmdir(const char *path); */
+int64_t sys_unlink(const char *path);
+int64_t sys_mkdir(const char *path, int mode);
+int64_t sys_rmdir(const char *path);
+
 /* ---- 第 5 批: 文件读写的语义实现 (fs_rw_sys.c) ----
  *
  * 只处理"真文件"。两类东西故意不在这里:

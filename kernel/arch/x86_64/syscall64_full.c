@@ -2124,20 +2124,8 @@ static int64_t sys_getppid(void)
     return 0;
 }
 
-/* sys_unlink - 删除文件 */
-/* §5-5: 实现已搬到 fs_dir_sys.c */
-static int64_t sys_unlink(const char *path);
-
-
-/* sys_mkdir - 创建目录 */
-/* §5-5: 实现已搬到 fs_dir_sys.c */
-static int64_t sys_mkdir(const char *path, int mode);
-
-
-/* sys_rmdir - 删除目录 */
-/* §5-5: 实现已搬到 fs_dir_sys.c */
-static int64_t sys_rmdir(const char *path);
-
+/* sys_unlink / sys_mkdir / sys_rmdir: 实现已搬到 fs_dir_sys.c,
+ * 外部原型见 fs_sys.h（§5-5 第 1 批），本文件不再保留无定义的 static 声明。 */
 
 /* sys_lseek - 移动文件指针 */
 static int64_t sys_lseek(int fd, int64_t offset, int whence)
