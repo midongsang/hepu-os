@@ -2535,22 +2535,25 @@ int user_process_get_current_pid(void)
  * 用户态唯一需要这些操作的程序: exec 时按可执行文件名精确匹配，把其 PID 记入
  * 本白名单；闸口复核时同时校验 PID 与进程名，避免槽位复用后误授权。不拆闸、不做
  * 全局 capability 放宽。 */
-#define INSTALLER_ELF_NAME "install64.elf"
+/* OPEN-04: 安装器唯一可信的规范绝对路径。
+ * 根文件系统由 tools/make_hybrid_img.sh 写到 /bin/install64.elf, 启动器
+ * (autostart) 也以该绝对路径 exec(串口证据: `run /bin/install64.elf`)。
+ * 旧实现只取 basename 精确比对, 任意同名不同路径(如 /tmp/install64.elf)都会
+ * 被误授高危白名单。改为规范绝对路径整串相等匹配: 必须 '/' 开头且逐字节等于
+ * 白名单路径, 裸 basename / 相对路径 / 前缀同名(install64.elfx)一律拒绝。 */
+#define INSTALLER_CANON_PATH "/bin/install64.elf"
 static int g_installer_pid = -1;
 
 static int installer_name_match(const char *path)
 {
-    if (!path) return 0;
-    const char *base = path;
-    for (const char *p = path; *p; p++) {
-        if (*p == '/') base = p + 1;
+    if (!path || path[0] != '/') return 0;
+    const char *p = path;
+    const char *q = INSTALLER_CANON_PATH;
+    while (*q) {
+        if (*p != *q) return 0;
+        p++; q++;
     }
-    const char *n = INSTALLER_ELF_NAME;
-    while (*n) {
-        if (*base != *n) return 0;
-        base++; n++;
-    }
-    return *base == 0;
+    return *p == 0;   /* 长度必须相等, 拒绝前缀同名 */
 }
 
 void user_process_grant_installer(int pid) { g_installer_pid = pid; }
