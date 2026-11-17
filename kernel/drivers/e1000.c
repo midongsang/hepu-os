@@ -38,13 +38,13 @@
 #define REG_IMC       0x00D8  /* 中断掩码清除 */
 #define REG_IAM       0x00E0  /* 中断自动掩码 */
 #define REG_RCTL      0x0100  /* 接收控制 */
-#define REG_RDLEN     0x2800  /* 接收描述符环长度 */
+#define REG_RDLEN     0x2808  /* 接收描述符环长度（原写 0x2800 与 RDBAL 同址，长度永远写不进去） */
 #define REG_RDH       0x2810  /* 接收描述符环头 */
 #define REG_RDT       0x2818  /* 接收描述符环尾 */
 #define REG_RDBAL     0x2800  /* 接收描述符环地址低 */
 #define REG_RDBAH     0x2804  /* 接收描述符环地址高 */
 #define REG_TCTL      0x0400  /* 发送控制 */
-#define REG_TDLEN     0x3800  /* 发送描述符环长度 */
+#define REG_TDLEN     0x3808  /* 发送描述符环长度（原写 0x3800 与 TDBAL 同址，同上） */
 #define REG_TDH       0x3810  /* 发送描述符环头 */
 #define REG_TDT       0x3818  /* 发送描述符环尾 */
 #define REG_TDBAL     0x3800  /* 发送描述符环地址低 */
