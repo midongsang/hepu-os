@@ -77,7 +77,12 @@
 #define RCTL_BSIZE_256  0x00000000  /* 缓冲区大小256 */
 #define RCTL_BSIZE_512  0x00010000  /* 缓冲区大小512 */
 #define RCTL_BSIZE_1024 0x00020000  /* 缓冲区大小1024 */
-#define RCTL_BSIZE_2048 0x00030000  /* 缓冲区大小2048 */
+/* RCTL.BSIZE 在 bit9:8 (2048B 编码 = 0b11 = 0x00000300)。
+ * 原值 0x00030000 落在 bit17:16, 那里不是 BSIZE —— 寄存器收下这个值后
+ * BSIZE 段仍是 0(=256B), 环里每个缓冲只有 256B, 大于 MTU 的帧直接被硬件
+ * 丢掉, 表现为"TX 能上链、RX 描述符永远等不到完成位"(RCTL 实测读回
+ * 0x0400831A, BSIZE=0)。 */
+#define RCTL_BSIZE_2048 0x00000300
 #define RCTL_BSEX      0x02000000  /* 缓冲区大小扩展 */
 #define RCTL_SECRC     0x04000000  /* 剥离CRC */
 
@@ -138,7 +143,7 @@ typedef struct {
 /* 驱动状态 */
 typedef struct {
     int      present;
-    uint32_t *mmio_base;
+    volatile uint32_t *mmio_base;   /* MMIO 窗口, 必须 volatile */
     int      irq;
     uint8_t  mac[6];
     e1000_rx_desc_t *rx_descs;
@@ -156,15 +161,19 @@ typedef struct {
 
 static e1000_dev_t e1000_dev;
 
-/* 寄存器读写 */
+/* 寄存器读写: volatile + 编译器屏障。MMIO 不能被优化器合并/缓存/重排 ——
+ * 否则"写 RCTL 再读 TDH/TDT"这类探针会读回优化前的陈旧值。 */
 static inline uint32_t e1000_read(uint32_t reg)
 {
-    return e1000_dev.mmio_base[reg / 4];
+    uint32_t v = e1000_dev.mmio_base[reg / 4];
+    __asm__ volatile("" ::: "memory");
+    return v;
 }
 
 static inline void e1000_write(uint32_t reg, uint32_t val)
 {
     e1000_dev.mmio_base[reg / 4] = val;
+    __asm__ volatile("" ::: "memory");
 }
 
 /* 读取 MAC 地址: 直接取 RAL/RAH 寄存器(与 64 位 e1000_64.c 同路径)。
@@ -228,7 +237,7 @@ int e1000_init(void)
         /* 与 apic.c/ahci.c 一致: 重写 CR3 刷新 TLB */
         __asm__ volatile("mov %%cr3, %%eax; mov %%eax, %%cr3" ::: "eax");
     }
-    e1000_dev.mmio_base = (uint32_t *)(uintptr_t)mmio_phys;
+    e1000_dev.mmio_base = (volatile uint32_t *)(uintptr_t)mmio_phys;
 
     serial_puts(0x3F8, "[e1000] mmio=0x");
     serial_puthex(0x3F8, (uint32_t)e1000_dev.mmio_base);
