@@ -6,7 +6,7 @@
 [![Release](https://github.com/midongsang/hepu-os/actions/workflows/release.yml/badge.svg)](https://github.com/midongsang/hepu-os/actions/workflows/release.yml)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPLv3-blue.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/version-v0.60.7-brightgreen.svg)](#当前版本)
-[![Kernel size](https://img.shields.io/badge/kernel-945KB-blue.svg)](#当前版本)
+[![Kernel size](https://img.shields.io/badge/kernel-946KB-blue.svg)](#当前版本)
 [![glibc 动态链接](https://img.shields.io/badge/glibc-✓-brightgreen.svg)](#核心特性)
 [![ext2](https://img.shields.io/badge/ext2-✓-brightgreen.svg)](#核心特性)
 [![SMP](https://img.shields.io/badge/SMP-4core-green.svg)](#核心特性)
@@ -79,7 +79,7 @@
 | 内存 | 实测 1 GB 到桌面；`.bss` 约 38.7 MB | 实测 256 MB 到桌面；`.bss` 约 92.6 MB |
 | 显示 | VBE 线性帧缓冲，1920×1080，显存 ≥ 8 MB | 同左（同一份桌面代码） |
 | 磁盘 | AHCI/SATA → ext2 读写；USB 存储（BOT 批量，可挂 ext2） | IDE PIO → ext2 读写（含 LBA48 读） |
-| 网络 | e1000（DHCP/ARP/ICMP/TCP 端到端验证）；RTL8139 为回退 | e1000 MMIO 已接通（BAR0 页级映射 + volatile/屏障），`RCTL.BSIZE` 位段已修正；RX 端到端验证进行中，RTL8139 为回退 |
+| 网络 | e1000（DHCP/ARP/ICMP/TCP 端到端验证）；RTL8139 为回退 | e1000 MMIO 已接通（BAR0 页级映射 + volatile/屏障），`RCTL.BSIZE` 位段已修正（原值写在 bit17:16，实际在 bit9:8，接收缓冲只有 256 B，大于 256 B 的帧全被硬件丢弃）；**IP/UDP/DHCP 整数字节序与 IP 校验和已修正，32 位已能收到 DHCP OFFER**；RTL8139 为回退 |
 | 输入 | PS/2 键盘鼠标 + USB 键鼠（UHCI 优先，EHCI/XHCI 备；两条链路可同时可用） | PS/2 |
 | 中断 | APIC / IOAPIC / HPET / PIT，SMP 4 核 | PIC / PIT |
 | 串口 | 16550 UART（IRQ4 已接） | 16550 UART |
@@ -127,6 +127,10 @@ AHCI 厂商实现差异（ABAR 与端口复位流程）。
 | `ebf3e05` | 开机进锁屏 —— 之前 `g_locked` 只有按 `L` 才置位，正式启动里等于没有锁屏 |
 | `9d39038` | 保护模式按实际内核架构跳转，修掉"把 64 位镜像当 32 位解码"导致的重启 |
 | `5f93c2d` | 32 位 `RCTL.BSIZE` 位段修正：原值写在 bit17:16，实际在 bit9:8，接收缓冲只有 256 B |
+| `a787a01` | 登录三分支认证 + 中英文案接入多语言表 + OOBE 与锁屏状态优先级修正（向导原先被锁屏态提前 return 挡住） |
+| `53e53cb` | 日期中文化；修掉 32 位"所有多语言文案渲染成空字符串"的假桩，改由真 l10n64.c 提供 |
+| `67f1e3b` | 32 位 IP/UDP/DHCP 整数字节序与 IP 校验和修正 —— 32 位网络长期不通的真根因（发出去的帧对端不认） |
+| `97db151` | 天气卡面板区域与卡片锚点统一：层区域原先把 `weather_margin_right` 当右边距，整块错位在卡片左侧 |
 
 四个阶段都在 1920×1080 下实拍过；32 位走到的是同一张锁屏、同一份桌面代码。
 
@@ -159,9 +163,9 @@ PASS: child ran in shared address space, both counters advanced
 
 ## 核心特性
 
-- **64位长模式内核**：约852KB（872,656字节），-O2优化，114个源码模块
+- **64位长模式内核**：约946KB（968,944字节），-O2优化，114个源码模块
 - **SMP多处理器**：4核并行，per-CPU调度，负载均衡，IPI核间中断
-- **双内核混合引导**：64位内核（947,952 B）+ 32位内核（3,534,124 B），启动菜单选择
+- **双内核混合引导**：64位内核（968,944 B）+ 32位内核（3,761,541 B），启动菜单选择
 - **三重引导支持**：BIOS + UEFI + CD-ROM
 - **图形桌面环境**：1920×1080 真彩色，100/125/150/200% 四档 UI 缩放，TrueType 字体，窗口投影与悬停反馈
 - **ext2文件系统**：完整文件/目录操作（创建/读写/删除）
