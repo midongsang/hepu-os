@@ -39,11 +39,14 @@ done
 q_sendkey 1
 sleep 1
 
-# ---- 2) 加载屏（4 帧，阶段推进由 loading 视频 + 抽帧交叉佐证）----
+# ---- 2) 加载屏（4 帧）----
+# splash 在 TCG 下很短：等串口 step1 标记后尽快连抓；若采样仍晚于 splash，
+# loading_*.png 会落进解锁/锁屏页残留，报告按 UNVERIFIED 处理，不计入加载屏取证。
+q_wait_for "step1 done" 30 "$SER"
 for i in 1 2 3 4; do
   log "loading frame $i"
   q_dump "$OUT/loading_$i.ppm" "$OUT/loading_$i.png"
-  sleep 1.5
+  sleep 0.8
 done
 
 # ---- 3) 锁屏 ----

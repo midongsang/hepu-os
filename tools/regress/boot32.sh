@@ -19,16 +19,15 @@ q_start "$SER"
 log "QEMU started, inst=$INST vnc=:$VNCPORT"
 
 # ---- 1) 菜单 4 帧 ----
-sleep 5
+sleep 7
 for i in 1 2 3 4; do
   log "menu frame $i"
   q_dump "$OUT/menu_$i.ppm" "$OUT/menu_$i.png"
   sleep 1.2
 done
 
-# ---- 2) 选择 32 位：down 一项 + ret ----
-q_sendkey down; sleep 1.5
-q_sendkey ret;   sleep 1
+# ---- 2) 选择 32 位：菜单代码对数字键 '2' 即时选中 MODE_32 并引导（无需 ret）----
+q_sendkey 2; sleep 1.5
 
 # ---- 3) 加载屏 4 帧 ----
 for i in 1 2 3 4; do
