@@ -1957,8 +1957,11 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
             debug_puts("\n");
         }
 
-        /* V0.10.6: 根据boot_mode选择跳转函数和入口地址 */
-        if (boot_mode == 0) {
+        /* 按已解析的架构标志 use32 选跳转。protect(MODE_PROTECT=2) 加载的仍是
+         * 64 位内核(use32=0)；若再用原始 boot_mode==0 判定，protect 会误走 32 位
+         * 交接 jump_to_kernel_32@0x101000，把 64 位镜像当 32 位代码解码，
+         * 在 0x10101b 触发 #GP -> #DF -> 三重故障复位。 */
+        if (!use32) {
             /* 64位内核: 直接在长模式下跳转 */
             debug_puts("Kernel arch: x86_64 (64-bit)\n");
             /* 64 位 flat 镜像由 load_kernel_to_memory() 原样铺到 0x100000,
