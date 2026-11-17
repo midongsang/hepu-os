@@ -65,6 +65,14 @@ typedef struct {
     uint32_t padding;
 } virtio_gpu_ctrl_hdr_t;
 
+/* VIRTIO_GPU_CMD_RESOURCE_UNREF 的完整命令体 = hdr + resource_id。
+ * 原先手写 "在 hdr 之后用指针补 4 字节", 真实效果是往栈上相邻变量写 ——
+ * 编译器 -Warray-bounds 在 886/956 两处报了越界。 */
+typedef struct {
+    virtio_gpu_ctrl_hdr_t hdr;
+    uint32_t              resource_id;
+} __attribute__((packed)) virtio_gpu_resource_unref_t;
+
 /* virtio-gpu矩形 */
 typedef struct {
     uint32_t x;
@@ -875,17 +883,15 @@ int virtio_gpu_set_resolution(uint32_t width, uint32_t height)
     serial_puts(0x3F8, "\n");
 
     /* 卸载旧资源 */
-    virtio_gpu_ctrl_hdr_t unref_cmd;
+    virtio_gpu_resource_unref_t unref_cmd;
     memset(&unref_cmd, 0, sizeof(unref_cmd));
-    unref_cmd.type = VIRTIO_GPU_CMD_RESOURCE_UNREF;
-    unref_cmd.flags = 0;
-    unref_cmd.fence_id = 0;
-    unref_cmd.ctx_id = 0;
-    /* REURCE_UNREF需要resource_id在hdr后面 */
-    uint32_t *res_id = (uint32_t*)((uint8_t*)&unref_cmd + sizeof(unref_cmd));
-    *res_id = virtio_resource_id;
+    unref_cmd.hdr.type = VIRTIO_GPU_CMD_RESOURCE_UNREF;
+    unref_cmd.hdr.flags = 0;
+    unref_cmd.hdr.fence_id = 0;
+    unref_cmd.hdr.ctx_id = 0;
+    unref_cmd.resource_id = (uint32_t)virtio_resource_id;
     virtio_gpu_ctrl_hdr_t resp;
-    virtio_gpu_send_cmd(&unref_cmd, sizeof(unref_cmd) + 4, &resp, sizeof(resp));
+    virtio_gpu_send_cmd(&unref_cmd, sizeof(unref_cmd), &resp, sizeof(resp));
 
     /* 更新尺寸 */
     virtio_width = width;
@@ -949,13 +955,12 @@ static void virtio_shutdown(void)
     virtio_gpu_hide_cursor();
 
     /* 卸载资源 */
-    virtio_gpu_ctrl_hdr_t unref_cmd;
+    virtio_gpu_resource_unref_t unref_cmd;
     memset(&unref_cmd, 0, sizeof(unref_cmd));
-    unref_cmd.type = VIRTIO_GPU_CMD_RESOURCE_UNREF;
-    uint32_t *res_id = (uint32_t*)((uint8_t*)&unref_cmd + sizeof(unref_cmd));
-    *res_id = virtio_resource_id;
+    unref_cmd.hdr.type = VIRTIO_GPU_CMD_RESOURCE_UNREF;
+    unref_cmd.resource_id = (uint32_t)virtio_resource_id;
     virtio_gpu_ctrl_hdr_t resp;
-    virtio_gpu_send_cmd(&unref_cmd, sizeof(unref_cmd) + 4, &resp, sizeof(resp));
+    virtio_gpu_send_cmd(&unref_cmd, sizeof(unref_cmd), &resp, sizeof(resp));
 
     /* 重置设备状态 */
     virtio_outb(virtio_io_base + VIRTIO_PCI_STATUS, 0);

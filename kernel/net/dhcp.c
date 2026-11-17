@@ -245,7 +245,10 @@ int dhcp_start(const char *interface)
         return -1;
     }
 
-    uint8_t reply[512];
+    /* 必须 >= sizeof(hepu_dhcp_msg_t): 结构是 240 字节固定头 + options[312] = 552,
+     * 而原缓冲只有 512 —— 读 options 时越界 40 字节, 读到栈上垃圾后再解析选项,
+     * 可能得到错误的 IP/租期. 编译器 -Warray-bounds 在 269/273/302/306 报了 6 处. */
+    uint8_t reply[sizeof(hepu_dhcp_msg_t)];
     uint32_t offered_ip = 0;
     uint32_t server_id = 0;
     int got_offer = 0;
