@@ -35,7 +35,8 @@ extern void kfree(void *ptr);
 
 extern int  ext2_64_read_file_offset(const char *path, uint8_t *buf,
                                      uint32_t size, uint32_t offset);
-extern int  ext2_64_write_file(const char *path, const uint8_t *buf, uint32_t size);
+extern int  ext2_64_write_file_offset(const char *path, const uint8_t *buf,
+                                       uint32_t size, uint32_t offset);
 
 /* 单次调用最多搬这么多: 与 sys_read/sys_write 原有的 4096 上限一致。
  * 放大它要同时确认 ext2 侧的块缓冲够不够，不是纯数字调整。 */
@@ -48,6 +49,10 @@ int64_t fs_do_write(int fd, const fs_fd_info_t *fi, const char *ubuf, int count)
     /* 只读打开的文件不能写。这条原来在 sys_write 里, 现在跟着语义一起搬。 */
     if (fi->mode == 0) return -1;
 
+    /* 与 fs_do_read / fs_fd_set_offset 同一口径: 负 offset 或 >2G 一律拒绝。
+       fd 表是共享状态, 别的路径写坏它时不该由这里来崩。 */
+    if (fi->offset < 0 || fi->offset > 0x7FFFFFFF) return -1;
+
     int n = count;
     if (n > FS_RW_MAX_XFER) n = FS_RW_MAX_XFER;
 
@@ -58,9 +63,13 @@ int64_t fs_do_write(int fd, const fs_fd_info_t *fi, const char *ubuf, int count)
         return -1;
     }
 
-    /* 现有语义: ext2_64_write_file 是整文件写入(不按 offset 定位)。
-     * 这里照原样保留 —— 改写入语义不是这批的事, 是另一条待定的技术债。 */
-    int wr = ext2_64_write_file(fi->path, kbuf, (uint32_t)n);
+    /* P3-12: 按 fd 当前 offset 定位写。旧实现调整文件覆写入口
+     * ext2_64_write_file, offset 被完全丢弃 —— VFS 把 offset 前进了 n,
+     * 数据却落回块 0, 大文件分段写再读回必然对不上。这里改走
+     * ext2_64_write_file_offset: 首/尾块读改写保留既有内容, 中间块整块覆写。
+     * 整文件覆写入口仍留给按路径直写的内核调用方(配置/注册表等)。 */
+    int wr = ext2_64_write_file_offset(fi->path, kbuf, (uint32_t)n,
+                                        (uint32_t)fi->offset);
     kfree(kbuf);
 
     if (wr < 0) return -1;

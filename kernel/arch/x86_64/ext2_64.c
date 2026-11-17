@@ -259,46 +259,50 @@ int ext2_read_data_block(ext2_inode_t *inode, uint32_t block_idx, uint8_t *buffe
         return ext2_algo_read_data_block(&ext2_ctx, inode, block_idx, buffer);
     }
     uint32_t block;
+    /* 间接索引单位必须按真实块大小推导: mkfs.ext2 -b 4096 下每块
+     * 有 1024 个 4 字节指针, 原写死的 256 是 1KB 块的假设,
+     * 导致 block_idx>=268 的一级间接落进二级分支读到 0(读回全零)。 */
+    uint32_t ppb = ext2_block_size / 4;
 
     if (block_idx < 12) {
         /* 直接块 */
         block = inode->i_block[block_idx];
-    } else if (block_idx < 12 + 256) {
+    } else if (block_idx < 12 + ppb) {
         /* 一级间接块 */
         uint32_t indirect = inode->i_block[12];
         if (indirect == 0) return -1;
         uint8_t ibuf[EXT2_MAX_BLOCK_SIZE];
         if (ext2_read_block(indirect, ibuf) != 0) return -1;
         block = ((uint32_t *)ibuf)[block_idx - 12];
-    } else if (block_idx < 12 + 256 + 65536) {
+    } else if (block_idx < 12 + ppb + ppb*ppb) {
         /* 二级间接块 */
         uint32_t dbl_indirect = inode->i_block[13];
         if (dbl_indirect == 0) return -1;
         uint8_t dbl_buf[EXT2_MAX_BLOCK_SIZE];
         if (ext2_read_block(dbl_indirect, dbl_buf) != 0) return -1;
-        uint32_t idx = block_idx - (12 + 256);
-        uint32_t indirect = ((uint32_t *)dbl_buf)[idx / 256];
+        uint32_t idx = block_idx - (12 + ppb);
+        uint32_t indirect = ((uint32_t *)dbl_buf)[idx / ppb];
         if (indirect == 0) return -1;
         uint8_t ibuf[EXT2_MAX_BLOCK_SIZE];
         if (ext2_read_block(indirect, ibuf) != 0) return -1;
-        block = ((uint32_t *)ibuf)[idx % 256];
-    } else if (block_idx < 12 + 256 + 65536 + 16777216) {
+        block = ((uint32_t *)ibuf)[idx % ppb];
+    } else if (block_idx < 12 + ppb + ppb*ppb + ppb*ppb*ppb) {
         /* 三级间接块 */
         uint32_t tri_indirect = inode->i_block[14];
         if (tri_indirect == 0) return -1;
         uint8_t tri_buf[EXT2_MAX_BLOCK_SIZE];
         if (ext2_read_block(tri_indirect, tri_buf) != 0) return -1;
-        uint32_t idx = block_idx - (12 + 256 + 65536);
-        uint32_t dbl_indirect = ((uint32_t *)tri_buf)[idx / 65536];
+        uint32_t idx = block_idx - (12 + ppb + ppb*ppb);
+        uint32_t dbl_indirect = ((uint32_t *)tri_buf)[idx / (ppb*ppb)];
         if (dbl_indirect == 0) return -1;
         uint8_t dbl_buf[EXT2_MAX_BLOCK_SIZE];
         if (ext2_read_block(dbl_indirect, dbl_buf) != 0) return -1;
-        uint32_t idx2 = idx % 65536;
-        uint32_t indirect = ((uint32_t *)dbl_buf)[idx2 / 256];
+        uint32_t idx2 = idx % (ppb*ppb);
+        uint32_t indirect = ((uint32_t *)dbl_buf)[idx2 / ppb];
         if (indirect == 0) return -1;
         uint8_t ibuf[EXT2_MAX_BLOCK_SIZE];
         if (ext2_read_block(indirect, ibuf) != 0) return -1;
-        block = ((uint32_t *)ibuf)[idx2 % 256];
+        block = ((uint32_t *)ibuf)[idx2 % ppb];
     } else {
         /* 超出范围 */
         return -1;
@@ -315,43 +319,47 @@ static int ext2_write_data_block(ext2_inode_t *inode, uint32_t block_idx, const 
         return ext2_algo_write_data_block(&ext2_ctx, inode, block_idx, buffer);
     }
     uint32_t block;
+    /* 间接索引单位必须按真实块大小推导: mkfs.ext2 -b 4096 下每块
+     * 有 1024 个 4 字节指针, 原写死的 256 是 1KB 块的假设,
+     * 导致 block_idx>=268 的一级间接落进二级分支读到 0(读回全零)。 */
+    uint32_t ppb = ext2_block_size / 4;
 
     if (block_idx < 12) {
         block = inode->i_block[block_idx];
-    } else if (block_idx < 12 + 256) {
+    } else if (block_idx < 12 + ppb) {
         uint32_t indirect = inode->i_block[12];
         if (indirect == 0) return -1;
         uint8_t ibuf[EXT2_MAX_BLOCK_SIZE];
         if (ext2_read_block(indirect, ibuf) != 0) return -1;
         block = ((uint32_t *)ibuf)[block_idx - 12];
-    } else if (block_idx < 12 + 256 + 65536) {
+    } else if (block_idx < 12 + ppb + ppb*ppb) {
         uint32_t dbl_indirect = inode->i_block[13];
         if (dbl_indirect == 0) return -1;
         uint8_t dbl_buf[EXT2_MAX_BLOCK_SIZE];
         if (ext2_read_block(dbl_indirect, dbl_buf) != 0) return -1;
-        uint32_t idx = block_idx - (12 + 256);
-        uint32_t indirect = ((uint32_t *)dbl_buf)[idx / 256];
+        uint32_t idx = block_idx - (12 + ppb);
+        uint32_t indirect = ((uint32_t *)dbl_buf)[idx / ppb];
         if (indirect == 0) return -1;
         uint8_t ibuf[EXT2_MAX_BLOCK_SIZE];
         if (ext2_read_block(indirect, ibuf) != 0) return -1;
-        block = ((uint32_t *)ibuf)[idx % 256];
-    } else if (block_idx < 12 + 256 + 65536 + 16777216) {
+        block = ((uint32_t *)ibuf)[idx % ppb];
+    } else if (block_idx < 12 + ppb + ppb*ppb + ppb*ppb*ppb) {
         /* 三级间接块 */
         uint32_t tri_indirect = inode->i_block[14];
         if (tri_indirect == 0) return -1;
         uint8_t tri_buf[EXT2_MAX_BLOCK_SIZE];
         if (ext2_read_block(tri_indirect, tri_buf) != 0) return -1;
-        uint32_t idx = block_idx - (12 + 256 + 65536);
-        uint32_t dbl_indirect = ((uint32_t *)tri_buf)[idx / 65536];
+        uint32_t idx = block_idx - (12 + ppb + ppb*ppb);
+        uint32_t dbl_indirect = ((uint32_t *)tri_buf)[idx / (ppb*ppb)];
         if (dbl_indirect == 0) return -1;
         uint8_t dbl_buf[EXT2_MAX_BLOCK_SIZE];
         if (ext2_read_block(dbl_indirect, dbl_buf) != 0) return -1;
-        uint32_t idx2 = idx % 65536;
-        uint32_t indirect = ((uint32_t *)dbl_buf)[idx2 / 256];
+        uint32_t idx2 = idx % (ppb*ppb);
+        uint32_t indirect = ((uint32_t *)dbl_buf)[idx2 / ppb];
         if (indirect == 0) return -1;
         uint8_t ibuf[EXT2_MAX_BLOCK_SIZE];
         if (ext2_read_block(indirect, ibuf) != 0) return -1;
-        block = ((uint32_t *)ibuf)[idx2 % 256];
+        block = ((uint32_t *)ibuf)[idx2 % ppb];
     } else {
         return -1;
     }
@@ -1585,7 +1593,12 @@ static int ext2_64_write_file_offset_inner(const char *path, const uint8_t *data
     }
 
     if (end_offset64 > inode.i_size) inode.i_size = (uint32_t)end_offset64;
-    inode.i_blocks = (inode.i_size + bs - 1) / bs * (bs / 512);
+    /* i_blocks 口径与 ext2_64_write_file_inner 一致: 数据块 + 所有间接元数据块
+       的 512B 扇区数。旧实现只数数据块, 文件跨过一/二级间接块边界后
+       i_blocks 偏小, e2fsck 会报块数不符。 */
+    uint32_t data_blocks = (inode.i_size + bs - 1) / bs;
+    inode.i_blocks = (data_blocks + ext2_count_meta_blocks(&inode)) *
+                     (bs / 512);
     ext2_write_inode(ino, &inode);
 
     return size;
