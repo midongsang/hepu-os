@@ -162,11 +162,47 @@ kernel/shared/
 8. 网络协议栈算法共享（TCP状态机/IP校验和）
 9. 内存分配算法共享（slab分配器）
 
-## 引用统计
+## 引用统计（2026-11-17 按构建产物重新核实）
 
-- shared目录文件数: 8个（6个头文件 + 1个实现 + 1个接口）
-- 64位引用shared的文件: 6个（ext2_64, gfx64, desktop64, drv_register64, storage_hal64, user_access64）
-- 32位引用shared的文件: 0个（稳定优先，待逐步迁移）
+上一版的数字（"shared 8 个文件 / 64 位引用 6 个 / 32 位引用 0 个"）全部偏低，成因是
+只 grep 了字面 `shared/` 路径，而多数引用走搜索路径形式（`#include "mm/hepu_pmm.h"`），
+grep 不到 —— 这类"查不到就当没有"的误判会让人重做已经做完的事。
+
+实测（`find kernel/shared` + `find build_* -path "*shared*" -name "*.o"` + `grep -rl`）：
+
+| 项 | 实测值 |
+|---|---|
+| `shared/` 文件 | **30**（20 个 `.h` + 10 个 `.c`） |
+| 32 位 include `shared/` 头 | 4 个文件（`sys_mem.c` / `gfx32_display.c` / `gfx64_compat.c` / `init_sequence.c`） |
+| 32 位**编进** `shared/` 实现 | **10 个**：`desk_surface` `desk_registry` `desk_runtime` `desk_hpdesk` `desk_demo` `gfx_algo` `lib_shared` `ext2_algo` `debug_shared` `driver_framework` |
+| 64 位 include `shared/` 头 | 17 个文件 |
+| 64 位**编进** `shared/` 实现 | 2 个（`desk_surface`、`gfx_algo`） |
+
+**结论出乎预期：共享在 32 位这边反而更彻底。** 32 位要编 `hpdesk.c` 全家桶，顺带把
+`desk_*` 五个 shared 实现全编了进去；64 位因为另有 `desktop64.c` 这套入口，只用到
+`desk_surface` 与 `gfx_algo`（后者见下面的"影子实现"说明）。
+
+### 三个"编了但没接上"的实现（重要，别误接）
+
+这三个文件 32/64 都编，但**调用方为 0**：
+
+| 文件 | 内容 | 为什么没接 | 接上去会怎样 |
+|---|---|---|---|
+| `shared/gfx/gfx_algo.c` | `gfx_algo_backend_t *ops` 那套抽象（fill_rect / draw_line / 圆角 / 渐变） | 现行桌面走 `desk_surface`（12 核心 + 17 可选），两代抽象未对接 | 要大改调用点，且碰绘制路径 |
+| `shared/lib/lib_shared.c` | `shared_strlen` / `shared_memcpy` / `shared_memset` … | 命名空间独立（`shared_` 前缀），与两边自己的 `memcpy` 不冲突也没人换 | **性能退步**：它是逐字节循环，不是 `rep movs`。内核热路径替换成它会直接变慢 |
+| `shared/debug/debug_shared.c` | 调试辅助 | 两边各有自己的 vga/serial 输出路径 | 同上，属可选替换 |
+
+**所以"让 32 位接 shared"不等于"把所有 shared 都接上"。** `shared_*` 那套内存函数是
+给非热路径与将来的用户态服务用的参考实现，**不要**拿它替换内核 `memcpy`/`memset`；
+`gfx_algo` 要不要接，取决于是否决定把 `desk_surface` 退成 `gfx_algo_backend_t` 的一种
+——那是架构选择，不是顺手活。
+
+### P1 第 1 条已完成
+
+`32位 sys_mem.c → shared/security/user_access.h` 已落地：该文件 include 了共享声明面，
+并按契约定义了 `hepu_user_space_limit = 0xBFFFFFFF`（32 位用户空间 3GB，内核从
+`0xC0000000` 起）。注意它必须是**变量**：契约里是 `extern` 声明，缺定义要么链接失败，
+要么默认 0 让所有用户指针校验失败。
 
 ## v0.10.128 更新 - P0-3: 共享字符串/内存库
 
