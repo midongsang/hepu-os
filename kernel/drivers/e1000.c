@@ -12,6 +12,7 @@
 #include "vga.h"
 #include "serial.h"
 #include "eth.h"
+#include "paging.h"
 
 /* e1000 PCI IDs */
 #define E1000_VENDOR_ID    0x8086
@@ -51,6 +52,10 @@
 #define REG_MTA       0x5200  /* 多播表数组 */
 #define REG_RAL       0x5400  /* 接收地址低 */
 #define REG_RAH       0x5404  /* 接收地址高 */
+
+/* 驱动实际访问到的最高寄存器偏移: RAH(0x5404) 占 4 字节,
+ * MMIO 映射窗口覆盖到 0x5408, 再按页对齐向上取整。 */
+#define E1000_MMIO_WINDOW 0x5408u
 
 /* 控制寄存器位 */
 #define CTRL_LRST     0x00000008  /* 链路复位 */
@@ -162,20 +167,19 @@ static inline void e1000_write(uint32_t reg, uint32_t val)
     e1000_dev.mmio_base[reg / 4] = val;
 }
 
-/* 从EEPROM读取MAC地址 */
+/* 读取 MAC 地址: 直接取 RAL/RAH 寄存器(与 64 位 e1000_64.c 同路径)。
+ * QEMU e1000 的 MAC 由主机配置装入 RAL/RAH, 板上 EEPROM 为空;
+ * 原先走 EERD 读 EEPROM 在 QEMU 下恒得 0(EERD 实测读回 0x0)。 */
 static int e1000_read_mac(void)
 {
-    /* 简化：从EEPROM读取MAC地址 */
-    for (int i = 0; i < 3; i++) {
-        e1000_write(REG_EERD, 1 | (i << 8));
-        /* 等待读取完成 */
-        for (int j = 0; j < 10000; j++) {
-            if (e1000_read(REG_EERD) & 0x10) break;
-        }
-        uint16_t data = (e1000_read(REG_EERD) >> 16) & 0xFFFF;
-        e1000_dev.mac[i * 2] = data & 0xFF;
-        e1000_dev.mac[i * 2 + 1] = (data >> 8) & 0xFF;
-    }
+    uint32_t ral = e1000_read(REG_RAL);
+    uint32_t rah = e1000_read(REG_RAH);
+    e1000_dev.mac[0] = ral & 0xFF;
+    e1000_dev.mac[1] = (ral >> 8) & 0xFF;
+    e1000_dev.mac[2] = (ral >> 16) & 0xFF;
+    e1000_dev.mac[3] = (ral >> 24) & 0xFF;
+    e1000_dev.mac[4] = rah & 0xFF;
+    e1000_dev.mac[5] = (rah >> 8) & 0xFF;
     return 0;
 }
 
@@ -201,9 +205,30 @@ int e1000_init(void)
     serial_puthex(0x3F8, pci->dev);
     serial_puts(0x3F8, "\n");
 
-    /* 获取内存映射基地址（BAR0） */
-    e1000_dev.mmio_base = (uint32_t *)(pci->bar[0] & ~0xF);
+    /* 获取内存映射基地址（BAR0 物理地址） */
+    uint32_t mmio_phys = pci->bar[0] & ~0xF;
     e1000_dev.irq = pci->irq_line;
+
+    /* BAR0 位于物理内存上限之上(0xFExxxxxx 一带), 32 位 identity map
+     * 只覆盖前 256MB; 原先直接拿物理地址当指针, 访问会被 demand paging
+     * 兜到 poison 哑页 —— 不崩, 但寄存器读写全是假的(MAC 全 0、link down)。
+     *
+     * 这里按页把实际用到的寄存器窗口(0x0000–0x5408)映射进内核地址空间。
+     * 采用 identity 映射(虚地址 == 物理地址): 与 apic.c LAPIC、ahci.c BAR5
+     * 的既有 MMIO 先例一致; 内核其余部分本就按物理=虚拟直访, 不再另设固定
+     * 虚拟窗口; PTE 不置 USER 位, 仅 ring0 可访问。 */
+    {
+        uint32_t map_start = mmio_phys & ~(PAGE_SIZE - 1);
+        uint32_t map_end   = (mmio_phys + E1000_MMIO_WINDOW + PAGE_SIZE - 1)
+                             & ~(PAGE_SIZE - 1);
+        page_directory_t *kdir = paging_get_kernel_dir();
+        for (uint32_t p = map_start; p < map_end; p += PAGE_SIZE) {
+            paging_map(kdir, p, p, PAGE_PRESENT | PAGE_WRITE);
+        }
+        /* 与 apic.c/ahci.c 一致: 重写 CR3 刷新 TLB */
+        __asm__ volatile("mov %%cr3, %%eax; mov %%eax, %%cr3" ::: "eax");
+    }
+    e1000_dev.mmio_base = (uint32_t *)(uintptr_t)mmio_phys;
 
     serial_puts(0x3F8, "[e1000] mmio=0x");
     serial_puthex(0x3F8, (uint32_t)e1000_dev.mmio_base);
