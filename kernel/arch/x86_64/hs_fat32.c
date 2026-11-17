@@ -84,7 +84,7 @@ static uint32_t f_find_esp(void)
 static int f32_init(void)
 {
     uint8_t b[512];
-    uint32_t esp, bs, spc, rsvd, nfats, fatsz, rootc, root_sec;
+    uint32_t esp, bs, spc, rsvd, nfats, fatsz, rootc;
 
     if (g_f32.ok) return 0;
     esp = f_find_esp();

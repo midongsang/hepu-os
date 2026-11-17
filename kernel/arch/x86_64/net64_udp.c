@@ -166,6 +166,7 @@ static int udp64_recv_inner(int sock, uint8_t *buffer, int max_len,
 /* 处理收到的UDP包 */
 static void udp64_handle_inner(const uint8_t *packet, int length, uint32_t src_ip, uint32_t dst_ip)
 {
+    (void)dst_ip;
     if (length < 8) return;
 
     udp_header_t *udp = (udp_header_t *)packet;

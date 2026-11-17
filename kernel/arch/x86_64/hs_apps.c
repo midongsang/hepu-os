@@ -15,6 +15,8 @@
 /* 外部图形/系统接口 */
 extern void gfx64_fill_rect(int x, int y, int w, int h, uint32_t color);
 extern void gfx64_fill_rounded_rect(int x, int y, int w, int h, int radius, uint32_t color);
+/* 文件内先由菜单动作入口调用、后定义, 前置原型消除隐式声明 */
+void hs_files_do_action(int action);
 /* 桌面缩放入口(见 hpdesk.c), 窗口创建尺寸必须与桌面同一套 DPI 语义 */
 extern int hs_ui_sx(int v);
 extern int hs_ui_sy(int v);
@@ -930,6 +932,7 @@ static uint8_t f_props_isdir;
 
 static int f_match_entry(const char *name, int type)
 {
+    (void)type;
     if (f_filter_len == 0) return 1;
     const char *q = f_filter;
     const char *p = name;
@@ -1175,7 +1178,7 @@ static uint8_t f_thumb_src[F_THUMB_SRC_MAX];
 
 
 /* 是否为可出缩略图的图片(png/jpg) */
-static int f_thumb_ext_ok(const char *name)
+static __attribute__((unused)) int f_thumb_ext_ok(const char *name)
 {
     int n = hs_strlen(name);
     for (int i = n - 1; i >= 0 && n - i <= 5; i--) {
@@ -2418,7 +2421,7 @@ static void f_open_item(int idx)
 /* ============================================================================
  * 多选 / 剪贴板 / 属性
  * ========================================================================== */
-static void f_clear_marks(void)
+static __attribute__((unused)) void f_clear_marks(void)
 {
     for (int i = 0; i < FS_MAX_ITEMS; i++) f_mark[i] = 0;
 }
@@ -2436,7 +2439,7 @@ static int f_copy_file(const char *src, const char *dst)
 }
 
 /* 目录复制 (BFS 队列, 避免深层递归占用内核栈) */
-static int f_copy_tree(const char *src, const char *dst)
+static __attribute__((unused)) int f_copy_tree(const char *src, const char *dst)
 {
     static char qs[8][FS_PATH_MAX];
     static char qd[8][FS_PATH_MAX];
@@ -3612,6 +3615,7 @@ static void m_bar_c(int x, int y, int ww, int hh, uint32_t c)
 static void m_draw_curve(void *fb, int W, int H, int x, int y, int w, int h,
                          int *hist, uint32_t color, int maxv)
 {
+    (void)fb; (void)W; (void)H;
     /* V0.56.2: 背景用主题面板色 —— 原硬编码 0x000000 在浅色主题下是三块黑块 */
     m_bar_c(x, y, w, h, g_shell.colors.panel_bg);
     gfx64_draw_rect(x, y, w, h, g_shell.colors.border);

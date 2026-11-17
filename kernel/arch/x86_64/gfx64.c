@@ -18,6 +18,8 @@
 void gfx64_blit_background(uint8_t *bg, int x, int y, int w, int h);
 void gfx64_blit_to(uint8_t *dstfb, uint8_t *bg, int x, int y, int w, int h);
 void gfx64_blend_pixel(int x, int y, uint32_t fg, int alpha);
+/* present 在文件内先被初始化流程调用、后定义, 前置原型消除隐式声明 */
+void gfx64_present(void);
 
 /* 图形模式信息（使用共享gfx_framebuffer_t结构） */
 static gfx_framebuffer_t gfx_fb_info = {0};
@@ -102,7 +104,7 @@ int gfx64_surface_height(void) { return g_rt_h; }
 int gfx64_surface_origin_x(void) { return g_rt_ox; }
 int gfx64_surface_origin_y(void) { return g_rt_oy; }
 
-static uint8_t *gfx64_cur_buf(void)
+static __attribute__((unused)) uint8_t *gfx64_cur_buf(void)
 {
     if (g_rt_buf) return g_rt_buf;
     return gfx_target ? gfx_target : front_buffer;
@@ -434,6 +436,7 @@ void gfx64_fill_round_rect_argb(void *buf, int bw, int bh,
     if (r == 0 || corners == 0) return;
 
     int r2 = r * r;
+    (void)r2;
     int r2o = (r <= 6) ? (r + 3) * (r + 3) : (r + 2) * (r + 2);
     int r2i = (r > 2) ? (r - 2) * (r - 2) : 0;
     int ak = (r <= 6) ? 96 : 128;

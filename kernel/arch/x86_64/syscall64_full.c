@@ -1042,7 +1042,7 @@ static int64_t sys_seccomp(unsigned int op, unsigned int flags, uint64_t args)
         return HEPU_EINVAL;
     }
 }
-static int64_t sys_dup3(int oldfd, int newfd, int flags) { (void)flags; return newfd; }
+static int64_t sys_dup3(int oldfd, int newfd, int flags) { (void)oldfd; (void)flags; return newfd; }
 static int64_t sys_select(int nfds, uint64_t readfds, uint64_t writefds, uint64_t exceptfds, uint64_t timeout) {
     (void)nfds;(void)readfds;(void)writefds;(void)exceptfds;(void)timeout;
     return 0;
@@ -2124,20 +2124,8 @@ static int64_t sys_getppid(void)
     return 0;
 }
 
-/* sys_unlink - 删除文件 */
-/* §5-5: 实现已搬到 fs_dir_sys.c */
-static int64_t sys_unlink(const char *path);
-
-
-/* sys_mkdir - 创建目录 */
-/* §5-5: 实现已搬到 fs_dir_sys.c */
-static int64_t sys_mkdir(const char *path, int mode);
-
-
-/* sys_rmdir - 删除目录 */
-/* §5-5: 实现已搬到 fs_dir_sys.c */
-static int64_t sys_rmdir(const char *path);
-
+/* sys_unlink / sys_mkdir / sys_rmdir: 实现已搬到 fs_dir_sys.c,
+ * 外部原型见 fs_sys.h（§5-5 第 1 批），本文件不再保留无定义的 static 声明。 */
 
 /* sys_lseek - 移动文件指针 */
 static int64_t sys_lseek(int fd, int64_t offset, int whence)
@@ -2390,9 +2378,11 @@ static int64_t wrap_shutdown(int64_t a1, int64_t a2, int64_t a3, int64_t a4, int
     (void)a3;(void)a4;(void)a5;(void)a6; return sys_shutdown((int)a1,(int)a2);
 }
 static int64_t wrap_setsockopt(int64_t a1, int64_t a2, int64_t a3, int64_t a4, int64_t a5, int64_t a6) {
+    (void)a6;
     return sys_setsockopt((int)a1,(int)a2,(int)a3,(uint64_t)a4,(int)a5);
 }
 static int64_t wrap_getsockopt(int64_t a1, int64_t a2, int64_t a3, int64_t a4, int64_t a5, int64_t a6) {
+    (void)a6;
     return sys_getsockopt((int)a1,(int)a2,(int)a3,(uint64_t)a4,(uint64_t)a5);
 }
 static int64_t wrap_getrusage(int64_t a1, int64_t a2, int64_t a3, int64_t a4, int64_t a5, int64_t a6) {

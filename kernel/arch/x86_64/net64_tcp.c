@@ -300,6 +300,7 @@ static void tcp_process_ack(tcp_connection_t *conn, uint32_t ack)
 /* 处理收到的TCP包 */
 static void tcp64_handle_inner(const uint8_t *packet, int length, uint32_t src_ip, uint32_t dst_ip)
 {
+    (void)dst_ip;
     if (length < 20) return;
 
     tcp_header_t *tcp = (tcp_header_t *)packet;

@@ -190,6 +190,7 @@ void notes64_clear(void)
 void notes64_draw(void *fb, int fb_w, int fb_h,
                   int x, int y, int w, int h)
 {
+    (void)w;
     if (!fb) return;
 
     extern void font64_draw_string(void *fb, int fw, int fh,

@@ -190,6 +190,7 @@ int sys_listen(int fd, int backlog)
 /* accept() - 接受连接（简化版，返回新fd） */
 int sys_accept(int fd, void *addr, int *addrlen)
 {
+    (void)addr; (void)addrlen;
     socket_t *sock = find_socket(fd);
     if (!sock) {
         return -1;  /* EBADF */
@@ -273,6 +274,7 @@ int sys_connect(int fd, const void *addr, int addrlen)
 /* send() - 发送数据（调用TCP协议栈） */
 int sys_send(int fd, const void *buf, size_t len, int flags)
 {
+    (void)flags;
     socket_t *sock = find_socket(fd);
     if (!sock) {
         return -1;  /* EBADF */
@@ -295,6 +297,7 @@ int sys_send(int fd, const void *buf, size_t len, int flags)
 /* recv() - 接收数据（调用TCP协议栈） */
 int sys_recv(int fd, void *buf, size_t len, int flags)
 {
+    (void)flags;
     socket_t *sock = find_socket(fd);
     if (!sock) {
         return -1;  /* EBADF */
@@ -340,6 +343,7 @@ int socket64_get_count(void)
 /* setsockopt() - 设置socket选项 */
 int sys_setsockopt(int fd, int level, int optname, const void *optval, int optlen)
 {
+    (void)level; (void)optname; (void)optval; (void)optlen;
     socket_t *sock = find_socket(fd);
     if (!sock) {
         return -1;  /* EBADF */
@@ -351,6 +355,7 @@ int sys_setsockopt(int fd, int level, int optname, const void *optval, int optle
 /* getsockopt() - 获取socket选项 */
 int sys_getsockopt(int fd, int level, int optname, void *optval, int *optlen)
 {
+    (void)level; (void)optname;
     socket_t *sock = find_socket(fd);
     if (!sock) {
         return -1;  /* EBADF */

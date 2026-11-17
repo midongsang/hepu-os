@@ -101,6 +101,7 @@ uint64_t hepu_build_initial_stack(const uint64_t *stack_phys, const char *path,
                                    uint64_t user_pml4,
                                    uint64_t at_entry_va, uint64_t interp_base)
 {
+    (void)entry_va;
     if (!stack_phys || !stack_phys[0]) return 0;
 
     /* ---- 1. 在内核缓冲里拼出初始栈内容 ----
