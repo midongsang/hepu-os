@@ -759,6 +759,24 @@ static void clear_boot_fail_count(void)
         0, 0, NULL);
 }
 
+/* 失败计数 +1。只在"已经决定要启这个内核"之后调用 —— 在菜单里犹豫不该算失败。
+ * 上限 99: 这个值只用来判断"是不是一直在重启"，不需要精确次数，也不希望一个
+ * 坏介质把它刷成天文数字。 */
+static void inc_boot_fail_count(void)
+{
+    UINT32 c = read_boot_fail_count();
+    if (c < 99) write_boot_fail_count(c + 1);
+}
+
+/* 追加字符串（UEFI 环境没有 strcat，cmdline 是 char 缓冲） */
+static void my_strcat(char *dst, const char *src)
+{
+    char *d = dst;
+    while (*d) d++;
+    while (*src) *d++ = *src++;
+    *d = 0;
+}
+
 /* 加载配置文件 */
 static void load_config(void)
 {
@@ -783,55 +801,125 @@ static void load_config(void)
 }
 
 /* 引导菜单 */
+/* ---- 引导模式选择（2026-11-17 重做） -----------------------------------
+ *
+ * 需求来自用户，四条必须同时成立：
+ *   1. 开机就进菜单，不是按 F8 才出来；
+ *   2. 三种模式：64 位 / 32 位 / 保护模式（只起终端，不进图形，用于图形起不来时兜底）；
+ *   3. 第一次选完记住，以后按记忆的默认；
+ *   4. 这台机器不支持的架构在菜单里**变灰且选不中**；连续启动失败达到阈值也直接转保护模式。
+ *
+ * 可用性的判据只有一条可信的：**ESP 里那个内核文件在不在**。CPU 是否支持长模式在
+ * UEFI 应用里无法可靠判定（UEFI 应用自己是按固件位宽编的，32 位固件下根本跑不到这里），
+ * 所以"机器不支持 64 位"在这个引导器上具体表现为"KERNEL64.BIN 不存在"。
+ * 不去猜硬件，只报事实。
+ * ------------------------------------------------------------------------ */
+#define MODE_64      0
+#define MODE_32      1
+#define MODE_PROTECT 2
+#define MODE_COUNT   3
+
+/* 探测某个内核文件是否真的可读：读进来一字节再释放。
+ * 只判断存在性和可读性，不做完整加载（那一步有 CRC 校验，归它自己管）。 */
+static int kernel_available(const CHAR16 *path)
+{
+    VOID *probe = NULL;
+    UINTN probe_size = 0;
+    EFI_STATUS st = read_esp_file((CHAR16 *)path, &probe, &probe_size);
+    if (probe) FreePool(probe);
+    return !EFI_ERROR(st) && probe_size > 0;
+}
+
+/* 记住上次的选择（UEFI 变量，掉电保留）。0/1/2 三种值；
+ * 读不到或值越界就退回 0（64 位优先）。 */
+static int read_default_mode(void)
+{
+    UINT32 v = 0;
+    UINTN size = sizeof(v);
+    EFI_STATUS st = uefi_call_wrapper(RT->GetVariable, 5,
+        L"HepuBootDefaultMode", &gHepuBootVendorGuid, NULL, &size, &v);
+    if (EFI_ERROR(st) || v >= MODE_COUNT) return MODE_64;
+    return (int)v;
+}
+
+static void save_default_mode(int mode)
+{
+    UINT32 v = (UINT32)mode;
+    uefi_call_wrapper(RT->SetVariable, 5,
+        L"HepuBootDefaultMode", &gHepuBootVendorGuid,
+        EFI_VARIABLE_NON_VOLATILE | EFI_VARIABLE_BOOTSERVICE_ACCESS |
+        EFI_VARIABLE_RUNTIME_ACCESS, sizeof(v), &v);
+}
+
 static int show_boot_menu(void)
 {
-    int selected = g_config.default_mode;
-    int countdown = g_config.timeout;
+    int avail[MODE_COUNT];
+    avail[MODE_64]      = kernel_available(KERNEL64_PATH);
+    avail[MODE_32]      = kernel_available(KERNEL32_PATH);
+    avail[MODE_PROTECT] = 1;   /* 保护模式永远可用：它是兜底，不能跟着内核文件一起失效 */
+
+    int selected = read_default_mode();
+    /* 记忆的模式在当前介质上不可用（比如换了一台没有 64 位内核的机器），
+     * 退到第一个可用的。都不行就只剩保护模式。 */
+    if (!avail[selected]) {
+        selected = avail[MODE_64] ? MODE_64 : (avail[MODE_32] ? MODE_32 : MODE_PROTECT);
+    }
+
     UINT32 fail_count = read_boot_fail_count();
-    const CHAR16 *items[] = {
-        L"  1. Hepu OS 64-bit (Default)",
-        L"  2. Hepu OS 32-bit (Stable)"
+    /* 连续失败到阈值就强制保护模式 —— 这是"系统老是重启"的自动兜底。
+     * 原来的实现是失败两次退 32 位，但那不是兜底：32 位图形化一样可能起不来，
+     * 而用户此刻最需要的是一个能敲命令的终端。 */
+    if (fail_count >= 3) {
+        selected = MODE_PROTECT;
+    }
+
+    int countdown = g_config.timeout;
+    /* 只有三个模式都不可用（介质坏了）时才真的无处可去，那也走保护模式，由内核报错。 */
+
+    const CHAR16 *items[MODE_COUNT] = {
+        L"  1. Hepu OS 64-bit        ",
+        L"  2. Hepu OS 32-bit        ",
+        L"  3. Protection Mode       "
+    };
+    const CHAR16 *notes[MODE_COUNT] = {
+        L"graphical desktop",
+        L"graphical desktop",
+        L"terminal only, no graphics"
     };
 
-    /* 如果失败次数>=2，自动选择32位稳定版（仅当 ESP 中确实存在 32 位内核） */
-    if (fail_count >= 2) {
-        VOID *probe = NULL;
-        UINTN probe_size = 0;
-        if (!EFI_ERROR(read_esp_file(KERNEL32_PATH, &probe, &probe_size))) {
-            selected = 1;
+    while (1) {
+        clear_screen();
+        set_color(EFI_LIGHTCYAN, EFI_BLACK);
+        print_str(L"\r\n  ================================================\r\n");
+        print_str(L"  |          Hepu OS Boot Menu                   |\r\n");
+        print_str(L"  ================================================\r\n\r\n");
+
+        if (fail_count > 0) {
+            set_color(EFI_RED, EFI_BLACK);
+            print_str(L"  [!] Previous boot failures: ");
+            CHAR16 fbuf[8]; UINT32 fc = fail_count; int fi = 6; fbuf[7] = 0;
+            if (fc == 0) fbuf[--fi] = '0';
+            while (fc > 0 && fi > 0) { fbuf[--fi] = (CHAR16)('0' + (fc % 10)); fc /= 10; }
+            print_str(&fbuf[fi]);
+            if (fail_count >= 3) {
+                print_str(L"  -> Protection Mode forced\r\n");
+            } else {
+                print_str(L"\r\n");
+            }
+            set_color(EFI_LIGHTGRAY, EFI_BLACK);
+            print_str(L"  Press C to clear the counter\r\n\r\n");
         }
-        if (probe) FreePool(probe);
-    }
 
-    clear_screen();
-    set_color(EFI_LIGHTCYAN, EFI_BLACK);
-    print_str(L"\r\n  ========================================\r\n");
-    print_str(L"  |       HepuBoot UEFI Boot Menu        |\r\n");
-    print_str(L"  ========================================\r\n\r\n");
-
-    /* 显示失败计数警告 */
-    if (fail_count > 0) {
-        set_color(EFI_RED, EFI_BLACK);
-        print_str(L"  [!] Previous boot failures: ");
-        CHAR16 fbuf[8];
-        UINT32 fc = fail_count;
-        int fi = 6;
-        fbuf[7] = 0;
-        if (fc == 0) fbuf[--fi] = '0';
-        while (fc > 0 && fi > 0) { fbuf[--fi] = '0' + (fc % 10); fc /= 10; }
-        print_str(&fbuf[fi]);
-        if (fail_count >= 2) {
-            print_str(L" -> Auto 32-bit Stable\r\n");
-        } else {
-            print_str(L"\r\n");
-        }
-        set_color(EFI_LIGHTGRAY, EFI_BLACK);
-        print_str(L"  Press C to clear failure count\r\n\r\n");
-    }
-
-    while (countdown >= 0) {
-        /* 显示菜单项 */
-        for (int i = 0; i < 2; i++) {
+        for (int i = 0; i < MODE_COUNT; i++) {
+            if (!avail[i]) {
+                /* 不可用：灰色 + 明确写出原因，并拒绝被选中 */
+                set_color(EFI_DARKGRAY, EFI_BLACK);
+                print_str(items[i]);
+                print_str(L" [unavailable: ");
+                print_str(i == MODE_64 ? L"no KERNEL64.BIN" : L"no KERNEL32.BIN");
+                print_str(L"]\r\n");
+                continue;
+            }
             if (i == selected) {
                 set_color(EFI_BLACK, EFI_WHITE);
                 print_str(L">");
@@ -840,68 +928,63 @@ static int show_boot_menu(void)
                 print_str(L" ");
             }
             print_str(items[i]);
+            print_str(L"  ");
+            print_str(notes[i]);
             if (i == selected) set_color(EFI_LIGHTGRAY, EFI_BLACK);
             print_str(L"\r\n");
         }
 
         set_color(EFI_YELLOW, EFI_BLACK);
         print_str(L"\r\n  Auto-boot in ");
-        CHAR16 numbuf[4];
-        int t = countdown, i = 2;
-        numbuf[3] = 0;
-        if (t == 0) numbuf[--i] = '0';
-        while (t > 0 && i >= 0) { numbuf[i--] = '0' + (t % 10); t /= 10; }
-        print_str(&numbuf[i+1]);
-        print_str(L"s. \x18\x19 select, Enter boot, C clear count\r\n");
+        CHAR16 numbuf[4]; int t = countdown, ni = 2; numbuf[3] = 0;
+        if (t <= 0) numbuf[--ni] = '0';
+        while (t > 0 && ni >= 0) { numbuf[ni--] = (CHAR16)('0' + (t % 10)); t /= 10; }
+        print_str(&numbuf[ni + 1]);
+        print_str(L"s.  \x18\x19 move, Enter boot, 1/2/3 pick, C clear\r\n");
 
-        /* 等待按键（1秒超时） */
         EFI_EVENT timer;
         uefi_call_wrapper(BS->CreateEvent, 5, EVT_TIMER, 0, NULL, NULL, &timer);
         uefi_call_wrapper(BS->SetTimer, 3, timer, TimerRelative, 10000000);
         EFI_EVENT events[2] = { ST->ConIn->WaitForKey, timer };
-        UINTN index;
-        UINTN num_events = 2;
+        UINTN index; UINTN num_events = 2;
         EFI_STATUS ks = uefi_call_wrapper(BS->WaitForEvent, 3, num_events, events, &index);
         uefi_call_wrapper(BS->CloseEvent, 1, timer);
 
         if (!EFI_ERROR(ks) && index == 0) {
-            /* 按键事件 */
             EFI_INPUT_KEY key;
             uefi_call_wrapper(ST->ConIn->ReadKeyStroke, 2, ST->ConIn, &key);
-            if (key.ScanCode == 0x01) { /* Up */
-                selected = (selected + 2) % 3;
+            if (key.ScanCode == 0x01 || key.ScanCode == 0x02) {
+                /* 上下移动：跳过不可用项，不允许停在灰掉的模式上 */
+                int dir = (key.ScanCode == 0x01) ? -1 : 1;
+                for (int step = 0; step < MODE_COUNT; step++) {
+                    selected = (selected + dir + MODE_COUNT) % MODE_COUNT;
+                    if (avail[selected]) break;
+                }
                 countdown = g_config.timeout;
-            } else if (key.ScanCode == 0x02) { /* Down */
-                selected = (selected + 1) % 3;
-                countdown = g_config.timeout;
-            } else if (key.UnicodeChar == 0x0D || key.UnicodeChar == 0x0A) { /* Enter */
-                break;
-            } else if (key.UnicodeChar == '1') { selected = 0; break; }
-            else if (key.UnicodeChar == '2') { selected = 1; break; }
-            else if (key.UnicodeChar == '3') { selected = 2; break; }
+            } else if (key.UnicodeChar == 0x0D || key.UnicodeChar == 0x0A) {
+                if (avail[selected]) {
+                    /* 只有真的用得上的选择才记下来 —— 灰掉的项不写进默认,
+                     * 否则换机器后默认会指向一个不存在的内核。 */
+                    save_default_mode(selected);
+                    break;
+                }
+            } else if (key.UnicodeChar == '1') { if (avail[MODE_64]) { selected = MODE_64; save_default_mode(selected); break; } }
+            else if (key.UnicodeChar == '2')       { if (avail[MODE_32]) { selected = MODE_32; save_default_mode(selected); break; } }
+            else if (key.UnicodeChar == '3')       { selected = MODE_PROTECT; save_default_mode(selected); break; }
             else if (key.UnicodeChar == 'c' || key.UnicodeChar == 'C') {
                 clear_boot_fail_count();
                 fail_count = 0;
-                set_color(EFI_GREEN, EFI_BLACK);
-                print_str(L"\r\n  [OK] Failure count cleared\r\n");
-                set_color(EFI_LIGHTGRAY, EFI_BLACK);
                 countdown = g_config.timeout;
-                /* 重新显示菜单 */
-                clear_screen();
-                set_color(EFI_LIGHTCYAN, EFI_BLACK);
-                print_str(L"\r\n  ========================================\r\n");
-                print_str(L"  |       HepuBoot UEFI Boot Menu        |\r\n");
-                print_str(L"  ========================================\r\n\r\n");
             }
         } else {
             countdown--;
+            if (countdown < 0) {
+                /* 超时就用当前选择；当前选择一定是可用的 */
+                save_default_mode(selected);
+                break;
+            }
         }
-
-        /* 清除菜单区域（光标回到菜单顶部） */
-        print_str(L"\x1b[6A"); /* 光标上移6行 */
     }
-
-    clear_screen();
     return selected;
 }
 
@@ -1295,31 +1378,66 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
         /* 显示引导菜单 */
         int boot_mode = show_boot_menu();
 
-        /* 如果选择32位，重新加载32位内核 */
-        if (boot_mode == 1) {
+        /* 保护模式不是"第四种内核"，是"用现有内核但不要图形"：
+         * 选一个当前介质上真的可用的内核（64 优先），然后把 graphics=0 交给它。
+         * 这样兜底难度不依赖再多编一个内核出来。 */
+        int protect = (boot_mode == MODE_PROTECT);
+        int use32 = 0;
+
+        if (protect) {
+            use32 = !kernel_available(KERNEL64_PATH);
+        } else if (boot_mode == MODE_32) {
+            use32 = 1;
+        }
+
+        if (use32) {
             set_color(EFI_YELLOW, EFI_BLACK);
             print_str(L"  [Loading 32-bit kernel...]\r\n");
             set_color(EFI_LIGHTGRAY, EFI_BLACK);
             ks = load_kernel_to_memory(KERNEL32_PATH, &kaddr, &ksize);
             if (EFI_ERROR(ks)) {
+                /* 32 位加载失败：保护模式下就彻底没有可启的内核了，如实报错；
+                 * 普通模式下退回 64 位，因为 64 位内核此刻一定可用 */
+                if (protect && !kernel_available(KERNEL64_PATH)) {
+                    set_color(EFI_RED, EFI_BLACK);
+                    print_str(L"  [FATAL] No bootable kernel in ESP.\r\n");
+                    set_color(EFI_LIGHTGRAY, EFI_BLACK);
+                    print_str(L"  Press any key to return to firmware...\r\n");
+                    wait_key();
+                    return EFI_NOT_FOUND;
+                }
                 set_color(EFI_RED, EFI_BLACK);
-                print_str(L"  [WARN] 32位内核加载失败，使用64位\r\n");
+                print_str(L"  [WARN] 32-bit kernel load failed, falling back to 64-bit\r\n");
                 set_color(EFI_LIGHTGRAY, EFI_BLACK);
-                boot_mode = 0;
+                use32 = 0;
             }
         }
 
-        /* 根据选择设置命令行参数 */
-        if (boot_mode == 0) {
-            my_strcpy(g_config.cmdline, "hepu.arch=x86_64");
-        } else {
+        /* 命令行：架构 + 图形开关。hepu.graphics=0 是保护模式的唯一标志，
+         * 内核侧读到它就不初始化任何图形后端，直接起串口/VGA 文本终端。 */
+        if (use32) {
             my_strcpy(g_config.cmdline, "hepu.arch=i386");
+        } else {
+            my_strcpy(g_config.cmdline, "hepu.arch=x86_64");
         }
+        if (protect) {
+            my_strcat(g_config.cmdline, " hepu.graphics=0");
+        }
+
         set_color(EFI_GREEN, EFI_BLACK);
         print_str(L"  [BOOT] Mode: ");
-        if (boot_mode == 0) print_str(L"64-bit x86_64\r\n");
-        else print_str(L"32-bit i386\r\n");
+        if (use32) print_str(L"32-bit i386");
+        else       print_str(L"64-bit x86_64");
+        if (protect) {
+            set_color(EFI_YELLOW, EFI_BLACK);
+            print_str(L"  (protection: terminal only, graphics disabled)");
+        }
+        print_str(L"\r\n");
         set_color(EFI_LIGHTGRAY, EFI_BLACK);
+
+        /* 选到要启的内核后，把失败计数 +1；内核起稳之后由它自己清（或用户按 C）。
+         * 放这里而不是更早，是因为"菜单里犹豫"不该算一次失败。 */
+        inc_boot_fail_count();
 
         /* V6.86真机兼容: GOP初始化移到GetMemoryMap之前，
          * 避免GOP操作分配内存改变内存映射导致ExitBootServices失败 */
