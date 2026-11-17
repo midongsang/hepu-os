@@ -18,6 +18,8 @@
 void gfx64_blit_background(uint8_t *bg, int x, int y, int w, int h);
 void gfx64_blit_to(uint8_t *dstfb, uint8_t *bg, int x, int y, int w, int h);
 void gfx64_blend_pixel(int x, int y, uint32_t fg, int alpha);
+/* present 在文件内先被初始化流程调用、后定义, 前置原型消除隐式声明 */
+void gfx64_present(void);
 
 /* 图形模式信息（使用共享gfx_framebuffer_t结构） */
 static gfx_framebuffer_t gfx_fb_info = {0};

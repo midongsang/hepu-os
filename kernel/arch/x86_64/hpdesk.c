@@ -19,6 +19,9 @@ extern void vga_printf(const char *fmt, ...);
 #include "hsinput.h"
 #include "../../shared/desktop/desk_api.h"
 
+/* 内核堆释放: 文件内壁纸回滚路径先于局部 extern 声明调用, 顶部前置原型消除隐式声明 */
+extern void kfree(void *ptr);
+
 /* V0.13.10: 缺失接口恢复 — 切换器渲染前向声明 */
 static void hs_switcher_render(void);
 

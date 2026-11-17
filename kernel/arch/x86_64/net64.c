@@ -22,6 +22,8 @@ extern void vga_put_hex(uint64_t v);
 extern int eth64_recv(uint8_t *buffer, uint32_t max_length);
 extern void arp64_handle(const uint8_t *packet, int length);
 extern void ip64_handle(const uint8_t *frame, int length);
+/* poll 在文件内先被连接流程调用、后定义, 前置原型消除隐式声明 */
+extern void net64_poll(void);
 
 /* 协议栈初始化 */
 extern void eth64_init(void);

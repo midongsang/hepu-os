@@ -15,6 +15,8 @@
 /* 外部图形/系统接口 */
 extern void gfx64_fill_rect(int x, int y, int w, int h, uint32_t color);
 extern void gfx64_fill_rounded_rect(int x, int y, int w, int h, int radius, uint32_t color);
+/* 文件内先由菜单动作入口调用、后定义, 前置原型消除隐式声明 */
+void hs_files_do_action(int action);
 /* 桌面缩放入口(见 hpdesk.c), 窗口创建尺寸必须与桌面同一套 DPI 语义 */
 extern int hs_ui_sx(int v);
 extern int hs_ui_sy(int v);
