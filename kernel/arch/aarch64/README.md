@@ -45,3 +45,23 @@ PE 头缺 optional header（`magic` 读到 `.text` 的 0x742e、subsystem=0）�
 `qemu-efi-aarch64`（/usr/share/qemu-efi-aarch64/QEMU_EFI.fd）、`dosfstools`/`mtools`/`gdisk`。
 gnu-efi 的 aarch64 产物：`make -C tools/gnu-efi ARCH=aarch64 CC=aarch64-linux-gnu-gcc`
 （生成 tools/gnu-efi/aarch64/，已入 .gitignore 的话不必提交）。
+
+## UEFI 引导现状（2026-11-18，卡点）
+
+已解决：PE 头。binutils 2.38 的 `objcopy --output-target=efi-app-aarch64` 生成的不是合规 EFI image
+（缺 optional header → magic 读到 0x742e、subsystem=0）。现改用 `tools/pe_wrap_aarch64.py`
+手工构造 PE32+（DOS 头 + COFF + PE32+ 可选头 + 节表 + .reloc）。产物 `file` 已能正确识别为
+`PE32+ executable (EFI application) Aarch64`。
+
+未解决：固件不枚举块设备。用 AAVMF_CODE.fd / QEMU_EFI.fd（QEMU 6.2, `-M virt`）时，
+无论 virtio-blk-pci / virtio-blk-device / NVMe，串口都只有
+`BdsDxe: failed to load Boot0001 "UEFI Misc Device" ... Not Found` 然后掉 PXE，
+从未走到读 ESP 里的 BOOTAA64.EFI。属 QEMU 6.2 + Ubuntu AAVMF 的块设备侧问题，
+与我们的 EFI 二进制无关（PE 头已合规）。
+下一步候选：换 QEMU 8.x / 用 `-M virt` + edk2-arm 的完整 FV / 或真板（RK3588S）。
+
+## 帧缓冲
+
+M0 的 GOP 填色代码（`m0/hepu_m0_a64.c` 的 `gop_fill_demo`）已写好但未跑成 ——
+它需要 UEFI 走到我们的 EFI 应用，而这一关被上面的块设备问题挡住。
+裸机路径（`m0/bare`）已验证 PL011/CNTVCT/PSCI 三件事，帧缓冲留给 UEFI 或 M1。
