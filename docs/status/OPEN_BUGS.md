@@ -2,7 +2,7 @@
 title: 赫普OS 未关闭问题清单
 status: active
 sys_version: 0.62.0
-updated: 2026-11-18（OBS-05 撤销为取帧时机问题；登记 OBS-07 linuxhello 崩溃、64 空口令拒登、ASan/UBSan 链接清单失败、32 KUnit 既有基线失败；文末「台账遗留项清理（2026-11-18）」为 32 位 / 64 位与主机侧遗留项复核记录。历史：驱动层整固 BUG-52~56；BUG-49 更正为不成立；OPEN-02 复现未成功并写明下一步夹具）
+updated: 2026-11-18（登记 OBS-08 32 位镜像布局位移敏感；OBS-05 撤销为取帧时机问题；登记 OBS-07 linuxhello 崩溃、64 空口令拒登、ASan/UBSan 链接清单失败、32 KUnit 既有基线失败；文末「台账遗留项清理（2026-11-18）」为 32 位 / 64 位与主机侧遗留项复核记录。历史：驱动层整固 BUG-52~56；BUG-49 更正为不成立；OPEN-02 复现未成功并写明下一步夹具）
 owner: status
 source_of_truth: kernel/arch/x86_64/
 ---
@@ -815,6 +815,38 @@ PE32 id=2、MACHO id=3，probe/load 均为合法 `.text` 地址）；`after-kmal
 **探针处置**：所有临时 `[DBG32]` 打点（cmd_run_auto 入口/出口、exec 返回码、加载器分发、
 syscall、异常向量、`formats[]` 影子完整性、VFS 链表遍历转储）在收尾时已从源码删除；
 提交内只保留 `kernel/fs/transcomp.c` 的栈局部修复。
+
+### OBS-08 32 位镜像布局位移敏感（野指针写入源未定性；2026-11-18 登记）
+
+**现象（两类，均随镜像 text/data 体积变化出现或消失）**
+
+1. `fix/vfs-contract` 分支（text +1712 B / data +96 B，bss 整体后移一页）：
+   `integration/subsystem memory`、`performance/perf memory usage` 两项 KUNIT 断言
+   `heap_total > 0` 失败（运行时 `heap_total == 0`），干净基线 `391e1db` 同环境通过。
+   探针显示 `kheap_init` 时 `0x03000000` 正常，损坏发生在 `pae_init()` 内部；第 4 个
+   4K 对齐页表分配回落 `kf_pool` 兜底池，池内写波及紧邻的 kheap 静态变量
+   （`heap_total` 位于池起点前 0x1C 字节）。
+2. 同一 VFS 分支并入"391e1db + OBS-07 修复 + crash_ctx + diag"后：自检停在
+   `[AUTO] linuxhello start`，`process_create` 分配 64 KB 后踩野地址 `0x82630000`：
+   `[PF] MMIO trap addr=0x0x82630000 -> poison page` → `[WATCHDOG] kernel heartbeat
+   timeout, resetting...` → 复位，永不出现 `[AUTO] linuxhello done`。
+   把 VFS 分支从同一集成树移除后，同位置恢复正常（`Hello from Linux ELF on HEPU!` 后
+   `done`，`ALL DONE`，冒烟 `fault=0`）。
+
+**定性**：野指针写入源尚未定位；触发条件是**镜像布局位移**这一事实已由两组对照实验确证
+（含 VFS 自身的 KUNIT 对照）。倾向既有 32 位 kheap 首链 / PAE 对齐分配 / `kf_pool` 兜底
+路径的脆弱性，被布局位移暴露。与 OBS-07 属同族（OBS-07 已定性为 64 KB 栈帧踩穿 16 KB
+内核栈、覆盖邻接 bss 的 `formats[]`），但本条不是栈越界，写入者仍未知。
+
+**处置**：`fix/vfs-contract` **暂不合并**（分支保留，契约/门禁/只读设备本身已在其基线上
+验收通过）；集成交付只带 diag / OBS-07 修复 / crash_ctx 三条。
+
+**证据**：`evidence-integration/run-default-full.log`（去 VFS 后正常）、
+`evidence-integration/run-diag-hoisted.log`；`fix/vfs-contract` 分支的
+`docs/design/VFS_CONTRACT_LANDING.md` §9.1（KUNIT 对照与探针窗口）。
+
+**下一步**：在一棵"既复现又最小"的树上用写保护毒页 + 数据断点定位写入者；定位后再评估
+VFS 分支是可直接合并还是需要先修 kheap/PAE。
 
 ### 64 位空 Enter 拒登（预期行为，非回归）
 

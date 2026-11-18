@@ -1,0 +1,51 @@
+[KTEST] === Auto-run all kunit suites ===
+[KUNIT-FAIL]  syscall deep /syscall table complete
+[KUNIT-FAIL]  user scenario / boot complete 
+[KUNIT-FAIL]  user scenario / interrupts active 
+[KUNIT-FAIL]  user scenario / datetime 
+[KUNIT-FAIL]  integration / flow syscall seq 
+[KUNIT-FAIL]  security E2E / boundary max size 
+[KTEST] RESULT: FAIL
+[AUTO] fork-test start
+[AUTO] fork-test done
+[AUTO] linuxhello start
+Hello from Linux ELF on HEPU!
+[AUTO] linuxhello done
+[AUTO] linuxc start
+[AUTO] linuxc done
+[AUTO] linuxbrk start
+[AUTO] linuxbrk done
+[AUTO] linuxcrt start
+[AUTO] linuxcrt done
+[AUTO] noent probe start
+[AUTO] noent probe done
+[AUTO] winhello.exe start
+[AUTO] winhello.exe done
+[AUTO] winargs.exe start
+[AUTO] winargs.exe done
+[AUTO] macho_demo start
+[AUTO] macho_demo done
+[AUTO] hello-rust start
+[AUTO] hello-rust done
+[AUTO] rust-cat start
+[AUTO] rust-cat done
+[AUTO] rust-echo start
+[AUTO] rust-echo done
+[AUTO] rust-sysinfo start
+[AUTO] rust-sysinfo done
+[AUTO] rust-fs-client start
+[AUTO] rust-fs-client done
+[AUTO] ipc-e2e-test start
+[AUTO] ipc-e2e-test done
+[AUTO] file-server-e2e-test skipped
+[AUTO] socket-test start
+[AUTO] socket-test done
+[AUTO] gfxtest start
+[AUTO] gfxtest done
+[AUTO] ALL DONE
+[AUTO] PAE full validation start...
+[AUTO] pae_test done
+[AUTO] pae_proc_test done
+[AUTO] pae_compat_test done
+[AUTO] PAE validation complete
+[AUTO] desktop preview skipped (desktop moved to hpdesk)
