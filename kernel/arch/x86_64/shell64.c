@@ -3286,11 +3286,21 @@ static void shell_cmd_tls12(const char *args)
     else        vga_puts("tls12: probe failed\n");
 }
 
+static void shell_cmd_sysprof(const char *args)
+{
+    /* A-3: 按 syscall 号输出「调用次数 + 单次平均周期数」，用于建立延迟基线。 */
+    extern void a3_sc_prof_dump(int limit);
+    (void)args;
+    vga_puts("sysprof: per-syscall latency (TSC cycles)\n");
+    a3_sc_prof_dump(24);
+}
+
 /* 命令表 */
 static shell_command_t shell_commands[] = {
 
 
     {"tls12", shell_cmd_tls12},
+    {"sysprof", shell_cmd_sysprof},
     {"help", shell_cmd_help},
     {"hepu", shell_cmd_hepu},
     {"devmode", shell_cmd_devmode},

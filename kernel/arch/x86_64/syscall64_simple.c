@@ -105,11 +105,48 @@ extern int64_t syscall64_dispatch(int number, int64_t arg1, int64_t arg2,
  * 于是 errno=-1 的正常调用被误判成未知系统调用（见 g_syscall64_handled）。 */
 extern int syscall64_last_handled(void);
 
+
+/* ============================================================================
+ * A-3 syscall 基准（NEXT_PHASE_PLAN 主线 A 第三项）
+ * 按 syscall 号累计「单次调用周期数」与「调用次数」。
+ * 只记 0..255 号（HepuOS 的 native 号都在此范围内，更大的号不统计）。
+ * 口径：TSC 周期，QEMU 下不代表真机，只做相对比较。
+ * ========================================================================== */
+#define A3_SC_SLOTS 256u
+static uint64_t a3_sc_cycles[A3_SC_SLOTS];
+static uint64_t a3_sc_calls[A3_SC_SLOTS];
+
+static uint64_t a3_rdtsc(void)
+{
+    uint32_t lo, hi;
+    __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi));
+    return ((uint64_t)hi << 32) | (uint64_t)lo;
+}
+
+/* 串口输出前 N 个"调用次数非零"的号；由 shell 命令 sysprof 调用 */
+void a3_sc_prof_dump(int limit)
+{
+    extern void serial_puts(uint16_t, const char*);
+    extern void serial_puthex(uint16_t, uint32_t);
+    int shown = 0;
+    for (uint32_t i = 0; i < A3_SC_SLOTS && shown < limit; i++) {
+        if (!a3_sc_calls[i]) continue;
+        serial_puts(0x3F8, "[A3] sys="); serial_puthex(0x3F8, (uint32_t)i);
+        serial_puts(0x3F8, " calls=");   serial_puthex(0x3F8, (uint32_t)a3_sc_calls[i]);
+        serial_puts(0x3F8, " avgK=");
+        serial_puthex(0x3F8, (uint32_t)(a3_sc_cycles[i] / (a3_sc_calls[i] * 1000ull)));
+        serial_puts(0x3F8, "\n");
+        shown++;
+    }
+    if (!shown) serial_puts(0x3F8, "[A3] no samples yet\n");
+}
+
 /* 系统调用处理函数 */
 uint64_t syscall_handler_64(uint64_t syscall_num, uint64_t arg1, uint64_t arg2,
                             uint64_t arg3, uint64_t arg4, uint64_t arg5,
                             uint64_t arg6)
 {
+    uint64_t a3_t0 = a3_rdtsc();
     /* 优先使用完整系统调用分发（POSIX兼容） */
     int64_t result = syscall64_dispatch((int)syscall_num,
                                          (int64_t)arg1, (int64_t)arg2,
@@ -119,6 +156,10 @@ uint64_t syscall_handler_64(uint64_t syscall_num, uint64_t arg1, uint64_t arg2,
      * 命中表就算处理过 —— 哪怕处理结果是 errno=-1，也要原样交给用户态。
      * 只有真正没被处理的号，才落到下面的 Hepu 扩展分支。 */
     if (syscall64_last_handled()) {
+        if (syscall_num < A3_SC_SLOTS) {
+            a3_sc_cycles[syscall_num] += a3_rdtsc() - a3_t0;
+            a3_sc_calls[syscall_num]++;
+        }
         return (uint64_t)result;
     }
 
