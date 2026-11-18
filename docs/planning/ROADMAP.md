@@ -1,8 +1,8 @@
 ---
 title: 赫普OS 开发路线图（唯一优先级来源）
 status: active
-sys_version: 0.58.0
-updated: 2026-11-12
+sys_version: 0.62.0
+updated: 2026-11-18
 owner: planning
 source_of_truth: kernel/arch/x86_64/Makefile
 supersedes: DEVELOPMENT_ROADMAP.md, PRIORITY_ROADMAP.md, X86_64_DEVELOPMENT_PLAN.md
@@ -13,7 +13,7 @@ supersedes: DEVELOPMENT_ROADMAP.md, PRIORITY_ROADMAP.md, X86_64_DEVELOPMENT_PLAN
 > 本文件为 **唯一优先级来源**。每条一行，带源码落点，避免腐化。
 > 状态定义：未开始 | 进行中 | 验证中 | ✅ 已完成（已完成项完整索引见 `status/VERSIONING.md`）。
 > 事实源：`kernel/arch/x86_64/Makefile` 中实际编入的 C_SOURCES/ASM_SOURCES。
-> 上次全面修订：2026-11-01（对齐 0.54.6 实况，基于 `syscall64_full.c` dispatch 表逐行核对）。
+> 上次全面修订：2026-11-18（对齐 0.62.0 实况；逐条依据见 `docs/planning/ROADMAP_AUDIT_2026-11-18.md`）。
 
 ---
 
@@ -21,16 +21,16 @@ supersedes: DEVELOPMENT_ROADMAP.md, PRIORITY_ROADMAP.md, X86_64_DEVELOPMENT_PLAN
 
 | # | 事项 | 源码落点 | 依据 | 状态 | 验收 |
 |---|------|---------|------|------|------|
-| P0-1 | 安装器闭环：MBR+mkfs+引导区+内核拷贝 | `user/apps/install64/install64.c` | STORAGE_MEMORY_PLAN | ✅ **代码完成 (v0.19.2)**，待真机双盘验证 | 空盘装完可重启进桌面 |
-| P0-2 | 安全地基：地址空间隔离 / SMEP / SMAP / W^X / fork COW | `user_aspace64.c` / `vmm64.c` / `irq64_simple.c` / `user_access64.c` / `swap64.c` | AUDIT_64BIT + OPEN_BUGS SEC-01/02/04/05/07/18 | ⚠️ **隔离主路径已完成；fork/clone 地址空间复制与部分安全项未闭环**。已完成（SEC-01 主路径）：每进程私有 PML4/PDPT 默认开（`Makefile:205` `USER_ISOLATION ?= 1`）、SMEP/SMAP 按 CR4 真实状态门控、brk 分页 + EFER.NXE + PT_NX（用户堆 W^X）、ELF 边界检查 + 用户指针逐页校验、ring3 异常只终止自身。边界：物理内存 >1GB 时内核恒等映射覆盖用户窗口，自动退回旧模式（`user_aspace64.c:76-77`）。未闭环（SEC-02 部分）：COW 缺页框架 `vmm64_try_cow`（`vmm64.c:432-457`，PAGE_COW bit9）在单进程/缺页路径可用；fork 已接入该框架（`uaspace_fork_copy` 深拷贝 PDPT/PD/PT + 物理页共享 + 清 W + `UA_COW`，`user_aspace64.c:165`，由 `sys_fork` 调用 `syscall64_full.c:1875`）；**clone 未实现**——`sys_clone` 原偏移全错、空实现，v0.57.1 改为返回 ENOSYS；原共享父页表指针（`syscall64_full.c:931` `child+24 = parent page_table`），未做私有副本也未打 COW 标记。仍待解决：SEC-04 capability/uid 能力模型未建（裸盘/reboot/mkfs 仅 PID==0 临时闸；真实用户进程 PID 恒 ≥100，`user_process.c:289/629`）；SEC-05 `sys_readdir` 静态 `names[64][256]`/`types[64]` 不可重入（`syscall64_full.c:1606-1607`）；SEC-07 路径 ≥255 截断而非拒绝（`syscall64_full.c:451`）；SEC-18 ext2 偶发挂死根因未复现。 | 用户程序直接访问内核地址触发 #PF 且只终止该进程；fork/clone 私有副本与能力模型为后续项 |
-| P0-3 | 高 LBA 读回 / USB 大容量存储写路径 / sendkey 验证 | `ext2_64.c` / `usb64.c` / `keyboard64.c` | VERSIONING 已知限制 | ⚠️ **sendkey QEMU 端到端已验证；存储读写与真机仍待验证**。sendkey：PS/2 链路每次按键 `g_kbd_irq_count` +2（`keyboard64.c:144/148`），环形缓冲 head/tail 前移并被消费（`keyboard64.c:33-34/277-282`）；HMP `sendkey 2` 使 OOBE 从 1/4 推进到 2/4（像素差 73616 px），账户页输入 h/e/p/u 回显 "hepu"（`tools/gui_test.py:173/221-222`）；挂 `-device piix3-usb-uhci -device usb-kbd` 后走 USB HID 队列同样可用；OOBE 语言页只绑定数字键 1/2（Tab/方向键/回车在该页未绑定属应用设计），真机仍待验证。控制器口径：64 位 `usb64.c` 先探 UHCI（PIIX3 0x7020/0x7112，`usb64.c:342-343`），无则回退 EHCI（`ehci64.c`）/XHCI（`xhci64.c`，`usb64.c:347/357-358`）；Makefile:102-104 编 usb64/ehci64/xhci64。USB BOT 写路径 `usb_storage_write_sectors`（`usb64.c:560`，挂 `storage_hal64.c:97-98`）代码已在，真机写盘待验证；高 LBA 读回待真机。 | sendkey 真机通过；USB 写盘与高 LBA 实机通过 |
+| P0-1 | 安装器闭环：MBR+mkfs+引导区+内核拷贝 | `user/apps/install64/install64.c` | STORAGE_MEMORY_PLAN；VERSIONING 0.60.7 批次 OPEN-04 | ✅ **QEMU 端到端已闭环 (0.60.7)**：装好的盘可单独 UEFI 启动进桌面（`NONBLACK=2073597`，fsck clean 74/30720 files，含 `/bin` 27 个 ELF）；**真机双盘验证仍待做** | 空盘装完可重启进桌面（QEMU 已验，真机待验） |
+| P0-2 | 安全地基：地址空间隔离 / SMEP / SMAP / W^X / fork COW | `user_aspace64.c` / `vmm64.c` / `irq64_simple.c` / `user_access64.c` / `swap64.c` | AUDIT_64BIT + OPEN_BUGS SEC-01/02/04/05/07/18 | ⚠️ **隔离主路径已完成；fork/clone 地址空间复制与部分安全项未闭环**。已完成（SEC-01 主路径）：每进程私有 PML4/PDPT 默认开（`Makefile:205` `USER_ISOLATION ?= 1`）、SMEP/SMAP 按 CR4 真实状态门控、brk 分页 + EFER.NXE + PT_NX（用户堆 W^X）、ELF 边界检查 + 用户指针逐页校验、ring3 异常只终止自身。边界：物理内存 >1GB 时内核恒等映射覆盖用户窗口，自动退回旧模式（`user_aspace64.c:76-77`）。未闭环（SEC-02 部分）：COW 缺页框架 `vmm64_try_cow`（`vmm64.c:432-457`，PAGE_COW bit9）在单进程/缺页路径可用；fork 已接入该框架（`uaspace_fork_copy` 深拷贝 PDPT/PD/PT + 物理页共享 + 清 W + `UA_COW`，`user_aspace64.c:165`，由 `sys_fork` 调用 `syscall64_full.c:1875`）；**clone 未实现**——`sys_clone` 原偏移全错、空实现，v0.57.1 改为返回 ENOSYS；原共享父页表指针（`syscall64_full.c:931` `child+24 = parent page_table`），未做私有副本也未打 COW 标记。仍待解决（2026-11-18 按维度拆分复核）：**SEC-04 能力对象模型已建，uid/凭据主体维度未闭环**：能力侧 `kernel/security/capability.c`（32/共享）+ `kernel/arch/x86_64/capability64.c` 已有 mint/derive/revoke/check + 代际失效（`generation` 递增使旧句柄失效，`capability64.c:117-123/201-202`），`capability64.c` 编入 64 位 Makefile:66；拒绝即审计环 `cap_audit_rec_t`（256 条，只记拒绝）+ `SYS_CAP_AUDIT`（commit `bb5565b`、`95eed32`；环实现 `capability64.c:159-167`）。未闭环：① 能力主体按 `domain_id` 绑定，未与 uid 主体绑定；② 凭据是全局静态 `g_cred_uid/gid/euid/egid/umask`（`syscall64_full.c:630-634`），chmod/chown/setuid/setgid 为最小实现，未做 per-process 凭据继承（fork 后仍共享全局凭据，注释 `syscall64_full.c:628`）；③ 高危闸（裸盘读写/mkfs/reboot）仍是 `PID==0` 或安装器文件名白名单（`syscall_installer_allowed`，`syscall64_full.c:31-39`；安装器判定 `user_process_is_installer`，`user_process.c:2302`），尚未改由 capability check 放行；真实用户进程 PID 恒 ≥100（`user_process.c:374/700`）。**SEC-05 readdir 静态表已撤，可重入性部分残留**：0.60.7 批次移除 `names[64][256]`/`types[64]` 16KB 常驻 BSS，改为调用期 `kmalloc/kfree`，栈帧 2360→360B（`syscall64_full.c:1562-1598`）；残留：仍由全局 `g_readdir_lock` 串行、内部打包上限 2048B。SEC-07 路径 ≥255 截断而非拒绝（`syscall64_full.c` 路径拷贝处，具体行号待核实）；SEC-18 ext2 偶发挂死根因未复现。 | 用户程序直接访问内核地址触发 #PF 且只终止该进程；fork/clone 私有副本与能力模型为后续项 |
+| P0-3 | 高 LBA 读回 / USB 大容量存储写路径 / sendkey 验证 | `ext2_64.c` / `usb64.c` / `keyboard64.c` | VERSIONING 已知限制；0.60.7 驱动四域实测批次 | ⚠️ **sendkey QEMU 端到端已验证；0.60.7 驱动四域（xHCI/AHCI/E1000/HPET）实测闭环**（修 xHCI BAR0 64 位取值、AHCI 四处 FIS 缺陷、E1000 注册误判、HPET 校准基准）；**USB 写盘与高 LBA 真机读回仍待验证**。sendkey：PS/2 链路每次按键 `g_kbd_irq_count` +2（`keyboard64.c:144/148`），环形缓冲 head/tail 前移并被消费（`keyboard64.c:33-34/277-282`）；HMP `sendkey 2` 使 OOBE 从 1/4 推进到 2/4（像素差 73616 px），账户页输入 h/e/p/u 回显 "hepu"（`tools/gui_test.py:173/221-222`）；挂 `-device piix3-usb-uhci -device usb-kbd` 后走 USB HID 队列同样可用；OOBE 语言页只绑定数字键 1/2（Tab/方向键/回车在该页未绑定属应用设计），真机仍待验证。控制器口径：64 位 `usb64.c` 先探 UHCI（PIIX3 0x7020/0x7112，`usb64.c:342-343`），无则回退 EHCI（`ehci64.c`）/XHCI（`xhci64.c`，`usb64.c:347/357-358`）；Makefile:102-104 编 usb64/ehci64/xhci64。USB BOT 写路径 `usb_storage_write_sectors`（`usb64.c:560`，挂 `storage_hal64.c:97-98`）代码已在，真机写盘待验证；高 LBA 读回待真机。 | sendkey 真机通过；USB 写盘与高 LBA 实机通过 |
 | P0-4 | 消除硬编码 PROJECT_ROOT | `kernel/arch/x86_64/Makefile` | 实测 | ✅ **已完成 (v0.18.5)** | 换路径直接 make |
 | P0-5 | 蓝牙输入栈（USB BT 适配器 HCI/L2CAP/HID-over-GATT） | `kernel/arch/x86_64/usb64_bt.c`（待建） | 用户需求：无线鼠标/键盘（2.4G HID 已支持，蓝牙鼠标需 BT 栈） | 未开始 | 蓝牙鼠标可配对并驱动指针 |
 | P0-6 | 驱动在线下载前的签名校验 | `kernel/arch/x86_64/kmod64.c` + crypto 模块 | P0-2 已编入 crypto.c（XTEA），需扩到公钥验证 | 未开始 | 未签名驱动被拒绝加载 |
 
 > **依赖说明**：
 > - P0-5 蓝牙栈与 P0-6 驱动签名涉及不可信输入，须带 fuzz 与签名校验
-> - P0-2 安全地基 2026-11-11 复核：隔离主路径已关闭（SEC-01）；COW 缺页框架已就位（`vmm64.c:432-457` + `swap64` 缺页路径），fork 私有副本已接入 COW（`uaspace_fork_copy`），clone 返回 ENOSYS（SEC-02 部分）；进程级 swap 换出未接入内存压力主循环（P1-4）；capability 模型、readdir 静态表、路径长度策略、SEC-18 根因仍待解决
+> - P0-2 安全地基 2026-11-18 复核：隔离主路径已关闭（SEC-01）；COW 缺页框架已就位（`vmm64.c:432-457` + `swap64` 缺页路径），fork 私有副本已接入 COW（`uaspace_fork_copy`），clone 返回 ENOSYS（SEC-02 部分）；进程级 swap 换出未接入内存压力主循环（P1-4）；能力对象模型 + 拒绝审计环已建（SEC-04 能力侧），uid/凭据主体绑定、per-process 凭据继承、高危闸改走 capability check 仍待解决；readdir 16KB 静态表已撤（SEC-05 部分残留：全局锁串行）；路径长度策略、SEC-18 根因仍待解决
 
 ---
 
@@ -38,7 +38,7 @@ supersedes: DEVELOPMENT_ROADMAP.md, PRIORITY_ROADMAP.md, X86_64_DEVELOPMENT_PLAN
 
 | # | 事项 | 源码落点 | 状态 |
 |---|------|---------|------|
-| P1-1 | syscall 集完善（fork/execve/waitpid/pv/sigaction/kill/mmap/munmap/mprotect/pipe/ioctl/stat/readdir/lseek/chdir/dup/umask/gettimeofday/socket 全套/epoll/futex/clock_gettime/...） | `syscall64_full.c`（dispatch 表 100+ 项，号表见 `specs/SYSCALL_ABI.md` 源码生成） | ⚠️ **主体完成，非全部**（2026-11-12 复核）：pipe/waitpid/ioctl/sigaction/kill/futex/clock_gettime 已有实现；**`epoll_create`/`epoll_ctl`/`epoll_wait`/`eventfd2` 仍是桩返回 0**（`syscall64_full.c:1268-1273`）——注册≠实现，依赖 epoll 的程序会退化或空转；`sys_sleep` 为关中断忙等。原"✅ 已完成"口径已按此更正 |
+| P1-1 | syscall 集完善（fork/execve/waitpid/pv/sigaction/kill/mmap/munmap/mprotect/pipe/ioctl/stat/readdir/lseek/chdir/dup/umask/gettimeofday/socket 全套/epoll/futex/clock_gettime/...） | `syscall64_full.c`（dispatch 表 100+ 项，号表见 `specs/SYSCALL_ABI.md` 源码生成） | ⚠️ **主体完成，非全部**（2026-11-18 复核）：pipe/waitpid/ioctl/sigaction/kill/futex/clock_gettime 已有实现；**`epoll_create`/`epoll_ctl`/`epoll_wait`/`eventfd2`/`pselect6` 仍是静默桩返回 0**（`syscall64_full.c:1255-1263`）——注册≠实现，依赖 epoll 的程序会退化或空转；`sys_sleep` 为忙等（`syscall64_full.c:2122`，计数空转非 hlt 让出）。epoll/eventfd2/pselect6 的真实现或显式 ENOSYS 改造见本次 B 段提交 |
 | P1-2 | ELF64 装载 + Linux 兼容层 | `elf64.c` + `syscall64_full.c linux_map[350]` | ✅ **基本完成**：PIE/ET_DYN 装载已跑通（装载偏置 + RELATIVE + SysV 初始栈 + auxv AT_PHDR/AT_ENTRY/AT_PHENT）；**PT_INTERP 交由 P1-7 处理**（内核加载解释器、ET_DYN 的 RELATIVE 交给用户态 ld.so）；IRELATIVE 由内核调用 resolver 写回 GOT；**glibc static-PIE 已端到端跑通并正常 exit_group 退出**（入口 GPR 按 Linux ABI 清零，SEC-10/SEC-13）；ABI 判定按进程 `env_type`（ENV_NATIVE / ENV_LINUX_COMPAT），`.note.ABI-tag` 通道已修复 |
 | P1-3 | TLS/HTTPS 网络加密 | `kernel/net/tls_*.c` + `kernel/crypto/` | ⚠️ **部分落地**：crypto 11 个文件（XTEA/XTS + AES-128/256-GCM/CBC、SHA-256/512、HMAC、HKDF、ECDHE、RSA、X.509）已编入 Makefile:85-95；TLS 5 个文件（`tls.c`/`tls_record.c`/`tls_crypto.c`/`tls_handshake.c`/`tls_client.c`，2327 行）已编入 Makefile:96-100 并在启动期 `hepu_tls_init()`（`kernel_main_64.c:1107`）初始化；但 HTTP 客户端 `net64_http.c` 无 https/443 路由，顶层会话为模拟握手桩，端到端 HTTPS 未打通 |
 | P1-4 | swap / 内存压力闭环（进程级换出） | `swap64.c` + `memory_pressure.c` | ⚠️ **框架已有但未闭环**：`vmm64_swap_out`/`swap_in` 原语 + 槽位图管理 + swap.hepu 懒扩展（ext2 文件后端）+ 缺页自动换入路径均已实现；但 `memory_pressure.c` 只回收 ext2 块缓存，未在压力等级 1/2 触发进程页换出（无调用者） |
@@ -64,7 +64,7 @@ supersedes: DEVELOPMENT_ROADMAP.md, PRIORITY_ROADMAP.md, X86_64_DEVELOPMENT_PLAN
 | P2-4 | 文件管理器完善 | `filemgr64.c`（278 行） | ⚠️ **部分**：列表/网格两视图 + 右键菜单 + 搜索过滤 + USB 挂载/卸载已接线；**无共享、无图标预览、无完整右键菜单** |
 | P2-5 | 系统设置完善 | `syssettings64.c` | ⚠️ **部分**：语言切换 + 驱动管理 + 通知位置 + 注册表/文件关联管理行已接线；**无权限控制、无软件管理面板、无文件关联完整编辑器** |
 | P2-6 | 多语言与系统语言切换 | `l10n64.c`（103 行） | ⚠️ **部分**：中英字符串表 + 语言切换接线；接入面窄（只有 hepushell 部分组件用） |
-| P2-7 | Dock 占位应用落地（Calculator → Notes → About） | `hepushell.c` Dock 渲染 | ❌ **未开始**：5 个占位应用（Browser/Editor/Calculator/Notes/About）渲染 "App content rebuilding"；Calculator 最简单可先做 |
+| P2-7 | Dock 占位应用落地（Calculator → Notes → About） | `hs_apps.c` / `notes64.c` / `desktop64.c` Dock 启动请求（`desktop64.c:353`） | ⚠️ **部分（2026-11-18 复核）**：Notes 内核实现已落地（`notes64.c`，启动期 `notes64_init()` 见 `kernel_main_64.c:1237`，经终端 `notes` 命令调用，`term64.c:244/248/252`）；Editor 有窗口实现（`hs_apps.c:4363/4380`）。**待核实**：Dock 图标点击到 GUI 应用的完整接线，以及 Browser/Calculator/About 是否仍渲染占位；旧"5 个全占位"口径不再沿用 |
 
 ---
 
@@ -73,7 +73,7 @@ supersedes: DEVELOPMENT_ROADMAP.md, PRIORITY_ROADMAP.md, X86_64_DEVELOPMENT_PLAN
 | # | 事项 | 源码落点 | 状态 |
 |---|------|---------|------|
 | P3-1 | 兼容层：Linux/Windows/Android/Apple 软件与驱动 | `kernel/shared/compat/` | ❌ **规划中**：Linux 兼容层按进程 env_type 判定已做；Windows 兼容层只有 `gen_winhello.py` 生成器（无加载器）；Mach-O 有 `gen_macho.py` 生成器（无加载器） |
-| P3-2 | GPS 定位 + 天气联网显示 | `gps64.c`（已编入 Makefile） | ⚠️ **部分**：gps64.c 存在但无任何网络调用；天气显示依赖 HTTP（已做）+ 无 TLS |
+| P3-2 | GPS 定位 + 天气联网显示 | `gps64.c`（已编入 Makefile）；天气取数路径在 `hpdesk.c` | ⚠️ **部分**：gps64.c 存在但无任何网络调用（源码 grep 无 tcp/http/recv/send）；**天气取数已打通**（BUG-59，commit `308e72b`，换国内源 + 解析适配 + 失败重试），但仍走明文 HTTP、无 TLS（P1-3） |
 | P3-3 | 驱动在线下载（联网后自动匹配安装） | `kmod64.c`（已编入 Makefile） | ❌ **规划中**：kmod64.c 存在但无 HTTP 下载路径；依赖 P1-3 TLS 签名校验 |
 | P3-4 | Rust 用户态服务 | `user/rust/` 目录 | ❌ **未接入构建**：15+ crate 存在但 `user/Makefile` 无 cargo 目标、`make_single_img64.sh` 不打包 Rust 产物；`hello-rust.elf` 是历史产物 |
 | P3-5 | 安全审计闭环（crypto/security 模块扩到 AES/SHA/RSA/TLS） | `kernel/crypto/` + `kernel/net/tls_*.c` | ⚠️ **部分**：AES-GCM/SHA-256/RSA/X.509 等套件代码已编入（Makefile:85-95），TLS 协议代码已编入但未接入 HTTP 调用链；证书链校验、端到端 HTTPS 仍待闭环 |
@@ -167,12 +167,31 @@ supersedes: DEVELOPMENT_ROADMAP.md, PRIORITY_ROADMAP.md, X86_64_DEVELOPMENT_PLAN
 | 安装向导闭环（MBR+mkfs+引导区+内核拷贝） | v0.19.2 | `install64.c` |
 | crypto.c（XTEA + XTS）编入 64 位 | v0.19.6 | `kernel/crypto/crypto.c` |
 
+### 多架构移植（arch_port + ARM64 M0–M1d）
+
+> 第二架构线，2026-11-18 按 `kernel/arch/aarch64/` 源码与 HEAD 提交核对。
+
+| 里程碑 | 状态 | 源码落点 / 依据 |
+|--------|------|----------------|
+| arch_port 抽象层（`arch_ticks` / `arch_console_puts` / `arch_poweroff` 三移植点，刻意避开已被 H-HAL 占用的 `hal_*` 前缀） | ✅ 已落地（commit `3afe24d` 引入移植点、`889b8cb` 第二架构实现） | 声明 `kernel/include/arch_port.h`；实现 `arch/x86_64/arch_port_x86_64.c`（64 位 Makefile:159）、`arch/x86/arch_port_x86_32.c`、`arch/aarch64/arch_port_aarch64.c`（41 行：CNTVCT_EL0 / PL011 @0x09000000 / PSCI SYSTEM_OFF）。注：`arch_port.h:19` 注释仍写 arm64「待建」，与实况不符，待同步 |
+| ARM64 M0：UEFI 引导 + GOP 800×600 帧缓冲填色 + PSCI 关机 | ✅ 已通（`b0e1809`） | `arch/aarch64/m0/hepu_m0_a64.c`；PE 包装 `tools/pe_flatten_aarch64.py`；串口证据见 `arch/aarch64/README.md` |
+| M1a：自建页表并切 TTBR0_EL1（48 位布局） | ✅（`2b64fd0`） | `arch/aarch64/m1/m1.c` |
+| M1b：排除 WXN 假设，锁定 tlbi 后崩溃为真崩溃（非串口静音/非 2MB block 属性错） | 实验结论（`f79826a`） | `m1.c`；结论记录 `arch/aarch64/README.md` M1b 段 |
+| M1c：4KB 页（L3）白名单映射 + VBAR 异常向量，tlbi 后存活、QEMU exit=0 | ✅（`54c7bb6`） | `m1.c` |
+| M1d-1：GetMemoryMap 驱动全 RAM 混合映射（整 2MB 对齐 L2 block，首尾不齐 L3 4KB 页）+ 远端 RAM 写读回 | ✅（`391e1db`） | `m1.c` |
+| M1d-2：GIC 版本判定 + 虚拟定时器 PPI27 中断计数（EOIR 后重 arm） | ✅（`a60ffdb`） | `m1.c` GICD/GICC @0x08000000/0x08010000 |
+| M1d-3：ExitBootServices + 描述符静态副本 + 自有 bss 栈切换 | ❌ **HEAD 未做**；工作区另有未提交的 M1d-3 草稿（新栈 + ExitBootServices），结论待核实 | 计划项见 `m1.c:7`；HEAD 代码内未见 `ExitBootServices` 调用 |
+| 复用层接入：`shared/desktop`、`gfx64` 绘制基元接到 GOP 帧缓冲出界面 | ❌ 未开始 | — |
+
+> 边界说明：截至 M1d-2，ARM64 仍运行在固件 EL1 环境；M1d-3 完成前未切自有 bss 栈、未退出 Boot Services。32 位根 Makefile 已排除 `arch/aarch64/%` 源文件（0.62.0 批次第 6 项）。
+
 ---
 
 ## 变更日志
 
 | 日期 | 变更 |
 |------|------|
+| 2026-11-18 | **对齐 0.62.0 实况（A 段事实修正）**：front matter sys_version 0.58.0→0.62.0、updated→2026-11-18；P0-1 安装器标 QEMU 端到端闭环（0.60.7 OPEN-04，`NONBLACK=2073597`），真机双盘仍待验；P0-2 SEC-04 拆分——能力对象模型 + 拒绝审计环已建（`capability.c`/`capability64.c`，`bb5565b`/`95eed32`），uid/凭据主体绑定、per-process 凭据继承、高危闸改走 capability check 仍待解决；SEC-05 readdir 16KB 静态表已撤（0.60.7），残留全局锁串行；P0-3 补 0.60.7 驱动四域（xHCI/AHCI/E1000/HPET）实测闭环；P1-1 桩行号更新到 `syscall64_full.c:1255-1263` 并补 pselect6；P3-2 天气取数打通（BUG-59 `308e72b`）仍无 TLS；P2-7 Notes/Editor 部分落地；里程碑索引新增「多架构移植」小节（arch_port + ARM64 M0–M1d）。逐条依据见 `ROADMAP_AUDIT_2026-11-18.md`。 |
 | 2026-11-11 | **跨文档对齐 OPEN_BUGS 台账**：P0-2 去掉"阶段 1+2 全部完成"口径，隔离主路径（SEC-01）标已完成并附 `Makefile:205`/`user_aspace64.c:76-77` 证据；fork/clone 地址空间复制/COW 降级为 SEC-02 部分（`vmm64.c:432-457`、`syscall64_full.c:931`）；补列 SEC-04/05/07/18 待解决项。P0-3：sendkey 标 QEMU 端到端已验证（PS/2 + USB HID 两链路），真机待验；控制器口径更正为先探 UHCI、无则 EHCI/XHCI 回退；USB 写路径待真机。里程碑索引：fork COW 改部分、epoll/eventfd2 标桩、PT_INTERP 改"解释器已落地"。 |
 | 2026-11-01 | **全面修订至 0.54.6 实况**：sys_version 从 0.33.1 → 0.54.6；P1-1 状态从 "⏳ pipe/signal/waitpid/ioctl（卡 SEC-03 fork）" 改为 "✅ 已完成"（dispatch 表逐行核对）；P0-2 安全地基明确阶段 1+2 全部完成；新增 P1-3 TLS/HTTPS 明确标注 crypto.c 只有 XTEA；新增 P1-4 swap 闭环状态从"进行中"细化为"框架已有但未闭环"；修正 over 10 处版本描述与 Makefile 实况对齐；新增"已完成"里程碑索引（6 大类） |
 | 原版本 | 初始版本（v0.33.1 口径，update 字段错误写 2026-11-05） |
