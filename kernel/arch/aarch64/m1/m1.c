@@ -992,6 +992,37 @@ efi_main(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE *st)
                 uart_puts("\n");
             }
 
+            /* ---- M2S 形状实验：同 ≈38400px、不同行数，验证「每行开销」 ----
+             * 400x96=96 行；96x400=400 行。同一个 present_region，50 帧去 5 预热。
+             * 96x400 放在 (350,120) 会临时压住标题区，测完统一重绘静态场景。 */
+            struct { uint32_t w, h, x, y; } SHAPES[2] = {
+                {400, 96, 200, 450},
+                {96, 400, 350, 120},
+            };
+            for (uint32_t si = 0; si < 2; si++) {
+                uint32_t sw = SHAPES[si].w, sh = SHAPES[si].h;
+                uint32_t sx = SHAPES[si].x, sy = SHAPES[si].y;
+                uint64_t sdu = 0; uint32_t sn = 0;
+                for (uint32_t f = 0; f < 50; f++) {
+                    __asm__ volatile("msr daifset, #2");
+                    uint64_t ds = cntvct();
+                    present_region(sx, sy, sw, sh, COL_ACCENT);
+                    uint64_t du = us_elapsed(ds);
+                    __asm__ volatile("msr daifclr, #2");
+                    if (f >= WARM) { sdu += du; sn++; }
+                }
+                uint64_t avg = sn ? sdu / sn : 0;
+                uint64_t px = (uint64_t)sw * sh;
+                uint64_t nsp = px ? avg * 1000 / px : 0;
+                uart_puts("[M2S] shape="); uart_dec(sw);
+                uart_puts("x"); uart_dec(sh);
+                uart_puts(" px="); uart_dec(px);
+                uart_puts(" rows="); uart_dec(sh);
+                uart_puts(" dirty_us="); uart_dec(avg);
+                uart_puts(" ns_per_px="); uart_dec(nsp);
+                uart_puts("\n");
+            }
+
             __asm__ volatile("msr cntv_ctl_el0, %0" :: "r"(0UL));
             __asm__ volatile("msr daifset, #2");
 
