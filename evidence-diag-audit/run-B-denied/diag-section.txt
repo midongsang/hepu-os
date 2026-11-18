@@ -1,0 +1,20 @@
+[AUDIT-PROBE] #1 ret=0x00000000 expect domain=0 handle=0 rights=0x1 reason=1
+[AUDIT-PROBE] #2 ret=0x00000000 expect domain=64 handle=0 rights=0x3 reason=4
+[权限审计：最近被拒绝的操作]
+  [debug-audit] raw syscall n=2
+  域    句柄 所需权利 原因
+  0      0      0x1        句柄无效/已撤销
+  64     0      0x3        域号越界
+  共 2 条拒绝记录
+
+[建议]
+  1. 9个模块需真机适配校准
+  2. 建议在目标设备上运行完整硬件诊断
+  3. 触屏/音频/USB/WiFi需H-DPK设备适配包
+  4. 核心模块全部正常，系统状态良好
+
+========================================
+  诊断完毕。系统归人，数据归己。
+========================================
+[SYSCALL] proc exit(code=0x00000000)
+[AUTO] diag hug_run rc=0x00000000
