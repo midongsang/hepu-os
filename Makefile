@@ -69,7 +69,9 @@ HP_DESK_DEPS = $(HP_DESK_SHARED) \
                $(KERNEL_DIR)/arch/x86_64/hsqml.c \
                $(KERNEL_DIR)/arch/x86_64/l10n64.c \
                $(KERNEL_DIR)/arch/x86_64/png64.c
-C_SRCS = $(filter-out $(KERNEL_DIR)/sched/scheduler.c $(KERNEL_DIR)/arch/x86_64/%,$(shell find $(KERNEL_DIR) -name "*.c")) $(HP_DESK_DEPS)
+# arch/aarch64 与 arch/x86_64 都是另一架构的源码，32 位构建必须排除，
+# 否则 `find kernel -name *.c` 会把它们也编进来（曾导致 build_v250 失败）。
+C_SRCS = $(filter-out $(KERNEL_DIR)/sched/scheduler.c $(KERNEL_DIR)/arch/x86_64/% $(KERNEL_DIR)/arch/aarch64/%,$(shell find $(KERNEL_DIR) -name "*.c")) $(HP_DESK_DEPS)
 
 # 兼容层（binfmt/ELF/PE/Mach-O/Darwin/Linux ABI）
 # 已从 kernel/ 迁出到 services/compat/：它原本靠 `find kernel -name *.c` 被顺带编进

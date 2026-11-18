@@ -104,4 +104,33 @@ int cap_list(capability_t *out, int max);
 /* 调试：列出某域的有效句柄，返回数量 */
 int cap_list_domain(int domain_id, handle_t *out, int max);
 
+/* ---- 授权审计（只在拒绝时记录，避免刷爆） ----
+ * 任何一次 cap_check/cap64_check 的拒绝都会留下一条定长记录，
+ * diag 服务可读取，用于回答"谁在什么时候被拒了、要什么、为什么"。 */
+#define CAP_AUDIT_RING            256   /* 环形缓冲条数 */
+
+enum cap_deny_reason {
+    CAP_DENY_HANDLE_INVALID = 1,  /* 句柄无效/已释放/代际过期 */
+    CAP_DENY_RIGHTS_SHORT   = 2,  /* 句柄权利不包含请求权利 */
+    CAP_DENY_EXCEED_BASE    = 3,  /* 句柄权利超出能力 base_rights */
+    CAP_DENY_DOMAIN_RANGE   = 4   /* 域号越界 */
+};
+
+typedef struct {
+    uint64_t ts;                  /* 单调时钟（无时钟时为 0） */
+    int32_t  domain_id;
+    int32_t  handle_idx;
+    uint32_t required_rights;
+    uint8_t  reason;              /* cap_deny_reason */
+} cap_audit_rec_t;
+
+/* 写一条审计（由 cap_check 内部调用，外部一般不需要直接用） */
+void cap_audit_record(int domain_id, int handle_idx, uint32_t required_rights, uint8_t reason);
+
+/* 统计已记录的拒绝条数（含被覆盖的） */
+uint32_t cap_audit_count(void);
+
+/* 按时间顺序（旧->新）拷出最多 max 条，返回实际条数 */
+int cap_audit_read(cap_audit_rec_t *out, int max);
+
 #endif /* HEPU_SHARED_CAP_H */

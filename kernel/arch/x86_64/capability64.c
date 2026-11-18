@@ -137,10 +137,56 @@ int cap64_revoke(int capability_id)
 
 int cap64_check(int domain_id, int handle_idx, uint32_t required_rights)
 {
+    if (domain_id < 0 || domain_id >= DOMAIN64_MAX_SLOTS ||
+        handle_idx < 0 || handle_idx >= CAP_HANDLES_PER_DOMAIN) {
+        cap_audit_record(domain_id, handle_idx, required_rights, CAP_DENY_DOMAIN_RANGE);
+        return 0;
+    }
     capability_t *cap = cap64_get_valid(domain_id, handle_idx);
-    if (!cap) return 0;
+    if (!cap) {
+        cap_audit_record(domain_id, handle_idx, required_rights, CAP_DENY_HANDLE_INVALID);
+        return 0;
+    }
     handle_t *h = &handle_tables[domain_id].handles[handle_idx];
-    return (h->rights_mask & required_rights) == required_rights;
+    if ((h->rights_mask & required_rights) != required_rights) {
+        cap_audit_record(domain_id, handle_idx, required_rights, CAP_DENY_RIGHTS_SHORT);
+        return 0;
+    }
+    return 1;
+}
+
+/* ---- 审计环（64 位独立一份，与 32 位同语义） ---- */
+static cap_audit_rec_t g_cap_audit64[CAP_AUDIT_RING];
+static uint32_t g_cap_audit64_head;
+static uint32_t g_cap_audit64_total;
+
+void cap_audit_record(int domain_id, int handle_idx, uint32_t required_rights, uint8_t reason)
+{
+    uint32_t idx = g_cap_audit64_head;
+    g_cap_audit64[idx].ts              = 0;
+    g_cap_audit64[idx].domain_id       = domain_id;
+    g_cap_audit64[idx].handle_idx      = handle_idx;
+    g_cap_audit64[idx].required_rights = required_rights;
+    g_cap_audit64[idx].reason          = reason;
+    g_cap_audit64_head = (idx + 1) % CAP_AUDIT_RING;
+    g_cap_audit64_total++;
+}
+
+uint32_t cap_audit_count(void)
+{
+    return g_cap_audit64_total;
+}
+
+int cap_audit_read(cap_audit_rec_t *out, int max)
+{
+    if (!out || max <= 0) return 0;
+    int n = 0;
+    uint32_t valid = g_cap_audit64_total < CAP_AUDIT_RING ? g_cap_audit64_total : CAP_AUDIT_RING;
+    uint32_t start = (g_cap_audit64_total < CAP_AUDIT_RING) ? 0 : g_cap_audit64_head;
+    for (uint32_t i = 0; i < valid && n < max; i++) {
+        out[n++] = g_cap_audit64[(start + i) % CAP_AUDIT_RING];
+    }
+    return n;
 }
 
 capability_t *cap64_get_valid(int domain_id, int handle_idx)

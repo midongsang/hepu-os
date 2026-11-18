@@ -147,15 +147,66 @@ capability_t *cap_get_valid(int domain_id, int handle_idx)
 
 int cap_check(int domain_id, int handle_idx, uint32_t required_rights)
 {
+    /* 域/句柄下标越界时不能落到 g_handles[...] 上，先挡掉并留痕 */
+    if (domain_id < 0 || domain_id >= DOMAIN_MAX_SLOTS ||
+        handle_idx < 0 || handle_idx >= CAP_HANDLES_PER_DOMAIN) {
+        cap_audit_record(domain_id, handle_idx, required_rights, CAP_DENY_DOMAIN_RANGE);
+        return 0;
+    }
+
     capability_t *cap = cap_get_valid(domain_id, handle_idx);
-    if (!cap) return 0;
+    if (!cap) {
+        cap_audit_record(domain_id, handle_idx, required_rights, CAP_DENY_HANDLE_INVALID);
+        return 0;
+    }
 
     handle_t *hdl = &g_handles[domain_id].handles[handle_idx];
     /* 句柄权利 ⊇ 请求权利，且句柄权利 ⊆ 能力 base_rights */
-    if ((hdl->rights_mask & required_rights) != required_rights) return 0;
-    if ((hdl->rights_mask & ~cap->base_rights) != 0) return 0;
+    if ((hdl->rights_mask & required_rights) != required_rights) {
+        cap_audit_record(domain_id, handle_idx, required_rights, CAP_DENY_RIGHTS_SHORT);
+        return 0;
+    }
+    if ((hdl->rights_mask & ~cap->base_rights) != 0) {
+        cap_audit_record(domain_id, handle_idx, required_rights, CAP_DENY_EXCEED_BASE);
+        return 0;
+    }
 
     return 1;
+}
+
+/* ---- 审计环（定长、无锁、单写多读） ---- */
+static cap_audit_rec_t g_cap_audit[CAP_AUDIT_RING];
+static uint32_t g_cap_audit_head;   /* 下一条写入位置 */
+static uint32_t g_cap_audit_total;  /* 累计条数（含被覆盖的） */
+
+void cap_audit_record(int domain_id, int handle_idx, uint32_t required_rights, uint8_t reason)
+{
+    uint32_t idx = g_cap_audit_head;
+    g_cap_audit[idx].ts              = 0;   /* 32 位侧暂无统一时钟，留 0 */
+    g_cap_audit[idx].domain_id       = domain_id;
+    g_cap_audit[idx].handle_idx      = handle_idx;
+    g_cap_audit[idx].required_rights = required_rights;
+    g_cap_audit[idx].reason          = reason;
+    g_cap_audit_head = (idx + 1) % CAP_AUDIT_RING;
+    g_cap_audit_total++;
+}
+
+uint32_t cap_audit_count(void)
+{
+    return g_cap_audit_total;
+}
+
+int cap_audit_read(cap_audit_rec_t *out, int max)
+{
+    if (!out || max <= 0) return 0;
+    int n = 0;
+    uint32_t valid = g_cap_audit_total < CAP_AUDIT_RING ? g_cap_audit_total : CAP_AUDIT_RING;
+    /* 从最旧的开始：当未写满时起点是 0，写满后起点是 head（最旧的那格） */
+    uint32_t start = (g_cap_audit_total < CAP_AUDIT_RING) ? 0 : g_cap_audit_head;
+    for (uint32_t i = 0; i < valid && n < max; i++) {
+        out[n++] = g_cap_audit[(start + i) % CAP_AUDIT_RING];
+    }
+    return n;
 }
 
 int cap_release(int domain_id, int handle_idx)
