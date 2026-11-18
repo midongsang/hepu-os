@@ -178,6 +178,39 @@ void bsod_text_mode(const char *reason, uint32_t isr_number,
     bsod_text_mode_ex(reason, isr_number, error_code, eip, cs, esp, 0, 0);
 }
 
+/* 图形模式绘制：崩溃时若 gfx 已初始化，直接在帧缓冲上画蓝底白字再 flip。
+ * 这条路径与桌面同源，QEMU/真机都能看到；文本模式作为 gfx 不可用时的兜底。 */
+static void bsod_gfx_draw(uint32_t isr_number, uint32_t error_code,
+                          uint32_t eip, uint32_t cs, uint32_t esp,
+                          uint32_t cr2, uint32_t eflags)
+{
+    char hb[11];
+    char sb[11];
+    int y = 6;
+
+    gfx_fillrect(0, 0, gfx_width, gfx_height, 1);
+    gfx_puts(6, y, "HEPU OS - DIAGNOSTIC REPORT", 15); y += 11;
+    gfx_puts(6, y, "------------------------------------------", 15); y += 12;
+    bsod_stop_code(isr_number, sb);
+    gfx_puts(6, y, "STOP: ", 15); gfx_puts(6 + 6*8, y, sb, 15); y += 10;
+    gfx_puts(6, y, "Exception: ", 15);
+    gfx_puts(6 + 11*8, y, isr_number < 32 ? bsod_exception_names[isr_number] : "Unknown", 15);
+    y += 12;
+    gfx_puts(6, y, "ERR=", 15); bsod_hex32(error_code, hb); gfx_puts(6 + 4*8, y, hb, 15);
+    gfx_puts(6 + 12*8, y, "CR2=", 15); bsod_hex32(cr2, hb); gfx_puts(6 + 16*8, y, hb, 15);
+    y += 10;
+    gfx_puts(6, y, "EIP=", 15); bsod_hex32(eip, hb); gfx_puts(6 + 4*8, y, hb, 15);
+    gfx_puts(6 + 12*8, y, "CS=", 15); bsod_hex32(cs, hb); gfx_puts(6 + 15*8, y, hb, 15);
+    y += 10;
+    gfx_puts(6, y, "ESP=", 15); bsod_hex32(esp, hb); gfx_puts(6 + 4*8, y, hb, 15);
+    gfx_puts(6 + 12*8, y, "EFL=", 15); bsod_hex32(eflags, hb); gfx_puts(6 + 16*8, y, hb, 15);
+    y += 12;
+    gfx_puts(6, y, "Hint: ", 15); gfx_puts(6 + 6*8, y, bsod_hint(isr_number), 15); y += 10;
+    gfx_puts(6, y, "log: /crash.log   run 'crashlog' after reboot", 15); y += 10;
+    gfx_puts(6, y, "system halted - please reboot", 15);
+    gfx_flip();
+}
+
 void bsod_text_mode_ex(const char *reason, uint32_t isr_number,
                        uint32_t error_code, uint32_t eip,
                        uint32_t cs, uint32_t esp, uint32_t cr2, uint32_t eflags)
@@ -187,6 +220,12 @@ void bsod_text_mode_ex(const char *reason, uint32_t isr_number,
     uint32_t frames[4];
     int nf;
     (void)reason;
+
+    /* gfx 可用则走图形绘制（与桌面同源，可见性最好） */
+    if (gfx_width > 0 && gfx_height > 0 && gfx_fb_addr) {
+        bsod_gfx_draw(isr_number, error_code, eip, cs, esp, cr2, eflags);
+        return;
+    }
 
     vga_set_color(VGA_COLOR_WHITE, VGA_COLOR_BLUE);
     vga_clear();
