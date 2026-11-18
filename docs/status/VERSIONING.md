@@ -1,7 +1,7 @@
 ---
 title: VERSIONING
 status: active
-sys_version: 0.61.0
+sys_version: 0.62.0
 updated: 2026-11-18
 owner: status
 source_of_truth: null
@@ -107,12 +107,30 @@ supersedes: null
 
 ## 当前版本
 
-**0.59.0**
+**0.62.0**
 - 重要版本：0
-- 默认版本：59
+- 默认版本：62
 - bug版本：0
 
 > 版本号以本文件 frontmatter `sys_version` 为唯一事实源。以下为历史迭代记录。
+
+**0.62.0 迭代内容（2026-11-18，多架构第一程 + 抽象层收口）**
+
+1. **ARM64 M0 达成**：UEFI 固件 → BOOTAA64.EFI → GOP 800×600 → 整屏填色 → PSCI 关机。
+   四个构建坑：objcopy 的 efi-app-aarch64 产出残缺 PE；正解是复用 crt0 已写的 PE 头
+   （`tools/pe_flatten_aarch64.py`）；必须 `--defsym=EFI_SUBSYSTEM=10`；必须补零到
+   `SizeOfImage`。QEMU 需 `-cpu max` + `-device ramfb`。
+2. **ARM64 M1 页表接管**：不能改 `TCR_EL1`（固件 48 位 T0SZ=16，改则当场失联）；
+   设备区必须非 cache；改 4KB 页（L0→L1→L2→L3）+ 先装 VBAR 再 `tlbi vmalle1` 热切
+   后**存活**（ALIVE + exit=0）。
+3. **M1d-1 全 RAM 映射**：GetMemoryMap 驱动，244 block + 5376 页 ≈ 509MB，低/远端 RAM
+   写读回均 OK。
+4. **arch_port 抽象**：arch_ticks/arch_console_puts/arch_poweroff 三移植点，x86_64 与
+   x86_32 各自实现；刻意避开已被 H-HAL 占用的 hal_* 前缀。
+5. **能力校验拒绝即审计**：cap_audit_rec_t（256 条环）+ SYS_CAP_AUDIT + diag 段；
+   只记拒绝不记放行。
+6. **修 32 位构建**：根 Makefile 的 C_SRCS 排除 arch/aarch64/%，否则 `find kernel` 会
+   把 aarch64 源码编进 32 位；constants.h 与 syscall.h 的 SYS_MAX 双源冲突一并统一为 238。
 
 **0.60.7 迭代内容（2026-11-17，内核正确性批次 + 安装器闭环）**
 

@@ -5,7 +5,7 @@
 [![Build](https://github.com/midongsang/hepu-os/actions/workflows/ci.yml/badge.svg)](https://github.com/midongsang/hepu-os/actions/workflows/ci.yml)
 [![Release](https://github.com/midongsang/hepu-os/actions/workflows/release.yml/badge.svg)](https://github.com/midongsang/hepu-os/actions/workflows/release.yml)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPLv3-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-v0.61.0-brightgreen.svg)](#当前版本)
+[![Version](https://img.shields.io/badge/version-v0.62.0-brightgreen.svg)](#当前版本)
 [![Kernel size](https://img.shields.io/badge/kernel-946KB-blue.svg)](#当前版本)
 [![glibc 动态链接](https://img.shields.io/badge/glibc-✓-brightgreen.svg)](#核心特性)
 [![ext2](https://img.shields.io/badge/ext2-✓-brightgreen.svg)](#核心特性)
@@ -96,10 +96,26 @@ AHCI 厂商实现差异（ABAR 与端口复位流程）。
 
 ## 当前版本
 
-**0.61.0** — 当前版本（版本号唯一事实源：`docs/status/VERSIONING.md` frontmatter，
+**0.62.0** — 当前版本（版本号唯一事实源：`docs/status/VERSIONING.md` frontmatter，
 代码侧单一来源：`kernel/include/version.h`，32/64 位共用）
 
-本版是**验证与整理批次**，没有新增功能，做的是把已有结论钉死、把不确定的东西标清楚。
+本版是**多架构第一程 + 抽象层收口**：ARM64 从 UEFI 出图（M0）走到自己的页表接管（M1c）
+与全 RAM 映射（M1d-1）；同时抽出 `arch_port` 抽象层、给能力校验加上"拒绝即审计"。
+
+**ARM64 M0（已达成）**：UEFI 固件 → `BOOTAA64.EFI` → GOP 800×600 → 整屏填色 → PSCI 关机，
+串口实证 `[HEPU-A64] M0: reached UEFI entry on aarch64`、`[M0] GOP res = 800x600`、
+`[M0] framebuffer filled (2 bands)`，实拍见 `docs/assets/aarch64-m0-framebuffer.jpg`。
+构建上踩掉四个坑（详见 `kernel/arch/aarch64/README.md`）：objcopy 的 efi-app-aarch64 产出
+残缺 PE 头、正解是复用 crt0 写好的 PE 头并补零到 SizeOfImage（`tools/pe_flatten_aarch64.py`）、
+链接必须 `--defsym=EFI_SUBSYSTEM=10`、QEMU 必须 `-cpu max` 与 `-device ramfb`。
+
+**ARM64 M1（页表接管）**：建自己的页表并切 `TTBR0_EL1`。三条实测结论——不能改 `TCR_EL1`
+（固件 48 位 `T0SZ=16`，改任何 T0SZ 都会让紧接着的取指错位）；设备区必须非 cache；把映射
+从 2MB block 换成 **4KB 页（L0→L1→L2→L3）白名单**、先装 `VBAR_EL1` 再 `tlbi vmalle1` 热切，
+**存活**（`[M1c] ALIVE after switch/tlbi`，QEMU exit=0）。M1d-1 用 `GetMemoryMap` 把可用
+RAM 全部映射（≈509MB），低地址与远端 RAM 写读回均通过。
+
+**上一版（0.61.0）** —— 验证与整理批次：多架构可行性评估、天气取数修复、版本号统一。
 
 **多架构移植可行性评估**（`docs/planning/MULTIARCH_PORT_EVALUATION.md`）：逐文件量了
 桌面层的架构耦合 —— `ttf64.c`/`cursor64.c`/`l10n64.c` 的 `__asm__`、`cpuid`、`msr`、
