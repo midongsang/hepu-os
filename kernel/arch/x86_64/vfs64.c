@@ -188,6 +188,9 @@ int vfs64_init(void)
     /* 根挂载：ext2 是 v1 唯一的块文件系统后端。 */
     vfs64_mount("/", &vfs64_be_ext2);
 
+    /* 伪设备后端：/dev 前缀。只实现 open/read/close，作为抽象层解耦验收点。 */
+    vfs64_mount("/dev", &vfs64_be_dev);
+
     g_vfs64_ready = 1;
     return 0;
 }
