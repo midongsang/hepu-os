@@ -367,7 +367,7 @@ void idt_handler(uint32_t isr_number, uint32_t error_code,
             extern uint32_t idt_last_eip, idt_last_cs, idt_last_eflags;
             extern uint32_t idt_last_esp;
             bsod_show("Kernel Exception", isr_number, error_code,
-                      idt_last_eip, idt_last_cs, idt_last_esp);
+                      idt_last_eip, idt_last_cs, idt_last_esp, 0);
         }
         /* 不会到达这里 */
         vga_puts(" system halted . please reboot .\n");

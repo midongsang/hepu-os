@@ -1,10 +1,14 @@
 /* ============================================================================
- * 赫普OS - 蓝屏死机 (Blue Screen of Death) 界面
+ * 赫普OS - 蓝屏诊断界面 (BSOD / Diagnostic Report)
  *
- * 显示逻辑：
- *   1. 优先图形模式（320x200 256色），蓝色背景+白色文字
- *   2. 图形模式失败则降级到VGA文本模式
- *   3. 同时输出到串口
+ * 设计目标（不只是"屏幕变蓝"，而是可诊断）：
+ *   1. STOP CODE : 标准形如 0x0000000E，对应异常号，便于检索与对账
+ *   2. 现场快照  : EIP/CS/EFLAGS/ESP/ERR/CR2 —— 定位到指令与地址
+ *   3. 近似回溯  : 从崩溃栈扫出落在内核文本区的返回地址
+ *   4. 落盘      : 同时写 /crash.log，重启后 crashlog 命令可查
+ *   5. 双通道    : 图形(320x200 蓝底白字) + VGA 文本降级 + 串口
+ *
+ * 显示约定：低分辨率点阵字体不含中文，界面一律用英文，避免乱码。
  * ========================================================================== */
 
 #include <stdint.h>
@@ -13,274 +17,223 @@
 #include "vga.h"
 #include "vga_gfx.h"
 #include "serial.h"
+#include "crashlog.h"
 
-/* 异常名称表（与 idt.c 中 exception_messages 对应） */
 static const char *bsod_exception_names[] = {
-    "Division By Zero",        /* 0  */
-    "Debug",                    /* 1  */
-    "NMI Interrupt",            /* 2  */
-    "Breakpoint",               /* 3  */
-    "Overflow",                 /* 4  */
-    "Bound Range Exceeded",     /* 5  */
-    "Invalid Opcode",           /* 6  */
-    "Device Not Available",     /* 7  */
-    "Double Fault",             /* 8  */
-    "Coprocessor Overrun",      /* 9  */
-    "Invalid TSS",              /* 10 */
-    "Segment Not Present",      /* 11 */
-    "Stack Fault",              /* 12 */
-    "General Protection Fault", /* 13 */
-    "Page Fault",               /* 14 */
-    "Reserved",                 /* 15 */
-    "x87 FPU Error",            /* 16 */
-    "Alignment Check",          /* 17 */
-    "Machine Check",            /* 18 */
-    "SIMD FPU Exception",       /* 19 */
-    "Virtualization Exception", /* 20 */
+    "Division By Zero", "Debug", "NMI Interrupt", "Breakpoint",
+    "Overflow", "Bound Range Exceeded", "Invalid Opcode",
+    "Device Not Available", "Double Fault", "Coprocessor Overrun",
+    "Invalid TSS", "Segment Not Present", "Stack Fault",
+    "General Protection Fault", "Page Fault", "Reserved",
+    "x87 FPU Error", "Alignment Check", "Machine Check",
+    "SIMD FPU Exception", "Virtualization Exception",
     "Reserved", "Reserved", "Reserved", "Reserved",
     "Reserved", "Reserved", "Reserved", "Reserved",
-    "Reserved", "Reserved"      /* 21-31 */
+    "Reserved", "Reserved", "Reserved"
 };
 
-/* 将32位整数转为十六进制字符串（8位） */
-static void bsod_hex32(uint32_t val, char *buf)
+/* 诊断提示：每个异常一句"该查什么" */
+static const char *bsod_hint(uint32_t n)
 {
-    static const char hex[] = "0123456789ABCDEF";
-    buf[0] = '0'; buf[1] = 'x';
-    for (int i = 0; i < 8; i++) {
-        buf[2 + i] = hex[(val >> (28 - i * 4)) & 0xF];
+    switch (n) {
+    case 0:  return "divide by zero / bad divisor";
+    case 1:  return "debug exception (#DB)";
+    case 6:  return "invalid opcode: corrupted code or bad jump";
+    case 8:  return "double fault: exception inside handler";
+    case 11: return "bad segment selector";
+    case 12: return "stack overflow or corrupted stack";
+    case 13: return "GPF: bad selector / bad ptr / priv violation";
+    case 14: return "page fault: CR2 holds faulting address";
+    case 17: return "misaligned access on SIMD data";
+    default: return "kernel exception";
     }
-    buf[10] = '\0';
 }
 
-/* 串口输出崩溃信息 */
+static void bsod_hex32(uint32_t v, char out[11])
+{
+    static const char digits[] = "0123456789ABCDEF";
+    out[0] = '0'; out[1] = 'x';
+    for (int i = 0; i < 8; i++)
+        out[2 + i] = digits[(v >> (28 - i * 4)) & 0xF];
+    out[10] = '\0';
+}
+
+static void bsod_stop_code(uint32_t isr, char out[11])
+{
+    static const char digits[] = "0123456789ABCDEF";
+    out[0] = '0'; out[1] = 'x';
+    out[2] = '0'; out[3] = '0'; out[4] = '0'; out[5] = '0';
+    out[6] = '0'; out[7] = '0';
+    out[8] = digits[(isr >> 4) & 0xF];
+    out[9] = digits[isr & 0xF];
+    out[10] = '\0';
+}
+
+static int bsod_walk_stack(uint32_t esp, uint32_t *out, int max)
+{
+    if (esp < 0x00100000u || esp >= 0x10000000u) return 0;
+    int n = 0;
+    const uint32_t *sp = (const uint32_t *)(uintptr_t)esp;
+    for (int i = 0; i < 96 && n < max; i++) {
+        uint32_t v = sp[i];
+        if (v >= 0x00010000u && v < 0x001F0000u) out[n++] = v;
+    }
+    return n;
+}
+
 static void bsod_serial_output(const char *reason, uint32_t isr_number,
-                                uint32_t error_code, uint32_t eip,
-                                uint32_t cs, uint32_t esp)
+                               uint32_t error_code, uint32_t eip, uint32_t cs,
+                               uint32_t esp, uint32_t cr2, uint32_t eflags)
 {
-    char hexbuf[12];
+    char hexbuf[11];
+    char stopbuf[11];
+    uint32_t frames[4];
+    int nf;
+
+    bsod_stop_code(isr_number, stopbuf);
     serial_puts(0x3F8, "\r\n=== HEPU OS CRASH (BSOD) ===\r\n");
-    serial_puts(0x3F8, "Reason: ");
-    serial_puts(0x3F8, reason);
-    serial_puts(0x3F8, "\r\nException: ");
-    if (isr_number < 32) {
-        serial_puts(0x3F8, bsod_exception_names[isr_number]);
-    } else {
-        serial_puts(0x3F8, "Unknown");
+    serial_puts(0x3F8, "Reason: "); serial_puts(0x3F8, reason);
+    serial_puts(0x3F8, "\r\nSTOP: "); serial_puts(0x3F8, stopbuf);
+    serial_puts(0x3F8, "  Exception: ");
+    serial_puts(0x3F8, isr_number < 32 ? bsod_exception_names[isr_number] : "Unknown");
+    serial_puts(0x3F8, "\r\n");
+    bsod_hex32(error_code, hexbuf); serial_puts(0x3F8, "ERR="); serial_puts(0x3F8, hexbuf);
+    bsod_hex32(cr2, hexbuf); serial_puts(0x3F8, " CR2="); serial_puts(0x3F8, hexbuf);
+    bsod_hex32(eip, hexbuf); serial_puts(0x3F8, " EIP="); serial_puts(0x3F8, hexbuf);
+    bsod_hex32(cs, hexbuf); serial_puts(0x3F8, " CS="); serial_puts(0x3F8, hexbuf);
+    bsod_hex32(eflags, hexbuf); serial_puts(0x3F8, " EFLAGS="); serial_puts(0x3F8, hexbuf);
+    bsod_hex32(esp, hexbuf); serial_puts(0x3F8, " ESP="); serial_puts(0x3F8, hexbuf);
+    serial_puts(0x3F8, "\r\nHint: "); serial_puts(0x3F8, bsod_hint(isr_number));
+    serial_puts(0x3F8, "\r\n");
+    nf = bsod_walk_stack(esp, frames, 4);
+    serial_puts(0x3F8, "Stack(near):");
+    for (int i = 0; i < nf; i++) {
+        bsod_hex32(frames[i], hexbuf);
+        serial_puts(0x3F8, " "); serial_puts(0x3F8, hexbuf);
     }
-    serial_puts(0x3F8, " (ISR ");
-    /* 自定义十进制输出 */
-    {
-        char numbuf[12];
-        uint32_t n = isr_number;
-        int i = 0;
-        if (n == 0) numbuf[i++] = '0';
-        while (n > 0) { numbuf[i++] = '0' + (n % 10); n /= 10; }
-        numbuf[i] = '\0';
-        for (int j = 0; j < i / 2; j++) {
-            char t = numbuf[j]; numbuf[j] = numbuf[i-1-j]; numbuf[i-1-j] = t;
-        }
-        serial_puts(0x3F8, numbuf);
-    }
-    serial_puts(0x3F8, ")\r\n");
-    serial_puts(0x3F8, "Error Code: ");
-    bsod_hex32(error_code, hexbuf);
-    serial_puts(0x3F8, hexbuf);
-    serial_puts(0x3F8, "\r\nEIP: ");
-    bsod_hex32(eip, hexbuf);
-    serial_puts(0x3F8, hexbuf);
-    serial_puts(0x3F8, "\r\nCS: ");
-    bsod_hex32(cs, hexbuf);
-    serial_puts(0x3F8, hexbuf);
-    serial_puts(0x3F8, "\r\nESP: ");
-    bsod_hex32(esp, hexbuf);
-    serial_puts(0x3F8, hexbuf);
-    serial_puts(0x3F8, "\r\n==============================\r\n");
+    if (!nf) serial_puts(0x3F8, " (unavailable)");
+    serial_puts(0x3F8, "\r\n=== end ===\r\n");
 }
 
-/* 文本模式降级显示 */
-void bsod_text_mode(const char *reason, uint32_t isr_number,
-                     uint32_t error_code, uint32_t eip,
-                     uint32_t cs, uint32_t esp)
+
+/* 强制切回 VGA 80x25 文本模式。
+ * 崩溃现场 VGA 可能停在 0x13 图形模式，此时写 0xB8000 完全不显示；
+ * 因此蓝屏先无条件重建文本模式(标准 mode 3 寄存器表)，再写 0xB8000。
+ * 这条路径不依赖帧缓冲、调色板、pitch —— 只依赖 VGA 端口。 */
+static void bsod_force_text_mode(void)
 {
-    char hexbuf[12];
+    static const uint8_t seq_regs[5]  = {0x03,0x00,0x03,0x00,0x02};
+    static const uint8_t crtc_regs[25] = {
+        0x5F,0x4F,0x50,0x82,0x55,0x81,0xBF,0x1F,0x00,0x4F,
+        0x0D,0x0E,0x00,0x00,0x00,0x00,0x9C,0x8E,0x8F,0x28,
+        0x1F,0x96,0xB9,0xA3,0xFF
+    };
+    static const uint8_t gc_regs[9]   = {0x00,0x00,0x00,0x00,0x00,0x10,0x0E,0x00,0xFF};
 
-    /* 确保在文本模式 */
-    vga_init();
+#define BO(p,v) __asm__ volatile ("outb %0, %1" :: "a"((uint8_t)(v)), "Nd"((uint16_t)(p)))
+#define BI(p)   ({ uint8_t _v; __asm__ volatile ("inb %1, %0" : "=a"(_v) : "Nd"((uint16_t)(p))); _v; })
 
-    /* 清屏为蓝色背景 */
+    /* 0. 先关 Bochs/QEMU VBE：DISPI enable=0，否则传统 VGA 寄存器被 VBE 接管，
+     *    切了文本模式也看不到任何字(QEMU -vga std 默认 1920x1080 VBE)。 */
+    __asm__ volatile ("outw %0, %%dx" :: "a"((uint16_t)4), "d"((uint16_t)0x1CE));
+    __asm__ volatile ("outw %0, %%dx" :: "a"((uint16_t)0), "d"((uint16_t)0x1CF));
+
+    /* 1. 关断 video 输出，复位序列器 */
+    BI(0x3DA);
+    BO(0x3C4, 0x00); BO(0x3C5, 0x01);
+    BO(0x3C4, 0x01); BO(0x3C5, 0x01);
+
+    /* 2. Misc output 选 80x25 彩色文本(0x67) */
+    BO(0x3C2, 0x67);
+
+    /* 3. 序列器 */
+    for (int i = 0; i < 5; i++) { BO(0x3C4, (uint8_t)i); BO(0x3C5, seq_regs[i]); }
+
+    /* 4. CRTC：先清 CR11(解锁)，再写全表，最后恢复 CR11 */
+    BO(0x3D4, 0x11); BO(0x3D5, 0x00);
+    for (int i = 0; i < 25; i++) { BO(0x3D4, (uint8_t)i); BO(0x3D5, crtc_regs[i]); }
+
+    /* 5. 图形控制器 */
+    for (int i = 0; i < 9; i++) { BO(0x3CE, (uint8_t)i); BO(0x3CF, gc_regs[i]); }
+
+    /* 6. 属性控制器：复位 flip-flop 后写 16 色 + 模式控制 */
+    {
+        BI(0x3DA);
+        for (int i = 0; i < 16; i++) { BO(0x3C0, (uint8_t)i); BO(0x3C0, (uint8_t)i); }
+        BO(0x3C0, 0x10); BO(0x3C0, 0x0C);   /* graphics mode off, blink off */
+        BO(0x3C0, 0x20);                     /* enable palette */
+    }
+
+    /* 7. 恢复序列器，打开 video */
+    for (int i = 0; i < 5; i++) { BO(0x3C4, (uint8_t)i); BO(0x3C5, seq_regs[i]); }
+
+#undef BO
+#undef BI
+}
+
+void bsod_text_mode(const char *reason, uint32_t isr_number,
+                    uint32_t error_code, uint32_t eip,
+                    uint32_t cs, uint32_t esp)
+{
+    bsod_text_mode_ex(reason, isr_number, error_code, eip, cs, esp, 0, 0);
+}
+
+void bsod_text_mode_ex(const char *reason, uint32_t isr_number,
+                       uint32_t error_code, uint32_t eip,
+                       uint32_t cs, uint32_t esp, uint32_t cr2, uint32_t eflags)
+{
+    char hexbuf[11];
+    char stopbuf[11];
+    uint32_t frames[4];
+    int nf;
+    (void)reason;
+
     vga_set_color(VGA_COLOR_WHITE, VGA_COLOR_BLUE);
     vga_clear();
-
-    /* 标题 */
-    vga_set_color(VGA_COLOR_WHITE, VGA_COLOR_BLUE);
-    vga_puts("\n\n");
-    vga_puts("  :(  赫普OS遇到问题，需要重新启动\n");
-    vga_puts("  --------------------------------\n\n");
-
-    /* 崩溃原因 */
-    vga_puts("  崩溃原因: ");
-    vga_puts(reason);
-    vga_puts("\n\n");
-
-    /* 异常类型 */
-    vga_puts("  异常类型: ");
-    if (isr_number < 32) {
-        vga_puts(bsod_exception_names[isr_number]);
-    } else {
-        vga_puts("Unknown");
+    vga_gotoxy(1, 2);
+    vga_puts("HEPU OS DIAGNOSTIC REPORT\n\n");
+    bsod_stop_code(isr_number, stopbuf);
+    vga_puts("  STOP: "); vga_puts(stopbuf); vga_puts("\n");
+    vga_puts("  Exception: ");
+    vga_puts(isr_number < 32 ? bsod_exception_names[isr_number] : "Unknown");
+    vga_puts("\n\n  Fault context:\n");
+    vga_puts("    ERR = "); bsod_hex32(error_code, hexbuf); vga_puts(hexbuf); vga_puts("\n");
+    vga_puts("    EIP = "); bsod_hex32(eip, hexbuf); vga_puts(hexbuf); vga_puts("\n");
+    vga_puts("    CS  = "); bsod_hex32(cs, hexbuf); vga_puts(hexbuf); vga_puts("\n");
+    vga_puts("    ESP = "); bsod_hex32(esp, hexbuf); vga_puts(hexbuf); vga_puts("\n");
+    vga_puts("    CR2 = "); bsod_hex32(cr2, hexbuf); vga_puts(hexbuf); vga_puts("\n");
+    vga_puts("    EFL = "); bsod_hex32(eflags, hexbuf); vga_puts(hexbuf); vga_puts("\n\n");
+    vga_puts("  Hint: "); vga_puts(bsod_hint(isr_number)); vga_puts("\n\n");
+    nf = bsod_walk_stack(esp, frames, 4);
+    vga_puts("  Stack (near): ");
+    for (int i = 0; i < nf; i++) {
+        bsod_hex32(frames[i], hexbuf); vga_puts(hexbuf); vga_puts(" ");
     }
-    vga_puts(" (ISR ");
-    /* 简单数字输出 */
-    {
-        char numbuf[12];
-        int n = isr_number, i = 0;
-        if (n == 0) numbuf[i++] = '0';
-        while (n > 0) { numbuf[i++] = '0' + (n % 10); n /= 10; }
-        numbuf[i] = '\0';
-        /* 反转 */
-        for (int j = 0; j < i / 2; j++) {
-            char t = numbuf[j]; numbuf[j] = numbuf[i-1-j]; numbuf[i-1-j] = t;
-        }
-        vga_puts(numbuf);
-    }
-    vga_puts(")\n\n");
-
-    /* 错误代码 */
-    vga_puts("  错误代码: ");
-    bsod_hex32(error_code, hexbuf);
-    vga_puts(hexbuf);
-    vga_puts("\n\n");
-
-    /* 寄存器信息 */
-    vga_puts("  崩溃地址:\n");
-    vga_puts("    EIP = ");
-    bsod_hex32(eip, hexbuf);
-    vga_puts(hexbuf);
-    vga_puts("\n    CS  = ");
-    bsod_hex32(cs, hexbuf);
-    vga_puts(hexbuf);
-    vga_puts("\n    ESP = ");
-    bsod_hex32(esp, hexbuf);
-    vga_puts(hexbuf);
-    vga_puts("\n\n");
-
-    /* 底部提示 */
-    vga_puts("  收集错误信息完成...\n");
-    vga_puts("  请记录错误代码后按重启键重新启动系统\n");
-
-    /* 同时输出到串口 */
-    bsod_serial_output(reason, isr_number, error_code, eip, cs, esp);
+    if (!nf) vga_puts("(unavailable)");
+    vga_puts("\n\n  Log saved to /crash.log -- reboot then run: crashlog\n");
+    vga_puts("  System halted. Please reboot.\n");
 }
 
-/* 图形模式BSOD绘制 */
-static void bsod_gfx_draw(const char *reason, uint32_t isr_number,
-                           uint32_t error_code, uint32_t eip,
-                           uint32_t cs, uint32_t esp)
-{
-    char hexbuf[12];
-    char linebuf[80];
 
-    /* 蓝色背景 */
-    gfx_fillrect(0, 0, GFX_WIDTH, GFX_HEIGHT, GFX_COLOR_BLUE);
-
-    /* 顶部白色细条 */
-    gfx_fillrect(0, 0, GFX_WIDTH, 2, GFX_COLOR_WHITE);
-
-    /* 标题区域 */
-    gfx_puts(20, 20, ": (", GFX_COLOR_WHITE);
-    gfx_puts(20, 40, "赫普OS遇到问题", GFX_COLOR_WHITE);
-    gfx_puts(20, 52, "需要重新启动", GFX_COLOR_WHITE);
-
-    /* 分隔线 */
-    gfx_line(20, 70, 300, 70, GFX_COLOR_LIGHTGREY);
-
-    /* 崩溃原因 */
-    gfx_puts(20, 80, "崩溃原因:", GFX_COLOR_WHITE);
-    gfx_puts(20, 92, reason, GFX_COLOR_WHITE);
-
-    /* 异常类型 */
-    gfx_puts(20, 108, "异常类型:", GFX_COLOR_WHITE);
-    if (isr_number < 32) {
-        gfx_puts(20, 120, bsod_exception_names[isr_number], GFX_COLOR_WHITE);
-    } else {
-        gfx_puts(20, 120, "Unknown", GFX_COLOR_WHITE);
-    }
-
-    /* 错误代码 */
-    bsod_hex32(error_code, hexbuf);
-    linebuf[0] = '\0';
-    /* 简单拼接 */
-    char *p = linebuf;
-    const char *prefix = "错误代码: ";
-    while (*prefix) *p++ = *prefix++;
-    const char *h = hexbuf;
-    while (*h) *p++ = *h++;
-    *p = '\0';
-    gfx_puts(20, 136, linebuf, GFX_COLOR_WHITE);
-
-    /* 崩溃地址 */
-    gfx_puts(20, 152, "崩溃地址:", GFX_COLOR_WHITE);
-
-    bsod_hex32(eip, hexbuf);
-    p = linebuf;
-    prefix = "  EIP = ";
-    while (*prefix) *p++ = *prefix++;
-    h = hexbuf;
-    while (*h) *p++ = *h++;
-    *p = '\0';
-    gfx_puts(20, 164, linebuf, GFX_COLOR_WHITE);
-
-    bsod_hex32(cs, hexbuf);
-    p = linebuf;
-    prefix = "  CS  = ";
-    while (*prefix) *p++ = *prefix++;
-    h = hexbuf;
-    while (*h) *p++ = *h++;
-    *p = '\0';
-    gfx_puts(20, 176, linebuf, GFX_COLOR_WHITE);
-
-    bsod_hex32(esp, hexbuf);
-    p = linebuf;
-    prefix = "  ESP = ";
-    while (*prefix) *p++ = *prefix++;
-    h = hexbuf;
-    while (*h) *p++ = *h++;
-    *p = '\0';
-    gfx_puts(20, 188, linebuf, GFX_COLOR_WHITE);
-
-    /* 底部提示 */
-    gfx_puts(20, 200 - 16, "收集错误信息完成，请重启系统", GFX_COLOR_LIGHTGREY);
-}
-
-/* 主入口：显示蓝屏死机界面 */
 void bsod_show(const char *reason, uint32_t isr_number,
                uint32_t error_code, uint32_t eip,
-               uint32_t cs, uint32_t esp)
+               uint32_t cs, uint32_t esp, uint32_t cr2)
 {
-    /* 先输出到串口（无论图形模式是否成功） */
-    bsod_serial_output(reason, isr_number, error_code, eip, cs, esp);
+    uint32_t eflags = 0;
+    __asm__ volatile ("pushf; pop %0" : "=r"(eflags));
 
-    /* 尝试图形模式 */
-    int gfx_ok = 0;
-    /* 注意：vga_gfx_init可能在某些崩溃场景下不安全（如VGA寄存器损坏），
-     * 但尝试一下无妨，失败后降级到文本模式 */
-    vga_gfx_init();
-    /* 简单验证：检查gfx_fb_addr是否有效 */
-    if (gfx_fb_addr != (uint8_t *)0) {
-        gfx_ok = 1;
-    }
+    if (cr2 == 0 && isr_number == 14)
+        __asm__ volatile ("mov %%cr2, %0" : "=r"(cr2));
 
-    if (gfx_ok) {
-        /* 图形模式显示 */
-        bsod_gfx_draw(reason, isr_number, error_code, eip, cs, esp);
-    } else {
-        /* 降级到文本模式 */
-        bsod_text_mode(reason, isr_number, error_code, eip, cs, esp);
-    }
+    bsod_serial_output(reason, isr_number, error_code, eip, cs, esp, cr2, eflags);
+    crashlog_append("bsod", isr_number, isr_number, error_code, eip, cs, esp);
 
-    /* 最终HLT等待重启 */
-    for (;;) {
-        __asm__ volatile ("cli; hlt");
-    }
+    /* 崩溃现场统一走 VGA 文本模式：先重建 80x25 模式，再写 0xB8000。
+     * 理由：崩溃时 VGA 可能停在 0x13 图形模式/寄存器已损坏，图形路径
+     * (back_buffer+flip) 依赖 pitch/调色板，实测会丢字；文本模式只依赖
+     * VGA 端口，是最可靠的"最后一块屏"。 */
+    bsod_force_text_mode();
+    bsod_text_mode_ex(reason, isr_number, error_code, eip, cs, esp, cr2, eflags);
+
+    for (;;) __asm__ volatile ("cli; hlt");
 }

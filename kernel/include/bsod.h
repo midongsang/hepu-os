@@ -30,11 +30,15 @@
  */
 void bsod_show(const char *reason, uint32_t isr_number,
                uint32_t error_code, uint32_t eip,
-               uint32_t cs, uint32_t esp);
+               uint32_t cs, uint32_t esp, uint32_t cr2);
 
 /* 文本模式降级显示（图形模式失败时自动调用，也可手动调用） */
 void bsod_text_mode(const char *reason, uint32_t isr_number,
                      uint32_t error_code, uint32_t eip,
                      uint32_t cs, uint32_t esp);
+
+void bsod_text_mode_ex(const char *reason, uint32_t isr_number,
+                       uint32_t error_code, uint32_t eip,
+                       uint32_t cs, uint32_t esp, uint32_t cr2, uint32_t eflags);
 
 #endif /* BSOD_H */
