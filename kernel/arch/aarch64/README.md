@@ -123,10 +123,56 @@ qemu-system-aarch64 -M virt -cpu max -m 512 \
 - **不是 2MB block 属性写错**：L2[1][195] 打出来是 0x58600000|0x401|0x4（valid+AF+AttrIdx1），
   与 image 地址 0x5873_6788 完全对得上。
 
-**下一步（M1c）：**
-- 改用 **4KB 页（L3）**，先只映射 image 所在 2MB + UART/GIC 两个 block，把 2MB block
-  这条路径彻底绕开，用最小表面积定位问题；
-- 若 4KB 页可行，再把 identity map 扩到全 RAM，然后加 `VBAR_EL1`、GIC、定时器中断。
+## M1c（已通）：4KB 页（L3）最小 identity map + 异常向量接管
+
+**结论：tlbi 之后串口继续打印，QEMU 退出码 0**（两条判据都满足）。
+
+最终配置（`m1.c` 内 `EXP_*` 开关全默认）：
+
+- 48 位 VA 四级表 L0→L1→L2→L3，L3 叶子 4KB 页；
+- 白名单映射：运行时按 pc/sp/页表数组锚点反推的 2MB Normal 块（实测两块：image
+  `0x58000000` l2=192、栈 `0x5f600000` l2=251）；UART `0x09000000` 一个 Device 4KB 页；
+  GICD `0x08000000` / GICC `0x08010000` 各一个 Device 4KB 页；其余表项填 0；
+- 先装 `VBAR_EL1` + el1_sync 向量（打印 ESR/ELR/FAR/EC/ISS）；
+- 叶子页描述符 AF=1、AttrIdx1 Normal WB inner shareable、AP=EL1 RW、PXN/UXN=0；设备页 Attr0 nGnRE；
+- TCR 不重写（沿用固件 `0x580803510`）；MAIR=`0x04FF`；SCTLR 保 M/C/I、清 WXN。
+
+### 实验记录（假设 → 实验 → 串口/退出码）
+
+| # | 假设 / 改动 | 配置 | 串口关键行（原文） | 退出码 |
+|---|---|---|---|---|
+| 0 | M1b 基线（2MB block，无 VBAR） | 旧源码 | 末行 `[dbg] tcr ok`，之后无输出 | 124 |
+| A | 切表不刷 TLB（旧 TLB 下应活着） | `EXP_FLUSH=0` | `[dbg] no tlbi (baseline contrast)` → `[M1c] ALIVE after switch/tlbi, pc=0x000000005811b9e0` → `[M1c] poweroff` | 0 |
+| B | 4KB 页 + `tlbi vmalle1` 热切 | 默认 | `[dbg] tlbi ok` → `[M1c] ALIVE after switch/tlbi, pc=0x000000005811ba38` → `count=0…90` → `second tlbi done` → `poweroff` | 0（复跑 B2 仍 0） |
+| C | 只映射 pc 当前 4KB + UART | `EXP_MINIMAL=1` | 末行 `[dbg] about to tlbi`，无 ESR（向量表页/栈页/其余代码页均未映射，异常入口取不到指） | 124 |
+| D | 单地址刷 `tlbi vaae1` | `EXP_FLUSH_KIND=1` | `[dbg] tlbi ok` → `[M1c] ALIVE after switch/tlbi, pc=0x000000005811ba40` → `poweroff` | 0 |
+| E | 标准序列 M=0 → 换 TTBR → 刷 → M=1 | `EXP_MOFF=1` | `[dbg] M=0` → `tlbi ok` → `[dbg] M=1 again` → `ALIVE ...5811baf0` → `poweroff` | 0 |
+| F | 切换后寄存器核对 | 默认 | `post TTBR0=0x000000005812e000 ASID=0 CnP=0`、`post TCR=0x0000000580803510 A1=0`、`post SCTLR=0x0000000000c5183d A=0 SA=1`；F 初版 `post VBAR=0x0000000000001800`（bug），F2 修后 `post VBAR=0x0000000058119800` | 0 |
+| G | 故意读未映射 `0x30000000` 验证向量 | `EXP_PROBE=1` | G 初版向量槽位错位，无 ESR 直接 hang；G2 修对齐后：`[EXC] ESR_EL1=0x0000000096000006 ELR_EL1=0x000000005811b058 FAR_EL1=0x0000000030000000`，`EC=37 ISS=0x0000000000000006`（数据 abort，level 2 翻译故障） | 124（向量内 wfi 停机） |
+| H | 按固件原值回写一遍 TCR | `EXP_WRITETCR=1` | `[M1c] tcr rewritten (same value)` → `ALIVE ...5811ab18` → `poweroff` | 0 |
+| I | L2 直接放 2MB block 描述符（复现 M1b 形态） | `EXP_BLOCK=1` | `tlbi ok` → `ALIVE ...5811ca18` → `poweroff` | 0 |
+
+### 本轮修掉的两个自身 bug
+
+1. **VBAR 取址没重定位**：C 里 `&vector_table` 走 GOT，该 asm 符号的 RELATIVE 槽在 gnu-efi
+   自举里没落地，读回 VBAR=`0x1800`（链接偏移）。改成内联汇编 `adrp/add` PC 相对现场算，
+   读回 `0x58119800`（运行时地址）。
+2. **向量槽位错位**：`b .Lv_sync` 前漏 `.align 7`，同步异常槽（偏移 0x200）落到 hang 分支，
+   异常进来直接死循环、打不出 ESR。补齐对齐后 G 组正常打出 ESR/ELR/FAR。
+
+### 结论与遗留
+
+- 4KB L3 白名单映射 + 叶子 AF=1 + 先装 VBAR 后，热切 TTBR0 并 `tlbi vmalle1` 可稳定存活
+  （B/B2/F/F2/final 五次 exit=0）。
+- 隔离实验里，**单地址刷、标准 M=0 序列、同值回写 TCR、2MB block 描述符形态**各自单独都能跑过；
+  M1b 的崩溃在本框架下未能由其中任一单项复现。M1b 与本版剩余差异：整 1GB Device/Normal 全量
+  映射、无 VBAR、M1b 原始源码路径；如需彻底归因，下一步在本框架把全量 1GB 映射加回来对照。
+- 附注：M1b 记录称固件 SCTLR bit19(WXN)=1，本轮实测 `0xc5183d` 的 bit19=0（SA=1、A=0）。
+
+**下一步：**
+- 把 identity map 从白名单 2MB 扩到全 RAM（按固件内存地图补块）；
+- GIC 初始化 + 定时器中断（CNTV），走通 el1_irq 向量；
+- 退出 BootServices、切自己的栈与页表，进入正式内核入口。
 
 **复现命令：** 见本文档 M0 段（`-cpu max` + `-bios QEMU_EFI.fd` + `-drive if=virtio` + `-device ramfb`），
 `kernel/arch/aarch64/m1` 目录直接 `make`，产物 `M1.EFI` 拷成 `EFI/BOOT/BOOTAA64.EFI`。
