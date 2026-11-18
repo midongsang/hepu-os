@@ -1028,55 +1028,62 @@ efi_main(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE *st)
                 uart_puts("\n");
             }
 
-            /* ---- M2S union 脏区 A/B：同 24x24 动画，两种提交方式 ----
-             * two_rect：旧块全填 BG + 新块全画，gross=2*s²=1152（重叠区写两遍）；
-             * union：只写旧块去掉重叠的两侧条 + 新块全画，重叠区只写一次，gross=768。
-             * 各 50 帧去 5 预热；对比耗时，判断瓶颈是否在写入量。 */
+            /* ---- M2S union 脏区 A/B：两种提交方式，跑 24 与 192 两个尺寸 ----
+             * 口径（step=STEP=8）：overlap=STEP·s
+             *   two_rect：旧块全填 BG + 新块全画，gross=2s²，net=2s²−2·overlap；
+             *   union：只写旧块去掉重叠的部分 + 新块全画，gross=2s²−overlap，net 同上。
+             * gross=实际写入像素口径；net=净未被重复覆盖像素，两者分列不混。
+             * 各 50 帧去 5 预热；对比耗时，判断 union 省写入量是否在噪声以上可测。 */
             {
-                const uint32_t AB_S = 24, AB_Y = 520;
-                for (uint32_t variant = 0; variant < 2; variant++) {
-                    int32_t bx = 0, dir = 1;
-                    uint64_t du_sum = 0, gross_sum = 0; uint32_t sn = 0;
-                    for (uint32_t f = 0; f < 50; f++) {
-                        uint64_t fs = cntvct();
-                        int32_t nx = bx + dir * STEP;
-                        if (nx < 0) { nx = 0; dir = 1; }
-                        if (nx > (int32_t)fb_w - (int32_t)AB_S) { nx = fb_w - AB_S; dir = -1; }
-                        int32_t lo = bx > nx ? bx : nx;
-                        int32_t hi = (bx + AB_S) < (nx + AB_S) ? (bx + AB_S) : (nx + AB_S);
+                const uint32_t AB_SIZES[2] = {24, 192};
+                for (uint32_t asi = 0; asi < 2; asi++) {
+                    uint32_t s = AB_SIZES[asi];
+                    uint32_t y = (s == 24) ? 520u : ((TITLE_BOTTOM + fb_h) / 2 - s / 2);
+                    uint32_t overlap = STEP * s;
+                    uint32_t gross_two = 2 * s * s;
+                    uint32_t gross_union = 2 * s * s - overlap;
+                    uint32_t net_px = 2 * s * s - 2 * overlap;
+                    for (uint32_t variant = 0; variant < 2; variant++) {
+                        int32_t bx = 0, dir = 1;
+                        uint64_t du_sum = 0; uint32_t sn = 0;
+                        for (uint32_t f = 0; f < 50; f++) {
+                            uint64_t fs = cntvct();
+                            int32_t nx = bx + dir * STEP;
+                            if (nx < 0) { nx = 0; dir = 1; }
+                            if (nx > (int32_t)fb_w - (int32_t)s) { nx = fb_w - s; dir = -1; }
 
-                        __asm__ volatile("msr daifset, #2");
-                        uint64_t ds = cntvct();
-                        uint32_t gross;
-                        if (variant == 0) {
-                            uint32_t wold = present_region((uint32_t)bx, AB_Y, AB_S, AB_S, COL_BG);
-                            uint32_t wnew = present_region((uint32_t)nx, AB_Y, AB_S, AB_S, COL_ACCENT);
-                            gross = wold + wnew;
-                        } else {
-                            uint32_t gw = 0;
-                            /* 旧块去掉重叠：左条 [bx,lo) 与右条 [hi,bx+s) 填 BG */
-                            if (lo > bx)
-                                gw += present_region((uint32_t)bx, AB_Y, (uint32_t)(lo - bx), AB_S, COL_BG);
-                            if (hi < bx + AB_S)
-                                gw += present_region((uint32_t)hi, AB_Y, (uint32_t)(bx + AB_S - hi), AB_S, COL_BG);
-                            gw += present_region((uint32_t)nx, AB_Y, AB_S, AB_S, COL_ACCENT);
-                            gross = gw;
+                            __asm__ volatile("msr daifset, #2");
+                            uint64_t ds = cntvct();
+                            if (variant == 0) {
+                                present_region((uint32_t)bx, y, s, s, COL_BG);
+                                present_region((uint32_t)nx, y, s, s, COL_ACCENT);
+                            } else {
+                                /* 保守 union：旧块去掉朝运动方向的 step 宽重叠条后填 BG，
+                                 * 再画新块。恢复面积 (s-step)·s，gross=2s²-step·s。
+                                 * （更激进的"只写露出条带"是下一步方向，本轮不实现。） */
+                                if (dir > 0)
+                                    present_region((uint32_t)bx, y, s - STEP, s, COL_BG);
+                                else
+                                    present_region((uint32_t)(bx + STEP), y, s - STEP, s, COL_BG);
+                                present_region((uint32_t)nx, y, s, s, COL_ACCENT);
+                            }
+                            uint64_t du = us_elapsed(ds);
+                            __asm__ volatile("msr daifclr, #2");
+                            bx = nx;
+                            if (f >= WARM) { du_sum += du; sn++; }
+                            uint64_t next = fs + FRAME_TICKS;
+                            while (cntvct() < next) { }
                         }
-                        uint64_t du = us_elapsed(ds);
-                        __asm__ volatile("msr daifclr, #2");
-                        bx = nx;
-                        if (f >= WARM) { du_sum += du; gross_sum += gross; sn++; }
-                        uint64_t next = fs + FRAME_TICKS;
-                        while (cntvct() < next) { }
+                        present_region((uint32_t)bx, y, s, s, COL_BG);
+                        uint64_t avg_du = sn ? du_sum / sn : 0;
+                        uart_puts("[M2S] ab=");
+                        uart_puts(variant == 0 ? "two_rect" : "union");
+                        uart_puts(" size="); uart_dec(s); uart_puts("x"); uart_dec(s);
+                        uart_puts(" gross_px="); uart_dec(variant == 0 ? gross_two : gross_union);
+                        uart_puts(" net_px="); uart_dec(net_px);
+                        uart_puts(" dirty_us="); uart_dec(avg_du);
+                        uart_puts("\n");
                     }
-                    present_region((uint32_t)bx, AB_Y, AB_S, AB_S, COL_BG);
-                    uint64_t avg_du = sn ? du_sum / sn : 0;
-                    uint64_t avg_g = sn ? gross_sum / sn : 0;
-                    uart_puts("[M2S] ab=");
-                    uart_puts(variant == 0 ? "two_rect" : "union");
-                    uart_puts(" gross_px="); uart_dec(avg_g);
-                    uart_puts(" dirty_us="); uart_dec(avg_du);
-                    uart_puts("\n");
                 }
             }
 
