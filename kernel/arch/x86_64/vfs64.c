@@ -89,6 +89,14 @@ int vfs64_create(const char *kpath, uint32_t flags)
     return best->be->create(kpath, flags);
 }
 
+int vfs64_iterate(const char *kpath, struct vfs_dirent *out, int max)
+{
+    if (!kpath || !out || max <= 0) return -1;
+    const struct vfs_mount *best = find_mount(kpath);
+    if (!best || !best->be->iterate) return -1;
+    return best->be->iterate(kpath, out, max);
+}
+
 int vfs64_open(const char *kpath, uint32_t flags, struct vfs_file *f)
 {
     if (!kpath || !f) return -1;

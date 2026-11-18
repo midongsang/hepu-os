@@ -15,6 +15,11 @@
 #include "syscall.h"   /* V0.54.6: 统一 syscall 号（唯一真源） */
 #include "spinlock.h"
 #include "fs_sys.h"    /* §5-5 第 5 批: fs_fd_info_t 与 fs_do_read/fs_do_write */
+#include "vfs64.h"     /* P3-6: VFS 抽象层分派（readdir 枚举走后端 ops） */
+
+/* 目录枚举上限：readdir 打包 staging 与 getdents 共用。 */
+#define READDIR_MAX_ENTRIES 64
+#define READDIR_STAGE_MAX   2048
 #include "epoll64.h"   /* epoll/eventfd2/pselect6 v1 最小实现（仅 LT） */
 #include "display_backend.h"  /* §5-4: fb_desc_t（前台所有权按真实 pitch 算映射长度） */
 
@@ -395,7 +400,7 @@ void syscall64_full_init(void)
             sys_files_tbl[t][i].used = 0;
     /* P3-6: VFS 抽象层挂载表初始化（后端 lookup 在调用时才检查 ext2 是否挂载，
      * 顺序不依赖此处先于 ext2 mount）。 */
-    { extern void vfs64_init(void); vfs64_init(); }
+    { vfs64_init(); }
 
     syscall_initialized = 1;
     vga_puts("[SYSCALL64] Full syscall interface initialized\n");
@@ -1165,6 +1170,45 @@ static int64_t sys_getdents(int fd, uint64_t dirp, int count) {
     /* 用户窗口校验：旧实现直接解引用 dirp 写用户地址，SMAP 下会内核 #PF */
     if (dirp < 0x40000000ULL || dirp >= 0x80000000ULL) return -1;
     if (count < 19) return 0;
+
+    extern void *kmalloc(uint32_t size);
+    extern void kfree(void *ptr);
+
+    /* S5: 枚举先走 VFS 后端（vfs_dirent staging）。v1 仍只枚举根目录 ——
+     * fd→路径映射与子目录 getdents 是 deferred 项，与基线行为一致。 */
+    struct vfs_dirent *de = (struct vfs_dirent *)kmalloc(
+        READDIR_MAX_ENTRIES * sizeof(struct vfs_dirent));
+    if (!de) return -1;
+    int n = vfs64_iterate("/", de, READDIR_MAX_ENTRIES);
+    if (n >= 0) {
+        int total = 0;
+        uint8_t kentry[288];
+        for (int i = 0; i < n; i++) {
+            int name_len = 0; while (de[i].d_name[name_len]) name_len++;
+            int reclen = (19 + name_len + 7) & ~7;
+            if (total + reclen > count) break;
+            memset(kentry, 0, sizeof(kentry));
+            uint64_t d_ino = de[i].d_ino;
+            int64_t  d_off  = (int64_t)(de[i].d_off + de[i].d_reclen);
+            uint16_t d_reclen = (uint16_t)reclen;
+            memcpy(kentry + 0, &d_ino, 8);
+            memcpy(kentry + 8, &d_off, 8);
+            memcpy(kentry + 16, &d_reclen, 2);
+            kentry[18] = de[i].d_type;
+            memcpy(kentry + 19, de[i].d_name, name_len);
+            kentry[19 + name_len] = 0;
+            if (copy_to_user((void *)(dirp + total), kentry, (uint32_t)reclen) != 0) {
+                kfree(de);
+                return total > 0 ? total : -1;
+            }
+            total += reclen;
+        }
+        kfree(de);
+        return total;
+    }
+    kfree(de);
+
+    /* ---- 回退：旧 ext2 块直读（基线行为，未改） ---- */
     extern int ext2_read_data_block(ext2_inode_t *inode, uint32_t block_idx, uint8_t *buffer);
     extern uint32_t ext2_block_size;
     typedef struct { uint32_t inode; uint16_t rec_len; uint8_t name_len; uint8_t file_type; char name[]; } ext2_dirent_t;
@@ -1594,8 +1638,6 @@ extern int64_t sys_fstat(int fd, void *statbuf);
  * 语义保持不变：每项 "name\0type\0"，内部打包上限仍为 2048 字节；装不下用户缓冲
  * 直接失败，不静默截断。 */
 extern int ext2_64_list_dir_entries(const char *path, char names[][256], uint8_t *types, int max);
-#define READDIR_MAX_ENTRIES 64
-#define READDIR_STAGE_MAX   2048
 static int64_t sys_readdir(const char *path, char *outbuf, int outsz)
 {
     extern void *kmalloc(uint32_t size);
@@ -1605,12 +1647,52 @@ static int64_t sys_readdir(const char *path, char *outbuf, int outsz)
     if (copy_user_path(kernel_path, sizeof(kernel_path), path) < 0) return -1;
     if (outsz <= 2) return -1;
 
+    /* S5: 先走 VFS 后端枚举（统一 vfs_dirent staging）；未挂载/后端不支持时
+     * 落到下面的 ext2 直调旧路径，对外打包格式（name\0type\0）不变。 */
+    struct vfs_dirent *de = (struct vfs_dirent *)kmalloc(
+        READDIR_MAX_ENTRIES * sizeof(struct vfs_dirent));
+    if (!de) return -1;
+
+    int n;
+    uint64_t rdf = spinlock_lock_irqsave(&g_readdir_lock);
+    n = vfs64_iterate(kernel_path, de, READDIR_MAX_ENTRIES);
+    spinlock_unlock_irqrestore(&g_readdir_lock, rdf);
+
+    if (n >= 0) {
+        /* 先按真实长度估算总占用，装不下用户缓冲直接失败（与旧实现 R3-2 同口径）。 */
+        int used = 0;
+        for (int i = 0; i < n; i++) {
+            int l = 0; while (de[i].d_name[l]) l++;
+            int need = l + 3;
+            if (used + need > READDIR_STAGE_MAX) break;
+            used += need;
+        }
+        if (used > outsz) { kfree(de); return -1; }
+
+        int off = 0;
+        for (int i = 0; i < n; i++) {
+            int l = 0; while (de[i].d_name[l]) l++;
+            int need = l + 3;
+            if (off + need > READDIR_STAGE_MAX) break;
+            char t = de[i].d_type == VFS_DT_DIR ? 'd' : 'f';
+            if (copy_to_user(outbuf + off, de[i].d_name, (size_t)l) != 0) goto vfs_fail;
+            if (copy_to_user(outbuf + off + l, "", 1) != 0) goto vfs_fail;
+            if (copy_to_user(outbuf + off + l + 1, &t, 1) != 0) goto vfs_fail;
+            if (copy_to_user(outbuf + off + l + 2, "", 1) != 0) goto vfs_fail;
+            off += need;
+        }
+        kfree(de);
+        return off;
+    }
+    kfree(de);
+
+    /* ---- 回退：ext2 直调（旧实现，行为不变） ---- */
     char (*names)[256] = (char (*)[256])kmalloc(READDIR_MAX_ENTRIES * 256);
     uint8_t *types = (uint8_t *)kmalloc(READDIR_MAX_ENTRIES);
     if (!names || !types) { kfree(names); kfree(types); return -1; }
 
-    uint64_t rdf = spinlock_lock_irqsave(&g_readdir_lock);
-    int n = ext2_64_list_dir_entries(kernel_path, names, types, READDIR_MAX_ENTRIES);
+    rdf = spinlock_lock_irqsave(&g_readdir_lock);
+    n = ext2_64_list_dir_entries(kernel_path, names, types, READDIR_MAX_ENTRIES);
     if (n < 0) {
         spinlock_unlock_irqrestore(&g_readdir_lock, rdf);
         kfree(names); kfree(types);
@@ -1619,14 +1701,10 @@ static int64_t sys_readdir(const char *path, char *outbuf, int outsz)
     int used = 0;
     for (int i = 0; i < n; i++) {
         int l = 0; while (names[i][l]) l++;
-        /* R3-1: 每项实际写 l+3 字节 —— name(l) + 结尾 0 + type(1) + 结尾 0。
-         * 按真实长度判断, 不靠旧代码两个错互相抵消。 */
         int need = l + 3;
         if (used + need > READDIR_STAGE_MAX) break;
         used += need;
     }
-    /* R3-2: used > outsz 时截断后照报长度会让调用方以为拿全了；
-     * 用户缓冲装不下就必须失败, 让调用方换更大的缓冲或分批读。 */
     if (used > outsz) {
         spinlock_unlock_irqrestore(&g_readdir_lock, rdf);
         kfree(names); kfree(types);
@@ -1634,7 +1712,6 @@ static int64_t sys_readdir(const char *path, char *outbuf, int outsz)
     }
     spinlock_unlock_irqrestore(&g_readdir_lock, rdf);
 
-    /* 长度已确认装得下，逐项拷给用户；任一段拷贝失败即放弃，不补写半截。 */
     int off = 0;
     for (int i = 0; i < n; i++) {
         int l = 0; while (names[i][l]) l++;
@@ -1650,6 +1727,9 @@ static int64_t sys_readdir(const char *path, char *outbuf, int outsz)
     kfree(names); kfree(types);
     return off;
 
+vfs_fail:
+    kfree(de);
+    return -1;
 fail:
     kfree(names); kfree(types);
     return -1;

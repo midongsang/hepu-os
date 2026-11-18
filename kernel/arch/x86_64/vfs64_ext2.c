@@ -33,6 +33,13 @@ extern int      ext2_64_read_file_offset(const char *path, uint8_t *buf,
                                         uint32_t size, uint32_t offset);
 extern int      ext2_64_write_file_offset(const char *path, const uint8_t *buf,
                                            uint32_t size, uint32_t offset);
+extern int      ext2_64_list_dir_entries_ex(const char *path, char names[][256],
+                                             uint8_t *types, uint32_t *sizes,
+                                             int max_entries);
+extern void    *kmalloc(uint32_t size);
+extern void     kfree(void *ptr);
+
+#define EXT2_ITER_MAX  64
 
 static int ext2_open(struct vfs_node *v, struct vfs_file *f, uint32_t flags)
 {
@@ -132,8 +139,57 @@ static int ext2_create(const char *path, uint32_t flags)
     return ext2_64_create_file(path);
 }
 
+/* S5：枚举目录项。names/types 走 kmalloc（64×256=16KB，不能压栈）。
+ * d_ino 通过对子路径再 lookup 取得；list_ex 本身不回传 inode。 */
+static int ext2_iterate(const char *path, struct vfs_dirent *out, int max)
+{
+    if (!ext2_64_is_mounted()) return -1;
+    if (max > EXT2_ITER_MAX) max = EXT2_ITER_MAX;
+
+    char (*names)[256] = (char (*)[256])kmalloc(EXT2_ITER_MAX * 256);
+    uint8_t  *types  = (uint8_t  *)kmalloc(EXT2_ITER_MAX);
+    uint32_t *sizes  = (uint32_t *)kmalloc(EXT2_ITER_MAX * 4);
+    if (!names || !types || !sizes) { kfree(names); kfree(types); kfree(sizes); return -1; }
+
+    int n = ext2_64_list_dir_entries_ex(path, names, types, sizes, EXT2_ITER_MAX);
+    if (n < 0) { kfree(names); kfree(types); kfree(sizes); return -1; }
+    if (n > max) n = max;
+
+    uint64_t off = 0;
+    for (int i = 0; i < n; i++) {
+        int nl = 0; while (names[i][nl] && nl < 255) nl++;
+
+        char child[256];
+        size_t pl = strlen(path);
+        strncpy(child, path, sizeof(child) - 1);
+        child[sizeof(child) - 1] = 0;
+        size_t cl = strlen(child);
+        if (!(cl == 1 && child[0] == '/') && child[cl - 1] != '/') {
+            if (cl < sizeof(child) - 1) { child[cl++] = '/'; child[cl] = 0; }
+        }
+        strncpy(child + cl, names[i], sizeof(child) - cl - 1);
+        child[sizeof(child) - 1] = 0;
+        (void)pl;
+
+        uint32_t ino = ext2_64_lookup(child);
+        uint16_t reclen = (uint16_t)((19 + nl + 7) & ~7);
+
+        memset(&out[i], 0, sizeof(out[i]));
+        out[i].d_ino    = ino;
+        out[i].d_off    = off;
+        out[i].d_reclen = reclen;
+        out[i].d_type   = types[i] ? VFS_DT_DIR : VFS_DT_REG;
+        strncpy(out[i].d_name, names[i], sizeof(out[i].d_name) - 1);
+        off += reclen;
+    }
+
+    kfree(names); kfree(types); kfree(sizes);
+    return n;
+}
+
 struct vfs_backend vfs64_be_ext2 = {
-    .name   = "ext2",
-    .lookup = ext2_lookup,
-    .create = ext2_create,
+    .name     = "ext2",
+    .lookup   = ext2_lookup,
+    .create   = ext2_create,
+    .iterate  = ext2_iterate,
 };

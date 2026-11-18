@@ -128,6 +128,72 @@ int main(void)
     if (fd3 != 3) fails++;
     if (fd3 >= 0) close(fd3);
 
+    /* ================= [VFSP5] S5 目录枚举（readdir/getdents） ================= */
+    out("[VFSP5] directory enumerate probe\n");
+    {
+        unsigned char rdbuf[1024];
+        int s5 = 0;
+        /* readdir 打包格式：name\0 type\0，与终端/文件管理器旧口径一致。 */
+        int rd = (int)syscall3(SYS_READDIR, (uint64_t)"/bin",
+                              (uint64_t)rdbuf, sizeof(rdbuf));
+        out("[VFSP5] readdir(/bin) bytes="); out_num(rd); out("\n");
+        if (rd <= 0) {
+            s5++;
+        } else {
+            int idx = 0; int found_hello = 0; int entries = 0; int hello_type_ok = 1;
+            while (idx < rd) {
+                char nm[256]; int nl = 0;
+                while (idx < rd && rdbuf[idx]) { nm[nl++] = rdbuf[idx++]; }
+                nm[nl] = 0;
+                if (idx < rd && rdbuf[idx] == 0) idx++;   /* 跳过名字 NUL */
+                char tp = '?';
+                if (idx < rd) { tp = rdbuf[idx++]; }      /* 类型字节 */
+                if (idx < rd && rdbuf[idx] == 0) idx++;   /* 跳过类型 NUL */
+                entries++;
+                if (strcmp(nm, "hello.elf") == 0) {
+                    found_hello = 1;
+                    if (tp != 'f') hello_type_ok = 0;
+                }
+            }
+            out("[VFSP5] readdir entries="); out_num(entries);
+            out(" hello.elf="); out(found_hello ? "found" : "MISSING");
+            out(" type="); out(hello_type_ok ? "ok" : "BAD"); out("\n");
+            if (!found_hello || !hello_type_ok) s5++;
+        }
+
+        /* getdents64：ino@0(8) off@8(8) reclen@16(2) type@18(1) name@19 */
+        unsigned char gbuf[512];
+        int gd = (int)syscall3(SYS_LNX64_GETDENTS, 0,
+                               (uint64_t)gbuf, sizeof(gbuf));
+        out("[VFSP5] getdents bytes="); out_num(gd); out("\n");
+        if (gd <= 0) {
+            s5++;
+        } else {
+            int goff = 0; int gent = 0;
+            while (goff + 19 <= gd) {
+                uint16_t reclen = (uint16_t)gbuf[goff+16] |
+                                  ((uint16_t)gbuf[goff+17] << 8);
+                if (reclen < 19) break;
+                int nl = 0;
+                while (goff + 19 + nl < gd && gbuf[goff+19+nl]) nl++;
+                if (nl > 0) gent++;
+                goff += reclen;
+            }
+            out("[VFSP5] getdents entries="); out_num(gent); out("\n");
+            if (gent <= 0) s5++;
+        }
+
+        /* 不存在的目录：对齐旧实现，枚举失败返回非正数。 */
+        int rm = (int)syscall3(SYS_READDIR, (uint64_t)"/no_such_dir_xyz",
+                               (uint64_t)rdbuf, sizeof(rdbuf));
+        out("[VFSP5] readdir(missing) rc="); out_num(rm);
+        out(" (expect <=0)\n");
+        if (rm > 0) s5++;
+
+        out("[VFSP5] local fails="); out_num(s5); out("\n");
+        fails += s5;
+    }
+
     out(fails ? "[VFSP] RESULT: FAIL\n" : "[VFSP] RESULT: PASS\n");
     return fails ? 1 : 0;
 }

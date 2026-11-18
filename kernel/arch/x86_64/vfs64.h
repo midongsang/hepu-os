@@ -50,6 +50,22 @@ struct vfs_node;
 struct vfs_file;
 struct vfs_backend;
 
+/* S5：跨后端统一的目录项布局（内核 staging，不直接写给用户态）。
+ * 字节布局对齐现有 64 位 getdents64 打包：
+ *   d_ino@0(8) d_off@8(8) d_reclen@16(2) d_type@18(1) d_name@19[]
+ * 后端 iterate 只填这个内核数组；用户态打包（readdir 的 name\0type\0 或
+ * getdents 的 dirent64 字节流）由 syscall 入口层负责。 */
+#define VFS_DT_REG  8   /* Linux DT_REG  */
+#define VFS_DT_DIR  4   /* Linux DT_DIR  */
+
+struct vfs_dirent {
+    uint64_t d_ino;
+    uint64_t d_off;
+    uint16_t d_reclen;
+    uint8_t  d_type;
+    char     d_name[256];
+};
+
 /* 冻结契约 ops 表。函数指针顺序与 lessons 第一节一致；
  * read/write 带 uint64_t *done（短读写回报）。 */
 struct vfs_file_ops {
@@ -93,6 +109,8 @@ struct vfs_backend {
     int (*lookup)(const char *path, struct vfs_node *out);
     /* S4：O_CREAT 新建普通文件。0 成功，-1 失败。 */
     int (*create)(const char *path, uint32_t flags);
+    /* S5：枚举目录项，填 out[0..max)，返回条目数；<0 失败。 */
+    int (*iterate)(const char *path, struct vfs_dirent *out, int max);
 };
 
 struct vfs_mount {
@@ -118,6 +136,9 @@ int  vfs64_open(const char *kpath, uint32_t flags, struct vfs_file *f);
 /* S4：按路径新建普通文件（O_CREAT 后端入口）。0 成功，-1 未挂载/后端不支持。
  * 调用方仍负责 fd 分配与失败回退；本入口只做后端分派。 */
 int  vfs64_create(const char *kpath, uint32_t flags);
+
+/* S5：按路径枚举目录，填内核 staging 数组；返回条目数，-1 未挂载/后端不支持。 */
+int  vfs64_iterate(const char *kpath, struct vfs_dirent *out, int max);
 
 /* 读：entry 内 copy_to_user 回写；*done 回报实际字节。返回 0 成功，-1 失败。 */
 long vfs64_read(struct vfs_file *f, void *ubuf, uint64_t len, uint64_t *done);
