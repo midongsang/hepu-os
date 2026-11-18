@@ -817,6 +817,27 @@ static void hepu_panic_kernel_fault(uint64_t *sf)
     while (1) { __asm__ volatile("hlt"); }
 }
 
+/* 2026-11-19: shell `bsod` 的 64 位实现 —— 构造一个假中断帧，
+ * 直接走 hepu_panic_kernel_fault，验证 STOP 码/异常名/Hint/回溯整条链。 */
+void cmd_bsod64(void)
+{
+    uint64_t sf[24];
+    int i;
+    extern void serial_puts(uint16_t port, const char *s);
+
+    for (i = 0; i < 24; i++) sf[i] = 0;
+    __asm__ volatile ("mov %%cs, %0"    : "=r"(sf[20]));
+    __asm__ volatile ("pushfq; pop %0"  : "=r"(sf[21]));
+    __asm__ volatile ("mov %%rsp, %0"   : "=r"(sf[22]));
+    __asm__ volatile ("mov %%rbp, %0"   : "=r"(sf[10]));
+    __asm__ volatile ("call 1f\n1:\tpopq %0" : "=r"(sf[19]));
+    sf[17] = 14;    /* page fault */
+    sf[18] = 0x2;   /* write, not present */
+
+    serial_puts(0x3F8, "[BSOD] 64-bit self-test requested from shell\n");
+    hepu_panic_kernel_fault(sf);
+}
+
 /* Hepu panic: 打印错误信息+栈帧后停机（SEC-06） */
 void hepu_panic(const char *msg)
 {

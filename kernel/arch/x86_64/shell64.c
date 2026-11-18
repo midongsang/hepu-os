@@ -3303,8 +3303,17 @@ static void shell_cmd_sysprof(const char *args)
     a3_sc_prof_dump(24);
 }
 
+static void shell_cmd_bsod(int argc, char **argv)
+{
+    extern void cmd_bsod64(void);
+    (void)argc; (void)argv;
+    cmd_bsod64();
+}
+
 /* 命令表 */
 static shell_command_t shell_commands[] = {
+
+    {"bsod", shell_cmd_bsod},
 
 
     {"tls12", shell_cmd_tls12},
