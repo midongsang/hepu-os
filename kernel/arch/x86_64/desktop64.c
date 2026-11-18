@@ -357,7 +357,10 @@ void desktop64_run(void)
         {
             int pend = __atomic_exchange_n(&g_pending_app, 0, __ATOMIC_ACQ_REL);
             if (pend != 0) {
-                hpdesk_handle_pending_app();
+                /* pend 已被取走并清零, 必须作为参数传给消费方;
+                 * 若 handler 再回去读 g_pending_app, 读到的已是 0(HS_APP_NONE),
+                 * 启动请求会被静默丢弃。 */
+                hpdesk_handle_pending_app(pend);
                 vga_puts("[DESKTOP64] Pending app request handled by Hepu Desktop\n");
             }
         }

@@ -1,0 +1,2 @@
+ESTAB 0      0                 127.0.0.1:39368             127.0.0.1:4433  users:(("qemu-system-x86",pid=52283,fd=18))
+ESTAB 0      0        [::ffff:127.0.0.1]:4433     [::ffff:127.0.0.1]:39368 users:(("openssl",pid=52260,fd=4))         

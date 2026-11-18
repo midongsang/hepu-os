@@ -308,7 +308,9 @@ static int tls12_build_client_hello(uint8_t *out, uint32_t out_max, const char *
 
     /* SNI (type 0) */
     {
-        uint16_t sni_len = (uint16_t)(host_len + 2 + 1 + 3); /* 列表长度 + 名字类型 + 名字长度 + 名字 */
+        /* SNI 扩展数据长度 = list_len(2) + name_type(1) + name_len(2) + name(host_len)
+         * 旧实现多算 1 字节, 声明长度大于实际, OpenSSL 会越界读下一扩展 -> bad extension。 */
+        uint16_t sni_len = (uint16_t)(host_len + 5);
         *p++ = 0x00; *p++ = 0x00;                        /* type=server_name */
         *p++ = (uint8_t)(sni_len >> 8); *p++ = (uint8_t)sni_len;
         uint16_t list_len = (uint16_t)(host_len + 3);
@@ -409,14 +411,16 @@ int tls12_probe(const char *hostname, uint16_t port)
     g_tls_sock = tcp64_connect(ip, port, 12345);
     if (g_tls_sock < 0) { vga_puts("[TLS12] tcp connect failed\n"); return -1; }
 
-    /* 等连接建立（3 秒墙钟上限，避免堵住主循环） */
+    /* 等连接建立（3 秒墙钟上限，避免堵住主循环）。
+     * 状态码口径与 net64_tcp.c 一致: TCP_ESTABLISHED=4
+     * (旧实现误写成 1, 那是 TCP_LISTEN, 连接已建立也会被判成未建立)。 */
     uint64_t t0 = rtc64_get_timestamp();
     while (rtc64_get_timestamp() - t0 < 3) {
         net64_poll();
-        if (tcp64_get_state(g_tls_sock) == 1 /* TCP_ESTABLISHED */) break;
+        if (tcp64_get_state(g_tls_sock) == 4 /* TCP_ESTABLISHED */) break;
         for (volatile int dw = 0; dw < 10000; dw++);
     }
-    if (tcp64_get_state(g_tls_sock) != 1) { vga_puts("[TLS12] tcp not established\n"); return -1; }
+    if (tcp64_get_state(g_tls_sock) != 4) { vga_puts("[TLS12] tcp not established\n"); return -1; }
     vga_puts("[TLS12] tcp established\n");
 
     uint8_t ch[512];

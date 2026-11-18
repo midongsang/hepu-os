@@ -1,0 +1,1 @@
+[ACCT] password input mode on

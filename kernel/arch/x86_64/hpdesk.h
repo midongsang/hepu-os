@@ -363,7 +363,7 @@ void hpdesk_cycle_window_focus(void);
 void hpdesk_close_focused_window(void);
 
 /* V0.13.7 P4: 消费应用启动请求 (Dock/启动器图标) */
-void hpdesk_handle_pending_app(void);
+void hpdesk_handle_pending_app(int app);
 void hpdesk_pinch_resize(int dir);  /* V0.13.8 P5: 触摸捏合缩放 */
 
 /* 应用启动请求（Dock图标点击时设置，desktop64主循环检测并启动） */

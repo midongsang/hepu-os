@@ -3708,6 +3708,23 @@ static void hs_settings_window_render(hs_window_t *w)
             g_acct_pw_btn_x = rx; g_acct_pw_btn_y = ry;
             ry += SETK(40);
         }
+        /* 输入模式: 画出可编辑输入框, 已键入字符以掩码圆点回显,
+         * 否则进入模式后界面没有任何可见反馈, 无法判断点击是否命中。 */
+        if (g_acct_pw_mode) {
+            int fh = SETK(28);
+            hs_draw_rounded_rect(rx, ry, SETK(150), fh, SETK(6), g_shell.colors.border);
+            if (g_acct_pw_len == 0) {
+                font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                                   rx + SETK(12), ry + SETK(7), "Enter new password",
+                                   g_shell.colors.text_secondary, SETK(11));
+            } else {
+                for (int i = 0; i < g_acct_pw_len; i++) {
+                    int dcx = rx + SETK(14) + i * SETK(12);
+                    hs_fill_circle(dcx, ry + fh / 2, SETK(3), g_shell.colors.panel_fg);
+                }
+            }
+            ry += SETK(36);
+        }
         if (g_acct_pw_msg[0]) {
             font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                                rx, ry, g_acct_pw_msg, g_shell.colors.text_secondary, SETK(10));
@@ -4011,6 +4028,16 @@ static int hs_panel_bounds(int idx, int *ox, int *oy, int *ow, int *oh)
     case HS_PANEL_TOP_BAR:
         *ox = 0; *oy = 0;
         *ow = sw; *oh = hs_sy(8) + hs_sy(g_shell.ui.bar_height) + hs_sy(16);
+        /* 电源菜单弹在顶栏下方, 三层高; 顶栏层若仍按常态高度分配,
+         * 超出层 surface 的两行(Reboot/Shut down)会被静默裁掉。
+         * 仅在菜单打开时条件化放大本层包围盒, 常态几何不变。 */
+        if (g_power_menu_open) {
+            int bar_top = hs_sy(8);
+            int bar_h = hs_sy(g_shell.ui.bar_height);
+            int mh = hs_sy(34);
+            int menu_bottom = bar_top + bar_h + hs_sy(4) - hs_sy(4) + mh * 3 + hs_sy(8);
+            if (menu_bottom > *oh) *oh = menu_bottom;
+        }
         return 1;
     case HS_PANEL_DYNAMIC_ISLAND: {
         int iw = hs_sx(g_shell.ui.island_width), ih = hs_sy(g_shell.ui.island_height);
@@ -6136,6 +6163,7 @@ void hpdesk_handle_click(int x, int y)
                 g_acct_pw_len = 0;
                 g_acct_pw_buf[0] = 0;
                 g_acct_pw_msg[0] = 0;
+                vga_puts("[ACCT] password input mode on\n");
                 g_content_dirty = 1;
                 return;
             }
@@ -9091,11 +9119,9 @@ static void hs_app_placeholder_render(hs_window_t *w)
                        "App content rebuilding (V0.55.0)", g_shell.colors.text_secondary, 12);
 }
 
-void hpdesk_handle_pending_app(void)
+void hpdesk_handle_pending_app(int app)
 {
-    if (g_pending_app == HS_APP_NONE) return;
-    int app = g_pending_app;
-    g_pending_app = HS_APP_NONE;
+    if (app == HS_APP_NONE) return;
 
     const char *title = "App";
     switch (app) {
