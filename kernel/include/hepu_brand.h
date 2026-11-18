@@ -41,9 +41,9 @@
 
 /* 版本 */
 #define HEPU_VERSION_MAJOR    0
-#define HEPU_VERSION_MINOR    33
-#define HEPU_VERSION_PATCH    1
-#define HEPU_VERSION_STRING   "V0.33.1"
+#define HEPU_VERSION_MINOR    61
+#define HEPU_VERSION_PATCH    0
+#define HEPU_VERSION_STRING   "V0.61.0"
 
 /* 开机画面文字 */
 #define HEPU_BOOT_LINE1       "  H E P U  "

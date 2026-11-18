@@ -1,8 +1,8 @@
 ---
 title: VERSIONING
 status: active
-sys_version: 0.60.7
-updated: 2026-11-17
+sys_version: 0.61.0
+updated: 2026-11-18
 owner: status
 source_of_truth: null
 supersedes: null

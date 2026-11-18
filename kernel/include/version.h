@@ -10,7 +10,7 @@
 #ifndef HEPU_VERSION_H
 #define HEPU_VERSION_H
 
-#define HEPU_OS_VERSION      "0.60.7"
+#define HEPU_OS_VERSION      "0.61.0"
 #define HEPU_OS_VERSION_MAJOR 0
 #define HEPU_OS_VERSION_MINOR 60
 #define HEPU_OS_VERSION_BUG   7

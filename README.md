@@ -5,7 +5,7 @@
 [![Build](https://github.com/midongsang/hepu-os/actions/workflows/ci.yml/badge.svg)](https://github.com/midongsang/hepu-os/actions/workflows/ci.yml)
 [![Release](https://github.com/midongsang/hepu-os/actions/workflows/release.yml/badge.svg)](https://github.com/midongsang/hepu-os/actions/workflows/release.yml)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPLv3-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-v0.60.7-brightgreen.svg)](#当前版本)
+[![Version](https://img.shields.io/badge/version-v0.61.0-brightgreen.svg)](#当前版本)
 [![Kernel size](https://img.shields.io/badge/kernel-946KB-blue.svg)](#当前版本)
 [![glibc 动态链接](https://img.shields.io/badge/glibc-✓-brightgreen.svg)](#核心特性)
 [![ext2](https://img.shields.io/badge/ext2-✓-brightgreen.svg)](#核心特性)
@@ -96,10 +96,48 @@ AHCI 厂商实现差异（ABAR 与端口复位流程）。
 
 ## 当前版本
 
-**0.60.7** — 当前版本（版本号唯一事实源：`docs/status/VERSIONING.md` frontmatter，
+**0.61.0** — 当前版本（版本号唯一事实源：`docs/status/VERSIONING.md` frontmatter，
 代码侧单一来源：`kernel/include/version.h`，32/64 位共用）
 
-本版是**内核正确性批次**，把一个长期被误判的崩溃查到了底：32 位只要多加约 1 KB
+本版是**验证与整理批次**，没有新增功能，做的是把已有结论钉死、把不确定的东西标清楚。
+
+**多架构移植可行性评估**（`docs/planning/MULTIARCH_PORT_EVALUATION.md`）：逐文件量了
+桌面层的架构耦合 —— `ttf64.c`/`cursor64.c`/`l10n64.c` 的 `__asm__`、`cpuid`、`msr`、
+端口 IO 全为 0，`hpdesk.c` 仅 2 处、`gfx64.c` 5 处。也就是说自研 TTF 光栅化、窗口
+系统、中文化可以直接搬；成本集中在 `arch/x86_64`（92,153 行）与 `arch/x86`（68,910 行）。
+按"目标平台必须有可用 UEFI 固件"这条硬约束筛出三梯队：ARM64 首选（RK3588S 明确支持
+UEFI Boot、Radxa Dragon Q8B 官方标准 UEFI、飞腾派、服务器级飞腾/鲲鹏/Ampere/Graviton），
+RISC-V64 次之（算能 SG2042、SpacemiT K3），LoongArch64 再次（龙芯 3A6000/3B6000M，
+统一系统架构规范 V4.2 明确 UEFI + ACPI）。
+
+**五条技术线合并，其中四条是"早已修好、本轮真机复验"**：存储 BUG-13（slave 256MB
+LBA48 高 LBA 自检 `cases=0x5 fails=0x0`、宿主回读 pattern 全 match）、BUG-55（32 位
+挂盘分区表/末扇区写读回/512KB 双间接块/auto-fsck 全 PASS）、BUG-54（AHCI `sectors=0x80000`
+末扇区 `mismatch=0x0`）、PCI BUG-53（xHCI `MMIO 0x800000000 slots=8 ports=8`，sendkey
+后 USB 报告 0→6 而 PS/2 IRQ1 恒 0x3）、BUG-56（e1000 注册且 DHCP/ARP/ICMP/TCP 齐全）、
+安装器 OPEN-04（宿主机独立核对：目标盘 P1 与源盘 P1 扇区级 0 差异、ESP 四文件逐字节
+一致、目标盘单盘独立启动进桌面）。另外两条是**部分修**：N-1 内存预算按方案 a 缓解
+（壁纸缓存 16,384,000→12,288,000 B，稳态堆余量 8.00→11.90 MiB），P3-6 加载器拆分完成
+第一阶段（新模块 `uproc_loader64.c`，并顺带修掉拆分引入的回归：返回 trampoline 漏
+恢复 r13 致 `path` 被踩、panic `CR2=0x400003E7`）。
+
+**两条口径纠正。** 其一，OBS-05"32 位桌面只画 38%"不成立：38% = 786,399 恰好只有
+上 409 行上色，是启动过渡期的半幅首帧被截屏；`61c53fa` 上实测 2,073,598/2,073,600 =
+100.00%（九宫格 8 格满、仅右上差 2 像素）。其二，32 位电池是**模拟放电**（
+`kernel/drivers/pm.c:342-357`），掉到 5% 打印 `auto suspend pending` 后进深睡、实例约
+15 秒自退，所以"静置 20 秒再截图"在 32 位上必然取不到帧 —— 32 位取样要卡在 first frame
+后 ≤8 秒。
+
+**版本号双源统一**：`kernel/include/hepu_brand.h` 里还留着一份 `V0.33.1` 的字面量
+（全仓库零引用的死代码），已同步到 0.61.0，避免后续误用。
+
+体积（默认参数重编，上限 1,048,576 B）：64 位 **969,520 B**（余量约 79 KB），
+32 位 **3,761,541 B**；双架构 0 error，32 位冒烟 `serial=1 initrd=1 net=1 desk=1
+fault=0 bound=1` PASS。
+
+### 0.60.7（上一版）
+
+0.60.7 是**内核正确性批次**，把一个长期被误判的崩溃查到了底：32 位只要多加约 1 KB
 静态数据就启动失败，此前结论是"BSS 已贴边界、不能再加"。用
 `qemu-system-i386 -d int,cpu_reset` 抓到异常链后才确认真实机制 ——
 `e1000` 把网卡 MMIO 物理地址（`0xFEB80000`，4 GB 附近）当指针直写，而按需分页对
@@ -108,13 +146,6 @@ AHCI 厂商实现差异（ABAR 与端口复位流程）。
 `#DF` 变成 triple fault。同一批还修了 `e1000` 拿 `kmalloc` 堆块当 DMA 缓冲
 （块被 split 后紧邻下一个 `block_header`，越界即踩坏链表），以及 `kheap`
 遇 header magic 不符时不再信任坏块的 `size/next`。
-
-配套完成：**安装器闭环**（三层叠加缺陷修完后，装出来的目标盘可单独 UEFI 启动，
-桌面 `NONBLACK=2073597`，`/bin` 27 个 ELF、配置 md5 与源盘逐一致）；
-`sys_readdir` 撤掉 16 KB 静态表（栈帧 `objdump` 实量 2,360 → 360 B）；
-驱动四域实测闭环（xHCI 枚举键鼠、AHCI 读 LBA0 签名 `55AA` 且末扇区回环
-`mismatch=0x0`、E1000 注册并 DHCP 通、boot 期 APIC 校准改用 HPET 基准
-5 次启动零告警）；`uart64` IRQ4 与 DHCP T1 续租打通。
 
 ### 启动链路（0.60.7 之后陆续合入）
 
