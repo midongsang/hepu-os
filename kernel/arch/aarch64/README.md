@@ -276,7 +276,7 @@ EOIR 对照 `/tmp/m1d-2-noeoir.log`，exit=124（超时）：
 
 - **退出前补齐映射**（`SetMemoryAttributes` 退出后不可用，属性须在退出前定好）：
   - GOP：`LocateProtocol` 取 `FrameBufferBase/FrameBufferSize` 与 Mode->Info（实测 800x600，
-    `PixelFormat=1` BGR 32bpp，stride=800），`map_fb_region` 按 4KB Normal WB 补齐；FB 这段在
+    `PixelFormat=1` BGR 32bpp，stride=800），`map_fb_region` 按 4KB 补齐（M2 起改 Normal NC）；FB 这段在
     MemoryMap 里是 type0 Reserved（`0x58430000` 768 页），被 M1d-1 规则跳过，须显式补映射。
   - 自有栈在 bss，随 image 段被 type1/type7 覆盖；描述符副本在静态 `map_buf`（32KB bss）。
 - **描述符静态副本**：`fetch_memory_map` 两遍取 MapKey/Size，描述符写进静态 bss `map_buf`，
@@ -340,7 +340,7 @@ EOIR 对照 `/tmp/m1d-2-noeoir.log`，exit=124（超时）：
 
 ### 遗留
 
-- FB 当前按 Normal WB 映射；若后续实测写无效，再改 Normal NC / Device 重映射复核。
+- FB 映射属性在 M2 改为 Normal NC（AttrIdx2），避免 WB 脏行未清回内存导致截图读到旧内容。
 - GICv3 路径未实现（同 M1d-2 遗留）。
 - 桩返回的「旧 sp」是压栈后的 sp（比入口 sp 低 16），非严格入口值；不影响换栈校验。
 - 退出后未再调用任何 BootServices/Print；GOP 结构体本身退出后不可依赖，仅在退出前缓存了
@@ -350,3 +350,101 @@ EOIR 对照 `/tmp/m1d-2-noeoir.log`，exit=124（超时）：
 
 **复现命令：** 见本文档 M0 段（`-cpu max` + `-bios QEMU_EFI.fd` + `-drive if=virtio` + `-device ramfb`），
 `kernel/arch/aarch64/m1` 目录直接 `make`，产物 `M1.EFI` 拷成 `EFI/BOOT/BOOTAA64.EFI`。
+
+## M2（已通）：ARM64 第一次出界面
+
+**结论：在 M1d 已验证可写的 GOP 帧缓冲上自绘最小界面——整屏底色 + 顶部状态栏 + accent 色块 +
+居中放大文字 `HEPU ARM64`；保持 9s 期间定时器中断继续计数，之后 PSCI 关机，QEMU exit=0。
+`monitor screendump` 抓回 P6 PPM 800×600，转 PNG 后肉眼 + 采样核对：底色/条/块/文字均符合预期，
+字形可读、未倒置错位。截图 `kernel/arch/aarch64/m1/m2-screen.png`。**
+
+### 实测分辨率与像素格式（串口原文）
+
+```
+[M1d] GOP 800x600 fmt=1 stride=800
+[M1d] FB base=0x0000000058430000 size=3145728
+[M2] FB @0x0000000058430000 w=800 h=600 stride=800 fmt=1
+```
+
+- `fmt=1` = `PixelBlueGreenRedReserved8BitPerColor`，BGRX 32bpp；内存字节序 B,G,R,X，小端写
+  `uint32 = 0x00RRGGBB` 即出正确颜色（截图采样 RGB 与预期一致，已自查字节序）。
+- `FrameBufferSize=3145728 = 1024×768×4`，比可见 `800×600×4` 大；寻址按 `PixelsPerScanLine=800`
+  作行步长，绘制全部限制在 `w=800 / h=600` 内，未越界。
+- screendump 出的 PPM 实测 `P6 w=800 h=600 max=255`，与 GOP `HRes/VRes/stride` 三者一致，
+  不存在按 1024×768 画导致右/下被裁的问题。
+
+### 区块坐标 + 颜色表
+
+颜色打包 `0x00RRGGBB`；采样值为 PPM 读出的 RGB。
+
+| 区块 | x | y | w | h | color(0x00RRGGBB) | 采样 RGB |
+|---|---|---|---|---|---|---|
+| 整屏底色 | 0 | 0 | 800 | 600 | `0x141822` | (20, 24, 34) |
+| 顶部状态栏 | 0 | 0 | 800 | 40 | `0x1F6FEB` | (31, 111, 235) |
+| accent 色块 | 16 | 8 | 24 | 24 | `0xFF6B35` | (255, 107, 53) |
+| 标题文字 | 居中 x=124 y=276 | — | 字 48×48 | — | fg `0xFFFFFF` / bg `0x141822` | 白 |
+
+- 字模：自带 8×8 位图，仅覆盖 `H E P U A R M 6 4` 与空格；放大倍数 `scale=6`（字 48px），
+  字间 `gap=8`。`HEPU ARM64` 共 10 字符，文本宽 `10×48 + 9×8 = 552`，
+  `x=(800-552)/2=124`，`y=(600-48)/2=276`。
+- 绘制耗时 `[M2] draw time=2 ms`（`CNTVCT_EL0` 差值按 `CNTFRQ=62500000` 换算）。
+
+### 保持期中断与关机
+
+```
+[M2] framebuffer drawn, holding
+[M2] held 9000 ms, IRQ during hold=89 total IRQ=109 vct=000000003c3167a1
+[M2] poweroff
+```
+
+- 保持 9000ms，期间虚拟定时器中断 89 次（100ms 周期），累计 109；结束后关定时器、mask IRQ，
+  PSCI 关机，**exit=0**。
+
+### 本轮发现/修掉的点
+
+- **FB 改 Normal NC**：M1d 里 FB 按 Normal WB 映射；WB 脏行若不主动清回内存，QEMU 抓屏可能读到
+  旧内容。MAIR 增加 Attr2=Normal NC(`0x44`)，FB 页用 AttrIdx2 映射，规避缓存一致性问题。
+- **EBS 后 GIC 被固件复位**：首次保持期 `IRQ during hold=0`（定时器没再触发）。排查后在保持段
+  重新写 `GICD_CTLR=1`、`ISENABLER0` bit27、`GICC_PMR=0xFF`、`GICC_CTLR=1` 再 arm 定时器，
+  保持期恢复 89 次中断。说明 ExitBootServices 后 CPU interface/优先级掩码需重新使能。
+- **抓图就绪信号时机**：初版把 `framebuffer drawn, holding` 打点放在 9s 等待循环**之后**，monitor
+  按这行触发抓图时画面已关机。改为先打就绪信号、再进等待循环，保证抓图落在保持窗内。
+
+### 截图判读（`m2-screen.png`，800×600）
+
+- 底色：左下/右上采样均为 `(20,24,34)`，整屏深底存在且颜色符合预期。
+- 状态栏：`(400,20)`、`(700,30)` 均为 `(31,111,235)` 蓝条，横贯顶部 40px。
+- accent：`(28,20)`、`(20,12)` 均为 `(255,107,53)` 橙块，位置 `16,8 24×24` 对得上。
+- 文字：中央白色像素成 9 个列段（对应 `HEPUARM64` 九个非空格字符），每段宽 48px、字距 8px，
+  首段 x=124、居中于 400；放大逐字核对为 `H E P U A R M 6 4`，可读、非色块、未倒置错位。
+
+### 复现（含 screendump 调法）
+
+1. `kernel/arch/aarch64/m1` 下 `make`，产物 `M1.EFI` 拷成 `EFI/BOOT/BOOTAA64.EFI` 放进 ESP。
+2. 起 QEMU（前台，`-display none`，加 monitor unix socket）：
+
+```
+qemu-system-aarch64 -M virt -cpu max -m 512 \
+  -bios /usr/share/qemu-efi-aarch64/QEMU_EFI.fd \
+  -drive file=/tmp/m1.img,format=raw,if=virtio -device ramfb \
+  -vnc 127.0.0.1:5938 -display none \
+  -monitor unix:/tmp/m2-mon.sock,server,nowait \
+  -serial file:/tmp/m2-run2.log
+```
+
+3. 串口出现 `[M2] framebuffer drawn, holding` 后（9s 保持窗内），连 socket 发：
+
+```
+screendump /tmp/m2.ppm
+```
+
+4. 环境无 `pnmtopng`，用 python + zlib 手写最小 P6(RGB)→PNG（IHDR 800×600、8bit 真彩、
+   filter 0、zlib 压缩 IDAT），输出 `m2-screen.png`。
+
+### 没做 / 存疑
+
+- 字模只覆盖标题用到的字符；无字符串渲染、无滚动、无指针/输入设备。
+- 单缓冲，未做 vsync/双缓冲；绘制直接写 FB，未做局部脏区刷新。
+- FB 按 Normal NC 映射，整屏填充性能未优化；后续若上复杂 UI 再评估 WC/NC 取舍与缓存清理。
+- GICv3 路径仍未实现（同 M1d-2 遗留）；保持期中断只做计数，未测中断嵌套/优先级分组。
+- `info display` 在本 QEMU monitor 下为 `unknown command`，分辨率以 GOP Info 与 PPM 头互证为准。

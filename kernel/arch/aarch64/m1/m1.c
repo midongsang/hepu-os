@@ -268,16 +268,128 @@ static void map_devices(void)
     map_page(0x09000000UL, PAGE_DEV);  /* PL011 UART */
 }
 
-/* GOP framebuffer 区间：退出前按 4KB 补齐映射（先 Normal WB，写无效再改 NC/Device） */
+/* GOP framebuffer 区间：退出前按 4KB 补齐映射。FB 走 Normal NC（AttrIdx2），
+ * 避免 WB 脏行未清回内存导致 QEMU screendump 读到旧内容。 */
 static uint64_t fb_base, fb_size;
+static uint32_t fb_w, fb_h, fb_stride, fb_fmt;
+#define PAGE_NORM_NC (0x3UL | (2UL << 2) | (3UL << 8) | (1UL << 10))
+
 static void map_fb_region(uint64_t base, uint64_t size)
 {
     if (!size) return;
     uint64_t lo = base & ~0xFFFULL;
     uint64_t hi = (base + size + 0xFFFULL) & ~0xFFFULL;
     for (uint64_t pa = lo; pa < hi; pa += 0x1000UL)
-        map_page(pa, PAGE_NORM);
+        map_page(pa, PAGE_NORM_NC);
     uart_puts("[M1d] FB mapped pages="); uart_dec((hi - lo) / 0x1000UL); uart_puts("\n");
+}
+
+/* ---------------- M2：最小 2D 绘制（8x8 字模，BGRX 32bpp） ----------------
+ * fmt=1 = PixelBlueGreenRedReserved8BitPerColor：内存字节序 B,G,R,X；
+ * 小端写 uint32 = 0x00RRGGBB 即得正确颜色。
+ * 字模每位 = 一行一字节，bit7 在最左；只覆盖标题要用的字符。
+ */
+static const uint8_t font8[][8] = {
+    /* 0 space */ {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00},
+    /* 1 H */     {0x81,0x81,0x81,0xFF,0x81,0x81,0x81,0x00},
+    /* 2 E */     {0xFF,0x80,0x80,0xFE,0x80,0x80,0xFF,0x00},
+    /* 3 P */     {0xFE,0x81,0x81,0xFE,0x80,0x80,0x80,0x00},
+    /* 4 U */     {0x81,0x81,0x81,0x81,0x81,0x81,0x7E,0x00},
+    /* 5 A */     {0x7E,0x81,0x81,0xFF,0x81,0x81,0x81,0x00},
+    /* 6 R */     {0xFE,0x81,0x81,0xFE,0x82,0x88,0x84,0x00},
+    /* 7 M */     {0x81,0xC3,0xA5,0x99,0x81,0x81,0x81,0x00},
+    /* 8 6 */     {0x3C,0x60,0x80,0xFE,0x81,0x81,0x7E,0x00},
+    /* 9 4 */     {0x10,0x28,0x44,0x84,0xFE,0x10,0x10,0x00},
+};
+
+static int glyph_index(char c)
+{
+    switch (c) {
+    case ' ': return 0;
+    case 'H': return 1;
+    case 'E': return 2;
+    case 'P': return 3;
+    case 'U': return 4;
+    case 'A': return 5;
+    case 'R': return 6;
+    case 'M': return 7;
+    case '6': return 8;
+    case '4': return 9;
+    default:  return 0;
+    }
+}
+
+static volatile uint32_t *fb_at(uint32_t x, uint32_t y)
+{
+    return (volatile uint32_t *)(fb_base + ((uint64_t)y * fb_stride + x) * 4);
+}
+
+static void putpx(uint32_t x, uint32_t y, uint32_t color)
+{
+    if (x >= fb_w || y >= fb_h) return;
+    *fb_at(x, y) = color;
+}
+
+static void fill_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t color)
+{
+    for (uint32_t j = 0; j < h; j++) {
+        uint32_t yy = y + j;
+        if (yy >= fb_h) break;
+        for (uint32_t i = 0; i < w; i++) {
+            uint32_t xx = x + i;
+            if (xx >= fb_w) break;
+            *fb_at(xx, yy) = color;
+        }
+    }
+}
+
+static void draw_char(char ch, uint32_t x, uint32_t y, uint32_t scale,
+                      uint32_t fg, uint32_t bg)
+{
+    const uint8_t *g = font8[glyph_index(ch)];
+    for (uint32_t r = 0; r < 8; r++) {
+        uint8_t row = g[r];
+        for (uint32_t col = 0; col < 8; col++) {
+            uint32_t on = (row >> (7 - col)) & 1;
+            uint32_t c = on ? fg : bg;
+            for (uint32_t sy = 0; sy < scale; sy++)
+                for (uint32_t sx = 0; sx < scale; sx++)
+                    putpx(x + col * scale + sx, y + r * scale + sy, c);
+        }
+    }
+}
+
+/* 文本宽（含字间 gap，末字不加） */
+static uint32_t text_width(const char *s, uint32_t scale, uint32_t gap)
+{
+    uint32_t w = 0;
+    for (; *s; s++) w += 8 * scale + gap;
+    return w ? w - gap : 0;
+}
+
+static void draw_text_center(const char *s, uint32_t scale, uint32_t gap,
+                             uint32_t fg, uint32_t bg)
+{
+    uint32_t tw = text_width(s, scale, gap);
+    uint32_t x = fb_w > tw ? (fb_w - tw) / 2 : 0;
+    uint32_t y = fb_h > 8 * scale ? (fb_h - 8 * scale) / 2 : 0;
+    for (; *s; s++) {
+        draw_char(*s, x, y, scale, fg, bg);
+        x += 8 * scale + gap;
+    }
+}
+
+static uint64_t cntv_freq;   /* 定时器频率（gic_timer_init 里读 CNTFRQ_EL0） */
+
+static uint64_t cntvct(void)
+{
+    uint64_t v;
+    __asm__ volatile("mrs %0, cntvct_el0" : "=r"(v));
+    return v;
+}
+static uint64_t ms_elapsed(uint64_t t0)
+{
+    return (cntvct() - t0) * 1000 / cntv_freq;
 }
 
 /* ---------------- MemoryMap 取取与打印 ---------------- */
@@ -428,7 +540,6 @@ static void remote_ram_check(uint64_t image_base)
 
 static volatile uint64_t irq_count;
 static volatile uint32_t irq_last;
-static uint64_t cntv_freq;
 static uint32_t gic_ver;
 static volatile int timer_armed;   /* 我们自己 arm 定时器后置 1；否则 handler 不重 arm */
 
@@ -591,8 +702,8 @@ efi_main(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE *st)
     __asm__ volatile("msr cntv_ctl_el0, %0" :: "r"(0UL));  /* 先关固件遗留的虚拟定时器 */
     uart_puts("[M1d] vbar installed\n");
 
-    /* MAIR：Attr0=Device nGnRE(0x04)，Attr1=Normal WB(0xFF) */
-    uint64_t mair = 0x04FFUL;
+    /* MAIR：Attr0=Device nGnRE(0x04)，Attr1=Normal WB(0xFF)，Attr2=Normal NC(0x44) */
+    uint64_t mair = 0x04FFUL | (0x44UL << 16);
     __asm__ volatile("msr mair_el1, %0" :: "r"(mair));
     uart_puts("[M1d] mair ok\n");
 
@@ -627,11 +738,15 @@ efi_main(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE *st)
         if (!EFI_ERROR(gs) && gop && gop->Mode && gop->Mode->Info) {
             fb_base = gop->Mode->FrameBufferBase;
             fb_size = gop->Mode->FrameBufferSize;
+            fb_w = gop->Mode->Info->HorizontalResolution;
+            fb_h = gop->Mode->Info->VerticalResolution;
+            fb_fmt = gop->Mode->Info->PixelFormat;
+            fb_stride = gop->Mode->Info->PixelsPerScanLine;
             uart_puts("[M1d] GOP ");
-            uart_dec(gop->Mode->Info->HorizontalResolution); uart_putc('x');
-            uart_dec(gop->Mode->Info->VerticalResolution);
-            uart_puts(" fmt="); uart_dec(gop->Mode->Info->PixelFormat);
-            uart_puts(" stride="); uart_dec(gop->Mode->Info->PixelsPerScanLine);
+            uart_dec(fb_w); uart_putc('x');
+            uart_dec(fb_h);
+            uart_puts(" fmt="); uart_dec(fb_fmt);
+            uart_puts(" stride="); uart_dec(fb_stride);
             uart_puts("\n[M1d] FB base=0x"); uart_hex(fb_base);
             uart_puts(" size="); uart_dec(fb_size); uart_puts("\n");
             map_fb_region(fb_base, fb_size);
@@ -692,21 +807,84 @@ efi_main(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE *st)
         old_sp = stack_switch_asm((uint64_t)new_stack + NEW_STACK_SIZE);
         uart_puts("[M1d] returned to old sp=0x"); uart_hex(old_sp); uart_puts("\n");
 
-        /* 退出后帧缓冲写一块像素并读回校验 */
+        /* ---- M2：在已验证可写的 FB 上自绘最小界面 ---- */
         if (fb_base) {
-            volatile uint32_t *px = (volatile uint32_t *)fb_base;
-            uint32_t old = px[0], w = 0x00FF00FFUL, r;
-            px[0] = w;
-            r = px[0];
-            uart_puts("[M1d] FB px[0] @0x"); uart_hex(fb_base);
-            uart_puts(" old=0x"); uart_hex(old);
-            uart_puts(" w=0x"); uart_hex(w);
-            uart_puts(" r=0x"); uart_hex(r);
-            uart_puts(r == w ? " OK\n" : " MISMATCH\n");
+            /* 颜色打包 0x00RRGGBB（小端内存序 B,G,R,X） */
+            const uint32_t COL_BG     = 0x141822UL;  /* 深底 */
+            const uint32_t COL_BAR    = 0x1F6FEBUL;  /* 顶部状态栏蓝 */
+            const uint32_t COL_ACCENT = 0xFF6B35UL;  /* accent 橙 */
+            const uint32_t COL_FG     = 0xFFFFFFUL;  /* 标题白 */
+            const uint32_t BAR_H = 40;
+            const uint32_t SCALE = 6, GAP = 8;
+
+            uart_puts("[M2] FB @0x"); uart_hex(fb_base);
+            uart_puts(" w="); uart_dec(fb_w);
+            uart_puts(" h="); uart_dec(fb_h);
+            uart_puts(" stride="); uart_dec(fb_stride);
+            uart_puts(" fmt="); uart_dec(fb_fmt); uart_puts("\n");
+
+            uint64_t t0 = cntvct();
+
+            /* 1) 整屏底色 */
+            fill_rect(0, 0, fb_w, fb_h, COL_BG);
+            uart_puts("[M2] rect bg    x=0 y=0 w="); uart_dec(fb_w);
+            uart_puts(" h="); uart_dec(fb_h);
+            uart_puts(" color=0x141822\n");
+
+            /* 2) 顶部状态栏横条 + accent 色块 */
+            fill_rect(0, 0, fb_w, BAR_H, COL_BAR);
+            uart_puts("[M2] rect bar   x=0 y=0 w="); uart_dec(fb_w);
+            uart_puts(" h="); uart_dec(BAR_H);
+            uart_puts(" color=0x1F6FEB\n");
+            fill_rect(16, 8, 24, 24, COL_ACCENT);
+            uart_puts("[M2] rect accent x=16 y=8 w=24 h=24 color=0xFF6B35\n");
+
+            /* 3) 屏幕中央大号文字 HEPU ARM64（8x8 字模 ×6） */
+            const char *title = "HEPU ARM64";
+            draw_text_center(title, SCALE, GAP, COL_FG, COL_BG);
+            uart_puts("[M2] text \""); uart_puts(title);
+            uart_puts("\" scale="); uart_dec(SCALE);
+            uart_puts(" gap="); uart_dec(GAP);
+            uart_puts(" fg=0xFFFFFF bg=0x141822\n");
+
+            uint64_t t1 = cntvct();
+            uart_puts("[M2] draw time="); uart_dec((t1 - t0) * 1000 / cntv_freq);
+            uart_puts(" ms\n");
+
+            /* 抽两个像素读回校验：accent 中心 + 标题区域不做强假设 */
+            uint32_t a = *fb_at(28, 20);
+            uart_puts("[M2] readback accent@(28,20)=0x"); uart_hex(a);
+            uart_puts(a == COL_ACCENT ? " OK\n" : " MISMATCH\n");
+
+            /* 4) 保持画面：先打就绪信号，再重新 arm 定时器忙等约 9s */
+            uart_puts("[M2] framebuffer drawn, holding\n");
+            uint64_t irq0 = irq_count;
+            /* EBS 后重新使能 GIC（固件可能复位过 CPU interface），再 arm 定时器 */
+            mmio_write32(GICD_BASE + 0x00, 0x01);
+            mmio_write32(GICD_BASE + GICD_ISENABLER0, 1u << PPI_VTIMER);
+            mmio_write32(GICC_BASE + GICC_PMR, 0xFF);
+            mmio_write32(GICC_BASE + GICC_CTLR, 0x01);
+            __asm__ volatile("msr cntv_tval_el0, %0" :: "r"(cntv_freq / 10));
+            __asm__ volatile("msr cntv_ctl_el0, %0" :: "r"(1UL));
+            __asm__ volatile("isb");
+            timer_armed = 1;
+            __asm__ volatile("msr daifclr, #2");
+
+            uint64_t ht0 = cntvct();
+            while (ms_elapsed(ht0) < 9000) { }
+            __asm__ volatile("msr cntv_ctl_el0, %0" :: "r"(0UL));
+            __asm__ volatile("msr daifset, #2");
+
+            uart_puts("[M2] held "); uart_dec(ms_elapsed(ht0));
+            uart_puts(" ms, IRQ during hold="); uart_dec(irq_count - irq0);
+            uart_puts(" total IRQ="); uart_dec(irq_count);
+            uart_puts(" vct="); uart_hex(cntvct()); uart_puts("\n");
+        } else {
+            uart_puts("[M2] no GOP, nothing to draw\n");
         }
     }
 
-    uart_puts("[M1d] poweroff\n");
+    uart_puts("[M2] poweroff\n");
     psci_off();
     return EFI_SUCCESS;
 }
