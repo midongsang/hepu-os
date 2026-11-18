@@ -212,3 +212,12 @@ source_of_truth: kernel/include/syscall.h + kernel/arch/x86_64/syscall64_full.c
 - 中断背景：syscall 入口经 FMASK 屏蔽 IF（进入时 `RFLAGS.IF=0`，定时器 tick 冻结），
   等待循环在锁外轮询/让出前显式 `sti` 让 APIC/PIT 中断送达；跨子系统取数都在
   irqsave 锁内完成，锁释放后才允许抢占；返回用户态时 RFLAGS 由 syscall 返回帧恢复。
+
+### 回归结论（2026-11-18）
+
+- v1 LT 实现验收成立：探针 23/23 断言 PASS、无 `PANIC/#PF/#GP`；静态 PIE、comptest、
+  fdstress（`open_fail=0/close_fail=0/leak_probe_fd=3`）、32 位 `regress32.sh` 均未被破坏。
+- **dyn 双重错误为既有问题，非本 v1 改动引入**：`glibchello.elf` 在 `uname` 后触发
+  vector=0x8（`rip=0x1001C5`、`cs=0x8`、`rsp=0xF000FF53`），HEAD 基线内核同崩溃复现；
+  `tools/gui_test.py --scenario dyn` 未取得输出，列为动态链接/ELF 装载线独立待办。
+  逐条对照与证据见 `docs/planning/EPOLL_REGRESSION_2026-11-18.md`。
