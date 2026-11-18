@@ -586,6 +586,8 @@ void gfx64_blend_image_sub(void *src, int sw, int sh, int sx, int sy,
 }
 
 /* 复制背景缓冲区域到帧缓冲（整行64位复制，分层渲染用） */
+extern void *memcpy(void *dst, const void *src, size_t n);
+
 void gfx64_blit_to(uint8_t *dstfb, uint8_t *bg, int x, int y, int w, int h)
 {
     if (!gfx_initialized || !bg || !dstfb) return;
@@ -601,12 +603,15 @@ void gfx64_blit_to(uint8_t *dstfb, uint8_t *bg, int x, int y, int w, int h)
         int pitch64 = gfx_pitch / 8;
         /* x0 为偶数像素时整行按 64 位复制；奇数像素回退 32 位 */
         if ((x0 & 1) == 0) {
+            /* P0 PERF: 整行副本交给编译器做 memcpy —— gcc 在这里会展开成
+             * rep movsq / SSE 16B 批量, 比逐元素 64 位赋值少一半以上的循环开销。
+             * 行内仍按 64 位边界对齐(x0 偶数), 尾部单像素照旧单独处理。 */
+            int n = (x1 - x0);
+            size_t row_bytes = (size_t)n * 4u;
             for (int j = y0; j < y1; j++) {
-                int n = (x1 - x0);
-                uint64_t *srow = src + j * pitch64 + x0 / 2;
-                uint64_t *drow = dst + j * pitch64 + x0 / 2;
-                int cnt = n / 2;
-                for (int i = 0; i < cnt; i++) drow[i] = srow[i];
+                memcpy((uint8_t *)dstfb + (size_t)j * gfx_pitch + (size_t)x0 * 4u,
+                       (uint8_t *)bg      + (size_t)j * gfx_pitch + (size_t)x0 * 4u,
+                       row_bytes);
                 if (n & 1) {
                     uint32_t *ds = (uint32_t *)dstfb;
                     uint32_t *ss = (uint32_t *)bg;
