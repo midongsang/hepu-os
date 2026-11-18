@@ -263,7 +263,87 @@ EOIR 对照 `/tmp/m1d-2-noeoir.log`，exit=124（超时）：
 - GICv3 路径（`ICC_SRE/PMR/IGRPEN1` + redistributor）未实现，留待机器换 v3 时补。
 - 未处理中断优先级分组、spurious intid（1023）分支；定时器未读 `CNTV_CVAL` 做高精度比对。
 
-**下一步：** M1d-3 ExitBootServices + 描述符静态副本 + 自有 bss 栈切换 + GOP framebuffer 写读回。
+## M1d-3（已通）：ExitBootServices + 描述符静态副本 + 自有 bss 栈切换 + GOP FB 写读回
+
+**结论：退出 BootServices 前把 GOP framebuffer、自有栈、描述符缓冲全部映射好；`ExitBootServices`
+第 1 次调用即 `Status=0`；退出后只用裸 PL011；切到自有 16KB bss 栈跑 probe（局部变量落在新栈范围
+内）；帧缓冲 `0x58430000` 写 `0xff00ff` 读回一致；QEMU exit=0。**
+
+### 做法
+
+- **退出前补齐映射**（`SetMemoryAttributes` 退出后不可用，属性须在退出前定好）：
+  - GOP：`LocateProtocol` 取 `FrameBufferBase/FrameBufferSize` 与 Mode->Info（实测 800x600，
+    `PixelFormat=1` BGR 32bpp，stride=800），`map_fb_region` 按 4KB Normal WB 补齐；FB 这段在
+    MemoryMap 里是 type0 Reserved（`0x58430000` 768 页），被 M1d-1 规则跳过，须显式补映射。
+  - 自有栈在 bss，随 image 段被 type1/type7 覆盖；描述符副本在静态 `map_buf`（32KB bss）。
+- **描述符静态副本**：`fetch_memory_map` 两遍取 MapKey/Size，描述符写进静态 bss `map_buf`，
+  `map_key` 留存。EBS 之后 pool 内存不再归自己，静态 bss 保留，故退出后仍可访问副本。
+- **EBS 重试**：最多 5 次；返回 `EFI_INVALID_PARAMETER(2)` 视为 MapKey 过期，重取 MemoryMap
+  刷新 `map_buf`/`map_key` 再试，每次打印 Status。实测 attempt 1 即 `Status=0`，未触发重试。
+- **MMIO 区间覆盖**：EBS 内部清理 PCI 时会触碰未映射的 PCIe PIO 窗口（`0x3eff0000`，64KB）与
+  ECAM（`0x3f000000`，16MB）；`map_dev_range` 按 2MB Device block 覆盖
+  `0x04000000–0x0A000000`、`0x0A000000–0x0C000000`、`0x0C000000–0x0E000000`、
+  `0x10000000–0x40000000`；GICD/GICC/UART 再补 4KB Device 页。
+- **栈切换**：`new_stack` 16KB、16 字节对齐；asm 桩在旧栈保存 x19/x20/x30，把 sp 切到新栈顶调
+  `stack_probe`，再切回旧栈，旧 sp 经 x0 返回。probe 打印局部变量值、`&local`、当前 sp，校验
+  落在新栈范围内；不在换栈后 `return` 到旧栈帧。
+
+### 本轮修掉的自身 bug
+
+- **EBS 崩在未映射 MMIO**：第一次跑 EBS 进 data abort，`EC=37 DFSC=level2 translation fault`，
+  `FAR=0x3eff0012`，`ELR` 在 BS 代码 `0x5bafc758`（故障指令 `strb w1,[x0]`）。对照 QEMU virt
+  内存地图确认 `0x3eff0000` 是 PCIe PIO 窗口；补 Device block 覆盖后 EBS 通过。
+- **`stack_probe` 被链接器回收**：初版 `static`、只被内联汇编 `bl` 引用，C 侧不可见，被优化掉后
+  `bl` 落空 PLT（符号 U）。改全局 + `__attribute__((used))` 后符号落地。
+- **固件遗留定时器 pending 风暴**：装 VBAR 后固件遗留的虚拟定时器 pending 被新向量接住，handler
+  无条件重 arm 形成风暴（计数冲到 1100 万，超时 124）。修复：装 VBAR 后先 `daifset #2` mask IRQ、
+  `CNTV_CTL=0` 关定时器；加 `timer_armed` 标志（`gic_timer_init` arm 后置 1），handler 仅在
+  armed 时重 arm，否则直接关定时器不重 arm。
+- **栈桩 sp 槽位错位破坏 x19 全局基址（核心坑）**：初版桩先 `mov x19, sp`（压栈前存旧 sp=S0），
+  再 `stp x19,x20,[sp,#-16]!`（压到 S0-16）；恢复时 `mov sp,x19`=S0，`ldp x19,x20,[sp],#16`
+  却从 S0 读，而压栈槽在 S0-16，槽位错位 → 错误恢复 x19/x20。x19 是 efi_main 用作全局基址的
+  callee-saved 寄存器，被踩成野值，后续经 x19 相对寻址读到错误的 `fb_base`（`0x5b6231f8`，
+  conventional RAM，非帧缓冲），FB 校验在错误地址自洽空转；同一错位还使「returned to old sp=」
+  字符串前缀丢失。修复：先压栈再 `mov x19, sp`，使恢复 sp 与压栈槽一致；修复后 `fb_base` 全程
+  `0x58430000`，前缀恢复显示。
+
+### 证据
+
+主路径 `/tmp/m1d-3-final.log`，exit=0：
+
+```
+[M1d] GOP 800x600 fmt=1 stride=800
+[M1d] FB base=0x0000000058430000 size=3145728
+[M1d] FB mapped pages=768
+[M1d] IRQ count=20 main_ticks=763470867 last intid=27
+[M1d] about to call ExitBootServices, MapKey=0x0000000000000914
+[M1d] EBS attempt 1
+[M1d] ExitBootServices Status=0
+[M1d] after ExitBootServices: bare PL011 only
+[M1d] stack switch: old sp=0x000000005f70c9d0 new stack=0x00000000580ee200..0x00000000580f2200
+[M1d] on new stack: local=0x1122334455667788 &local=0x00000000580f21f8 sp=0x00000000580f21e0
+[M1d] returned to old sp=0x000000005f70c9c0
+[M1d] FB px[0] @0x0000000058430000 old=0x0000000000000000 w=0x0000000000ff00ff r=0x0000000000ff00ff OK
+[M1d] poweroff
+```
+
+对照与定位：
+
+- `/tmp/m1d-3-nirq7.log`（`EXP_SKIP_IRQ=1` 跳过中断直调 EBS），exit=0：EBS Status=0、换栈
+  probe OK、FB@`0x58430000` OK；用于确认缺映射与中断状态互不干扰。
+- `/tmp/m1d-3-fbdiag.log`（桩修复前）：`fb_base after EBS=0x58430000` 完好，
+  `fb_base after stack=0x5b6231f8` 在换栈过程中被踩，把踩栈时刻锁定到栈桩。
+- 早期 EBS 崩溃日志 `/tmp/m1d-3-ebs*.log`：`EC=37 DFSC=level2 translation fault FAR=0x3eff0012`。
+
+### 遗留
+
+- FB 当前按 Normal WB 映射；若后续实测写无效，再改 Normal NC / Device 重映射复核。
+- GICv3 路径未实现（同 M1d-2 遗留）。
+- 桩返回的「旧 sp」是压栈后的 sp（比入口 sp 低 16），非严格入口值；不影响换栈校验。
+- 退出后未再调用任何 BootServices/Print；GOP 结构体本身退出后不可依赖，仅在退出前缓存了
+  base/size。`EFI_MEMORY_XP` 属性未特殊处理。
+
+**下一步：** 进入真正内核态——接管中断/定时器与调度，不再返回 UEFI；细化代码/数据段 PXN/UXN 权限。
 
 **复现命令：** 见本文档 M0 段（`-cpu max` + `-bios QEMU_EFI.fd` + `-drive if=virtio` + `-device ramfb`），
 `kernel/arch/aarch64/m1` 目录直接 `make`，产物 `M1.EFI` 拷成 `EFI/BOOT/BOOTAA64.EFI`。

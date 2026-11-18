@@ -15,6 +15,7 @@
 #define EXP_FLUSH       1   /* 1=切表后 tlbi 刷 TLB；0=不刷（对照） */
 #define EXP_FLUSH_KIND  0   /* 0=vmalle1 全刷；1=vaae1 单地址刷 */
 #define EXP_NO_EOIR     0   /* 1=对照：handler 不写 EOIR，验证后续中断不再来 */
+#define EXP_SKIP_IRQ    0   /* 1=诊断：跳过 GIC/定时器，EBS 直调，判断缺映射 vs 中断状态 */
 
 /* ---------------- PL011 ---------------- */
 #define PL011_BASE 0x09000000UL
@@ -87,7 +88,21 @@ __asm__ (
 "  stp x0, x1, [sp, #-16]!\n"
 "  stp x2, x3, [sp, #-16]!\n"
 "  stp x4, x5, [sp, #-16]!\n"
+"  stp x6, x7, [sp, #-16]!\n"
+"  stp x8, x9, [sp, #-16]!\n"
+"  stp x10, x11, [sp, #-16]!\n"
+"  stp x12, x13, [sp, #-16]!\n"
+"  stp x14, x15, [sp, #-16]!\n"
+"  stp x16, x17, [sp, #-16]!\n"
+"  stp x18, x19, [sp, #-16]!\n"
 "  bl el1_irq_c\n"
+"  ldp x18, x19, [sp], #16\n"
+"  ldp x16, x17, [sp], #16\n"
+"  ldp x14, x15, [sp], #16\n"
+"  ldp x12, x13, [sp], #16\n"
+"  ldp x10, x11, [sp], #16\n"
+"  ldp x8, x9, [sp], #16\n"
+"  ldp x6, x7, [sp], #16\n"
 "  ldp x4, x5, [sp], #16\n"
 "  ldp x2, x3, [sp], #16\n"
 "  ldp x0, x1, [sp], #16\n"
@@ -107,6 +122,8 @@ void el1_sync_c(uint64_t esr, uint64_t elr, uint64_t far, uint64_t el)
     uart_puts(" FAR_EL1=0x");     uart_hex(far);
     uart_puts("\n[EXC] EC=");     uart_dec((esr >> 26) & 0x3F);
     uart_puts(" ISS=0x");         uart_hex(esr & 0x1FFFFFFUL);
+    uint32_t insn = *(volatile uint32_t *)elr;
+    uart_puts("\n[EXC] insn@ELR=0x"); uart_hex(insn);
     uart_puts("\n[EXC] halting (no eret)\n");
     for (;;) __asm__ volatile("wfi");
 }
@@ -168,6 +185,23 @@ static void map_page(uint64_t pa, uint64_t desc)
     if (l3) l3[(pa >> 12) & 0x1FF] = pa | desc;
 }
 
+static void map_block_dev(uint64_t base)
+{
+    uint64_t l1 = (base >> 30) & 0x1FF;
+    uint64_t l2i = (base >> 21) & 0x1FF;
+    m1_l1[l1] = (uint64_t)m1_l2[l1] | TAB_DESC;
+    m1_l2[l1][l2i] = base | BLOCK_DEV;
+}
+
+/* 整段 MMIO 按 2MB Device block 覆盖（EBS 内部会触碰 PCIe PIO/ECAM 等窗口） */
+static void map_dev_range(uint64_t lo, uint64_t hi)
+{
+    lo &= ~0x1FFFFFULL;
+    hi = (hi + 0x1FFFFFULL) & ~0x1FFFFFULL;
+    for (uint64_t b = lo; b < hi; b += 0x200000UL)
+        map_block_dev(b);
+}
+
 /* 接受进 Normal WB 映射的固件内存类型；其余（Reserved/Unusable/MMIO/IOPort/Pal）跳过 */
 static int ram_type_ok(uint32_t t)
 {
@@ -223,9 +257,27 @@ static void     mmio_write32(uint64_t a, uint32_t v) { *(volatile uint32_t *)a =
 /* 设备 MMIO：UART / GICD / GICC，各给 4KB Device 页 */
 static void map_devices(void)
 {
+    /* virt MMIO 区间（GIC/UART/RTC/fwcfg/virtio-mmio/platform bus/PCIe MMIO+PIO+ECAM） */
+    map_dev_range(0x04000000UL, 0x0A000000UL);
+    map_dev_range(0x0A000000UL, 0x0C000000UL);
+    map_dev_range(0x0C000000UL, 0x0E000000UL);
+    map_dev_range(0x10000000UL, 0x40000000UL);
+    /* 关键设备再补 4KB 页，确保属性明确 */
     map_page(0x08000000UL, PAGE_DEV);  /* GICD */
     map_page(0x08010000UL, PAGE_DEV);  /* GICC */
     map_page(0x09000000UL, PAGE_DEV);  /* PL011 UART */
+}
+
+/* GOP framebuffer 区间：退出前按 4KB 补齐映射（先 Normal WB，写无效再改 NC/Device） */
+static uint64_t fb_base, fb_size;
+static void map_fb_region(uint64_t base, uint64_t size)
+{
+    if (!size) return;
+    uint64_t lo = base & ~0xFFFULL;
+    uint64_t hi = (base + size + 0xFFFULL) & ~0xFFFULL;
+    for (uint64_t pa = lo; pa < hi; pa += 0x1000UL)
+        map_page(pa, PAGE_NORM);
+    uart_puts("[M1d] FB mapped pages="); uart_dec((hi - lo) / 0x1000UL); uart_puts("\n");
 }
 
 /* ---------------- MemoryMap 取取与打印 ---------------- */
@@ -378,6 +430,7 @@ static volatile uint64_t irq_count;
 static volatile uint32_t irq_last;
 static uint64_t cntv_freq;
 static uint32_t gic_ver;
+static volatile int timer_armed;   /* 我们自己 arm 定时器后置 1；否则 handler 不重 arm */
 
 void el1_irq_c(void)
 {
@@ -396,8 +449,13 @@ void el1_irq_c(void)
 #if !EXP_NO_EOIR
     mmio_write32(GICC_BASE + GICC_EOIR, iar);
 #endif
-    /* 重 arm 虚拟定时器：TVVAL 是有符号偏移，正值=未来比较值（负值=已过期，会风暴） */
-    __asm__ volatile("msr cntv_tval_el0, %0" :: "r"(cntv_freq / 10));
+    if (timer_armed) {
+        /* 重 arm 虚拟定时器：TVVAL 是有符号偏移，正值=未来比较值（负值=已过期，会风暴） */
+        __asm__ volatile("msr cntv_tval_el0, %0" :: "r"(cntv_freq / 10));
+    } else {
+        /* 固件遗留的 pending 定时器：直接关掉，不重 arm，避免风暴 */
+        __asm__ volatile("msr cntv_ctl_el0, %0" :: "r"(0UL));
+    }
 }
 
 static void gic_timer_init(void)
@@ -427,8 +485,46 @@ static void gic_timer_init(void)
     __asm__ volatile("msr cntv_tval_el0, %0" :: "r"(cntv_freq / 10));
     __asm__ volatile("msr cntv_ctl_el0, %0" :: "r"(1UL));
     __asm__ volatile("isb");
+    timer_armed = 1;
     uart_puts("[M1d] timer armed, unmask IRQ\n");
     __asm__ volatile("msr daifclr, #2");   /* 清 DAIF.IRQ 掩码 */
+}
+
+/* ---------------- M1d-3：自有 bss 栈 + ExitBootServices ---------------- */
+#define NEW_STACK_SIZE (16UL * 1024UL)
+static uint8_t new_stack[NEW_STACK_SIZE] __attribute__((aligned(16)));
+
+void stack_probe(void) __attribute__((used));
+uint64_t stack_switch_asm(uint64_t new_top);
+
+/* 入参 x0=new_top；切到新栈调 stack_probe，再切回旧栈，旧 sp 经 x0 返回。
+ * x19/x20/x30 在旧栈显式保存恢复；不依赖跨 bl 存活的调用者保存寄存器。 */
+__asm__ (
+".align 2\n"
+".global stack_switch_asm\n"
+"stack_switch_asm:\n"
+"  stp x19, x20, [sp, #-16]!\n"
+"  mov x19, sp\n"
+"  mov x20, x30\n"
+"  mov sp, x0\n"
+"  bl stack_probe\n"
+"  mov sp, x19\n"
+"  mov x0, x19\n"
+"  mov x30, x20\n"
+"  ldp x19, x20, [sp], #16\n"
+"  ret\n"
+);
+
+/* 注意：只被内联汇编 bl 引用，必须 used 防止链接器回收，否则分支落空 PLT
+ * （同 M1c GOT 不落位坑）。 */
+void __attribute__((used)) stack_probe(void)
+{
+    volatile uint64_t local = 0x1122334455667788UL;
+    uint64_t spv;
+    __asm__ volatile("mov %0, sp" : "=r"(spv));
+    uart_puts("[M1d] on new stack: local=0x"); uart_hex(local);
+    uart_puts(" &local=0x"); uart_hex((uint64_t)&local);
+    uart_puts(" sp=0x"); uart_hex(spv); uart_puts("\n");
 }
 
 EFI_STATUS
@@ -491,6 +587,8 @@ efi_main(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE *st)
             : "=r"(vbar) :: "memory");
     }
     __asm__ volatile("isb");
+    __asm__ volatile("msr daifset, #2");   /* 先 mask IRQ，防止固件遗留定时器 pending 冲进新向量 */
+    __asm__ volatile("msr cntv_ctl_el0, %0" :: "r"(0UL));  /* 先关固件遗留的虚拟定时器 */
     uart_puts("[M1d] vbar installed\n");
 
     /* MAIR：Attr0=Device nGnRE(0x04)，Attr1=Normal WB(0xFF) */
@@ -520,6 +618,29 @@ efi_main(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE *st)
 
     remote_ram_check(pc & ~0x1FFFFFULL);
 
+    /* GOP 探测：ExitBootServices 之前取 framebuffer 基址/大小并补映射 */
+    {
+        EFI_GUID gop_guid = EFI_GRAPHICS_OUTPUT_PROTOCOL_GUID;
+        EFI_GRAPHICS_OUTPUT_PROTOCOL *gop = NULL;
+        EFI_STATUS gs = uefi_call_wrapper(st->BootServices->LocateProtocol, 3,
+                &gop_guid, NULL, (void **)&gop);
+        if (!EFI_ERROR(gs) && gop && gop->Mode && gop->Mode->Info) {
+            fb_base = gop->Mode->FrameBufferBase;
+            fb_size = gop->Mode->FrameBufferSize;
+            uart_puts("[M1d] GOP ");
+            uart_dec(gop->Mode->Info->HorizontalResolution); uart_putc('x');
+            uart_dec(gop->Mode->Info->VerticalResolution);
+            uart_puts(" fmt="); uart_dec(gop->Mode->Info->PixelFormat);
+            uart_puts(" stride="); uart_dec(gop->Mode->Info->PixelsPerScanLine);
+            uart_puts("\n[M1d] FB base=0x"); uart_hex(fb_base);
+            uart_puts(" size="); uart_dec(fb_size); uart_puts("\n");
+            map_fb_region(fb_base, fb_size);
+        } else {
+            uart_puts("[M1d] no GOP, Status="); uart_dec(gs); uart_puts("\n");
+        }
+    }
+
+#if !EXP_SKIP_IRQ
     gic_timer_init();
     uint64_t main_ticks = 0;
     while (irq_count < 20) main_ticks++;
@@ -530,6 +651,60 @@ efi_main(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE *st)
     /* 关定时器、重新 mask IRQ，再关机 */
     __asm__ volatile("msr cntv_ctl_el0, %0" :: "r"(0UL));
     __asm__ volatile("msr daifset, #2");
+#else
+    uart_puts("[diag] IRQ section skipped\n");
+#endif
+
+    /* ---- M1d-3：ExitBootServices + 自有栈 + FB 写读回 ---- */
+    {
+        EFI_STATUS ebs;
+        int tries = 0;
+        uart_puts("[M1d] about to call ExitBootServices, MapKey=0x");
+        uart_hex(map_key); uart_puts("\n");
+        while (tries < 5) {
+            uart_puts("[M1d] EBS attempt "); uart_dec(tries + 1); uart_puts("\n");
+            ebs = uefi_call_wrapper(st->BootServices->ExitBootServices, 2,
+                                    image_handle, map_key);
+            uart_puts("[M1d] ExitBootServices Status="); uart_dec(ebs); uart_puts("\n");
+            if (ebs == EFI_SUCCESS) break;
+            /* INVALID_PARAMETER(2) 多半是 MapKey 过期：重取 MemoryMap 再试 */
+            if (ebs == EFI_INVALID_PARAMETER) {
+                uart_puts("[M1d] MapKey stale, refetch MemoryMap\n");
+                fetch_memory_map(st);
+                tries++;
+            } else {
+                break;
+            }
+        }
+        if (ebs != EFI_SUCCESS) {
+            uart_puts("[M1d] EBS failed, halt\n");
+            for (;;) __asm__ volatile("wfi");
+        }
+        uart_puts("[M1d] after ExitBootServices: bare PL011 only\n");
+
+        /* 自有栈切换：打印切换前后 sp 与新栈范围，probe 局部变量须落在新栈内 */
+        uint64_t old_sp, sp_before;
+        __asm__ volatile("mov %0, sp" : "=r"(sp_before));
+        uart_puts("[M1d] stack switch: old sp=0x"); uart_hex(sp_before);
+        uart_puts(" new stack=0x"); uart_hex((uint64_t)new_stack);
+        uart_puts("..0x"); uart_hex((uint64_t)new_stack + NEW_STACK_SIZE);
+        uart_puts("\n");
+        old_sp = stack_switch_asm((uint64_t)new_stack + NEW_STACK_SIZE);
+        uart_puts("[M1d] returned to old sp=0x"); uart_hex(old_sp); uart_puts("\n");
+
+        /* 退出后帧缓冲写一块像素并读回校验 */
+        if (fb_base) {
+            volatile uint32_t *px = (volatile uint32_t *)fb_base;
+            uint32_t old = px[0], w = 0x00FF00FFUL, r;
+            px[0] = w;
+            r = px[0];
+            uart_puts("[M1d] FB px[0] @0x"); uart_hex(fb_base);
+            uart_puts(" old=0x"); uart_hex(old);
+            uart_puts(" w=0x"); uart_hex(w);
+            uart_puts(" r=0x"); uart_hex(r);
+            uart_puts(r == w ? " OK\n" : " MISMATCH\n");
+        }
+    }
 
     uart_puts("[M1d] poweroff\n");
     psci_off();
