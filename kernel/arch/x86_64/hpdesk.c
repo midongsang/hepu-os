@@ -7193,8 +7193,12 @@ static void hpdesk_render_inner(void)
     int mx = g_shell.mouse_x, my = g_shell.mouse_y;
     int mouse_moved = (mx != g_last_mx || my != g_last_my);
     int animating = hs_anim_active();
-    /* 兜底: 每 60 帧(约1s@60fps) 强制全量一次, 防止漏标 dirty 造成画面停更 */
-    if ((g_frame_no % 30) == 0) g_content_dirty = 1;
+    /* 兜底: 强制全量一次, 防止漏标 dirty 造成画面停更。
+     * V0.62.x: 从 30 帧放宽到 300 帧 —— 原来的 30 帧让 g_content_dirty 每半秒
+     * 就被置 1, 光标脏区快速路径(要求 !g_content_dirty)几乎永远进不去,
+     * 实测 [P0] cursor-only frames 恒为 0。300 帧(约 5s@60fps)既保留兜底作用,
+     * 又给局部刷新留出足够窗口。 */
+    if ((g_frame_no % 300) == 0) g_content_dirty = 1;
 
     /* 完全静止: 不重绘、不提交、不画光标 */
 #if 0   /* 必须在跳帧判断之前 —— 静止桌面每帧 return, 放后面则永远轮不到它产生第一个脏区 */

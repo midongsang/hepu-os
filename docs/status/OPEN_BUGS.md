@@ -964,3 +964,27 @@ diag1/diag2/move/sb_up/hand），但系统目前只有 4 个形态场景，映�
   全套主机测试通过 8 / 失败 0，elf `ALL ELF TESTS PASSED`。
 - 证据：`/home/user/Doubao/chats/38452875115179010/evidence-ledger-2026-11-18/64/host-tests/host-tests.log`。
 - 代码位置：`tools/host-tests/run_host_tests.sh:64`；`tools/host-tests/elf_test.c:9-10`。
+
+## OBS-09：x86 桌面局部刷新未生效（cursor-only 恒为 0）
+
+**现象**（2026-11-18 实测日志 /tmp/vq.log）：
+```
+[P0] frames: redraw=134 skip=1666 skip_pct=92
+[P0] cursor-only frames=0
+[P0] dirty-region frames=0
+```
+
+**代码现状**：光标脏区快速路径（`hpdesk.c` 第 7231 行起）与脏矩形局部路径都已实现，
+`gfx64_present_region` 后端也在，但两条路径的计数器为 0 —— **说明它们一次都没进过**。
+
+**已定位的直接原因**：`g_frame_no % 30 == 0` 的兜底强制 `g_content_dirty = 1`，
+而光标快速路径要求 `!g_content_dirty`。每 30 帧被兜底打断一次，
+窗口期内还要等鼠标真的移动，实际命中率极低（实测为 0）。
+
+**已做**（2026-11-18）：兜底从 30 帧放宽到 300 帧。**待实测确认 cursor-only 帧数 > 0**。
+
+**预期收益**：ARM64 侧 M2S 已量化 —— 24×24 脏区 vs 整屏是 **151.8×**；
+x86 光标 128×128 区域理论也在同一量级（整屏 8.3MB vs 64KB）。
+
+**另一个待跟进**：`dirty-region frames=0` 说明拖动窗口的脏矩形路径同样没走到，
+根因可能不同（需要单独查 `g_dirty_x1` 的置位条件）。
