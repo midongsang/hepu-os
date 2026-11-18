@@ -105,9 +105,20 @@ static inline void mmu_enable_own(void)
     uart_puts("[dbg] dsb ok\n");
     /* 最小判据：tlbi 之后什么都不打印，直接 PSCI 关机。
      * QEMU 正常退出 => 系统活着，只是串口在切表后被吞；不退出 => 真的崩了。 */
-    /* 先不 tlbi：新表与固件表都是 identity，固件 TLB 里的旧项依然指向同一物理页，
-     * 不刷新也能继续跑 —— 用来确认"崩"到底来自 TLB 刷新还是新表本身。 */
+    /* 固件 SCTLR_EL1 的 WXN(bit19)=1：可写页一律不可执行。新表的 Normal block 是
+     * EL1 RW，代码就落在那里 —— 所以 TLB 刷新后取指会被判"执行禁止"。
+     * 这里清掉 WXN 再做 tlbi，验证这个假设。 */
+    {
+        uint64_t s2;
+        __asm__ volatile("mrs %0, sctlr_el1" : "=r"(s2));
+        s2 &= ~(1UL << 19);          /* WXN = 0 */
+        __asm__ volatile("msr sctlr_el1, %0" :: "r"(s2));
+        __asm__ volatile("isb");
+    }
+    uart_puts("[dbg] wxn cleared\n");
+    __asm__ volatile("tlbi vmalle1");
     __asm__ volatile("dsb sy; isb");
+    uart_puts("[dbg] tlbi ok\n");
     __asm__ volatile("mov w0, #0x8\n movk w0, #0x8400, lsl #16\n hvc #0" : : : "x0");
     uart_puts("[dbg] PSCI returned (should not happen)\n");
     {

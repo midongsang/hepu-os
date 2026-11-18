@@ -115,10 +115,18 @@ qemu-system-aarch64 -M virt -cpu max -m 512 \
 2. **去掉 `tlbi` 时系统是活的。** 新表与固件表都是 identity 映射，固件 TLB 里的旧项指向同一物理页，所以不刷新也能继续跑并正常 PSCI 关机（QEMU exit=0）—— 这反过来证明"崩"只发生在 TLB 刷新之后，即**新表本身对被清掉的地址翻译有问题**。
 3. **设备区必须非 cache。** 把 0-1GB 改成 Normal 会让取指读到旧 cache，比 Device 属性更早崩（`sctlr before` 之后就没输出）。
 
-**下一步（M1b）：**
-- 逐项核对 L2 block 描述符（AF/AttrIdx/SH/AP 位），确认 48 位布局下 2MB block 的可执行权限；
-- 或改为**全 4KB 页**（L3）避开 block 描述符的细节；
-- 之后再加 `VBAR_EL1` 异常向量、GIC 初始化与定时器中断。
+**M1b 已排除项：**
+- **WXN 不是原因**：固件 `SCTLR_EL1=0xc5183d` 的 bit19(WXN)=1（可写页一律不可执行），
+  我们已清掉 WXN 再 tlbi，仍然在 `tlbi` 之后失联（`[dbg] wxn cleared` 之后无输出）。
+- **不是串口被吞**：tlbi 之后不做任何打印、直接 PSCI 关机，QEMU 仍不退出（exit=124），
+  说明是真崩溃而不是"控制台静音"。
+- **不是 2MB block 属性写错**：L2[1][195] 打出来是 0x58600000|0x401|0x4（valid+AF+AttrIdx1），
+  与 image 地址 0x5873_6788 完全对得上。
+
+**下一步（M1c）：**
+- 改用 **4KB 页（L3）**，先只映射 image 所在 2MB + UART/GIC 两个 block，把 2MB block
+  这条路径彻底绕开，用最小表面积定位问题；
+- 若 4KB 页可行，再把 identity map 扩到全 RAM，然后加 `VBAR_EL1`、GIC、定时器中断。
 
 **复现命令：** 见本文档 M0 段（`-cpu max` + `-bios QEMU_EFI.fd` + `-drive if=virtio` + `-device ramfb`），
 `kernel/arch/aarch64/m1` 目录直接 `make`，产物 `M1.EFI` 拷成 `EFI/BOOT/BOOTAA64.EFI`。
