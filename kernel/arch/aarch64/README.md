@@ -94,3 +94,31 @@ qemu-system-aarch64 -M virt -cpu max -m 512 \
 - 从 EFI 环境下降到 EL1、建页表和异常向量（现在仍跑在固件的 EL1 环境里，没换栈/没关 MMU 接管）
 - GIC 初始化、定时器中断（CNTV 已在用，但没开中断）
 - 接入复用层：把 `shared/desktop`、`gfx64` 的绘制基元接到 GOP 帧缓冲上，看能不能出界面
+
+## M1（进行中）：接管 MMU
+
+目标：从 EFI 环境往自己的 EL1 内核过渡 —— 建页表、切 TTBR0_EL1、设 VBAR、打开中断。
+
+当前 `kernel/arch/aarch64/m1/m1.c` 已做到：
+
+| 步骤 | 状态 | 证据（串口） |
+|---|---|---|
+| 确认当前异常级 | ✅ | `[M1] CurrentEL = EL1` |
+| 读固件 MMU 配置 | ✅ | `[fw] TCR_EL1=0x580803510 (T0SZ=16)`、`TTBR0_EL1=0x5ffff000`、`SCTLR_EL1=0xc5183d` |
+| 建 48 位四级页表（L0→L1→L2 2MB block，0-1GB Device / 1-2GB Normal） | ✅ | `[M1] page tables built` |
+| 写 MAIR_EL1 / TCR_EL1 / TTBR0_EL1 / SCTLR_EL1（开 MMU） | ✅ | `[dbg] mair ok / tcr ok / ttbr ok / sctlr ok` |
+| 刷 TLB 后继续跑 | ❌ 失联 | `tlbi vmalle1` 之后没有任何输出，QEMU 不退出 |
+
+**关键结论（三条，都是实测）：**
+
+1. **不能改 TCR_EL1。** 本机固件用 48 位 VA（`T0SZ=16`）。写一个不同的 T0SZ（试过 25/31）会让**紧接着的取指**按新布局翻译，当场失联。正确做法是**沿用固件的 `0x580803510`**，只换 TTBR0。
+2. **去掉 `tlbi` 时系统是活的。** 新表与固件表都是 identity 映射，固件 TLB 里的旧项指向同一物理页，所以不刷新也能继续跑并正常 PSCI 关机（QEMU exit=0）—— 这反过来证明"崩"只发生在 TLB 刷新之后，即**新表本身对被清掉的地址翻译有问题**。
+3. **设备区必须非 cache。** 把 0-1GB 改成 Normal 会让取指读到旧 cache，比 Device 属性更早崩（`sctlr before` 之后就没输出）。
+
+**下一步（M1b）：**
+- 逐项核对 L2 block 描述符（AF/AttrIdx/SH/AP 位），确认 48 位布局下 2MB block 的可执行权限；
+- 或改为**全 4KB 页**（L3）避开 block 描述符的细节；
+- 之后再加 `VBAR_EL1` 异常向量、GIC 初始化与定时器中断。
+
+**复现命令：** 见本文档 M0 段（`-cpu max` + `-bios QEMU_EFI.fd` + `-drive if=virtio` + `-device ramfb`），
+`kernel/arch/aarch64/m1` 目录直接 `make`，产物 `M1.EFI` 拷成 `EFI/BOOT/BOOTAA64.EFI`。
