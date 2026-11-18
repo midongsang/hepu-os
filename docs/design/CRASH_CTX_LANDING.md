@@ -114,12 +114,15 @@ msg / ts），状态置 dead，`restarts++`。
 ## 6. QEMU 实跑验收（32 位，串口原文）
 
 环境：32 位 `make` → `build_v250/kernel.elf`；QEMU `-m 256 -display none
--no-reboot`，串口落盘到本 worktree `.qemu-logs/crash-final.log`。
+-no-reboot`，串口落盘到本 worktree `.qemu-logs/`；证据归档在
+`evidence-crash-ctx/`。
+
+### 6.1 真实崩溃 1 次端到端
 
 验收载体：AUTO 段静态用户入口 `crashsvc`（`shell.c`），进入 ring3 后先做一次
 `SYS_YIELD(6)`（让 `last_syscall` 被快路径记为非零），随后除零触发 `#DE`。
-
-串口关键片段：
+串口关键片段（`evidence-crash-ctx/real-crash-snippet.txt`，原件
+`real-crash-final.log`）：
 
 ```
 [AUTO] crashsvc launch
@@ -131,22 +134,50 @@ msg / ts），状态置 dead，`restarts++`。
 [CRASHLOG] recorded: crashsvc
 ```
 
+已验证：崩溃后查询记录给出 `pc=0x1a47be`、`last_syscall=6`（SYS_YIELD）、
+`msg="user #Division By Zero at 0x1a47be esp=0x4000fff0"`、`state=dead`、
+`restarts=1`、`ts=0x96`。二进制记录由 `crash_query_by_pid()` 填充（与
+`sys_crash_query` 同一序列化路径），串口打印的字段即出参结构体内容。
+
+### 6.2 重启计数与 last_crash 覆盖（同槽位 3 次，内核侧临时探针）
+
+真实"崩一次 → supervisor 拉起 → 再崩"的调度闭环尚未实现（见 6.3 未完成项），
+因此 3 次计数不依赖重启闭环：用内核侧临时探针在**同一个**槽位（pid=900，
+名 `probe-svc`）连续走 3 次"填现场 + `crash_ctx_snapshot_for_restart(pid)`"，
+每次填入不同的 pc/sp/last_syscall/msg，最后经 `crash_query_by_name` 读出。
+入参：第 1/2/3 次 pc=`0xC0FFEE01/02/03`，msg=`probe crash #1/#2/#3`。
+
+串口关键片段（`evidence-crash-ctx/probe3-snippet.txt`，原件 `probe3.log`）：
+
+```
+[DEBUG] before fork-test at start
+[PROBE] restarts=0x0x00000003 state=0x00000002
+[PROBE] last_crash pc=0x0xC0FFEE03 syscall=0x0000002B msg=probe crash #3
+```
+
 已验证：
 
-- 崩溃后查询记录给出 `pc=0x1a47be`、`last_syscall=6`（SYS_YIELD）、
-  `msg="user #Division By Zero at 0x1a47be esp=0x4000fff0"`、`state=dead`、
-  `restarts=1`、`ts=0x96`。
-- 二进制记录由 `crash_query_by_pid()` 填充（与 `sys_crash_query` 同一序列化路径），
-  串口打印的字段即出参结构体内容。
+- `restarts=0x00000003`：快照路径被走到 3 次，计数逐次自增，未归零、未串槽。
+- `last_crash` 是**最近一次**入参：`pc=0xC0FFEE03`、`syscall=0x2B=43`
+  （40+3）、`msg=probe crash #3`，不是第 1 次的 `0xC0FFEE01` / `#1`；每次
+  快照都会覆盖 `last_crash`（pc/last_syscall/msg/ts）。
+- `state=0x00000002` = restarting，与 `snapshot_for_restart` 的状态一致。
 
-### 未达到项与确切卡点
+> 该探针是验收用的**临时**内核侧自测入口，跑通取证后已从工作树删除；最终
+> commit 不含探针源码、调用点或任何 `probe` 残留。它证明的是"计数累计 +
+> last_crash 覆盖"这两段机制本身；**不等于**真实服务被 supervisor 自动重启了
+> 三次。
 
-- **连崩 3 次（restarts=3）未在本轮达到，实际只到 1 次。** 卡点：当前
-  `sys_exit` 在"无其他活进程"时回收全部进程并 `longjmp` 回主线 Shell，AUTO 段的
-  C 调用栈被展开，无法在同一轮 AUTO 内连续拉起同一服务三次；系统里也还没有
-  supervisor 自动拉起用户服务的闭环（`services_monitor_tick` 只面向内核 def 服务，
-  且本环境未被驱动到该分支）。`restarts` 累计逻辑、同名槽位复用已就位，差一个
-  真正的重启调度闭环。
+### 6.3 未达到项与确切卡点
+
+- **真实重启闭环仍缺 supervisor，属未完成项。** 6.2 的 3 次计数是内核侧探针
+  直接驱动快照路径得到的机制验证；真实"用户服务崩后被自动拉起、再崩"的闭环
+  在本轮没有跑通。卡点：当前 `sys_exit` 在"无其他活进程"时回收全部进程并
+  `longjmp` 回主线 Shell，AUTO 段的 C 调用栈被展开，无法在同一轮 AUTO 内连续
+  拉起同一服务三次；系统里也还没有 supervisor 自动拉起用户服务的闭环
+  （`services_monitor_tick` 只面向内核 def 服务，且本环境未被驱动到该分支）。
+  `restarts` 累计逻辑、同名槽位复用、`last_crash` 覆盖已就位，差一个真正的
+  重启调度闭环。
 - **#PF 用户态隔离**：两个页错误处理器（非 PAE / PAE）在确认 `user &&
   current->privilege==PRIV_USER` 时改走 `idt_pf_user_reap()`（切回内核目录 →
   填现场 → 杀进程），不再整机停机；但本轮验收用的是 `#DE`，#PF 路径未在串口上

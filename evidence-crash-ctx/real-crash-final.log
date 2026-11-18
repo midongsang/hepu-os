@@ -1,0 +1,643 @@
+T0=50560033 D0=838B0033
+[SERIAL] COM1 16550 UART ready (115200 8N1)
+[EARLY] tbl0=0x5056000A ver=0x518E0F04
+[VGAREG] misc=0x00000067
+[VGAREG] seq:0x000000030x000000000x000000030x000000000x00000002
+[VGAREG] crtc:0x0000005F0x0000004F0x000000500x000000820x000000550x000000810x000000BF0x0000001F0x000000000x0000004F0x0000000D0x0000000E0x000000000x000000000x000000000x000000500x0000009C0x0000008E0x0000008F0x000000280x0000001F0x000000960x000000B90x000000A30x000000FF
+[VGAREG] gc:0x000000000x000000000x000000000x000000000x000000000x000000100x0000000E0x0000000F0x000000FF
+[MB-DBG] magic=0x0x2BADB002 info=0x0x00009500 flags=0x0x0000024F mem_upper=0x0003FB80 mmap_addr=0x0x00009000 mmap_len=0x00000090
+[MB-DBG] mmap_count=0x00000006
+[MB-DBG] region 0x00000000: base=0x0x00000000 len=0x0x0009FC00 type=0x00000001
+[MB-DBG] region 0x00000001: base=0x0x0009FC00 len=0x0x00000400 type=0x00000002
+[MB-DBG] region 0x00000002: base=0x0x000F0000 len=0x0x00010000 type=0x00000002
+[MB-DBG] region 0x00000003: base=0x0x00100000 len=0x0x0FEE0000 type=0x00000001
+[MB-DBG] region 0x00000004: base=0x0x0FFE0000 len=0x0x00020000 type=0x00000002
+[MB-DBG] region 0x00000005: base=0x0xFFFC0000 len=0x0x00040000 type=0x00000002
+[MB-VBE] no framebuffer info, fallback VGA
+[CPU] 64-bit support: NO
+[BOOT] compat level low, disabling boot splash
+[DBG]after-cpu t0=0x0011D2E0 t1=0x0011D3B0 t3=0x0011D880
+[DBG]after-mm-init t0=0x0011D2E0 t1=0x0011D3B0 t3=0x0011D880
+[MEM-DBG] mem_kb=0x0003FDFF kern_end=0x0x0613A000 heap_base=0x0x0613A000 heap_size=0x03000000 heap_end=0x0x0913A000
+[BUDDY] total_pages=0x0000FF7F free_pages=0x00000001
+[BUDDY] selftest: start
+[BUDDY] test1 alloc 1 page: PASS (addr=0x0x0FF7E000)
+[BUDDY] test2 alloc 4 pages: PASS (addr=0x0x0913C000)
+[BUDDY] test3 alloc 16 pages: PASS (addr=0x0x0FF60000)
+[BUDDY] test4 alloc after free: PASS (addr=0x0x0913A000)
+[BUDDY] test5 alloc 64 pages: PASS (addr=0x0x09140000)
+[BUDDY] selftest: done (pass=0x00000005, fail=0x00000000)
+[PAGING] CPU supports PAE (64GB max)
+[PAGING] PAE detected, legacy paging active
+[PAGING] starting integrity check...
+[PAGING] integrity check done, fixed=0x00000000
+[PAGING] registered 0x00000041 page table pages
+[DBG]after-paging t0=0x0011D2E0 t1=0x0011D3B0 t3=0x0011D880
+[GFX] LFB phys=0x0x00000000
+[VMA] selftest: start
+[VMA] test1 create space: PASS
+[VMA] test2 map single: PASS
+[VMA] test3 map non-overlap: PASS
+[VMA] test4 VMA merge: PASS
+[VMA] test5 find VMA: PASS
+[VMA] test6 access check (rw): PASS
+[VMA] test7 access denied: PASS
+[VMA] test8 unmap full: PASS
+[VMA] test9 stats: PASS
+[VMA] test10 destroy space: PASS (no crash)
+[VMA] selftest: done (pass=0x0000000A, fail=0x00000000)
+[ZRAM] selftest: start
+[ZRAM] test1 compress zero page: PASS (size=0x00000016)
+[ZRAM] test2 decompress zero page: PASS
+[ZRAM] test3 random data compress/decompress: PASS (ratio=0x00000037%)
+[ZRAM] test4 pattern compress: PASS (size=0x00000021, ratio=0x00000000%)
+[ZRAM] test5 store/load page: PASS
+[ZRAM] test6 stats: PASS (compressed_pages=0x00000001, original_bytes=0x00001000, compressed_bytes=0x00000021)
+[ZRAM] test7 free page: PASS
+[ZRAM] selftest: done (pass=0x00000007, fail=0x00000000)
+[RTL8139] device not found
+[e1000] found at PCI 0x00000000:0x00000003
+[e1000] mmio=0x0xFEB80000 irq=0x0000000B
+[e1000] MAC: 0x00000052:0x00000054:0x00000000:0x00000012:0x00000034:0x00000056
+[e1000] link up
+[e1000] initialization complete
+[e1000-diag] === after-init ===
+[e1000-diag] PCI_CMD=0x00000107 MASTER=0x00000001 RDBAL=0x0925A000 RDBAH=0x00000000 TDBAL=0x0914A000 TDBAH=0x00000000 RCTL=0x0400831A STATUS=0x80080783 RDH=0x00000000 RDT=0x0000001F RDLEN=0x00000200 rx_cur=0x00000000
+[e1000-diag] MMC PRC=0x00000000 MPTC=0x00000000 MPC=0x00000000 RFC=0x00000000 ROC=0x00000000 RUC=0x00000000 RLEC=0x00000000 CRCERR=0x00000000
+[e1000-diag] desc[0x00000000] status=0x00000000 err=0x00000000 len=0x00000000 addr=0x0913A000
+[e1000-diag] desc[0x00000001] status=0x00000000 err=0x00000000 len=0x00000000 addr=0x0913A800
+[e1000-diag] desc[0x00000002] status=0x00000000 err=0x00000000 len=0x00000000 addr=0x0913B000
+[e1000-diag] desc[0x00000003] status=0x00000000 err=0x00000000 len=0x00000000 addr=0x0913B800
+[e1000-diag] desc[0x00000004] status=0x00000000 err=0x00000000 len=0x00000000 addr=0x0913C000
+[e1000-diag] desc[0x00000005] status=0x00000000 err=0x00000000 len=0x00000000 addr=0x0913C800
+[e1000-diag] desc[0x00000006] status=0x00000000 err=0x00000000 len=0x00000000 addr=0x0913D000
+[e1000-diag] desc[0x00000007] status=0x00000000 err=0x00000000 len=0x00000000 addr=0x0913D800
+[IP] initialized, IP=192.168.1.100
+[UDP] initialized
+[DBG]after-mm t0=0x0011D2E0 t1=0x0011D3B0 t3=0x0011D880
+[SWAP] init OK (8MB)
+[HUGETLB] selftest: start
+[HUGETLB] test1 CPU PSE support: PASS
+[HUGETLB] test2 alloc 4MB: PASS (phys=0x0x09400000)
+[HUGETLB] test3 alloc 2MB after 4MB free: PASS (phys=0x0x09200000)
+[HUGETLB] test4 stats update: PASS (2m=0x00000001, 4m=0, alloc_4m=1)
+[HUGETLB] test5 free 2MB: PASS
+[HUGETLB] test6 4MB already freed: PASS
+[HUGETLB] test7 realloc 4MB after free: PASS (phys=0x0x09400000)
+[HUGETLB] selftest: done (pass=0x00000007, fail=0x00000000)
+[PAE] init: starting...
+[PAE] init: CPU supports PAE
+[PAE] init: 36-bit physical addressing, 63GB max
+[PAE] init: creating PDPT...
+[PAE] init: PDPT created, mapping first 4MB...
+[PAE] init: first 4MB mapped
+[PAE] selftest: start
+[PAE] selftest PASS (data structures)
+[DBG]after-sched t0=0x0011D2E0 t1=0x0011D3B0 t3=0x0011D880
+[DBG]after-proc t0=0x0011D2E0 t1=0x0011D3B0 t3=0x0011D880
+[DBG]after-ipc t0=0x0011D2E0 t1=0x0011D3B0 t3=0x0011D880
+[VRAM] selftest: start
+[VRAM] test1 init: PASS (total=96KB)
+[VRAM] test2 alloc 4KB: PASS (addr=0x0x000A0000)
+[VRAM] test3 alloc 16KB: PASS (addr=0x0x000A1000)
+[VRAM] test4 stats update: PASS (used=20KB, free=76KB)
+[VRAM] test5 free 4KB: PASS (used=16KB)
+[VRAM] test6 realloc after free: PASS (addr=0x0x000A0000)
+[VRAM] test7 alloc 64K-aligned: PASS (addr=0x0x00E00000)
+[VRAM] selftest: done (pass=0x00000007, fail=0x00000000)
+[IOSCHED] selftest: start
+[IOSCHED] test1 init: PASS
+[IOSCHED] test2 submit: PASS
+[IOSCHED] test3 merge adjacent: PASS (merged=0x00000001, count=0x00000002)
+[IOSCHED] test4 LBA sort: PASS
+[IOSCHED] test5 no merge non-adjacent: PASS
+[IOSCHED] test6 no merge diff-type: PASS
+[IOSCHED] selftest: done (pass=0x00000006, fail=0x00000000)
+[JOURNAL] selftest: start
+[JOURNAL] test1 init: PASS
+[JOURNAL] test2 start transaction: PASS
+[JOURNAL] test3 write entry: PASS (pending=1)
+[JOURNAL] test4 write multiple: PASS (pending=3)
+[JOURNAL] test5 commit: PASS (committed=3)
+[JOURNAL] test6 abort/rollback: PASS
+[JOURNAL] test7 replay/recover: PASS (committed=5)
+[JOURNAL] selftest: done (pass=0x00000007, fail=0x00000000)
+[CRYPTO] selftest: start
+[CRYPTO] all modules initialized
+[CRYPTO] test1 XTEA single block: PASS
+[CRYPTO] test2 ECB encrypt/decrypt: PASS
+[CRYPTO] test3 ECB cipher differs: PASS
+[CRYPTO] test4 XTS encrypt/decrypt: PASS
+[CRYPTO] test5 XTS different sector: PASS
+[CRYPTO] test6 page encrypt/decrypt: PASS
+[CRYPTO] test7 key generation deterministic: PASS
+[CRYPTO] selftest: done (pass=0x00000007, fail=0x00000000)
+[KHEAP-BIG] size=0x00100000 caller=0x0014D982
+[SNAPSHOT] selftest: start
+[SNAPSHOT] test1 init: PASS
+[SNAPSHOT] test2 create snapshot: PASS (id=0x00000001)
+[SNAPSHOT] test3 COW: PASS (block_count=1)
+[SNAPSHOT] test4 restore block: PASS
+[SNAPSHOT] test5 duplicate COW dedup: PASS
+[SNAPSHOT] test6 freeze: PASS
+[SNAPSHOT] test7 delete: PASS
+[SNAPSHOT] selftest: done (pass=0x00000007, fail=0x00000000)
+[UMEM] selftest: start
+[UMEM] test1 init: PASS
+[UMEM] test2 alloc normal: PASS
+[UMEM] test3 alloc vram: PASS
+[UMEM] test4 migrate normal->vram: PASS
+[UMEM] test5 realloc: PASS (size=2048)
+[UMEM] test6 free: PASS (alloc=0x00000003, free=0x00000003)
+[UMEM] test7 stats: PASS
+[UMEM] selftest: done (pass=0x00000007, fail=0x00000000)
+[TRANSCOMP] selftest: start
+[TRANSCOMP] test1 init: PASS
+[TRANSCOMP] test2 zero block write/read: PASS
+[TRANSCOMP] test3 pattern block write/read: PASS
+[TRANSCOMP] test4 random block write/read: PASS
+[TRANSCOMP] test5 overwrite: PASS
+[TRANSCOMP] test6 discard: PASS
+[TRANSCOMP] test7 stats: PASS (compress=0x00000003, ratio=0x00000000%)
+[TRANSCOMP] selftest: done (pass=0x00000007, fail=0x00000000)
+[KHEAP-BIG] size=0x00400000 caller=0x00141875
+[VVRAM] selftest: start
+[VVRAM] test1 init: PASS (regions=0x00000003, virtual=0x00001000KB)
+[VVRAM] test2 alloc 4KB: PASS (handle=0x00000000)
+[VVRAM] test3 write/read: PASS
+[VVRAM] test4 partial read: PASS
+[VVRAM] test5 multi alloc: PASS (64KB+256KB)
+[VVRAM] test6 free all: PASS (virtual_used=0)
+[VVRAM] test7 info: PASS (gpu=1, regions=0x00000003, virtual=0x00001000KB)
+[VVRAM] selftest: done (pass=0x00000007, fail=0x00000000)
+[GFX-TEST] legacy gfx_selftest disabled (using pluggable gfx subsystem)
+[BD-VBE] dispi id=0x0x0000B0C5
+[BD-VBE] mode set: 0x00000780x0x00000438@0x00000020bpp
+[BD-VBE] pci 0:2.0 bar0=0x0xFD000000
+[BD-VBE] linear framebuffer ready
+[BD-VBE] bd_fb_phys=0x0xFD000000
+[GFX] framebuffer -> draw target (double-buffer)
+[GFX] gfx_pitch=0x00001E00
+[GFX] LFB mapped (after dispi init)
+[GFX-VBE] sync: 0x00000780x0x00000438@0x00000020bpp pitch=0x00001E00
+[GFX] true-color mode applied: 0x00000780x0x00000438@32bpp fb=0x0xFD000000
+[GFX] registered backend: VGA Text
+[GFX] registered backend: UEFI GOP
+[GFX] registered backend: virtio-gpu
+[GFX-VIRTIO] backend registered
+[GFX] registered backend: VBE
+[GFX-VBE] backend registered
+[GFX] probing backends...
+[GFX-VIRTIO] initializing virtio-gpu backend...
+[GFX-VIRTIO] probing for virtio-gpu device...
+[GFX-VIRTIO] no virtio-gpu device found
+[GFX] backend virtio-gpu init failed, trying next
+[GFX-GOP] initializing GOP backend...
+[GFX-GOP] no GOP protocol from firmware (BIOS boot), refuse
+[GFX] backend UEFI GOP init failed, trying next
+[GFX-VBE] initializing VBE backend...
+[GFX-VBE] detected from boot params: 0x00000780x0x00000438@0x00000020bpp
+[GFX-VBE] backend initialized (0x00000780x0x00000438@0x00000020bpp, pitch=0x00001E00)
+[GFX] selected backend: VBE
+[GFX-TEST] starting graphics subsystem selftest...
+[GFX-TEST] test1 VGA early text: PASS
+[GFX-TEST] test2 register VGA backend: PASS
+[GFX-TEST] test3 register GOP backend: PASS
+[GFX] probing backends...
+[GFX-VIRTIO] initializing virtio-gpu backend...
+[GFX-VIRTIO] probing for virtio-gpu device...
+[GFX-VIRTIO] no virtio-gpu device found
+[GFX] backend virtio-gpu init failed, trying next
+[GFX-GOP] initializing GOP backend...
+[GFX-GOP] no GOP protocol from firmware (BIOS boot), refuse
+[GFX] backend UEFI GOP init failed, trying next
+[GFX] selected backend: VBE
+[GFX-TEST] test4 probe backend: PASS (type=0x00000002)
+[GFX] vram partition 0x00000000 size=0x00100000
+[GFX] vram partition 0x00000001 size=0x00080000
+[GFX-TEST] test5 set vram partitions: PASS
+[GFX-TEST] test6 vram info: partitions=0x00000002, size[0]=0x00100000
+[GFX] initializing graphics subsystem...
+[GFX] probing backends...
+[GFX-VIRTIO] initializing virtio-gpu backend...
+[GFX-VIRTIO] probing for virtio-gpu device...
+[GFX-VIRTIO] no virtio-gpu device found
+[GFX] backend virtio-gpu init failed, trying next
+[GFX-GOP] initializing GOP backend...
+[GFX-GOP] no GOP protocol from firmware (BIOS boot), refuse
+[GFX] backend UEFI GOP init failed, trying next
+[GFX] selected backend: VBE
+[GFX] vram allocator init: 0x00200000 bytes at 0x0xFD300000
+[GFX] graphics subsystem initialized
+[GFX-TEST] test7 gfx_init: PASS
+[GFX-TEST] test8 unified API drawing: PASS
+[GFX-TEST] test9 advanced drawing: PASS
+[GFX-TEST] test10 mode: 0x00000400x0x00000300@0x00000020bpp
+[GFX-TEST] test10 clear screen: PASS
+[GFX-TEST] selftest done (pass=0x0000000A, fail=0x00000000)
+[GFX-FONT] font manager initialized
+[GFX-FONT] default: antialiased 16px
+[TTF] TrueType font parser initialized
+[TTF] Note: load font data with tt_font_load()
+0x890x800[FONT32] TrueType loaded
+[BLK-MQ] selftest: start
+[BLK-MQ] test1 init: PASS (sw=4, hw=2)
+[BLK-MQ] test2 submit read: PASS (id=0x00000001)
+[BLK-MQ] test3 submit write: PASS (id=0x00000002)
+[BLK-MQ] test4 request merge: PASS (merges=0x00000001)
+[BLK-MQ] test5 dispatch: PASS (dispatched=0x00000002)
+[BLK-MQ] test6 complete: PASS (completed=0x00000002)
+[BLK-MQ] test7 poll: PASS (polled=0x00000002)
+[BLK-MQ] selftest: done (pass=0x00000007, fail=0x00000000)
+[VRAM-VIRT] selftest: start
+[VRAM-VIRT] test1 init: PASS (physical=0x00000040KB)
+[VRAM-VIRT] test2 create ctx: PASS (id=0x00000001)
+[VRAM-VIRT] test3 map 4KB: PASS
+[VRAM-VIRT] test4 virt2phys: PASS (paddr=0x0x000A0064)
+[VRAM-VIRT] test5 switch ctx: PASS
+[VRAM-VIRT] test6 page fault: PASS (faults=0x00000001)
+[VRAM-VIRT] test7 destroy ctx: PASS (contexts=0)
+[VRAM-VIRT] selftest: done (pass=0x00000007, fail=0x00000000)
+[TASKMGR] selftest: start
+[TASKMGR] test1 init: PASS
+[TASKMGR] test2 cpu usage: PASS (cpu=0x00000000 pct)
+[TASKMGR] test3 mem info: PASS (total=0x0000003FKB)
+[TASKMGR] test4 proc stats: PASS (total=0x00000000, running=0x00000000)
+[TASKMGR] test5 state str: PASS
+[TASKMGR] selftest: done (pass=0x00000005, fail=0x00000000)
+[DMA] selftest: start
+[DMA] test1 alloc 4KB buffer: PASS (phys=0x0x0FF7E000)
+[DMA] test2 alloc 16KB buffer: PASS (phys=0x0x0913C000)
+[DMA] test3 get phys: PASS (phys=0x0x0FF7E000)
+[DMA] test4 stats update: PASS (buffers=2)
+[DMA] test5 free 4KB buffer: PASS
+[DMA] test6 realloc after free: PASS (phys=0x0x0FF7E000)
+[DMA] test7 alloc 64KB buffer: PASS (phys=0x0x0FF60000)
+[DMA] selftest: done (pass=0x00000007, fail=0x00000000)
+[DBG]after-drv t0=0x0011D2E0 t1=0x0011D3B0 t3=0x0011D880
+[DBG]after-syscall-init t0=0x0011D2E0 t1=0x0011D3B0 t3=0x0011D880
+[M1] after newline
+[M2] after banner
+[M3] after setcolor
+[M4] before handler
+
+[INITRD] base=0x0044F6FD size=0x0004A0F0 head=0x55504548 tail=0x00000000
+[LIVE] initrd done
+[RTC] irq8 handler registered
+[LIVE] rtc done
+[SERIAL] COM1 16550 UART ready (115200 8N1)
+[LIVE] splash done
+[DBG] before VFS init
+[DBG] after vga_puts VFS
+[DBG] before klog_capture_boot
+[DBG] after klog_capture_boot
+[DBG] before compat_init
+[DEGRADE] init: mode=GRAPHICAL
+[DBG] before hepu_init_sequence
+
+=== Hepu OS unified init sequence ===
+
+[INIT] phase:  cores subsystem 
+===  cores subsystem  ===
+[INIT] phase done:  cores subsystem 
+ init 0x00000007 module
+
+[INIT] phase:  HW driver 
+===  HW driver  ===
+[KHEAP-BIG] size=0x0001F400 caller=0x001367F4
+[KHEAP-BIG] size=0x0001F400 caller=0x001333D3
+[COMP] fb=0x06671554 next=0x06690954
+[INIT] phase done:  HW driver 
+ init 0x0000000C module
+
+[INIT] phase:  fs 
+===  fs  ===
+[IDE-DMA] hyper leaf ebx=0x0x54474354 edx=0x0x47435447 ecx=0x0x43544743
+[IDE-DMA] QEMU TCG, DMA disabled, PIO only
+[SWAP] auto-detecting disk swap...
+[SWAP] failed to read MBR
+[IDE] selftest: no drive present, skip
+[EXT2] selftest: no disk, skip
+[SEC32] user_access contract PASS limit=0xBFFFFFFF
+[INIT] phase done:  fs 
+ init 0x00000012 module
+
+[INIT] phase:  net proto 
+===  net proto  ===
+[ETH] Ethernet driver init
+[ETH] eth0 MAC: 00:1A:36:5D:A7:C9
+[DHCP] client init done
+[TLS-CLIENT] initialized (TLS 1.2)
+[TCP] init
+[NET-TEST] === Network Self-Test ===
+[NET-TEST] diag tick=0 if=0(interrupts OFF)
+[NET-TEST] Starting DHCP...
+[IP] packet sent
+[UDP] packet sent
+[IP] config updated
+[NET-TEST] DHCP started
+[NET-TEST] Polling network packets...
+[NET-TEST] Sending ICMP echo to 8.8.8.8...
+[e1000-diag] === after-dhcp-poll ===
+[e1000-diag] PCI_CMD=0x00080107 MASTER=0x00000001 RDBAL=0x0925A000 RDBAH=0x00000000 TDBAL=0x0914A000 TDBAH=0x00000000 RCTL=0x0400831A STATUS=0x80080783 RDH=0x00000000 RDT=0x0000001F RDLEN=0x00000200 rx_cur=0x00000000
+[e1000-diag] MMC PRC=0x00000000 MPTC=0x00000000 MPC=0x00000000 RFC=0x00000000 ROC=0x00000000 RUC=0x00000000 RLEC=0x00000000 CRCERR=0x00000000
+[e1000-diag] desc[0x00000000] status=0x00000000 err=0x00000000 len=0x00000000 addr=0x0913A000
+[e1000-diag] desc[0x00000001] status=0x00000000 err=0x00000000 len=0x00000000 addr=0x0913A800
+[e1000-diag] desc[0x00000002] status=0x00000000 err=0x00000000 len=0x00000000 addr=0x0913B000
+[e1000-diag] desc[0x00000003] status=0x00000000 err=0x00000000 len=0x00000000 addr=0x0913B800
+[e1000-diag] desc[0x00000004] status=0x00000000 err=0x00000000 len=0x00000000 addr=0x0913C000
+[e1000-diag] desc[0x00000005] status=0x00000000 err=0x00000000 len=0x00000000 addr=0x0913C800
+[e1000-diag] desc[0x00000006] status=0x00000000 err=0x00000000 len=0x00000000 addr=0x0913D000
+[e1000-diag] desc[0x00000007] status=0x00000000 err=0x00000000 len=0x00000000 addr=0x0913D800
+[NET-TEST] === Self-Test Complete ===
+[INIT] phase done:  net proto 
+ init 0x00000015 module
+
+[INIT] phase:  security encryption 
+===  security encryption  ===
+[SEC] MAC init done, domains=7 types=9 rules=12
+[SEC] sec_init done
+[SEC-AUDIT] DENY s=untrusted_app t=app_data_t: access denied
+[SEC-AUDIT] DENY s=untrusted_app t=system_t: access denied
+[SEC-AUDIT] DENY s=untrusted_app t=private_t: access denied
+[SEC-AUDIT] ALLOW(permissive) s=untrusted_app t=app_data_t: would be denied
+[SEC-AUDIT] DENY s=untrusted_app t=system_t: access denied
+[SEC-AUDIT] PERM-DENY s=browser_app t=browser_data_t: storage
+[SEC-AUDIT] DENY s=browser_app t=calc_data_t: access denied
+[SEC-AUDIT] DENY s=browser_app t=system_t: access denied
+[SEC-AUDIT] PERM-DENY s=browser_app t=contact_t: contacts
+[SEC-SELFTEST] MAC: 16/16 PASS
+[SEC] sec_selftest done
+[SEC] x509_init done
+[SEC] csprng_init done
+[SEC] ecdhe_init done
+[SEC] crypto libs done
+[SEC] aes+secure_boot done
+[PERM] seeded /data/contacts/contacts.txt
+[PERM] seeded /data/sms/sms.txt
+[PERM] seeded /data/phone/calls.txt
+[PERM] seeded /data/photos/photos.txt
+[PERM] seeded /data/browser/bookmarks.txt
+[PERM] seeded /data/music/favorites.txt
+[PERM] seeded /data/clock/alarms.txt
+[PERM] sms_seed_welcome skipped (BIOS debug)
+[PERM] permission_manager_init returning...
+[SEC] permission_manager_init done
+[INIT] calling prm_selftest...
+[PRM-SELFTEST] disk persistence test skipped (BIOS compat)
+[PERM-SELFTEST] 8/8 PASS
+[INIT] prm_selftest done
+[INIT] privacy_compute_init done, calling security2_init...
+[INIT] security2_init done
+[INIT] phase done:  security encryption 
+ init 0x0000000D module
+
+[INIT] phase:  system service 
+===  system service  ===
+[SETTINGS] font size applied: 0x00000024px (setting=0x00000032)
+[GFX-FONT] loading default font config...
+[GFX-FONT] registered font: Default (Built-in) (0x000B8D54 bytes)
+[TTF] loading font, tables=0x00000014
+[TTF] font loaded: 0x00000800 units/em, 0x0000186D glyphs, ascent=0x0000076D descent=0xFFFFFE1D
+[GFX-FONT] selected font: Default (Built-in)
+[GFX-FONT] loaded built-in Default font
+[GFX-FONT] registered font: CJK (Built-in) (0x000EEE60 bytes)
+[GFX-FONT] loaded built-in CJK font
+[GFX-FONT] loaded 0x00000002 font(s) from config
+[INIT] phase done:  system service 
+ init 0x00000016 module
+
+[INIT] phase:  app framework 
+===  app framework  ===
+[APPS] starting app framework (72 modules)...
+[APPS] 1/7: core framework done
+[APPS-DEBUG] about to call notification_init
+[NOTIF] init (minimal BIOS version)
+[NOTIF] init done
+[APPS] notification_init done
+[APPS] windowsystem_init done
+[SHARE] init done
+[ACCOUNT] init done
+[SUI] init done
+[APPS] systemui_init done
+[APPS] 2/7: webengine/ai/media...
+[APPS] 3/7: bt/usb/gfx/camera...
+[APPS] 4/7: kernel/drivers/userland...
+[APPS] 5/7: apps (file/camera/browser...)
+[APPS] file_manager_init...
+[APPS] camera_app_init...
+[CAMERA] init (minimal BIOS version)
+[CAMERA] init done
+[APPS] gallery_init...
+[APPS] browser_init...
+[APPS] app_store_init...
+[APPS] system_tools_init...
+[APPS] music_player_init...
+[APPS] video_player_init...
+[APPS] photo_editor_init...
+[APPS] voice_recorder_init...
+[APPS] audio_effects_init...
+[APPS] hug_sdk_init...
+[APPS] hug_template_init...
+[APPS] hug_debugger_init...
+[APPS] hug_depman_init...
+[APPS] apk_parser_init...
+[APPS] 5.5/7: compat/android...
+[APPS] 6/7: pre-desktop done, calling elastic_desktop_init...
+[DESKTOP] elastic free desktop init done
+ free mode: on, pages: 0x00000001, items: 0x0000000B
+[APPS] 7/7: elastic_desktop_init done!
+[GFX] fb after-desktop-init nonzero=0x0000BB3F blk=0x0000BFBF/0x0000C000/0x0000C000/0x0000C000/0x0000C000/0x0000C000/0x00000000/0x00000000/0x00000000/0x00000000/0x00000000/0x00000000/0x00000000/0x00000000/0x00000000/0x00000000
+[MMAP] phys=0x00100000 virt=0x60000000 len=0x00001000
+[MMAP] phys=0xfd000000 virt=0x60001000 len=0x00001000
+[FB] owner acquired by pid, kernel present paused
+[FB] owner released, kernel present resumed
+[MMAP] phys=0xfd000000 virt=0x60002000 len=0x00001000
+[FB] owner acquired by pid, kernel present paused
+[FB] owner released, kernel present resumed
+[FBOWN] 2nd acquire=-EBUSY ok, release clears owner ok, re-acquire after release ok
+[MMAPTEST] phys->virt ok, read=0x1badb002
+[EDESKTOP] desk_start on 32-bit
+[HP32-FS] /etc/hepushell/config.hsqml dir=/etc/hepushell n=0xFFFFFFFF
+[HP32-FS] /etc/hepushell/config.hsqml dir=/etc/hepushell n=0xFFFFFFFF
+[HP32-FS] /display.conf dir=/ n=0xFFFFFFFF
+[SCALE] pct=0x00000064 bar_h=0x00000024 island=0x00000078 accent=0x00D0BCFF theme=0x00000001
+0x0[HP32-FS] /etc/hepushell/autostart.cmd dir=/etc/hepushell n=0xFFFFFFFF
+[EDESKTOP] res=0x00000780x0x00000438 desk_start rc=0x00000000
+[HP32-FS] /usr/share/samples/sample.png dir=/usr/share/samples n=0xFFFFFFFF
+[HP32-FS] /usr/share/wallpapers/wallpaper.png dir=/usr/share/wallpapers n=0xFFFFFFFF
+[KHEAP-BIG] size=0x007E9000 caller=0x001BE0BB
+[HPD] wallpaper done
+[COMPAT32] degrade: blur=fill (double-buffer, gradient, aa-round now supported)
+[HPD] panels done
+[KHEAP-BIG] size=0x00056D30 caller=0x001C80EB
+[KHEAP-BIG] size=0x00056D30 caller=0x001C8100
+[KHEAP-BIG] size=0x0015B4B8 caller=0x001C8166
+[KHEAP-BIG] size=0x000C12A0 caller=0x001C7892
+0x5[HPD] windows done
+[EDESKTOP] first frame via registry, cycles=0x000000000x2912E85C
+[VGAREG] misc=0x00000067
+[VGAREG] seq:0x000000030x000000000x000000030x000000000x00000002
+[VGAREG] crtc:0x0000005F0x000000EF0x000000500x000000820x000000550x000000810x000000BF0x0000001D0x000000000x000000400x0000000D0x0000000E0x000000000x000000000x000000070x000000800x0000009C0x0000008E0x000000370x000000C00x0000001F0x000000960x000000B90x000000A30x000000FF
+[VGAREG] gc:0x000000000x000000000x000000000x000000000x000000000x000000500x000000070x0000000F0x000000FF
+[INIT] phase done:  app framework 
+ init 0x00000048 module
+
+[INIT] QUIC DATAGRAM + QPACK dynamic table 
+
+=== init done: total 0x000000A5 module ===
+
+[DBG] after hepu_init_sequence
+[VVRAM] auto-mount: checking MBR...
+[VVRAM] auto-mount: failed to read MBR (IDE not ready)
+[KTEST] === Auto-run all kunit suites ===
+[KUNIT] suite:  字符串 ops  (0x00000005 tests)
+[KUNIT] result: 0x00000005 passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  count 学运算  (0x00000005 tests)
+[KUNIT] result: 0x00000005 passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  bit ops  (0x00000005 tests)
+[KUNIT] result: 0x00000005 passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  ring buffer region  (0x00000003 tests)
+[KUNIT] result: 0x00000003 passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  哈希 table  (0x00000002 tests)
+[KUNIT] result: 0x00000002 passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  链 table  (0x00000002 tests)
+[KUNIT] result: 0x00000002 passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  net proto  (0x00000003 tests)
+[KUNIT] result: 0x00000003 passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  encryption algo  (0x00000006 tests)
+[KUNIT] result: 0x00000006 passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  net proto  (0x00000005 tests)
+[KUNIT] result: 0x00000005 passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  fs  (0x00000007 tests)
+[KUNIT] result: 0x00000007 passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  driver module  (0x0000000B tests)
+[KUNIT] result: 0x0000000B passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  scheduler  (0x00000009 tests)
+[KUNIT] result: 0x00000009 passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  memory mgr  (0x00000009 tests)
+[KUNIT] result: 0x00000009 passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite: IPC 通信  (0x0000000B tests)
+[KUNIT] result: 0x0000000B passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  irq handling  (0x0000000A tests)
+[KUNIT] result: 0x0000000A passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  syscall  (0x0000000A tests)
+[KUNIT] result: 0x0000000A passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  net proto deep  (0x0000000C tests)
+[KUNIT] result: 0x0000000C passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  encryption algo deep  (0x0000000B tests)
+[KUNIT] result: 0x0000000B passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  fs deep  (0x0000000C tests)
+[KUNIT] result: 0x0000000C passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  boot flow  (0x0000000E tests)
+[KUNIT] result: 0x0000000E passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  driver deep  (0x0000000F tests)
+[KUNIT] result: 0x0000000F passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  data struct deep  (0x0000000C tests)
+[KUNIT] result: 0x0000000C passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  algo correctness  (0x00000010 tests)
+[KUNIT] result: 0x00000010 passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  concurrent & sync  (0x0000000D tests)
+[KUNIT] result: 0x0000000D passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  error handling & boundary  (0x0000000E tests)
+[KUNIT] result: 0x0000000E passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  memory security  (0x0000000C tests)
+[KUNIT] result: 0x0000000C passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  time & timer  (0x0000000D tests)
+[KUNIT] result: 0x0000000D passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  I/O  (0x0000000D tests)
+[KUNIT] result: 0x0000000D passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  config & param  (0x0000000B tests)
+[KUNIT] result: 0x0000000B passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  multilingual & i18n  (0x0000000D tests)
+[KUNIT] result: 0x0000000D passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  security & perm  (0x00000009 tests)
+[KUNIT] result: 0x00000009 passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  process & thread  (0x0000000D tests)
+[KUNIT] result: 0x0000000D passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  net security deep  (0x0000000C tests)
+[KUNIT] result: 0x0000000C passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  storage & block device  (0x0000000B tests)
+[KUNIT] result: 0x0000000B passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  power mgmt  (0x0000000C tests)
+[KUNIT] result: 0x0000000C passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite: V1.02 memory side module  (0x00000009 tests)
+[KUNIT] result: 0x00000009 passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite: V1.02 HAL side module  (0x00000008 tests)
+[KUNIT] result: 0x00000008 passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite: stress (0x00000006 tests)
+[KUNIT] result: 0x00000006 passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  syscall deep  (0x00000032 tests)
+[KUNIT-ASSERT] time works
+[KUNIT-FAIL]  syscall deep /syscall table complete
+[KUNIT] result: 0x00000031 passed, 0x00000001 failed, 0x00000000 skipped
+[KUNIT-FAIL-SUITE]  syscall deep  failed=0x00000001
+[KUNIT] suite:  memory deep  (0x00000019 tests)
+[KUNIT] result: 0x00000019 passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  user scenario  (0x00000010 tests)
+[KUNIT-ASSERT]  system booted, ticks >0 
+[KUNIT-FAIL]  user scenario / boot complete 
+[KUNIT-ASSERT]  interrupts active 
+[KUNIT-FAIL]  user scenario / interrupts active 
+[KUNIT-ASSERT]  datetime valid 
+[KUNIT-FAIL]  user scenario / datetime 
+[KUNIT] result: 0x0000000D passed, 0x00000003 failed, 0x00000000 skipped
+[KUNIT-FAIL-SUITE]  user scenario  failed=0x00000003
+[KUNIT] suite:  recovery  (0x0000000D tests)
+[KUNIT] result: 0x0000000D passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  perf benchmark  (0x0000000A tests)
+[KUNIT] result: 0x0000000A passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  integration  (0x0000000E tests)
+[KUNIT-ASSERT]  time ok 
+[KUNIT-FAIL]  integration / flow syscall seq 
+[KUNIT] result: 0x0000000D passed, 0x00000001 failed, 0x00000000 skipped
+[KUNIT-FAIL-SUITE]  integration  failed=0x00000001
+[KUNIT] suite:  security E2E  (0x0000000F tests)
+[KUNIT-ASSERT]  max size alloc fails 
+[KUNIT-FAIL]  security E2E / boundary max size 
+[KUNIT] result: 0x0000000E passed, 0x00000001 failed, 0x00000000 skipped
+[KUNIT-FAIL-SUITE]  security E2E  failed=0x00000001
+[KUNIT] suite:  compatibility  (0x0000000D tests)
+[KUNIT] result: 0x0000000D passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  stress E2E  (0x00000009 tests)
+[KUNIT] result: 0x00000009 passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  filesystem E2E  (0x0000000D tests)
+[KUNIT] result: 0x0000000D passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  network E2E  (0x00000012 tests)
+[KUNIT] result: 0x00000012 passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  driver E2E  (0x00000012 tests)
+[KUNIT] result: 0x00000012 passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  graphics  (0x00000014 tests)
+[KUNIT] result: 0x00000014 passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  performance  (0x0000000C tests)
+[KUNIT] result: 0x0000000C passed, 0x00000000 failed, 0x00000000 skipped
+[KTEST] RESULT: FAIL
+[KLOG] save-to-disk: calling writefile
+[KLOG] save-to-disk: writefile returned
+[USB] subsystem init done
+[KHEAP-BIG] size=0x00010000 caller=0x001A230E
+[UPROC] exec-static name=init rc=1
+[KHEAP-BIG] size=0x00010000 caller=0x001A230E
+[UPROC] exec-static name=procb rc=2
+[FRAME] ds=0x0x00000023 edi=0x0x00000000 esi=0x0x00000000 ebp=0x0x00000000 esp=0x0x00000000 ebx=0x0x00000000 edx=0x0x00000000 ecx=0x0x00000000 eax=0x0x00000000 irq=0x0x00000000 err=0x0x00000000 eip=0x0x001016AB cs=0x0x0000001B eflags=0x0x00000200 useresp=0x0x40010000 ss=0x0x00000023
+  [user init] Hello! Running in ring 3
+  [user init] alive(tick), preemptive sched works
+  [proc-B] user-mode process running, preemptive sched works
+[MAC] AUTOLOAD: MOUNT FAIL
+[SHELL] main started
+[DEBUG] before fork-test at start
+[AUTO] fork-test start
+[UPROC] exec path=fork-test rc=-2
+[RUN] fork-test -> rc=0xFFFFFFFE
+[AUTO] fork-test done
+[AUTO] crashsvc launch
+[KHEAP-BIG] size=0x00010000 caller=0x001A230E
+[UPROC] exec-static name=crashsvc rc=3
+[FRAME] ds=0x0x00000023 edi=0x0x00000000 esi=0x0x00000000 ebp=0x0x00000000 esp=0x0x00000000 ebx=0x0x00000000 edx=0x0x00000000 ecx=0x0x00000000 eax=0x0x00000000 irq=0x0x00000000 err=0x0x00000000 eip=0x0x001A47A0 cs=0x0x0000001B eflags=0x0x00000200 useresp=0x0x40010000 ss=0x0x00000023
+[UEXC] Division By Zero
+[CRASH-FRAME] eip=0x001A47BE cs=0x0000001B eflags=0x00000206 esp=0x4000FFF0 ss=0x00000023 err=0x00000000 eax=0x0000002A ebx=0x00000000 ecx=0x00000000 edx=0x00000000
+[USTACK] 0x4000FFF0: 0x00000000 0x00000000 0x00000000 0x00000000 0xDEADBEEF 0xDEADBEEF 0xDEADBEEF 0xDEADBEEF 0xDEADBEEF 0xDEADBEEF 0xDEADBEEF 0xDEADBEEF 0xDEADBEEF 0xDEADBEEF 0xDEADBEEF 0xDEADBEEF
+[CRASHCTX] query crashsvc state=dead restarts=0x00000001
+[CRASHCTX]   pc=0x0x001A47BE syscall=0x00000006 ts=0x00000096 msg=user #Division By Zero at 0x1a47be esp=0x4000fff0
+[CRASHLOG] recorded: crashsvc
+
