@@ -316,6 +316,7 @@ void auth64_init(void)
 int auth64_is_configured(void) { return g_role != ROLE_NONE; }
 const char *auth64_current_user(void) { return g_user; }
 int auth64_current_role(void) { return g_role; }
+const char *auth64_user_name(void) { return g_user; }
 
 /* 校验账户密码 */
 int auth64_verify_password(const char *pass)

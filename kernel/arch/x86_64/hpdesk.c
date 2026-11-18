@@ -554,10 +554,19 @@ static int g_dragging;
 
 /* 设置窗口当前页面 */
 static int g_content_dirty;   /* 定义在文件后部, 此处前向声明供设置页使用 */
+static int g_acct_pw_btn_x = 0, g_acct_pw_btn_y = 0; /* V0.62: 改密码按钮 */
+static int g_acct_pw_mode = 0;      /* V0.62: 0=浏览, 1=输入新密码 */
+static char g_acct_pw_buf[56];
+static int g_acct_pw_len = 0;
+static char g_acct_pw_msg[64];
+static int g_screensaver_min = 0;      /* V0.62: 屏保超时分钟数, 0=关闭 */
+static uint64_t g_last_activity_ts = 0; /* V0.62: 最近一次用户输入时间 */
+static int g_screensaver_active = 0;  /* V0.62: 屏保是否已进入 */
 static int g_settings_page = 0;  /* 0=Appearance, 1=Panels, 2=System, 3=About, 4=Display */
 /* Display 页缩放按钮的渲染位置: 命中测试直接复用, 不另算一套坐标 */
 static int g_disp_scale_btn_x = 0, g_disp_scale_btn_y = 0;
 /* 分辨率档位(点选后写 ESP 的 HEPBOOT.CFG, 重启生效) */
+static int g_disp_ss_btn_x = 0, g_disp_ss_btn_y = 0; /* V0.62: 屏保设置按钮 */
 static int g_disp_res_btn_x = 0, g_disp_res_btn_y = 0;
 static const int g_disp_res_w[4] = {1024, 1280, 1920, 2048};
 static const int g_disp_res_h[4] = {768, 720, 1080, 1536};
@@ -3387,9 +3396,9 @@ static void hs_settings_nav_paint(hs_ui_box_t *b)
 {
     hs_window_t *w = g_nav_win;    /* SETK 宏需要名为 w 的局部变量 */
     void *fb = hs_get_framebuffer();
-    static const char *menu[5] = {"Appearance", "Panels", "System", "About", "Display"};
+    static const char *menu[6] = {"Appearance", "Panels", "System", "About", "Display", "Accounts"};
     int page = b->tag;
-    if (page < 0 || page > 4) return;
+    if (page < 0 || page > 5) return;
     uint32_t bg = (page == g_settings_page) ? g_shell.colors.accent : g_shell.colors.panel_bg;
     uint32_t fg = (page == g_settings_page) ? hs_on_accent() : g_shell.colors.panel_fg;
     hs_fill_rounded_rect(b->x, b->y, b->w, b->h, SETK(6), bg);
@@ -3452,7 +3461,7 @@ static void hs_settings_window_render(hs_window_t *w)
 
     /* 左侧菜单 —— 由布局容器排列(hs_ui), 这里只给根矩形与尺寸参数 */
     g_nav_win = w;
-    hs_settings_nav_ensure(5);
+    hs_settings_nav_ensure(6);
     hs_settings_nav_layout(cx, cy, SETK(120), SETK(28), SETK(4));
     { static int hit_tested = 0; if (!hit_tested) { hit_tested = 1; hs_settings_nav_hit_selftest(); } }
 
@@ -3665,6 +3674,45 @@ static void hs_settings_window_render(hs_window_t *w)
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            rx, ry, ab, g_shell.colors.panel_fg, SETK(12));
         g_settings_assoc_ry = ry;
+    } else if (g_settings_page == 5) {
+        /* V0.62: Accounts —— 用户账号与密码管理 */
+        extern const char *auth64_user_name(void);
+        extern int auth64_current_role(void);
+        font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                           rx, ry, "Accounts", g_shell.colors.panel_fg, SETK(16));
+        ry += SETK(30);
+        {
+            char line[64]; int q = 0;
+            const char *u = auth64_user_name();
+            if (!u || !*u) u = "hepu";
+            const char *pre = "User: ";
+            while (*pre && q < 60) line[q++] = *pre++;
+            while (*u && q < 60) line[q++] = *u++;
+            line[q] = 0;
+            font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                               rx, ry, line, g_shell.colors.panel_fg, SETK(12));
+            ry += SETK(22);
+        }
+        {
+            int role = auth64_current_role();
+            const char *rs = (role == 2) ? "Role: Developer" : ((role == 1) ? "Role: Normal" : "Role: (none)");
+            font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                               rx, ry, rs, g_shell.colors.text_secondary, SETK(11));
+            ry += SETK(26);
+        }
+        /* Change password 按钮 */
+        {
+            hs_fill_rounded_rect(rx, ry, SETK(150), SETK(28), SETK(6), g_shell.colors.accent);
+            font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                               rx + SETK(12), ry + SETK(7), "Change password", 0x2B2930, SETK(11));
+            g_acct_pw_btn_x = rx; g_acct_pw_btn_y = ry;
+            ry += SETK(40);
+        }
+        if (g_acct_pw_msg[0]) {
+            font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                               rx, ry, g_acct_pw_msg, g_shell.colors.text_secondary, SETK(10));
+            ry += SETK(16);
+        }
     } else if (g_settings_page == 4) {
         /* Display */
         char b1[16], b2[16];
@@ -3748,6 +3796,24 @@ static void hs_settings_window_render(hs_window_t *w)
         }
         /* 两行按钮的实际占用: 行距 + 按钮高 + 行间留白 */
         ry += SETK(HS_DISP_RES_GAPY + 26) + SETK(8);
+        /* V0.62: 屏保超时 —— 点一下在 Off/1/5/10 分钟之间循环 */
+        {
+            font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                               rx, ry, "Screensaver:", g_shell.colors.panel_fg, SETK(11));
+            ry += SETK(18);
+            const char *sv = "Off";
+            if (g_screensaver_min == 1) sv = "1 min";
+            else if (g_screensaver_min == 5) sv = "5 min";
+            else if (g_screensaver_min == 10) sv = "10 min";
+            hs_fill_rounded_rect(rx, ry, SETK(HS_DISP_RES_W), SETK(24), SETK(6),
+                                 g_screensaver_min ? g_shell.colors.accent : g_shell.colors.panel_bg);
+            font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                               rx + SETK(10), ry + SETK(6), sv,
+                               g_screensaver_min ? 0x2B2930 : g_shell.colors.panel_fg, SETK(11));
+            g_disp_ss_btn_x = rx;
+            g_disp_ss_btn_y = ry;
+            ry += SETK(30);
+        }
         if (g_disp_msg[0]) {
             font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                                rx, ry, g_disp_msg,
@@ -6062,6 +6128,28 @@ void hpdesk_handle_click(int x, int y)
                     return;
                 }
             }
+            /* V0.62: Accounts 页 Change password 点击 → 进入输入模式 */
+            if (g_settings_page == 5 && g_acct_pw_btn_x > 0 &&
+                x >= g_acct_pw_btn_x && x <= g_acct_pw_btn_x + hs_set_k(w, 150) &&
+                y >= g_acct_pw_btn_y && y <= g_acct_pw_btn_y + hs_set_k(w, 28)) {
+                g_acct_pw_mode = 1;
+                g_acct_pw_len = 0;
+                g_acct_pw_buf[0] = 0;
+                g_acct_pw_msg[0] = 0;
+                g_content_dirty = 1;
+                return;
+            }
+            /* V0.62: 屏保超时点击 —— Off/1/5/10 循环 */
+            if (g_settings_page == 4 && g_disp_ss_btn_x > 0 &&
+                x >= g_disp_ss_btn_x && x <= g_disp_ss_btn_x + hs_set_k(w, HS_DISP_RES_W) &&
+                y >= g_disp_ss_btn_y && y <= g_disp_ss_btn_y + hs_set_k(w, 24)) {
+                if (g_screensaver_min == 0) g_screensaver_min = 1;
+                else if (g_screensaver_min == 1) g_screensaver_min = 5;
+                else if (g_screensaver_min == 5) g_screensaver_min = 10;
+                else g_screensaver_min = 0;
+                g_content_dirty = 1;
+                return;
+            }
             /* Display 页: 分辨率档位点击 -> 写 HEPBOOT.CFG(重启生效) */
             if (g_settings_page == 4 && y >= g_disp_res_btn_y) {
                 int rx_ = x - g_disp_res_btn_x;
@@ -7328,6 +7416,23 @@ static void hpdesk_render_inner(void)
  * 每 60 帧打印一次(单位: 千周期), 用于定位到底哪一段在吃时间。 */
 void hpdesk_render(void)
 {
+    /* V0.62: 屏保 —— 空闲超过设定分钟数则整屏黑, 任意输入唤醒 */
+    if (g_screensaver_min > 0) {
+        extern uint64_t rtc64_get_timestamp(void);
+        uint64_t now = rtc64_get_timestamp();
+        if (g_last_activity_ts == 0) g_last_activity_ts = now;
+        if (!g_screensaver_active &&
+            now - g_last_activity_ts >= (uint64_t)(g_screensaver_min * 60)) {
+            g_screensaver_active = 1;
+            vga_puts("[SCREENSAVER] entered\n");
+        }
+        if (g_screensaver_active) {
+            void *fb = hs_get_framebuffer();
+            int fw = g_shell.screen_width, fh = g_shell.screen_height;
+            if (fb) hs_fill_rect(0, 0, fw, fh, 0x00000000);
+            return;
+        }
+    }
     /* 常驻性能探针: 每 300 帧往串口打一行。
      *
      * 三个数各自口径不同, 不能混着看:
@@ -7393,6 +7498,45 @@ void hpdesk_render(void)
 
 void hpdesk_handle_key(int key)
 {
+    /* V0.62: 改密码输入模式 —— 接收密码字符, Enter 提交 */
+    if (g_acct_pw_mode) {
+        if (key == 13 /* Enter */) {
+            extern int auth64_create_account(const char *, const char *, int, const char *);
+            extern int auth64_current_role(void);
+            extern const char *auth64_user_name(void);
+            if (g_acct_pw_len >= 6) {
+                int rc = auth64_create_account(auth64_user_name(), g_acct_pw_buf, auth64_current_role(), 0);
+                if (rc == 0) {
+                    const char *ok = "Password updated.";
+                    int i = 0; while (ok[i] && i < 63) { g_acct_pw_msg[i] = ok[i]; i++; } g_acct_pw_msg[i] = 0;
+                } else {
+                    const char *bad = "Update failed (check account state).";
+                    int i = 0; while (bad[i] && i < 63) { g_acct_pw_msg[i] = bad[i]; i++; } g_acct_pw_msg[i] = 0;
+                }
+            } else {
+                const char *shortp = "Too short (>= 6 chars).";
+                int i = 0; while (shortp[i] && i < 63) { g_acct_pw_msg[i] = shortp[i]; i++; } g_acct_pw_msg[i] = 0;
+            }
+            g_acct_pw_mode = 0;
+            g_content_dirty = 1;
+            return;
+        }
+        if (g_acct_pw_len < 55 && key >= 32 && key < 127) {
+            g_acct_pw_buf[g_acct_pw_len++] = (char)key;
+            g_acct_pw_buf[g_acct_pw_len] = 0;
+        }
+        g_content_dirty = 1;
+        return;
+    }
+
+    if (g_screensaver_active) {
+        extern uint64_t rtc64_get_timestamp(void);
+        g_screensaver_active = 0;
+        g_last_activity_ts = rtc64_get_timestamp();
+        hpdesk_mark_dirty();
+        return;
+    }
+    g_last_activity_ts = 0;  /* 有输入即刷新活动时间 */
     hpdesk_mark_dirty();   /* P0: 交互发生, 内容需重绘 */
 
     /* 锁屏状态：任意键进入登录界面。

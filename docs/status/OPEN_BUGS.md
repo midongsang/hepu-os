@@ -764,3 +764,14 @@ diag1/diag2/move/sb_up/hand），但系统目前只有 4 个形态场景，映�
   `new_fails` 空、`fixed_fails` 空；属既有基线项，非本轮新增。
 - 证据：`evidence-regress-2026-11-17/tests/ser32.txt`、
   `tests/baseline/61c53fa-kunit32.txt`、`tests/results.json`。
+
+## 待验证（本轮新增，未在 QEMU 内实测）
+
+| 项 | 代码位置 | 状态 |
+|---|---|---|
+| 顶栏电源按钮弹出菜单（注销/重启/关机） | `hpdesk.c` g_power_menu_open + hs_top_bar_render / hpdesk_mouse_down | 编译通过；**QEMU 内点击未验** |
+| 屏保（Off/1/5/10 分钟，黑屏 + 任意键唤醒） | `hpdesk.c` g_screensaver_min / hpdesk_render / hpdesk_handle_key | 编译通过；**未实跑** |
+| 设置 → Accounts 页（用户名/角色/改密码） | `hpdesk.c` page 5 + auth64_user_name | 编译通过；**未实跑** |
+| TLS ClientHello 探针（`tls12` 命令） | `kernel/net/tls.c` tls12_probe | 编译通过；**未触发** |
+
+以上均为"代码就位 + 编译 0 error"，均需在单独 QEMU 实例里实测后才可标 PASS。
