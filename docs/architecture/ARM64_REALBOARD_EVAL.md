@@ -1,7 +1,7 @@
 ---
 title: ARM64_REALBOARD_EVAL
 status: draft-evaluation
-sys_version: 0.61.0
+sys_version: 0.62.0
 updated: 2026-11-18
 owner: architecture
 source_of_truth: kernel/arch/aarch64/arch_port_aarch64.c, kernel/arch/aarch64/m1/m1.c

@@ -1,8 +1,8 @@
 ---
 title: 赫普OS 未关闭问题清单
 status: active
-sys_version: 0.60.7
-updated: 2026-11-18（OBS-05 撤销为取帧时机问题；登记 OBS-07 linuxhello 崩溃、64 空口令拒登、ASan/UBSan 链接清单失败、32 KUnit 既有基线失败。历史：驱动层整固 BUG-52~56；BUG-49 更正为不成立；OPEN-02 复现未成功并写明下一步夹具）
+sys_version: 0.62.0
+updated: 2026-11-18（OBS-05 撤销为取帧时机问题；登记 OBS-07 linuxhello 崩溃、64 空口令拒登、ASan/UBSan 链接清单失败、32 KUnit 既有基线失败；文末「台账遗留项清理（2026-11-18）」为 32 位 / 64 位与主机侧遗留项复核记录。历史：驱动层整固 BUG-52~56；BUG-49 更正为不成立；OPEN-02 复现未成功并写明下一步夹具）
 owner: status
 source_of_truth: kernel/arch/x86_64/
 ---
