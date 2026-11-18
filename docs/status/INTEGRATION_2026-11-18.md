@@ -7,7 +7,7 @@ updated: 2026-11-18
 # 2026-11-18 集成交付记录
 
 四条任务各自在独立 worktree / 分支上完成，本文记录**合并顺序、集成期修复、合并后实测**。
-分支基点均为 `391e1db`；集成分支 `integrate/verified` 基于 main `86cb4b3`。
+四条分支基点均为 `391e1db`；集成分支 `integrate/verified` 基于 main **`c28d4d9`**（32 位链接修复已在 main 上独立完成）。
 
 ## 1. 合并了什么
 
@@ -23,11 +23,12 @@ updated: 2026-11-18
 
 ## 2. 集成期修复（三条，都属于"合起来才暴露"的问题）
 
-1. **32 位链接断链**：main `3f0edb1`（屏保 + Accounts）让共用 `kernel/arch/x86_64/hpdesk.c`
-   引用 `auth64_user_name` / `auth64_current_role` / `rtc64_get_timestamp`，但 32 位的
-   `kernel/arch/x86/hpdesk32_deps.c` 没补桩，32 位构建直接 ld 失败。按该文件既有的"退化壳"
-   约定补三个桩：前两者返回占位（32 位无账户子系统），时间戳用 `pit_get_seconds()`
-   单调秒（**不是墙钟**，只够屏保空闲计时）。这是 main 自身的 32 位回归，与本轮四条无关。
+1. **32 位链接断链（已在 main 侧解决，不由本分支引入）**：main `3f0edb1`（屏保 + Accounts）
+   让共用 `kernel/arch/x86_64/hpdesk.c` 引用 `auth64_user_name` / `auth64_current_role` /
+   `rtc64_get_timestamp`，而 32 位树没有定义方，32 位构建 ld 失败。集成过程中先按
+   `hpdesk32_deps.c` 的"退化壳"约定补过三个桩；随后 main 自己以 `c28d4d9`
+   （`gfx64_compat_ext.c` 用 32 位 CMOS 折算真实 epoch）修好，口径更好，故**丢弃本地补桩**
+   以避免重复定义，集成分支只保留 main 的实现。
 2. **crashsvc 默认会截断自检**：crash_ctx 的验收钩子原先无条件跑在自检序列中段，
    故意 #DE 崩溃后 `sys_exit` 回收全部进程并 longjmp，后续自检项整批被截断。
    改为 `make AUTO_CRASH_SVC=1` 才编入（`-DHEPU_AUTO_CRASH_SVC`，默认关闭），并挪到
@@ -39,7 +40,8 @@ updated: 2026-11-18
 
 ## 3. 合并后实测（`integrate/verified`，干净重编）
 
-- 32 位构建：`make -j2` 退出 0，`build_v250/hepu-kernel.bin` = 3,774,445 字节。
+- 32 位构建（`rm -rf build_v250` 后干净重编）：`make -j2` 退出 0，
+  `build_v250/hepu-kernel.bin` = 3,774,477 字节。
 - 32 位冒烟（按 `tools/regress32.sh` 判据、私有日志复现）：
   `serial=1 initrd=1 net=1 desk=1 fault=0 bound=1` → **PASS**
 - 自检序列：42 条 `[AUTO]` 事件，跑到 `[AUTO] ALL DONE` + PAE 验证完成；
@@ -90,8 +92,11 @@ timeout 150 qemu-system-i386 -L $CHAT/.toolchain/pkg/datadir \
 
 ## 6. 证据
 
+全部证据均在**最终集成分支（基 `c28d4d9`）**上重新取过，与交付树一一对应。
 `evidence-integration/`
 - `run-default-full.log`：默认构建完整启动日志（冒烟判据、KUNIT、OBS-07 修复、无 crashsvc）
 - `run-diag-hoisted.log`：带临时 diag 前置的取证日志
+- `run-crashsvc-enabled.log`：`make AUTO_CRASH_SVC=1` 的取证日志（`crashsvc` 在 `ALL DONE` 之后执行）
+- `crashsvc-section.txt`：crashsvc 现场原文（`pc=0x1a49be`、`syscall=6`、`restarts=1`）
 - `diag-section.txt`：审计段 + 崩溃现场段原文
 - `runs-summary.txt`：`[AUTO]` 序列 / KUNIT 失败项 / linuxhello 关键行摘录

@@ -1,11 +1,9 @@
-[KTEST] === Auto-run all kunit suites ===
 [KUNIT-FAIL]  syscall deep /syscall table complete
 [KUNIT-FAIL]  user scenario / boot complete 
 [KUNIT-FAIL]  user scenario / interrupts active 
 [KUNIT-FAIL]  user scenario / datetime 
 [KUNIT-FAIL]  integration / flow syscall seq 
 [KUNIT-FAIL]  security E2E / boundary max size 
-[KTEST] RESULT: FAIL
 [AUTO] fork-test start
 [AUTO] fork-test done
 [AUTO] linuxhello start
