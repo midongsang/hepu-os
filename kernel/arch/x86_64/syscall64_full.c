@@ -15,6 +15,7 @@
 #include "syscall.h"   /* V0.54.6: 统一 syscall 号（唯一真源） */
 #include "spinlock.h"
 #include "fs_sys.h"    /* §5-5 第 5 批: fs_fd_info_t 与 fs_do_read/fs_do_write */
+#include "epoll64.h"   /* epoll/eventfd2/pselect6 v1 最小实现（仅 LT） */
 #include "display_backend.h"  /* §5-4: fb_desc_t（前台所有权按真实 pitch 算映射长度） */
 
 int g_running_linux_elf = 0;  /* V0.20.70: 当前是否在运行Linux ABI ELF */
@@ -406,6 +407,11 @@ static int64_t sys_write(int fd, const char *buf, int count)
     if (count <= 0) return 0;
     if (count > 4096) count = 4096;  /* 限制单次写入大小 */
 
+    /* epoll/eventfd 分流：epfd 不允许 write（误用返回 EINVAL）；eventfd 走计数器。 */
+    int kind = epoll64_fd_kind(fd);
+    if (kind == EPOLL_FD_KIND_EPOLL) return HEPU_EINVAL;
+    if (kind == EPOLL_FD_KIND_EVENTFD) return eventfd64_write(fd, buf, count);
+
     /* stdout/stderr: 逐字节镜像到 VGA 与串口（图形模式下 VGA 文本缓冲不可见） */
     if (fd == 1 || fd == 2) {
         extern void *kmalloc(uint32_t size);
@@ -473,6 +479,11 @@ static int64_t sys_read(int fd, char *buf, int count)
 {
     if (count <= 0) return 0;
     if (count > 4096) count = 4096;
+
+    /* epoll/eventfd 分流：epfd 不允许 read（误用返回 EINVAL）；eventfd 走计数器。 */
+    int kind = epoll64_fd_kind(fd);
+    if (kind == EPOLL_FD_KIND_EPOLL) return HEPU_EINVAL;
+    if (kind == EPOLL_FD_KIND_EVENTFD) return eventfd64_read(fd, buf, count);
 
     if (fd == 0) {  /* stdin - 从键盘缓冲区读取 */
         extern int keyboard64_haschar(void);
@@ -592,6 +603,19 @@ int fs_fd_release(int fd)
     g_fd_lock_holder = -1;
     spinlock_unlock_irqrestore(&g_fd_lock, f);
     return ok ? 0 : -1;
+}
+
+/* epoll64/pselect6 就绪判定用：管道缓冲当前可读字节数（锁内取 head/tail，
+ * 不搬运数据、不改游标）。pipe_buf 越界返回 0。 */
+int syscall_pipe_bytes(int pipe_buf)
+{
+    if (pipe_buf < 0 || pipe_buf >= MAX_PIPES) return 0;
+    uint64_t f = spinlock_lock_irqsave(&g_pipe_lock);
+    pipe_t *p = &g_pipes[pipe_buf];
+    int n = 0;
+    if (p->used) n = (p->tail - p->head + PIPE_BUF_SIZE) % PIPE_BUF_SIZE;
+    spinlock_unlock_irqrestore(&g_pipe_lock, f);
+    return n;
 }
 
 /* sys_mkfs: 安装器格式化分区为 ext2。a1=lba a2=sectors a3=label(ptr,可空)
@@ -1252,15 +1276,24 @@ static int64_t sys_writev(int fd, uint64_t iov, int iovcnt) {
     }
     return total;
 }
-static int64_t sys_pselect6(void) { return 0; }
+/* pselect6 / epoll / eventfd2：薄壳，实现见 epoll64.c（v1 仅 LT，限制见头文件）。 */
+static int64_t sys_pselect6(int nfds, uint64_t readfds, uint64_t writefds,
+                           uint64_t exceptfds, uint64_t timeout, uint64_t sigmask)
+{
+    return pselect64_impl(nfds, readfds, writefds, exceptfds, timeout, sigmask);
+}
+static int64_t sys_epoll_create(int flags) { return epoll64_create(flags); }
+static int64_t sys_epoll_ctl(int epfd, int op, int fd, const void *event)
+{
+    return epoll64_ctl(epfd, op, fd, event);
+}
+static int64_t sys_epoll_wait(int epfd, uint64_t events, int maxevents, int timeout_ms)
+{
+    return epoll64_wait(epfd, (void *)events, maxevents, timeout_ms);
+}
 
-/* V0.20.37: epoll 桩 */
-static int64_t sys_epoll_create(int flags) { (void)flags; return 0; }
-static int64_t sys_epoll_ctl(void) { return 0; }
-static int64_t sys_epoll_wait(void) { return 0; }
-
-/* V0.20.38: eventfd/clock_gettime/uname 桩 */
-static int64_t sys_eventfd2(void) { return 0; }
+/* V0.20.38: eventfd/clock_gettime/uname 桩（eventfd2 已接入 epoll64.c） */
+static int64_t sys_eventfd2(int initval, int flags) { return eventfd64_create(initval, flags); }
 static int64_t sys_clock_gettime(int clockid, uint64_t ts) {
     extern uint64_t pit64_get_ticks(void);
     if (ts < 0x40000000ULL || ts >= 0x80000000ULL) return HEPU_EFAULT;
@@ -2247,6 +2280,7 @@ static int64_t wrap_open(int64_t a1, int64_t a2, int64_t a3, int64_t a4, int64_t
 }
 static int64_t wrap_close(int64_t a1, int64_t a2, int64_t a3, int64_t a4, int64_t a5, int64_t a6) {
     (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+    epoll64_on_close((int)a1);   /* 回收 epoll/eventfd 注册表条目 */
     return fs_do_close((int)a1);
 }
 static int64_t wrap_exit(int64_t a1, int64_t a2, int64_t a3, int64_t a4, int64_t a5, int64_t a6) {
@@ -2508,19 +2542,20 @@ static int64_t wrap_writev(int64_t a1, int64_t a2, int64_t a3, int64_t a4, int64
     (void)a4;(void)a5;(void)a6; return sys_writev((int)a1, (uint64_t)a2, (int)a3);
 }
 static int64_t wrap_pselect6(int64_t a1, int64_t a2, int64_t a3, int64_t a4, int64_t a5, int64_t a6) {
-    (void)a1;(void)a2;(void)a3;(void)a4;(void)a5;(void)a6; return sys_pselect6();
+    return sys_pselect6((int)a1, (uint64_t)a2, (uint64_t)a3, (uint64_t)a4,
+                        (uint64_t)a5, (uint64_t)a6);
 }
 static int64_t wrap_epoll_create(int64_t a1, int64_t a2, int64_t a3, int64_t a4, int64_t a5, int64_t a6) {
     (void)a2;(void)a3;(void)a4;(void)a5;(void)a6; return sys_epoll_create((int)a1);
 }
 static int64_t wrap_epoll_ctl(int64_t a1, int64_t a2, int64_t a3, int64_t a4, int64_t a5, int64_t a6) {
-    (void)a1;(void)a2;(void)a3;(void)a4;(void)a5;(void)a6; return sys_epoll_ctl();
+    (void)a5;(void)a6; return sys_epoll_ctl((int)a1, (int)a2, (int)a3, (const void *)a4);
 }
 static int64_t wrap_epoll_wait(int64_t a1, int64_t a2, int64_t a3, int64_t a4, int64_t a5, int64_t a6) {
-    (void)a1;(void)a2;(void)a3;(void)a4;(void)a5;(void)a6; return sys_epoll_wait();
+    (void)a5;(void)a6; return sys_epoll_wait((int)a1, (uint64_t)a2, (int)a3, (int)a4);
 }
 static int64_t wrap_eventfd2(int64_t a1, int64_t a2, int64_t a3, int64_t a4, int64_t a5, int64_t a6) {
-    (void)a1;(void)a2;(void)a3;(void)a4;(void)a5;(void)a6; return sys_eventfd2();
+    (void)a3;(void)a4;(void)a5;(void)a6; return sys_eventfd2((int)a1, (int)a2);
 }
 static int64_t wrap_clock_gettime(int64_t a1, int64_t a2, int64_t a3, int64_t a4, int64_t a5, int64_t a6) {
     (void)a3;(void)a4;(void)a5;(void)a6; return sys_clock_gettime((int)a1, (uint64_t)a2);

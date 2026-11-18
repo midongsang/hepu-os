@@ -145,8 +145,70 @@ source_of_truth: kernel/include/syscall.h + kernel/arch/x86_64/syscall64_full.c
 1. **号空间是混用的**：`SYS_xxx` 原生号（0–99）、`SYS_LNX64_xxx` 自定义扩展号（100 段）、
    以及少数直接采用 Linux x86_64 号（如 `SYSCALL_GETSOCKNAME=140`、`SYSCALL_SHUTDOWN=145`）。
    后者一旦与未来原生号扩张撞车，注册表会静默覆盖——新增号时必须先跑本生成器查冲突。
-2. **本表只描述"已注册"**（即 `syscall_table[]` 里有项）。注册了但实现是桩返回 0 的项
-   （当前：`epoll_create/epoll_ctl/epoll_wait/eventfd2`）**仍然算"已注册"**，
-   其语义完整度见 `planning/ROADMAP.md` P1-1 与 `architecture/KERNEL.md` 4.3 备注。
+2. **本表只描述"已注册"**（即 `syscall_table[]` 里有项）。`epoll_create/epoll_ctl/
+   epoll_wait/eventfd2/pselect6` 自 2026-11-18 起由静默 `return 0` 桩改为 v1 最小
+   真实现（见文末「epoll / eventfd2 / pselect6 v1 语义与限制」小节）；其语义完整度
+   见 `planning/ROADMAP.md` P1-1 与 `architecture/KERNEL.md` 4.3 备注。
 3. 32 位路径（`int 0x80`）与本表共用同一号空间，但入口只压 4 个参数寄存器，
    所以 `mmap(fd/offset)`、`clone(tls)`、`futex` 在 32 位路径上参数不全。
+
+## epoll / eventfd2 / pselect6 v1 语义与限制（手写小节）
+
+> 本小节为手写说明；`tools/gen_syscall_doc.py` 重生成时只覆写表头与注册表，
+> 本小节需在重生成后补回。实现落点：`kernel/arch/x86_64/epoll64.c` /
+> `epoll64.h`；薄壳在 `syscall64_full.c`；探针 `user/apps/epolltest.c`。
+> 错误一律返回**负 errno**（本地码表，与 syscall64_full.c 一致）。
+
+### 号与处理器（64 位路径）
+
+| 号 | 名称 | 薄壳 | 实现 |
+|----|------|------|------|
+| 113 | PSELECT6 | `wrap_pselect6` | `pselect64_impl` |
+| 114 | EPOLL_CREATE | `wrap_epoll_create` | `epoll64_create` |
+| 115 | EPOLL_CTL | `wrap_epoll_ctl` | `epoll64_ctl` |
+| 116 | EPOLL_WAIT | `wrap_epoll_wait` | `epoll64_wait` |
+| 117 | EVENTFD2 | `wrap_eventfd2` | `eventfd64_create` |
+
+### epoll_create(flags)
+- 返回 ≥3 的合法 fd；`flags`（EPOLL_CLOEXEC）v1 忽略；集合/fd 表满返回 `-EMFILE`。
+- 该 fd 是 epoll 集合句柄，**不参与普通文件读写**：对它误用 `read/write` 返回 `-EINVAL`。
+
+### epoll_ctl(epfd, op, fd, const struct epoll_event *event)
+- `event` 结构（v1 布局，16 字节）：`uint32_t events; uint32_t _pad; uint64_t data;`，
+  经 `copy_from_user` 进内核。
+- 操作码：`ADD=1`、`DEL=2`、`MOD=3`；未知 op 返回 `-EINVAL`。
+- `ADD` 重复注册同一 fd 返回 `-EEXIST`；`MOD` 目标未注册返回 `-EBADF`；
+  目标 fd 不在当前 fd 表返回 `-EBADF`；不允许把 epoll fd 自身注册进另一集合，返回 `-EINVAL`。
+- **EPOLLET（0x80000000）边沿触发 v1 不支持**：注册事件掩码含该位即返回 `-EINVAL`。
+- `DEL` 不校验 `event` 指针；`ADD/MOD` 缺 `event` 指针或拷用户态失败返回 `-EFAULT`。
+
+### epoll_wait(epfd, struct epoll_event *events, int maxevents, int timeout_ms)
+- `timeout_ms < 0`：无限等待；`= 0`：立即返回（轮询一次）；`> 0`：毫秒超时。
+- 有就绪项：填 `events` 并返回就绪数量（≤ `maxevents`，上限 16）；超时返回 `0`；
+  拷回用户态失败返回 `-EFAULT`。
+- **v1 仅水平触发（LT）**：只要条件成立就持续报就绪，不做边沿记录。
+- 就绪判定（按 fd 类型自身）：eventfd 计数 >0；pipe 可读字节 >0；普通文件恒可读；
+  stdin(fd 0) 键盘缓冲非空，事件记 `EPOLLIN(1)`。`EPOLLOUT(4)` v1 未分类。
+
+### eventfd2(initval, flags)
+- 返回 ≥3 的合法 fd；初始计数 = `initval`。
+- `EFD_SEMAPHORE(1)` 信号量模式 v1 不支持，返回 `-EINVAL`。
+- `write(fd, buf, 8)`：读 8 字节无符号 64 位值累加进计数器（饱和到 `UINT64_MAX`，不回绕），
+  返回 `8`；长度 <8 返回 `-EINVAL`。
+- `read(fd, buf, 8)`：计数器非零时取走并**清零**（Linux 非信号量语义），写回 8 字节，
+  返回 `8`；计数为零返回 `-EAGAIN`（v1 读空不阻塞）；长度 <8 返回 `-EINVAL`。
+- 计数 >0 时可被 `epoll_wait` 判为可读（`EPOLLIN`）。
+
+### pselect6(nfds, readfds, writefds, exceptfds, timeout, sigmask)
+- v1 只判**读就绪**并回写 `readfds` 位图；`writefds/exceptfds/sigmask` 忽略。
+- `nfds` v1 上限 16（超出钳到 16）；`readfds` 为空指针返回 `-EINVAL`；拷位图/超时失败返回 `-EFAULT`。
+- `timeout=NULL` 无限等待；否则按 `struct timespec{ tv_sec; tv_nsec; }` 折算毫秒。
+- 有就绪：位图置位并返回就绪数量；超时：位图清零返回 `0`。
+
+### 已知不支持 / 后续接入点
+- 边沿触发（EPOLLET）、`EPOLLOUT` 就绪分类、信号量 eventfd（EFD_SEMAPHORE）、
+  eventfd 阻塞读空；注册表未按进程槽位隔离（v1 靠 fd 快照防跨槽泄漏）；
+  无 pipe 写唤醒钩子，等待循环靠 `process64_yield()` 轮询 + `pit64` 毫秒时基。
+- 中断背景：syscall 入口经 FMASK 屏蔽 IF（进入时 `RFLAGS.IF=0`，定时器 tick 冻结），
+  等待循环在锁外轮询/让出前显式 `sti` 让 APIC/PIT 中断送达；跨子系统取数都在
+  irqsave 锁内完成，锁释放后才允许抢占；返回用户态时 RFLAGS 由 syscall 返回帧恢复。

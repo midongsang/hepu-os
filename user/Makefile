@@ -38,6 +38,7 @@ TARGETS := $(BUILD_DIR)/hello.elf $(BUILD_DIR)/shell.elf $(BUILD_DIR)/forktest.e
            $(BUILD_DIR)/fdstress.elf \
            $(BUILD_DIR)/mmprobe.elf \
            $(BUILD_DIR)/rwprobe.elf \
+           $(BUILD_DIR)/epolltest.elf \
            $(BUILD_DIR)/fbsyn.elf \
            $(BUILD_DIR)/install64.elf
 
@@ -194,6 +195,14 @@ $(BUILD_DIR)/fbdesc.elf: $(BUILD_DIR)/fbdesc.o $(LDSCRIPT)
 $(BUILD_DIR)/pipe_test.o: $(USER_DIR)apps/pipe_test.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 $(BUILD_DIR)/pipe_test.elf: $(BUILD_DIR)/pipe_test.o $(LDSCRIPT)
+	$(LD) $(LDFLAGS) -T $(LDSCRIPT) -o $@ $<
+	@echo "Built user ELF: $@"
+	@ls -lh $@
+
+# epolltest：epoll/eventfd2/pselect6 最小语义探针（B 段验收）
+$(BUILD_DIR)/epolltest.o: $(USER_DIR)apps/epolltest.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD_DIR)/epolltest.elf: $(BUILD_DIR)/epolltest.o $(LDSCRIPT)
 	$(LD) $(LDFLAGS) -T $(LDSCRIPT) -o $@ $<
 	@echo "Built user ELF: $@"
 	@ls -lh $@
