@@ -89,7 +89,12 @@ int main(int argc, char **argv)
     printf("========================================\n\n");
 
     printf("[系统信息]\n");
-    printf("  内核版本: %s\n", hepu_info());
+    /* sys_hepu_info 返回编码版本号 (major<<24 | minor<<16 | patch<<8)，不是字符串指针 */
+    {
+        unsigned int ver = (unsigned int)hepu_info();
+        printf("  内核版本: %u.%u.%u\n",
+               (ver >> 24) & 0xFFu, (ver >> 16) & 0xFFu, (ver >> 8) & 0xFFu);
+    }
     printf("  当前PID:  %d\n", hepu_getpid());
     printf("  诊断模块: %d项\n\n", DIAG_COUNT);
 

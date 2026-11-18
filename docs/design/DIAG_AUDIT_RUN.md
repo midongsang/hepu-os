@@ -173,33 +173,78 @@ diag 按定长结构从内核缓冲逐字段解码，不做任何文本匹配。
 
 ## 7. 临时改动清单与还原证明
 
-下列改动仅为取证脚手架，**最终提交不含任何一项**；取证后已
+取证脚手架分两轮，下列临时项**最终提交均不保留**；取证后已
 `git checkout --` 还原：
 
 | 文件 | 临时内容 | 还原方式 |
 |---|---|---|
-| `kernel/sched/shell.c` | 把 `diag`（`.hug` 原生应用，走 `hug_run("diag")`）临时提到自检序列最前；两条 `cap_check` 拒绝探针；串口标记 | `git checkout -- kernel/sched/shell.c` |
-| `user/apps/diag/diag.c` | 临时打印审计 syscall 原始返回值 `n`；调试分段标记；临时绕过版本行（见第 8 节） | `git checkout -- user/apps/diag/diag.c` |
+| `kernel/sched/shell.c` | 把 `diag`（`.hug` 原生应用，走 `hug_run("diag")`）临时提到自检序列最前；B 轮两条 `cap_check` 拒绝探针；串口标记 | `git checkout -- kernel/sched/shell.c` |
+| `user/apps/diag/diag.c` | A/B 轮：临时打印审计 syscall 原始返回值 `n`、调试分段标记、临时绕过版本行；C 轮：临时打印 `raw syscall n=`（最终源码已去掉该行，仅 §8.1 的版本解码 hunk 保留为正式改动） | 临时埋点行已删除；版本解码 hunk 见 §8.1 |
 | `kernel/arch/x86/sys_process.c` | 临时把 `sys_exit` 退出码镜像到串口 | `git checkout -- kernel/arch/x86/sys_process.c` |
 
-还原后核对：
+还原后核对（C 轮收尾）：
 
 ```text
-$ git diff --stat 391e1db
-（空，跟踪文件零差异）
 $ git diff 391e1db -- kernel/sched/shell.c | wc -l
 0
+$ git diff 391e1db -- user/apps/diag/diag.c | grep '^+'
+（仅 §8.1 版本解码 hunk，无临时埋点行）
 ```
 
-## 8. 遗留观察（不在本次修复范围）
+## 8. 版本行卡死问题与遗留观察
 
-1. **`hepu_info()` 返回值类型与应用用法不一致（既有问题，非本次引入）**：
-   `sys_hepu_info` 自 V7.66 起返回编码后的版本号 `u32`（主版本<<24 | …），
-   而 `diag.c`、`hello_c`、`sysinfo` 仍把返回值当字符串指针传给 `%s`。
-   在 32 位 QEMU 实跑中，diag 会卡在版本行之前、到不了审计段。本次取证
-   临时绕过该行才到达审计段；审计环 / syscall / 解码链路本身未因此改动。
-   该不一致影响所有沿用此写法的 `.hug` 应用，建议另立条目跟进。
-2. **32 位尚无用户态可触发的能力校验入口**：新三参 `cap_check` 目前只被
-   本次临时探针直接调用；后续把某条 syscall / IPC 路径接到 `cap_check` 后，
-   可去掉探针，用真实业务拒绝复测本审计段。
-3. 审计记录 `ts` 在 32 位侧恒为 0（暂无统一单调时钟），diag 段也不展示时间戳。
+### 8.1 `hepu_info()` 返回编码 u32 被当字符串指针 —— 已修复
+
+**根因**：`sys_hepu_info`（`kernel/arch/x86/sys_hepu.c:18-36`）自 V7.66
+起出于地址泄露防护，不再返回内核字符串指针，改为返回编码版本号：
+
+```text
+返回 u32 = (major << 24) | (minor << 16) | (patch << 8)
+"1.0.2" -> 0x01000200
+```
+
+用户态包装 `hepu_info()`（`user/libhepu/include/hepu/syscall.h:68`）的返回
+类型标注 `const char *` 是历史遗留，实际拿到的是这个 u32。基线 `diag.c:92`
+把返回值当字符串指针传给 `%s`，在 32 位 QEMU 解引用 `0x01000200`，
+diag 卡在版本行之前、到不了审计段（A/B 两轮取证只能临时绕过该行）。
+
+**修复方式**：只改 `user/apps/diag/diag.c` 版本行这一个局部 hunk，把返回值
+按 `unsigned int` 解码回三段版本号打印；**未动内核 syscall ABI、未改 syscall
+号、未动审计段与诊断表**：
+
+```c
+/* sys_hepu_info 返回编码版本号 (major<<24 | minor<<16 | patch<<8)，不是字符串指针 */
+{
+    unsigned int ver = (unsigned int)hepu_info();
+    printf("  内核版本: %u.%u.%u\n",
+           (ver >> 24) & 0xFFu, (ver >> 16) & 0xFFu, (ver >> 8) & 0xFFu);
+}
+```
+
+**证据（`evidence-diag-audit/run-C-clean-diag/`）**：
+
+- `serial.log` + `diag-section.txt`：带临时 `raw syscall n=` 打印的复跑，
+  版本行解码为 `1.0.2`，审计段 `raw syscall n=0` → `(暂无记录)`，随后到达
+  `[建议]` 与诊断完毕横幅，`hug_run rc=0x00000000`。
+- `diag-section-final-source.txt`：去掉临时调试行后的**最终提交源码**复核 boot，
+  同样从横幅跑到 `内核版本: 1.0.2`、`(暂无记录)`、`[建议]`，`rc=0x00000000`。
+
+**未修的同类 `%s` 误用调用点（本轮只列出，不修）**：
+
+| 文件:行 | 现状写法 | 现象 |
+|---|---|---|
+| `user/apps/hello_c/hello.c:18` | `printf("内核版本: %s\n", hepu_info());` | 编码 u32 被当字符串指针，32 位下卡在版本行 |
+| `user/apps/sysinfo/sysinfo.c:19` | `printf("  内核版本: %s\n", hepu_info());` | 同上 |
+| `user/apps/top/top.c:43` | `printf("  内核: %s\n", hepu_info());` | 同上 |
+
+> 备注：`user/apps/perf/perf.c:132` 未调用 `hepu_info()`（硬编码版本串）；
+> `user/apps/notepad/notepad.c:81` 仅字符串字面量提及该 API，均非误用。
+
+### 8.2 32 位尚无用户态可触发的能力校验入口
+
+新三参 `cap_check` 目前只被 B 轮临时探针直接调用；后续把某条 syscall / IPC
+路径接到 `cap_check` 后，可去掉探针，用真实业务拒绝复测本审计段。
+
+### 8.3 审计记录时间戳
+
+审计记录 `ts` 在 32 位侧恒为 0（暂无统一单调时钟），diag 段也不展示时间戳。

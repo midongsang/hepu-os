@@ -17,6 +17,9 @@
 | `run-A-empty/diag-section.txt` | 空环态 diag 段摘录：`raw syscall n=0` → `(暂无记录)` |
 | `run-B-denied/serial.log` | 真实拒绝态完整串口日志（722 行） |
 | `run-B-denied/diag-section.txt` | 拒绝态摘录：探针两条 + diag 解码两行 + 退出码 `code=0x00000000` |
+| `run-C-clean-diag/serial.log` | 版本行修复后复跑完整串口日志（719 行，带临时 `raw syscall n=` 打印） |
+| `run-C-clean-diag/diag-section.txt` | 修复后摘录：`内核版本: 1.0.2`、`raw syscall n=0` → `(暂无记录)`、`[建议]`、`rc=0x00000000` |
+| `run-C-clean-diag/diag-section-final-source.txt` | 去掉临时调试行后的最终提交源码复核摘录：`内核版本: 1.0.2`、`(暂无记录)`、`[建议]`、`rc=0x00000000` |
 
 ## 复现命令
 
@@ -30,8 +33,11 @@ qemu-system-i386 -L "$BIOS" \
 
 ## 取证脚手架声明
 
-两次日志均在临时脚手架下采集（自检序列前置 diag、内核侧临时 `cap_check`
-探针、diag 临时打印原始 `n`、sys_exit 临时串口镜像）。这些改动**未进入最终
-提交**，已 `git checkout --` 还原；`git diff --stat 391e1db` 为空。
-从干净树直接复跑会在既有 `hepu_info()` 版本行卡住（见设计文档 §8.1），
-需按 §7 临时绕过该行后才能到达审计段。
+- A/B 两轮日志在临时脚手架下采集（自检序列前置 diag、内核侧临时 `cap_check`
+  探针、diag 临时打印原始 `n`、sys_exit 临时串口镜像、临时绕过版本行）。
+- C 轮：版本行卡死已在 `diag.c` 正式修复（见设计文档 §8.1）；复跑仍用临时
+  hoist 把 diag 提到自检最前，`raw syscall n=` 为临时调试打印（最终源码已去掉）。
+- 上述临时项**均未进入最终提交**，已 `git checkout --` 还原；
+  `kernel/sched/shell.c` 相对基点 0 改动，`diag.c` 仅保留版本解码 hunk。
+- 注意：`hello_c` / `sysinfo` / `top` 仍有同款 `%s` 误用（§8.1 清单），
+  从干净树直接跑这三个应用仍会卡在版本行；diag 本身已可一路跑到 `[建议]`。
