@@ -126,6 +126,8 @@ diag.query(service_name) -> {
 - 人为让某服务空指针崩溃 → 重启后 `diag.query` 能给出 `pc`、`last_syscall`、`msg`；
 - 重复崩溃 3 次后，`restarts=3` 且 `last_crash` 为最近一次。
 
+> 落地记录见 [CRASH_CTX_LANDING.md](./CRASH_CTX_LANDING.md)（实际达到程度、取舍与未完成项）。
+
 ---
 
 ## 四条通用纪律（贯穿以上三项）

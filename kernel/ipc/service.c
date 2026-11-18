@@ -9,6 +9,7 @@
 #include <string.h>
 #include "vga.h"
 #include "sched.h"
+#include "crash_ctx.h"
 
 #define MAX_SERVICES 16
 #define SERVICE_NAME_LEN 32
@@ -50,6 +51,7 @@ int sys_service_register(const char *name, uint32_t type, uint32_t version) {
             service_table[i].name[SERVICE_NAME_LEN - 1] = 0;
             service_table[i].type = type;
             service_table[i].version = version;
+            crash_ctx_bind_name(pid, name);
             vga_printf("[SERVICE] updated: %s (pid=%d, type=%d, ver=%d)\n",
                        service_table[i].name, pid, type, version);
             return 0;
@@ -65,6 +67,7 @@ int sys_service_register(const char *name, uint32_t type, uint32_t version) {
             service_table[i].pid = pid;
             service_table[i].type = type;
             service_table[i].version = version;
+            crash_ctx_bind_name(pid, name);
             vga_printf("[SERVICE] registered: %s (pid=%d, type=%d, ver=%d)\n",
                        service_table[i].name, pid, type, version);
             return 0;
@@ -98,6 +101,7 @@ void service_unregister_pid(uint32_t pid) {
             vga_printf("[SERVICE] unregistered: %s (pid=%d)\n",
                        service_table[i].name, pid);
             service_table[i].used = 0;
+            crash_ctx_release(pid);
         }
     }
 }

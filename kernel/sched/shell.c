@@ -37,6 +37,32 @@
 
 #define SHELL_BUFFER_SIZE 128
 
+/* §3 验收用静态用户入口：进入 ring3 后除零触发 #DE。
+ * 与 user_init_start 同走 hepu_exec_static 旁路 ABI，代码位于内核 .text
+ * 恒等映射区（见 paging.c 注释），不依赖 initrd ELF 装载器。 */
+static void crashsvc_start(void)
+{
+    /* 先做一次 SYS_YIELD(6)：让 syscall 快路径把 last_syscall/last_arg0
+     * 记进现场，便于验收时看到非零的 last_syscall。 */
+    __asm__ volatile ("movl $6, %%eax; int $0x80" ::: "eax");
+    volatile int z = 0;
+    volatile int y = 42 / z;   /* #DE: 除以零 */
+    (void)y;
+    for (;;) { __asm__ volatile ("hlt"); }
+}
+
+/* 启动一次静态崩溃服务并显式进入用户态；崩溃/退出后回收并 longjmp 回主线。 */
+static void crashsvc_launch_once(void)
+{
+    extern int hepu_exec_static(const char *name, void (*entry)(void));
+    int pid = hepu_exec_static("crashsvc", crashsvc_start);
+    process_t *p = NULL;
+    for (int i = 0; i < MAX_PROCESSES; i++) {
+        if (proc_table[i].pid == (uint32_t)pid) { p = &proc_table[i]; break; }
+    }
+    if (p) process_enter_user_mode(p);
+}
+
 extern const char *hepu_kernel_version;
 extern const char *hepu_system_version;
 
@@ -205,6 +231,19 @@ void shell_main(void)
         extern int cmd_run_auto(const char *);
         cmd_run_auto("fork-test");
         serial_puts(0x3F8, "[AUTO] fork-test done\n");
+        /* §3 crash_ctx 验收通道：静态用户入口在 ring3 触发 #DE，异常入口填
+         * pc/sp/regs/msg 并快照 last_crash，restarts 累计。放在 linuxhello
+         * 之前：后者在本环境会阻塞，靠后的自检到不了。
+         * 注：当前 sys_exit 回收后 longjmp 回主线，本块 C 栈被展开，无法在
+         * 同一轮内连续拉起多次；多次重启依赖 supervisor 自动拉起（未实现）。 */
+        {
+            serial_puts(0x3F8, "[AUTO] crashsvc launch\n");
+            crashsvc_launch_once();
+            {
+                extern void crash_ctx_dump_all(void);
+                crash_ctx_dump_all();
+            }
+        }
         serial_puts(0x3F8, "[DEBUG] after fork-test at start\n");
         vga_puts(" [SHELL] auto-test: run linuxhello...\n");
         serial_puts(0x3F8, "[AUTO] linuxhello start\n");
@@ -276,7 +315,6 @@ void shell_main(void)
         serial_puts(0x3F8, "[AUTO] socket-test start\n");
         cmd_run_auto("socket-test");
         serial_puts(0x3F8, "[AUTO] socket-test done\n");
-        /* V6.50: 图形模式测试 (gfxtest) — 放在最后, 切换图形模式后自动切回文本 */
         vga_puts(" [SHELL] auto-test: run gfxtest (VGA 320x200 graphics)...\n");
         serial_puts(0x3F8, "[AUTO] gfxtest start\n");
         cmd_run_auto("gfxtest");

@@ -13,6 +13,8 @@
 #include "fingerprint.h"
 #include "vfs.h"
 #include "ipc.h"
+#include "process.h"
+#include "crash_ctx.h"
 extern const char *hepu_kernel_version;
 
 u32 sys_ipc_send(u32 target_pid, u32 type,
@@ -23,6 +25,10 @@ u32 sys_ipc_send(u32 target_pid, u32 type,
     if (length > 0 && !user_ptr_valid((const void *)data_ptr, length)) {
         vga_printf("[IPC] sys_ipc_send: invalid user ptr 0x%x\n", data_ptr);
         return (u32)-1;
+    }
+    /* §3: 记录最后一次 IPC 的 tag（消息类型）到崩溃现场 */
+    if (current && current->crash_ctx) {
+        crash_ctx_record_ipc(current->crash_ctx, type);
     }
     return ipc_send(target_pid, type, (void *)data_ptr, length);
 }

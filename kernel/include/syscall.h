@@ -170,7 +170,13 @@
 #define SYS_GET_CURRENT_USER 220 /* 获取当前用户 (V8.46) */
 #define SYS_GFX_3D_DEMO      221 /* 3D图形演示 (V0.9.0: P5-5硬件加速) */
 #define SYS_CAP_AUDIT     237   /* 读取能力授权审计环（拒绝记录） */
-#define SYS_MAX              238
+#define SYS_CRASH_QUERY   238   /* 服务崩溃现场/结构化状态查询（UNIX_LESSONS §3） */
+#define SYS_MAX              239
+#endif
+
+/* 不受上面 ifndef 分支影响：保证号表两端一致 */
+#ifndef SYS_CRASH_QUERY
+#define SYS_CRASH_QUERY   238
 #endif
 
 /* 初始化系统调用 */

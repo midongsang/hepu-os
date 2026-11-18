@@ -18,6 +18,38 @@ typedef struct {
 
 #define SYS_CAP_AUDIT 237
 
+/* §3 服务崩溃现场 + 结构化状态查询（UNIX_LESSONS.md 第三节）。
+ * 下面的布局必须与内核 kernel/include/crash_ctx.h 的 struct svc_query
+ * 逐字段一致：syscall 直接二进制直拷，diag 按结构体字段消费，
+ * 不解析任何文本行。 */
+#define SYS_CRASH_QUERY 238
+
+struct diag_last_crash {
+    unsigned long long pc;
+    unsigned long long last_syscall;
+    char     msg[96];
+    unsigned long long ts;
+};
+
+struct diag_svc_query {
+    char     name[32];
+    unsigned int state;        /* 0=run 1=degraded 2=restarting 3=dead */
+    unsigned int restarts;
+    unsigned long long uptime_ms;
+    struct diag_last_crash last_crash;
+};
+
+static const char *diag_state_str(unsigned int st)
+{
+    switch (st) {
+        case 0: return "run";
+        case 1: return "degraded";
+        case 2: return "restarting";
+        case 3: return "dead";
+        default: return "?";
+    }
+}
+
 #define CHECK_OK   "[  OK  ]"
 #define CHECK_WARN "[ WARN ]"
 #define CHECK_FAIL "[ FAIL ]"
@@ -150,6 +182,32 @@ int main(int argc, char **argv)
                        recs[i].required_rights, why);
             }
             printf("  共 %u 条拒绝记录\n", n);
+        }
+    }
+
+    printf("\n[崩溃现场：结构化状态查询]\n");
+    {
+        /* 候选服务名；内核按名返回二进制 struct diag_svc_query。
+         * 这里只做字段读取与固定格式打印，不 grep 内核文本输出。 */
+        static const char *cands[] = { "crashdemo.elf", "diag" };
+        struct diag_svc_query q;
+        for (unsigned int i = 0; i < sizeof(cands) / sizeof(cands[0]); i++) {
+            memset(&q, 0, sizeof(q));
+            uint32_t rc = hepu_syscall2(SYS_CRASH_QUERY,
+                                        (uint32_t)cands[i], (uint32_t)&q);
+            if ((int)rc < 0) {
+                printf("  %-16s (无崩溃记录)\n", cands[i]);
+                continue;
+            }
+            printf("  服务: %s\n", q.name);
+            printf("  状态: %s  重启次数: %u  运行时长: %u ms\n",
+                   diag_state_str(q.state), q.restarts,
+                   (unsigned int)q.uptime_ms);
+            printf("  上次崩溃: pc=0x%x syscall=%u ts=%u\n",
+                   (unsigned int)q.last_crash.pc,
+                   (unsigned int)q.last_crash.last_syscall,
+                   (unsigned int)q.last_crash.ts);
+            printf("  信息: %s\n", q.last_crash.msg);
         }
     }
 
