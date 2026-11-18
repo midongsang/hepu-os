@@ -39,6 +39,7 @@ TARGETS := $(BUILD_DIR)/hello.elf $(BUILD_DIR)/shell.elf $(BUILD_DIR)/forktest.e
            $(BUILD_DIR)/mmprobe.elf \
            $(BUILD_DIR)/rwprobe.elf \
            $(BUILD_DIR)/epolltest.elf \
+           $(BUILD_DIR)/vfsprobe.elf \
            $(BUILD_DIR)/fbsyn.elf \
            $(BUILD_DIR)/install64.elf
 
@@ -206,6 +207,13 @@ $(BUILD_DIR)/epolltest.elf: $(BUILD_DIR)/epolltest.o $(LDSCRIPT)
 	$(LD) $(LDFLAGS) -T $(LDSCRIPT) -o $@ $<
 	@echo "Built user ELF: $@"
 	@ls -lh $@
+
+# vfsprobe：VFS64 伪设备后端探针（P3-6 解耦验收）
+$(BUILD_DIR)/vfsprobe.o: $(USER_DIR)apps/vfsprobe.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD_DIR)/vfsprobe.elf: $(BUILD_DIR)/vfsprobe.o $(LDSCRIPT)
+	$(LD) $(LDFLAGS) -T $(LDSCRIPT) -o $@ $<
+	@echo "Built user ELF: $@"
 
 # ===========================================================================
 # SEC-12: 历史测试程序补源码 —— 让镜像**完全**可从源码重建
