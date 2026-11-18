@@ -7119,6 +7119,10 @@ static void hpdesk_render_inner(void)
     /* 几何探针: 只打印第一帧。布局问题一直靠看截图估算, 而截图与配置值经常对不上,
      * 这里把每个面板的真实几何 + 当前缩放吐到串口, 后续改造全部以这些数字为准。 */
     if (g_frame_no == 1) {
+        /* A-1 启动基准: 桌面第一帧到达标记（时间基准 t0 在内核入口
+         * kernel_main_64.c 的 g_boot_tsc0，两者间隔即"内核入口→桌面可绘制"） */
+        { extern void serial_puts(uint16_t, const char*);
+          serial_puts(0x3F8, "[BOOT] desktop_frame1\n"); }
         /* 真实逻辑画布 = 物理尺寸 ÷ 缩放因子(Windows DIP 语义)。
          * 旧实现按 "1024*100/pct" 算, 把 1024 基准当成物理宽, 打印出来是 819x614,
          * 而 1920x1080@125% 的实际逻辑画布是 1536x864 —— 这个误导曾导致

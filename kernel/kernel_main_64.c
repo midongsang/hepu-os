@@ -180,8 +180,41 @@ uint32_t g_root_lba = 0;
 uint32_t g_root_size = 0;
 
 /* 64位内核主函数 */
+
+/* ============================================================================
+ * A-1 启动基准（NEXT_PHASE_PLAN 主线 A）
+ * 在 7 个 phase 边界读 TSC 打点，用于"同一镜像连跑多次的可比性"。
+ * QEMU 的 TSC 频率不代表真机，这里只输出周期数，便于改动前后做相对比较，
+ * 不换算绝对秒数、不对外声称 fps 或启动秒数。
+ * ========================================================================== */
+static uint64_t g_boot_tsc0;
+
+static uint64_t boot_rdtsc(void)
+{
+    uint32_t lo, hi;
+    __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi));
+    return ((uint64_t)hi << 32) | (uint64_t)lo;
+}
+
+static void boot_mark(const char *tag)
+{
+    extern void vga_puts(const char *str);
+    extern void vga_put_hex(uint64_t val);
+    extern int uart64_puts(int com, const char *str);
+    uint64_t c = boot_rdtsc() - g_boot_tsc0;
+    vga_puts("[BOOT] ");
+    vga_puts(tag);
+    vga_puts(" cycles=");
+    vga_put_hex(c);
+    vga_puts("\n");
+    uart64_puts(0, "[BOOT] ");
+    uart64_puts(0, tag);
+    uart64_puts(0, "\n");
+}
+
 void x86_64_kernel_main(void)
 {
+    g_boot_tsc0 = boot_rdtsc();          /* A-1: 内核入口时间零点 */
     /* 最早期启用FPU/SSE，防止编译器生成的SSE指令在启用前触发#UD */
     extern void x86_64_enable_fpu_early(void);
     x86_64_enable_fpu_early();
@@ -241,7 +274,7 @@ void x86_64_kernel_main(void)
     /* P2-1: 64 位贴 7 个 phase 标签, 名字与 32 位 hepu_init_phase_name() 逐字一致,
      * 这样两边的启动日志能逐行 diff。32 位的 hepu_init_phase() 不能直接调
      * (它内部调 vfs_init/devfs_init 等只存在于 32 位的模块)。 */
-    { vga_puts("[INIT] phase:  cores subsystem \n"); }
+    { boot_mark("cores"); vga_puts("[INIT] phase:  cores subsystem \n"); }
     vga_puts("[INIT] Initializing physical memory manager (2GB max)...\n");
     /* V0.13.63: 真机内存探测 — stage2(E820)/UEFI(EFI内存图) 写入 0x90100(64位字节)
      * 替代硬编码 2GB: 真机内存 <2GB 时硬编码会分配不存在的物理页 -> 启动即崩 */
@@ -326,7 +359,7 @@ void x86_64_kernel_main(void)
 
     vga_puts("[BOOT] step3 done (paging)\n");
 
-    { vga_puts("[INIT] phase:  HW driver \n"); }
+    { boot_mark("hw_driver"); vga_puts("[INIT] phase:  HW driver \n"); }
     /* V0.20.59: 提前装 IDT，防止切页表后到 SMP/APIC 之间任何异常导致 triple fault 回 BIOS */
     vga_puts("[INIT] Early IDT (crash-safe)...\n");
     extern void irq64_init(void);
@@ -437,7 +470,7 @@ void x86_64_kernel_main(void)
     syscall64_full_init();
     syscall64_test();
 
-    { vga_puts("[INIT] phase:  security encryption \n"); }
+    { boot_mark("security"); vga_puts("[INIT] phase:  security encryption \n"); }
     /* P0-4: seccomp 沙箱状态初始化（全槽位 disabled） */
     extern void seccomp64_init(void);
     seccomp64_init();
@@ -642,7 +675,7 @@ void x86_64_kernel_main(void)
         }
     }
 
-    { vga_puts("[INIT] phase:  fs \n"); }
+    { boot_mark("fs"); vga_puts("[INIT] phase:  fs \n"); }
     /* 初始化ext2文件系统 */
     vga_puts("[INIT] Initializing 64-bit ext2 filesystem...\n");
     ext2_64_init();
@@ -794,7 +827,7 @@ void x86_64_kernel_main(void)
     extern void csprng_init(void);
     csprng_init();
 
-    { vga_puts("[INIT] phase:  net proto \n"); }
+    { boot_mark("net"); vga_puts("[INIT] phase:  net proto \n"); }
     /* 初始化网络协议栈 */
     vga_puts("[INIT] Initializing 64-bit network stack...\n");
     net64_init();
@@ -810,7 +843,7 @@ void x86_64_kernel_main(void)
     vga_puts("[INIT] Initializing 64-bit HTTP client...\n");
     http64_init();
 
-    { vga_puts("[INIT] phase:  system service \n"); }
+    { boot_mark("sys_service"); vga_puts("[INIT] phase:  system service \n"); }
     /* 初始化进程管理 */
     vga_puts("[INIT] Initializing 64-bit process manager...\n");
     process64_init();
@@ -1278,7 +1311,7 @@ void x86_64_kernel_main(void)
     vga_puts("========================================\n");
 
     /* 尝试启动桌面环境，失败则启动Shell */
-    { vga_puts("[INIT] phase:  app framework \n"); }
+    { boot_mark("app_framework"); vga_puts("[INIT] phase:  app framework \n"); }
     if (desktop64_init() == 0) {
         vga_puts("[INIT] Desktop environment ready\n");
 
