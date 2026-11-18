@@ -128,10 +128,18 @@ LBA48 高 LBA 自检 `cases=0x5 fails=0x0`、宿主回读 pattern 全 match）�
 15 秒自退，所以"静置 20 秒再截图"在 32 位上必然取不到帧 —— 32 位取样要卡在 first frame
 后 ≤8 秒。
 
+**天气取数打通（BUG-59）**：桌面天气卡此前从未成功取到过数据，根源不在网络栈 ——
+打点证明我方请求完整到达（服务器回的 ACK 号恰为我方 seq+151），但 Open-Meteo
+（Cloudflare 前置）只 ACK、不发响应体；用本机服务器（回 564 B 与 473 B body）反证
+TCP/HTTP 栈收发正常。已换源 `t.weather.itboy.net`（又拍云，非常 Cloudflare）、
+字段适配（温度 `data.wendu`、天气 `forecast[0].type` 中文直拷）、缓冲提至 8192 B、
+失败改为最多 6 次重试。实测 `[WX] weather fetched temp=9 desc=多云`，
+![](docs/assets/desktop-weather-live.jpg)。
+
 **版本号双源统一**：`kernel/include/hepu_brand.h` 里还留着一份 `V0.33.1` 的字面量
 （全仓库零引用的死代码），已同步到 0.61.0，避免后续误用。
 
-体积（默认参数重编，上限 1,048,576 B）：64 位 **969,520 B**（余量约 79 KB），
+体积（默认参数重编，上限 1,048,576 B）：64 位 **968,560 B**（余量约 79 KB），
 32 位 **3,761,541 B**；双架构 0 error，32 位冒烟 `serial=1 initrd=1 net=1 desk=1
 fault=0 bound=1` PASS。
 
