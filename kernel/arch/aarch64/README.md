@@ -169,10 +169,46 @@ qemu-system-aarch64 -M virt -cpu max -m 512 \
   映射、无 VBAR、M1b 原始源码路径；如需彻底归因，下一步在本框架把全量 1GB 映射加回来对照。
 - 附注：M1b 记录称固件 SCTLR bit19(WXN)=1，本轮实测 `0xc5183d` 的 bit19=0（SA=1、A=0）。
 
-**下一步：**
-- 把 identity map 从白名单 2MB 扩到全 RAM（按固件内存地图补块）；
-- GIC 初始化 + 定时器中断（CNTV），走通 el1_irq 向量；
-- 退出 BootServices、切自己的栈与页表，进入正式内核入口。
+## M1d-1（已通）：GetMemoryMap 全 RAM 混合映射
+
+**结论：按固件内存描述符建混合映射（整 2MB 用 L2 block、首尾不齐用 L3 4KB 页），tlbi 后 ALIVE，
+低地址与远端 RAM 写读回均 OK，QEMU exit=0。**
+
+### 做法与取舍
+
+- `BootServices->GetMemoryMap` 两遍取：第一遍 `Size=0/NULL` 拿所需大小，留两个描述符余量重取；
+  缓冲为静态 bss（32KB），`DescriptorSize=48`、`Version=1`、`MapKey` 留存供 M1d-3 用。
+- 映射类型：接受 LoaderCode(1)/LoaderData(2)/BootServicesCode(3)/BootServicesData(4)/
+  RuntimeServicesCode(5)/RuntimeServicesData(6)/Conventional(7)/ACPIReclaim(9)/ACPINvs(10)/
+  Persistent(14)，按 Normal WB(Attr1) inner shareable 映射；跳过 Reserved(0)/Unusable(8)/
+  MemoryMappedIO(11)/MemoryMappedIOPortSpace(12)/PalCode(13)。
+  取舍理由：跳过的类型要么不可用、要么是 MMIO（设备另由 UART/GIC 4KB Device 页覆盖）；
+  RuntimeServices* 先按 Normal 映射，M1d-3 退出 BootServices 后再复核其属性。
+- 混合映射：整 2MB 对齐且完全被同一描述符覆盖 → L2 block；首尾不齐的 2MB → 该块内 L3 4KB 页。
+  L3 表池静态 48 表（192KB bss），实测只用 14 表。
+- 设备页：GICD `0x08000000`、GICC `0x08010000`、PL011 `0x09000000`，各一个 4KB Device 页。
+
+### 证据（`/tmp/m1d-1-map.log`，exit=0）
+
+```
+[M1d] MemoryMap: descriptors=29 DescSize=48 Ver=1 Key=00000000000008fe
+[M1d] mapped: blocks=244 pages=5376 RAM=509MB L3tables=14
+[dbg] tlbi ok
+[M1d] ALIVE after switch/tlbi, pc=0x00000000580e92a8
+[M1d] low RAM  @0x0000000040000000 w0=0xa55a0001dead0001 r0=0xa55a0001dead0001
+[M1d] remote RAM @0x000000005a80c000 w0=0xa55a0001dead0001 r0=0xa55a0001dead0001
+[M1d] poweroff
+```
+
+描述符清单见日志 `[M1d] [n] type=… start=… pages=… [map]/[skip]`：type0 一段 3MB Reserved、
+type11 两段 MMIO（`0x04000000` 64MB、`0x09010000` 4KB）按规则跳过。
+
+### 遗留
+
+- 未处理 `EFI_MEMORY_XP`（执行保护）属性：当前所有映射 PXN/UXN=0，后续内核代码段需要时再按属性细化。
+- 509MB 已映射；未映射部分即 Reserved/MMIO，未做访问校验。
+
+**下一步：** M1d-2 GIC 版本判定 + 虚拟定时器 PPI27 中断计数；M1d-3 ExitBootServices + 自有栈。
 
 **复现命令：** 见本文档 M0 段（`-cpu max` + `-bios QEMU_EFI.fd` + `-drive if=virtio` + `-device ramfb`），
 `kernel/arch/aarch64/m1` 目录直接 `make`，产物 `M1.EFI` 拷成 `EFI/BOOT/BOOTAA64.EFI`。
