@@ -926,7 +926,7 @@ efi_main(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE *st)
                 }
                 uint64_t full_us = fu_sum / (NFILL - FILL_WARM);
 
-                uint64_t px_sum = 0, du_sum = 0;
+                uint64_t px_sum = 0, gross_sum = 0, du_sum = 0;
                 uint32_t n = 0;
 
                 if (is_full) {
@@ -940,7 +940,7 @@ efi_main(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE *st)
                         __asm__ volatile("msr daifclr, #2");
                         if (k >= FILL_WARM) du_sum += du;
                     }
-                    px_sum = w; du_sum /= (NFILL - FILL_WARM); n = 1;
+                    px_sum = w; gross_sum = w; du_sum /= (NFILL - FILL_WARM); n = 1;
                 } else {
                     /* 垂直放在标题下方的下半区，整块不被底边裁剪（裁剪会让 px/成本失真） */
                     uint32_t y = (TITLE_BOTTOM + fb_h) / 2 - s / 2;
@@ -952,7 +952,9 @@ efi_main(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE *st)
                         if (nx < 0) { nx = 0; dir = 1; }
                         if (nx > (int32_t)fb_w - (int32_t)s) { nx = fb_w - s; dir = -1; }
 
-                        /* 同行同尺寸：重叠宽 = x 区间交叠，高恒为 s；重叠像素不重复计 */
+                        /* 同行同尺寸：重叠宽 = x 区间交叠，高恒为 s。
+                         * px=净脏区(扣重叠)；gross=两次 present_region 实际写入之和(不扣)。
+                         * 重叠区被写两遍，计费必须按 gross，否则斜率带 1.5~1.9×重复计费。 */
                         int32_t lo = bx > nx ? bx : nx;
                         int32_t hi = (bx + (int32_t)s) < (nx + (int32_t)s)
                                    ? (bx + (int32_t)s) : (nx + (int32_t)s);
@@ -965,10 +967,11 @@ efi_main(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE *st)
                         uint32_t wnew = present_region((uint32_t)nx, y, s, s, COL_ACCENT);
                         uint64_t du = us_elapsed(ds);
                         __asm__ volatile("msr daifclr, #2");
-                        uint32_t dirty = wold + wnew - overlap;
+                        uint32_t gross = wold + wnew;
+                        uint32_t dirty = gross - overlap;
 
                         bx = nx;
-                        if (f >= WARM) { px_sum += dirty; du_sum += du; n++; }
+                        if (f >= WARM) { px_sum += dirty; gross_sum += gross; du_sum += du; n++; }
 
                         uint64_t next = fs + FRAME_TICKS;
                         while (cntvct() < next) { }
@@ -977,16 +980,18 @@ efi_main(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE *st)
                 }
 
                 uint64_t avg_px = n ? px_sum / n : 0;
+                uint64_t avg_gross = n ? gross_sum / n : 0;
                 uint64_t avg_du = n ? du_sum / n : 0;
-                uint64_t ns_px = avg_px ? avg_du * 1000 / avg_px : 0;
+                uint64_t ns_gross = avg_gross ? avg_du * 1000 / avg_gross : 0;
                 uint64_t ratio_t = avg_du ? full_us * 10 / avg_du : 0;  /* 一位小数 ×10 */
 
                 uart_puts("[M2S] size="); uart_dec(s);
                 uart_puts("x"); uart_dec(is_full ? fb_h : s);
                 uart_puts(" px="); uart_dec(avg_px);
+                uart_puts(" gross_px="); uart_dec(avg_gross);
                 uart_puts(" full_us="); uart_dec(full_us);
                 uart_puts(" dirty_us="); uart_dec(avg_du);
-                uart_puts(" ns_per_px="); uart_dec(ns_px);
+                uart_puts(" ns_per_gross_px="); uart_dec(ns_gross);
                 uart_puts(" ratio="); uart_dec(ratio_t / 10);
                 uart_putc('.'); uart_dec(ratio_t % 10);
                 uart_puts("\n");
@@ -1021,6 +1026,58 @@ efi_main(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE *st)
                 uart_puts(" dirty_us="); uart_dec(avg);
                 uart_puts(" ns_per_px="); uart_dec(nsp);
                 uart_puts("\n");
+            }
+
+            /* ---- M2S union 脏区 A/B：同 24x24 动画，两种提交方式 ----
+             * two_rect：旧块全填 BG + 新块全画，gross=2*s²=1152（重叠区写两遍）；
+             * union：只写旧块去掉重叠的两侧条 + 新块全画，重叠区只写一次，gross=768。
+             * 各 50 帧去 5 预热；对比耗时，判断瓶颈是否在写入量。 */
+            {
+                const uint32_t AB_S = 24, AB_Y = 520;
+                for (uint32_t variant = 0; variant < 2; variant++) {
+                    int32_t bx = 0, dir = 1;
+                    uint64_t du_sum = 0, gross_sum = 0; uint32_t sn = 0;
+                    for (uint32_t f = 0; f < 50; f++) {
+                        uint64_t fs = cntvct();
+                        int32_t nx = bx + dir * STEP;
+                        if (nx < 0) { nx = 0; dir = 1; }
+                        if (nx > (int32_t)fb_w - (int32_t)AB_S) { nx = fb_w - AB_S; dir = -1; }
+                        int32_t lo = bx > nx ? bx : nx;
+                        int32_t hi = (bx + AB_S) < (nx + AB_S) ? (bx + AB_S) : (nx + AB_S);
+
+                        __asm__ volatile("msr daifset, #2");
+                        uint64_t ds = cntvct();
+                        uint32_t gross;
+                        if (variant == 0) {
+                            uint32_t wold = present_region((uint32_t)bx, AB_Y, AB_S, AB_S, COL_BG);
+                            uint32_t wnew = present_region((uint32_t)nx, AB_Y, AB_S, AB_S, COL_ACCENT);
+                            gross = wold + wnew;
+                        } else {
+                            uint32_t gw = 0;
+                            /* 旧块去掉重叠：左条 [bx,lo) 与右条 [hi,bx+s) 填 BG */
+                            if (lo > bx)
+                                gw += present_region((uint32_t)bx, AB_Y, (uint32_t)(lo - bx), AB_S, COL_BG);
+                            if (hi < bx + AB_S)
+                                gw += present_region((uint32_t)hi, AB_Y, (uint32_t)(bx + AB_S - hi), AB_S, COL_BG);
+                            gw += present_region((uint32_t)nx, AB_Y, AB_S, AB_S, COL_ACCENT);
+                            gross = gw;
+                        }
+                        uint64_t du = us_elapsed(ds);
+                        __asm__ volatile("msr daifclr, #2");
+                        bx = nx;
+                        if (f >= WARM) { du_sum += du; gross_sum += gross; sn++; }
+                        uint64_t next = fs + FRAME_TICKS;
+                        while (cntvct() < next) { }
+                    }
+                    present_region((uint32_t)bx, AB_Y, AB_S, AB_S, COL_BG);
+                    uint64_t avg_du = sn ? du_sum / sn : 0;
+                    uint64_t avg_g = sn ? gross_sum / sn : 0;
+                    uart_puts("[M2S] ab=");
+                    uart_puts(variant == 0 ? "two_rect" : "union");
+                    uart_puts(" gross_px="); uart_dec(avg_g);
+                    uart_puts(" dirty_us="); uart_dec(avg_du);
+                    uart_puts("\n");
+                }
             }
 
             __asm__ volatile("msr cntv_ctl_el0, %0" :: "r"(0UL));
