@@ -2,7 +2,7 @@
 title: 赫普OS 未关闭问题清单
 status: active
 sys_version: 0.62.0
-updated: 2026-11-18（登记 OBS-08 32 位镜像布局位移敏感、OBS-09 x86 桌面局部刷新未生效；OBS-05 撤销为取帧时机问题；登记 OBS-07 linuxhello 崩溃、64 空口令拒登、ASan/UBSan 链接清单失败、32 KUnit 既有基线失败；文末「台账遗留项清理（2026-11-18）」为 32 位 / 64 位与主机侧遗留项复核记录；2026-11-18 桌面 GUI QEMU 实测：电源菜单、屏保、Accounts、tls12 探针四项均 PASS，结论与证据见文末「实测结论（2026-11-18）」表及 `evidence-desktop-gui-2026-11-18/`。历史：驱动层整固 BUG-52~56；BUG-49 更正为不成立；OPEN-02 复现未成功并写明下一步夹具）
+updated: 2026-11-19（OBS-08 追加取证进展：二分窗口、垃圾指针定性、TCG 数据断点不可用；**2026-11-18 前**（登记 OBS-08 32 位镜像布局位移敏感、OBS-09 x86 桌面局部刷新未生效；OBS-05 撤销为取帧时机问题；登记 OBS-07 linuxhello 崩溃、64 空口令拒登、ASan/UBSan 链接清单失败、32 KUnit 既有基线失败；文末「台账遗留项清理（2026-11-18）」为 32 位 / 64 位与主机侧遗留项复核记录；2026-11-18 桌面 GUI QEMU 实测：电源菜单、屏保、Accounts、tls12 探针四项均 PASS，结论与证据见文末「实测结论（2026-11-18）」表及 `evidence-desktop-gui-2026-11-18/`。历史：驱动层整固 BUG-52~56；BUG-49 更正为不成立；OPEN-02 复现未成功并写明下一步夹具）
 owner: status
 source_of_truth: kernel/arch/x86_64/
 ---
@@ -845,8 +845,39 @@ syscall、异常向量、`formats[]` 影子完整性、VFS 链表遍历转储）
 `evidence-integration/run-diag-hoisted.log`；`fix/vfs-contract` 分支的
 `docs/design/VFS_CONTRACT_LANDING.md` §9.1（KUNIT 对照与探针窗口）。
 
-**下一步**：在一棵"既复现又最小"的树上用写保护毒页 + 数据断点定位写入者；定位后再评估
-VFS 分支是可直接合并还是需要先修 kheap/PAE。
+**2026-11-19 取证进展（追加；写入源仍未指名，但性质已改写）**
+
+- **二分窗口**：给 `vfs_add_child` 加指针合法性校验 + 在 `init_sequence` 逐阶段打 root
+  快照（临时插桩，跑完已 `git checkout` 回退）。在复现布局下得到：
+  `vfs_init`/`devfs`/`ipc`/`net`/`touch`/`smp`/`dynld` 全 ✔；HW driver / fs / net proto /
+  security / services / app framework 阶段入口全 ✔；APPS 阶段内 21 个 init
+  （appframework → id_randomizer，含 hug 全家与 compat/container）全 ✔；
+  **`after-init_sequence` 变 ✘**（`name='' children=0x82630000 type=0`）。
+  **换轻量插桩后布局变化（root 0x0913B0B8 → 0x0913C0B8），`elastic_desktop_init`
+  与 `gfx_fb_stats` 之后 root 仍完好** —— 即"写坏者 = elastic_desktop_init"这一结论
+  **已被自己推翻**，不能作为结论使用。
+- **性质改写：不是"VFS 建树写坏内存"，而是"垃圾指针被当成结构指针访问"**。同一次启动
+  poison page 机制记录了全部越界访问：
+  `0x11400000`、`0xBBBBB000`、`0xCCCCC000`、`0x82630000`。
+  其中 `0xBBBB*/0xCCCC*` 是典型的未初始化内存填充模式，`0x11400000` 正是 `ADD-BAD`
+  里那个 child 地址。`kernel/mm/paging.c:345-372` 的注释已记过同族问题：
+  *"32 位 e1000 把 BAR 物理址当指针，写 MMIO 却踩坏内核堆 …… 布局敏感的启动失败"*。
+  因此本条与那条同族：**某处把一块未初始化/被覆盖的内存当成了结构指针**；
+  `0x82630000` 超出物理内存上限，被 poison page 兜住 → 表现为"偶发不崩"，
+  换布局后该值落进真实内存才踩坏 vnode。
+- **数据断点路线在此环境不可用**：按设计给 root 的 name 槽下 4 字节写断点
+  （`DR0=root, DR7=0x000D0001`），整个启动**零 `[DBG-HIT]`**，且武装后出现
+  `[WATCHDOG] kernel heartbeat timeout`。QEMU 纯 TCG 对 i386 数据断点支持不可靠，
+  该路线在本环境不可继续。
+- **另修一个取证流程漏洞**：`grep -E " error"` 会漏掉 GCC 的 `Error:`（大写），
+  曾导致"编译失败却拿旧镜像跑测试"。构建校验统一改为 `grep -Ei "error"`。
+- **当前状态**：已由 poison page 兜底（不崩内核、不污染真实内存）；**写入者仍未指名**。
+  证据留档 `evidence-obs08-2026-11-18/`（`ser32-ckpt-bisect.log`、`bisect-chain.txt`、
+  `ser32-dr-watch.log`、`dr-watch-result.txt`）。
+
+**下一步（收敛版）**：不再赌布局二分。优先做**结构自证**（`vfs_node` 尾部余量放
+magic/checksum，进入 VFS 前校验，坏即当场报错）与**不再把未初始化内存当指针**的入口
+校验（`vfs_find` 遍历前校验 name/type）。定位到写入者后再评估 VFS 分支合并。
 
 ### 64 位空 Enter 拒登（预期行为，非回归）
 
