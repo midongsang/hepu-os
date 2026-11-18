@@ -54,7 +54,7 @@ source_of_truth: kernel/arch/x86_64/
 | OPEN-01 | **QEMU 高 LBA(P2/P3) 写成功读全 0** —— **实测不复现，关闭（v0.59.1）**。新增 `ide64_selftest_high_lba()`：在独立 slave 测试盘（QEMU `-drive if=ide,index=1`，256MB）上对 LBA `0 / 0x1000 / 0x20000 / 0x3FFFF / 0x7F000` 逐个写入递增 pattern → 读回逐字节比对，外加一段 8 扇区连续读写的多扇区回环。实测 `[ATA] high-lba selftest drive=0x1 cases=0x5 fails=0x0`，多扇区回环无 mismatch。历史现象最可能来自 0.13.57 时期「逐扇区发命令 + 写后未等 FLUSH 完成」，这两点在 v0.59.1 的 BUG-13 修复里已一并处理。注：自检只用 slave 盘，不碰系统盘 | `ide64.c ide64_selftest_high_lba()`；QEMU 双盘实跑；`fails=0x0` | 已关闭 |
 | OPEN-02 | UHCI 写路径时序竞态 | 0.13.42 遗留；**v0.59.2 尝试复现未成功**：按约束只挂 `-device piix3-usb-uhci -device usb-kbd`，没有 bulk 设备，BOT 的 CBW/CSW 批量写路径整条未进入；既有缓解（命令级重试、CSW 重读、帧同步重挂 QH、8 深 scratch 轮转）仍在位，HID 中断 IN 两次按键各 1 条队列项、无 TD err/stall。**`4524f79` 加固（未关闭）**：control/bulk/interrupt 三处 TD 发布前补 `uhci_wmb()` 写屏障，防止编译器把帧列表指针发布重排到 TD 字段写入之前。**运行时未验证**：当前 QEMU 配置为 xhci + usb-kbd/mouse，无 UHCI 控制器，`uhci_detect` 不命中，传输路径未被执行；其余疑点（`frame_list[0]` 单点抢占、超时裸循环、端口复位保持时长、链接指针类型位）未改，分析见 `evidence-rxnet-2026-11-17/OPEN-02-uhci-analysis.md`。**复现条件**：需挂 `-device piix3-usb-uhci` 并带 usb-storage 夹具做满扇区 bulk 写压测 | **未关闭（写屏障已加，运行时未验证）** |
 | OPEN-03 | ~~QEMU sendkey 不被键盘驱动读取~~ **已关闭（非真 bug，旧测量误解）**。PS/2 与 USB HID 两条键盘链路端到端可用，无需先点击聚焦。四重实测证据（ef3c7cc 内核，PS/2 配置未挂 USB）：① 中断级 `g_kbd_irq_count`（符号地址 0x1f29f4）每次按键 +2（按下/释放各 1 次），键盘环形缓冲 head/tail 同步前移且条目被消费；`sendkey 2` 后计数 11→13、缓冲指针 3→4；② 界面级 `sendkey 2` 使 OOBE 由 1/4 推进到 2/4（截屏像素差 73616 px），账户创建页输入 h/e/p/u，用户名框真实回显 "hepu"；③ USB HID 键盘对照（`-device piix3-usb-uhci -device usb-kbd`）sendkey 改走 USB 队列（此时 PS/2 IRQ1 静默），同样推进向导、回显 hepu、Tab 切换输入框焦点（像素差 3008 px）。**应用层边界（避免再误判）**：OOBE 语言页只绑定数字键 `1`/`2`，Tab/方向键/回车在该页未绑定，属应用设计；旧「按了没反应」源于此，加之此前缺中断级取证，把「界面没变化」误判为「驱动没收到键」 | `g_kbd_irq_count` 中断计数 + 环形缓冲指针；OOBE 页面推进与文本回显；USB HID 对照链路 | 已关闭（非缺陷） |
-| OPEN-04 | 安装器不拷贝系统文件 —— **已修，端到端实测通过（2026-11-18，commit 61c53fa）**。旧条目「280 行、无 rootfs 拷贝步骤、装完盘是空的」系过时描述：现 `user/apps/install64/install64.c` 为 335 行，流程 `[1/5]` 读源盘分区表 → `[2/5]` 目标盘布局 → `[3/5]` 克隆引导链(MBR+GPT+ESP) → `[4/5]` 源盘 rootfs 按扇区 `clone_region` 进目标 P1（245,760 扇区）→ `[5/5]` 格式化 P2/P3（P1 不 mkfs）；扇区克隆与引导链落地在 `install64.c` 的 `clone_region:165-187`、引导链 `:280-294`、rootfs 到 P1 `:299-308`、P2/P3 mkfs `:312-321`；修复落地于先前提交 `3cca450`，本轮未改源码；`b8509c0` 的白名单路径整串匹配保留（`user_process.c:2544` 宏 `INSTALLER_CANON_PATH "/bin/install64.elf"`，`installer_name_match:2547-2557` 先要求 `path[0]=='/'` 再整串逐字节比、长度必须相等，拒裸名/相对路径/前缀同名），本轮实测内核侧一次放行成功、无需补白名单 | 双盘 QEMU 实测走完 5 步并主动重启；宿主机独立核对：目标 P1 与源 P1 扇区级 `cmp` 差异 0 字节，ESP 的 KERNEL64.BIN/KERNEL32.BIN/HEPBOOT.CFG/BOOTX64.EFI 逐字节一致，`/system.conf`、`/account.conf`、`/bin/install64.elf`、`/bin/shell.elf` 等关键文件大小/块数两侧一致；目标盘单盘独立启动进桌面（串口 `[Hepu Desktop] loaded`/`Initialized (1920x1080)`，像素判定 DESKTOP）。证据：`evidence-installer/`（REPORT.md、`serial/`、`rootfs-list/`、`esp/`、`shots/`） | **已修 / 已验证** |
+| OPEN-04 | 安装器不拷贝系统文件 —— **已修，端到端实测通过（2026-11-18，commit 61c53fa）**。旧条目「280 行、无 rootfs 拷贝步骤、装完盘是空的」系过时描述：现 `user/apps/install64/install64.c` 为 335 行，流程 `[1/5]` 读源盘分区表 → `[2/5]` 目标盘布局 → `[3/5]` 克隆引导链(MBR+GPT+ESP) → `[4/5]` 源盘 rootfs 按扇区 `clone_region` 进目标 P1（245,760 扇区）→ `[5/5]` 格式化 P2/P3（P1 不 mkfs）；扇区克隆与引导链落地在 `install64.c` 的 `clone_region:165-187`、引导链 `:280-294`、rootfs 到 P1 `:299-308`、P2/P3 mkfs `:312-321`；修复落地于先前提交 `3cca450`，本轮未改源码；`b8509c0` 的白名单路径整串匹配保留（`user_process.c:2544` 宏 `INSTALLER_CANON_PATH "/bin/install64.elf"`，`installer_name_match:2547-2557` 先要求 `path[0]=='/'` 再整串逐字节比、长度必须相等，拒裸名/相对路径/前缀同名），本轮实测内核侧一次放行成功、无需补白名单 | 双盘 QEMU 实测走完 5 步并主动重启；宿主机独立核对：目标 P1 与源 P1 扇区级 `cmp` 差异 0 字节，ESP 的 KERNEL64.BIN/KERNEL32.BIN/HEPBOOT.CFG/BOOTX64.EFI 逐字节一致，`/system.conf`、`/account.conf`、`/bin/install64.elf`、`/bin/shell.elf` 等关键文件大小/块数两侧一致；目标盘单盘独立启动进桌面（串口 `[Hepu Desktop] loaded`/`Initialized (1920x1080)`，像素判定 DESKTOP）。证据：`evidence-installer/`（REPORT.md、`serial/`、`rootfs-list/`、`esp/`、`shots/`）。**2026-11-18 证据审计（HEAD 391e1db）**：留存产物复核上述 P1 零差异、ESP 四文件一致、关键文件一致、独立启动桌面像素判定均成立（有支撑）；但该轮实测基于旧基线 `61c53fa` 构建的镜像，**HEAD 391e1db 未独立复跑双盘安装**，旧结论不外推到 HEAD。白名单 HEAD 实际行号：宏 `INSTALLER_CANON_PATH` 在 `user_process.c:2285`，`installer_name_match:2288-2298`（旧记 2544/2547-2557 已漂移，逻辑不变）。审计清单：`evidence-ledger-2026-11-18/64/installer/OPEN-04-audit.md` | **已修；旧基线 61c53fa 已验证（产物复核有支撑），HEAD 391e1db 未独立复跑** |
 | SEC-01 | ~~用户程序可直接读写内核内存~~ **隔离主路径已修复**：私有 PML4/PDPT 默认开（`Makefile:205` `USER_ISOLATION ?= 1`）、SMEP+SMAP 按 CR4 真实状态门控、brk 分页+NX(W^X)；QEMU 512MB 隔离模式到桌面、sec_test 通过。**边界口径（勿与下文混淆）**：物理内存 >1GB 时内核恒等映射覆盖用户窗口，自动退回旧模式（`user_aspace64.c:76-77`）；fork 的 COW 复制已落地（`uaspace_fork_copy`），clone 仍共享父页表，见 SEC-02（部分）。**v0.33.0 补**：用户堆/TLS 预留区搬入用户窗口私有分区（PDPT[1]，原落在内核共享 PDPT[0] 树导致用户态写自己堆 #PF）；大页不可当页表写（新增 vmm64_split_huge_pde）；PMM 显式保留内核栈页（原与用户栈物理重叠） | user_aspace64.c:76-77；user_access64.c/vmm64.c/pmm64.c；Makefile:205；提交 3375fbe | 已关闭（隔离主路径；RAM>1GB 退回旧模式与 fork 复制见 SEC-02） |
 | SEC-02 | **状态精确化（2026-11-12 源码复核）**：① **fork 已接入 COW** —— `sys_fork`（`syscall64_full.c:1875`）调 `uaspace_fork_copy`（`user_aspace64.c:165`），深拷贝 PML4/PDPT/PD/PT、物理页共享 + `cow_ref` + 清 W 位 + 打 `UA_COW` 标记，缺页走 `vmm64_try_cow`（`vmm64.c:432-457`，PAGE_COW bit9）。旧表述「fork 未接入」不成立。② **clone 未实现（返回 ENOSYS）** —— 原 `sys_clone` 用错误的结构体偏移（`+8` 写 active 实际落在 rip、`+24` 写页表实际落在 rflags、真正的 `active(+4)`/`page_table(+32)` 从未赋值），导致子槽**永远不会被调度**，clone 只是返回一个 pid 的空实现；一旦把 active 改对，子线程会带脏页表启动。v0.57.1 已改为明确返回 `-38 ENOSYS`，真线程需 trampoline + 独立内核栈 + 子 rax 清零 + 共享页表引用计数（见 `FIXES_0_57_0.md` §1.82）。③ 旧模式（非隔离）下页表/用户页帧仍不释放（隔离模式已回收） | `syscall64_full.c:915-953`、`user_aspace64.c:165`、`vmm64.c:426-457`、`user_process.c user_process_release` | 部分（fork COW 已闭环；**clone 已诚实化为 ENOSYS**，真线程未实现） |
 | SEC-03 | fork 父子进程调度。**v0.34.0 已修复**：根因是 schedule() 里 `if (old && old->stack)` 跳过上下文切换，去掉后子进程可调度；子进程exit后通过 fork_return_to_parent 切换到父进程CR3+恢复GPR快照+sysret回父用户态。forktest端到端通过：CHILD输出可见、g_shared隔离正确、PARENT恢复运行、干净exit(0)。 | process64_full.c, syscall64_full.c, entry_64.S | 已关闭 |
@@ -773,14 +773,20 @@ diag1/diag2/move/sb_up/hand），但系统目前只有 4 个形态场景，映�
 - 证据：`evidence-regress-2026-11-17/frames64/ser.log`、`frames64/login_reject_1.png`、
   `frames64/login_1..4.png`、`frames64/desktop_1..4.png`。
 
-### 主机端 ASan/UBSan：7 过 1 败（FAIL，测试脚手架链接清单问题，非内核运行时缺陷）
+### 主机端 ASan/UBSan：已修复（8 过 0 败，2026-11-18 复核；原为 7 过 1 败）
 
-- 通过 7 / 失败 1；唯一失败项 `elf`：主机测试链接清单只编 `elf64.c`，缺 `compat_gate.c`
-  （定义 `compat_gate_detect_elf`）及进程表依赖，链接报
-  `undefined reference to compat_gate_detect_elf`，属测试脚手架链接清单未随源码重构同步；
-  未做隔离编译验证，不据此判定内核运行时回归。
-- **待办**：修主机测试链接清单（补 `compat_gate.c` 与进程表依赖），不是修内核缺陷。
-- 证据：`evidence-regress-2026-11-17/tests/host-tests.log`。
+- 改动前：通过 7 / 失败 1；唯一失败项 `elf`，链接报
+  `undefined reference to compat_gate_detect_elf`，主机测试链接清单只编 `elf64.c`、漏编
+  `compat_gate.c`（定义 `compat_gate_detect_elf`）；属测试脚手架链接清单未随源码重构同步，
+  非内核运行时缺陷。
+- **修复（2026-11-18，最小改动，未重构）**：
+  - `tools/host-tests/run_host_tests.sh:64`：elf `run_one` 链接清单补 `$ARCH/compat_gate.c`；
+  - `tools/host-tests/elf_test.c:9-10`：补进程表访问器桩
+    `int user_process_current_env_type(void){ return 0; }`（ENV_NATIVE=0）；主机测试无进程表，
+    不把 `user_process.c` 编入（实测会级联 pmm/vmm/ext2/domain/uproc 一大批未定义符号）。
+- **实测结果**：全套主机测试 `=== 结果: 通过 8 / 失败 0 ===`，elf `ALL ELF TESTS PASSED`。
+- 证据：`evidence-ledger-2026-11-18/64/host-tests/host-tests.log`；改动前旧日志
+  `evidence-regress-2026-11-17/tests/host-tests.log`。
 
 ### 32 位 KUnit：4 套件 / 6 用例失败（既有基线项，非本轮新增）
 
@@ -892,3 +898,68 @@ diag1/diag2/move/sb_up/hand），但系统目前只有 4 个形态场景，映�
   `kernel/net/icmp.c:51-80`（自检组包不上线）、`:112-163`（`ping_once`）、`kernel/net/tcp.c:185-230`
   （connect/握手）、`kernel/net/ip.c:209-252`（协议/以太网类型分发）；命令入口
   `kernel/sched/shell.c:375-410`、`kernel/sched/shell_cmd_adv.c:283`、`kernel/sched/shell_execute.c:152-160,465-466`。
+
+
+## 台账遗留项清理（2026-11-18）—— 64 位与主机侧
+
+复核基线 HEAD `391e1db`；新证据根
+`/home/user/Doubao/chats/38452875115179010/evidence-ledger-2026-11-18/64/`。
+每条：原文摘要 → 结论 → 证据绝对路径 → 代码位置。
+
+### A. 64-加载屏静态帧 / 64-加载阶段帧覆盖（原 REPORT.md L16/L17，UNVERIFIED）
+- 原文摘要：首轮 4 帧晚于 splash；Loading 64-bit kernel image / Verifying kernel image /
+  Preheating kernel pages 三阶段亚秒闪过，未采到独立静态帧。
+- 结论：**PASS**。120 ms 高频 screendump 轮询 81 帧，font8x16 点阵匹配（score≥0.50）+ 目视复核：
+  Loading `p0051-0054`、Verifying `p0055-0058`、Preheating `p0059-0068`、handoff `p0069-0078`。
+- 证据：`/home/user/Doubao/chats/38452875115179010/evidence-ledger-2026-11-18/64/loading/evidence_summary.md`、
+  `frames/p0051.png`、`frames/p0055.png`、`frames/p0059.png`、`frames/p0069.png`、`ser.log`。
+- 代码位置：`tools/hepboot/uefi/hepboot_uefi.c:1709/1740/1757/1771`；字体 `tools/hepboot/uefi/hepboot_gop.c`。
+
+### B. 64-鼠标解锁路径（原 REPORT.md L22，UNVERIFIED）
+- 原文摘要：只测了键盘，锁屏点击→登录页→点 Unlock→桌面未单独取证，未记录坐标/点击事件。
+- 结论：**PASS**。QMP `input-send-event` 绝对鼠标两段点击；按钮从登录帧色带实测中心 (959,611)；
+  串口 `lock -> login (click)`、`login -> desktop (auth ok)`、`login -> desktop (button click)` 三条在场；
+  锁屏/登录页/桌面三帧像素统计区分明确。口令 `hepu123` 走键盘夹具，鼠标只负责点击。
+- 证据：`/home/user/Doubao/chats/38452875115179010/evidence-ledger-2026-11-18/64/mouse/mouse_lock.png`、
+  `mouse_login.png`、`mouse_desktop.png`、`ser.log`、`mouse_report.txt`、`mouse_unlock.py`。
+- 代码位置：`kernel/arch/x86_64/hpdesk.c:5777`、`:5891-5896`；`kernel/arch/x86_64/usb64.c:1456-1457`。
+
+### C. 64 位 KUnit（原 REPORT.md L32，UNVERIFIED）
+- 原文摘要：64 位保护 shell 执行 `ktest` 返回 `Command not found: ktest`，未取得 64 位 KUnit 结果。
+- 结论：**不可取证**。64 位根本没有 KUnit 运行入口：Makefile 源清单不含 `kernel/kunit/` 与 `kernel/sched/`，
+  `shell64.c` 命令表无 `ktest`；`ktest` 仅是 32 位命令。缺编译入口与命令分发，不是"跑过未验到"。
+- 证据：`/home/user/Doubao/chats/38452875115179010/evidence-ledger-2026-11-18/64/kunit/kunit_audit.md`；
+  旧串口 `/home/user/Doubao/chats/38452875115179010/evidence-regress-2026-11-17/protect64/ser.log`。
+- 代码位置：`kernel/kunit/`；`kernel/arch/x86_64/Makefile`；`kernel/arch/x86_64/shell64.c`；
+  32 位接线 `kernel/sched/shell_cmd_system.c:75-80`、`kernel/sched/shell_execute.c:115`、
+  `kernel/arch/x86/kernel.c:638-651`。
+
+### D. 安全启动验证桩（原 REPORT.md L33，UNVERIFIED）
+- 原文摘要：三处桩改返回 -2 后，本次非严格模式启动未触发 verify 调用，串口未见 NOT implemented 警告。
+- 结论：**不可取证（无调用方）**。三 verify 桩全仓零调用方，启动链路不进入该路径；唯一外部引用是
+  `secure_boot_init()`。另附主机级单元调用 harness（**非启动链路实测**）：signature/hash 返回 -2、
+  严格模式 stage 返回 -2，harness PASS。
+- 证据：`/home/user/Doubao/chats/38452875115179010/evidence-ledger-2026-11-18/64/secboot/secboot_audit.md`、
+  `harness.c`、`harness.log`。
+- 代码位置：`kernel/arch/x86/secure_boot.c`；`kernel/include/secure_boot.h`；
+  `kernel/arch/x86/init_sequence.c:101,370`。
+
+### E. OPEN-04 真实安装（本行 L57）—— 证据审计
+- 原文摘要：2026-11-18 在 `61c53fa` 端到端实测通过，P1 扇区级 cmp 差异 0、ESP 四文件一致、
+  目标盘单盘启动进桌面、像素判定 DESKTOP，证据 `evidence-installer/`。
+- 结论：**旧基线产物复核有支撑；HEAD 391e1db 未独立复跑**。P1 零差异、ESP 一致、关键文件 size/blocks
+  一致、standalone 桌面像素判定本轮从留存原始磁盘独立复算通过；但镜像派生自 `61c53fa`，HEAD 未重跑双盘安装，
+  不外推。未复跑卡点：交互式安装菜单分支无自动化点击方案；两轮 TCG 双盘 + 独立启动受多 agent 锁争用；
+  空白第二盘预置本轮未做。白名单 HEAD 行号漂移：`user_process.c:2285` 宏、`:2288-2298` 匹配函数。
+- 证据：`/home/user/Doubao/chats/38452875115179010/evidence-ledger-2026-11-18/64/installer/OPEN-04-audit.md`；
+  旧证据 `/home/user/Doubao/chats/38452875115179010/evidence-installer/`。
+- 代码位置：`user/apps/install64/install64.c:165-187/281-294/299-308/312-321`；
+  `kernel/arch/x86_64/user_process.c:2285,2288-2298`。
+
+### F. 主机端 ASan/UBSan elf 用例（原 750-757 行，7 过 1 败）
+- 原文摘要：elf 用例链接清单缺 `compat_gate.c`，报 `undefined reference to compat_gate_detect_elf`；
+  待办为补链接清单，不是修内核缺陷。
+- 结论：**已修复，8 过 0 败**。补编 `compat_gate.c` + 测试桩进程表访问器（返回 ENV_NATIVE=0）；
+  全套主机测试通过 8 / 失败 0，elf `ALL ELF TESTS PASSED`。
+- 证据：`/home/user/Doubao/chats/38452875115179010/evidence-ledger-2026-11-18/64/host-tests/host-tests.log`。
+- 代码位置：`tools/host-tests/run_host_tests.sh:64`；`tools/host-tests/elf_test.c:9-10`。

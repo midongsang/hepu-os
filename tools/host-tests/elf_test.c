@@ -6,6 +6,8 @@
 #include "elf64.h"
 void vga_puts(const char *s){ (void)s; }
 void vga_put_hex(uint64_t v){ (void)v; }
+/* 主机测试没有进程表：兼容网关的当前进程 ABI 访问器按无活动进程兜底返回 ENV_NATIVE(0)。 */
+int user_process_current_env_type(void){ return 0; }
 static size_t last_alloc=0; static int allocs=0, frees=0;
 void *kmalloc(uint64_t n){ last_alloc=n; allocs++; return malloc(n); }
 void kfree(void *p){ frees++; free(p); }
