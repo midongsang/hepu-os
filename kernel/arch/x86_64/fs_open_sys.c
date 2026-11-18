@@ -26,6 +26,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include "fs_sys.h"
+#include "vfs64.h"
 
 /* 与 syscall64_full.c 同一定义（不另起一套） */
 #define FS_MAX_FILES   64
@@ -58,10 +59,20 @@ int64_t fs_do_open(const char *path, int flags, int mode)
     /* O_CREAT 的 ext2 调用放在锁外: 文件系统层自己串行化, 而把一次可能睡
      * 的 IO 塞进自旋锁里会拖长临界区。**这是原有行为, 不是这批改的** ——
      * 也就是说"open(O_CREAT) 先占 fd 再建文件"的顺序保留了: 建文件失败时
-     * fd 仍然被占着。这一点在 fdstress 里测不到(它不建文件), 属于已知缺口。 */
+     * fd 仍然被占着。这一点在 fdstress 里测不到(它不建文件), 属于已知缺口。
+     *
+     * S4: 新建先走 VFS 后端分派（vfs64_create）；未挂载/后端无 create 时
+     * 回退 ext2 直调（旧路径），对外返回值与 fd 分配不变。 */
     if (flags & FS_O_CREAT) {
-        extern int ext2_64_create_file(const char *path);
-        ext2_64_create_file(kpath);
+        if (vfs64_create(kpath, (uint32_t)flags) != 0) {
+            extern int ext2_64_create_file(const char *path);
+            ext2_64_create_file(kpath);
+        }
+    } else {
+        /* 已存在节点走后端 open 钩子；lookup 未命中不报错 —— 与旧实现一致：
+         * open 不做存在性检查，未命中路径仍分配 fd（旧行为，待后续补 ENOENT）。 */
+        struct vfs_file f;
+        (void)vfs64_open(kpath, (uint32_t)flags, &f);
     }
     return fd;
 }

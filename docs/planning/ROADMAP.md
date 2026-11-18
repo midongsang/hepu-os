@@ -77,7 +77,7 @@ supersedes: DEVELOPMENT_ROADMAP.md, PRIORITY_ROADMAP.md, X86_64_DEVELOPMENT_PLAN
 | P3-3 | 驱动在线下载（联网后自动匹配安装） | `kmod64.c`（已编入 Makefile） | ❌ **规划中**：kmod64.c 存在但无 HTTP 下载路径；依赖 P1-3 TLS 签名校验 |
 | P3-4 | Rust 用户态服务 | `user/rust/` 目录 | ❌ **未接入构建**：15+ crate 存在但 `user/Makefile` 无 cargo 目标、`make_single_img64.sh` 不打包 Rust 产物；`hello-rust.elf` 是历史产物 |
 | P3-5 | 安全审计闭环（crypto/security 模块扩到 AES/SHA/RSA/TLS） | `kernel/crypto/` + `kernel/net/tls_*.c` | ⚠️ **部分**：AES-GCM/SHA-256/RSA/X.509 等套件代码已编入（Makefile:85-95），TLS 协议代码已编入但未接入 HTTP 调用链；证书链校验、端到端 HTTPS 仍待闭环 |
-| P3-6 | VFS 抽象层 | 64 位：`kernel/arch/x86_64/vfs64.*`；32 位遗留 `kernel/fs/vfs.c` | 🚧 **进行中（骨架落地，syscall 未全线切换）**：vfs64 node/ops/mount/路径解析 + ext2 后端 + 只读伪设备后端已落地；read/write/pread/stat 经 VFS 路由（未命中回退 ext2 直调）；open、readdir、目录三件套、ioctl/mmap 及 ext4/exFAT/NTFS 后端为 deferred；详见 `docs/design/VFS64.md` |
+| P3-6 | VFS 抽象层 | 64 位：`kernel/arch/x86_64/vfs64.*`；32 位遗留 `kernel/fs/vfs.c` | 🚧 **进行中（open 已走 VFS，枚举/目录变更待续）**：vfs64 node/ops/mount/路径解析 + ext2 后端 + 只读伪设备后端已落地；read/write/pread/stat/open 经 VFS 路由（未命中回退 ext2 直调）；readdir/getdents、目录三件套、ioctl/mmap 及 ext4/exFAT/NTFS 后端为 deferred；详见 `docs/design/VFS64.md` |
 | P3-7 | NVMe / virtio-gpu 驱动 | NVMe：`kernel/drivers/nvme.c`（32 位遗留）；virtio-gpu 无源码 | ❌ **不在 64 位 Makefile**：64 位树无 `nvme64.c`/virtio-gpu 驱动 |
 | P3-8 | Secure Boot 签名验证 | 引导器待建 | ❌ **源码不存在** |
 | P3-9 | IPC 原语（信号量/共享内存/消息队列/互斥锁） | `kernel/ipc/ipc_sem.c`/`ipc_mutex.c`/`ipc_fifo.c`（32 位遗留） | ❌ **64 位未实现**：64 位 syscall 表无 shmget/semget/msgget；V0.54 阶段不走微内核路线 |

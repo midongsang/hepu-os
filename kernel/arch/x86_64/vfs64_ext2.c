@@ -26,6 +26,7 @@
 
 extern int      ext2_64_is_mounted(void);
 extern uint32_t ext2_64_lookup(const char *path);
+extern int      ext2_64_create_file(const char *path);
 extern int      ext2_64_stat_ino(const char *path, uint32_t *size,
                                  uint8_t *isdir, uint32_t *ino);
 extern int      ext2_64_read_file_offset(const char *path, uint8_t *buf,
@@ -123,7 +124,16 @@ static int ext2_lookup(const char *path, struct vfs_node *out)
     return 0;
 }
 
+/* S4：O_CREAT 新建普通文件。返回 ext2_64_create_file 的 0/-1。 */
+static int ext2_create(const char *path, uint32_t flags)
+{
+    (void)flags;
+    if (!ext2_64_is_mounted()) return -1;
+    return ext2_64_create_file(path);
+}
+
 struct vfs_backend vfs64_be_ext2 = {
     .name   = "ext2",
     .lookup = ext2_lookup,
+    .create = ext2_create,
 };

@@ -53,10 +53,9 @@ int vfs64_mount(const char *prefix, struct vfs_backend *be)
     return 0;
 }
 
-int vfs64_lookup(const char *kpath, struct vfs_node *node)
+/* 最长前缀匹配挂载点；未挂载返回 0。 */
+static const struct vfs_mount *find_mount(const char *kpath)
 {
-    if (!kpath || !node) return -1;
-
     const struct vfs_mount *best = 0;
     size_t best_len = 0;
     for (int i = 0; i < g_mount_count; i++) {
@@ -68,10 +67,26 @@ int vfs64_lookup(const char *kpath, struct vfs_node *node)
             }
         }
     }
+    return best;
+}
+
+int vfs64_lookup(const char *kpath, struct vfs_node *node)
+{
+    if (!kpath || !node) return -1;
+
+    const struct vfs_mount *best = find_mount(kpath);
     if (!best) return -1;
 
     memset(node, 0, sizeof(*node));
     return best->be->lookup(kpath, node);
+}
+
+int vfs64_create(const char *kpath, uint32_t flags)
+{
+    if (!kpath) return -1;
+    const struct vfs_mount *best = find_mount(kpath);
+    if (!best || !best->be->create) return -1;
+    return best->be->create(kpath, flags);
 }
 
 int vfs64_open(const char *kpath, uint32_t flags, struct vfs_file *f)

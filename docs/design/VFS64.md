@@ -76,7 +76,11 @@ VFS 句柄是一次调用的临时快照；这是 ext2 路径式 API 与 fd 句�
 
 ### 2.3 `struct vfs_backend` / `struct vfs_mount`
 
-- 后端只注册 `name` 与 `lookup(path, node)`；不允许后端自己注册 syscall（lessons §1 落地步骤 4）。
+- 后端注册 `name`、`lookup(path, node)`，以及可选的**路径式变更方法**（S4 起追加
+  `create`；S5/S6 追加 `iterate/mkdir/rmdir/unlink`）。这些方法不依附已打开句柄，
+  属于后端对路径的操作，因此放在后端结构而不是冻结的 `vfs_file_ops` 表上；方法指针
+  全部可选（NULL = 后端不支持，syscall 层回退直调）。后端不允许自己注册 syscall
+  （lessons §1 落地步骤 4）。
 - 挂载点表 `g_mounts[]`（上限 8），`vfs64_mount(prefix, be)` 登记。
 - 路径解析 `vfs64_lookup(path, node)`：**最长前缀匹配**。`/dev` 匹配 `/dev` 与
   `/dev/nullread`，不匹配 `/devx`；`/` 兜底根后端。匹配到后端后调其 `lookup`。
@@ -100,6 +104,7 @@ VFS 句柄是一次调用的临时快照；这是 ext2 路径式 API 与 fd 句�
 | VFS ops / 动作 | 底层 `ext2_64` 函数 | 说明 |
 |---|---|---|
 | lookup | `ext2_64_is_mounted()` + `ext2_64_lookup(path)` + `ext2_64_stat_ino(path, &sz, &isdir, &ino)` | `ext2_64_lookup` 返回 **uint32 inode 号**（0 = 未命中），不是句柄；已核源码确认 |
+| create（S4，后端方法） | `ext2_64_create_file(path)` | O_CREAT 新建普通文件；0 成功 / -1 失败 |
 | open | 无状态 | ext2 API 按路径调用，v1 不持有打开句柄 |
 | close | 无状态 | 同上 |
 | read | `ext2_64_read_file_offset(path, buf, size, offset)` | 按 fd offset 定位；短读经 `*done` 回报 |
@@ -133,13 +138,13 @@ VFS 句柄是一次调用的临时快照；这是 ext2 路径式 API 与 fd 句�
 | `fs_do_write`（`fs_rw_sys.c`） | 同上，走 `vfs64_write_path`；未命中回退 `ext2_64_write_file_offset` | 只读打开拒写、offset 推进口径不变 |
 | `fs_do_pread`（`fs_rw_sys.c`） | 同上，走 `vfs64_read_path`；不回写 fd 游标（与原 pread 语义一致） | 同上 |
 | `sys_stat` / `sys_fstat`（`fs_stat_sys.c`） | 新增 `resolve_stat`：先 `vfs64_stat`，未命中回退 `ext2_64_stat_ino`；再由既有 `fill_stat` 按 Linux x86_64 偏移填充用户态缓冲 | stat 布局、错误码（EFAULT/ENOENT）不变 |
+| `fs_do_open`（`fs_open_sys.c`，S4） | 非 O_CREAT：`vfs64_open` 走后端 open 钩子；O_CREAT：`vfs64_create` 分派后端 create，未挂载/后端无 create 回退 `ext2_64_create_file`。**fd 分配顺序不变**：先 `fs_fd_alloc` 占槽，再建文件 | fd 号 ≥3、stdio 0/1/2 保留槽位不变；「先占 fd 再建文件」顺序保留（建文件失败 fd 仍占着，已知缺口，fdstress 不测）；open 不存在文件**不做存在性检查、仍分配 fd**（旧行为，未引入 ENOENT，待后续补） |
 
 ### 4.2 尚未走 VFS（保持原 ext2 直调，未破坏现有功能）
 
 | 路径 | 现状 | 原因 / 归属 |
 |---|---|---|
-| `fs_do_open`（`fs_open_sys.c`） | fd 槽位按路径分配；`O_CREAT` 直调 `ext2_64_create_file` | open 要同时管 fd 表分配、创建语义与「先占 fd 再建文件」的既有顺序；纳入 VFS 需要后端提供 create 语义，v1 未做 |
-| 目录枚举 readdir/getdents | 终端 `ls` 与文件管理器在 `hs_apps.c` 直调 `ext2_64_list_dir_entries(_ex)`；64 位树尚无 syscall getdents 路径 | 枚举后端接口（dirent 布局）尚未在 ops 表定义；deferred |
+| 目录枚举 readdir/getdents | 终端 `ls` 与文件管理器在 `hs_apps.c` 直调 `ext2_64_list_dir_entries(_ex)`；64 位树尚无 syscall getdents 路径 | 枚举后端接口（dirent 布局）尚未在 ops 表定义；deferred（S5） |
 | `sys_unlink / sys_mkdir / sys_rmdir`（`fs_dir_sys.c`） | 直调 ext2 删除/建目录 | 同上，目录变更接口未纳入 v1 ops |
 | `ioctl` | ops 表有槽位，ext2 后端返回 -1，伪设备留 NULL | deferred |
 | `mmap` 文件映射 | 未接入 | deferred，依赖页缓存与映射语义设计 |
@@ -271,11 +276,12 @@ grep -nE '\*ubuf|ubuf\[|\([^)]*\)\s*ubuf\s*->' \
 ### 9.1 编译（64 位，`make -C kernel/arch/x86_64`）
 
 - 三个 VFS 目标以 `-Wall -Wextra` 重编：**0 warning / 0 error**，链接 rc=0。
-- 产物大小（本轮实测）：
-  - `build_x86_64/hepu-kernel64.bin`：**981 584 字节**
-  - `build_x86_64/hepu-kernel64.elf`：**1 141 296 字节**
-  - 目标文件：`vfs64.o` 8 088 B、`vfs64_ext2.o` 5 368 B、`vfs64_dev.o` 4 088 B
-- 探针：`user/build/vfsprobe.elf` **5 736 字节**。
+- 产物大小（S4 本轮实测）：
+  - `build_x86_64/hepu-kernel64.bin`：**982 256 字节**
+  - `build_x86_64/hepu-kernel64.elf`：**1 142 152 字节**
+  - 目标文件：`vfs64.o` 9 008 B、`vfs64_ext2.o` 5 944 B、`vfs64_dev.o` 4 088 B、`fs_open_sys.o` 2 376 B
+- 探针：`user/build/vfsprobe.elf` **7 408 字节**。
+- 编译告警：64 位 `-Wall -Wextra` 重编 **0 warning / 0 error**，链接 rc=0。
 
 ### 9.2 64 位 QEMU 运行串口摘要（本轮取证实例）
 
@@ -318,6 +324,25 @@ SEC-TEST DONE
 [FDSTRESS] RESULT: PASS                    ← fd 表分配/释放/保留槽位未被破坏
 ```
 
+S4 本轮追加探针（`[VFSP4]`，QEMU 串口实测）：
+
+```
+[VFSP4] open routing probe
+[VFSP4] open(/bin/hello.elf) fd=3          ← 既有文件打开，fd≥3（stdio 保留）
+[VFSP4] hello read=64 bytes
+[VFSP4] open(O_CREAT|WR /vfs4_new.txt) fd=3
+[VFSP4] write=12 bytes
+[VFSP4] reopen fd=3
+[VFSP4] read back=12 bytes                 ← 新建文件写后读回逐字节一致
+[VFSP4] open(missing) fd=3 (old impl: allocated, no ENOENT)
+[VFSP4] reuse open fd=3 (expect 3)         ← close 后 fd 可复用，无泄漏
+[VFSP] RESULT: PASS
+```
+
+同轮既有回归：`[STATP] RESULT: PASS`、`[FDSTRESS] open_fail=0 close_fail=0 bad_range=0
+conflict=0 leak_probe_fd=3 RESULT: PASS`；`hello.elf` read 6904 B、`comptest.elf` rc=100、
+`SEC-TEST DONE`；桌面 `[DESKTOP64] Hepu Desktop started`，全程无 EXCEPTION/PANIC。
+
 > 注：`ls /` 与文件管理器列表走的是 §4.2 未接线的 readdir 直调路径；本轮停机后
 > 帧缓冲已黑屏，目录列表的窗口截图未留存。该路径代码本次未改，行为同基线。
 
@@ -325,7 +350,7 @@ SEC-TEST DONE
 
 - 前置：`git log` 中已有 32 位链接修复提交（`c28d4d9 fix(regress32): 修复 32 位内核
   链接失败（auth64/rtc64 兼容层）`），基线已就绪。
-- 结果：**PASS**，判据 `serial=1 initrd=1 net=1 desk=1 fault=0 bound=1 lines=632`：
+- 结果：**PASS**，判据 `serial=1 initrd=1 net=1 desk=1 fault=0 bound=1 lines=632`（S4 复跑：`serial=1 initrd=1 net=1 desk=1 fault=0 bound=1 lines=893`）：
 
 ```
 [SERIAL] COM1 16550 UART ready (115200 8N1)
@@ -345,7 +370,7 @@ SEC-TEST DONE
 | S1（已完成） | VFS 骨架：node/ops/mount/最长前缀解析 + kernel 入口拷贝边界 | 可编译；lookup/read_path/write_path/stat 链路可调用；静态自检 0 解引用 | 句柄模型与路径式 API 的折中（§8.1） |
 | S2（已完成） | ext2 后端封装 + read/write/stat 路由带回退 | hello/statprobe/fdstress 回归通过；stat ino 真实 | 双路径排查成本；回退分支长期滞留 |
 | S3（已完成） | 只读伪设备三 ops 样例 + 探针 | 不改 syscall 代码即可挂设备；vfsprobe PASS | 无（样例后端，不承载真实设备） |
-| S4 | open 路由：后端 create/open 语义入 ops；fd 表与 VFS 句柄对齐 | fdstress 仍全绿；新建文件/打开既有文件行为与旧实现逐一对齐 | 「先占 fd 再建文件」的既有顺序、并发 close 复用 fd |
+| S4（已完成） | open 路由：后端 create/open 语义入分派；fd 表与 VFS 句柄对齐 | fdstress 全绿；既有文件读回、O_CREAT 新建写读回、不存在文件旧行为、close 后 fd 复用均对齐；regress32 fault=0 | 「先占 fd 再建文件」顺序保留（失败占槽已知缺口）；open 缺失文件尚未返回 ENOENT |
 | S5 | 目录枚举 ops + getdents syscall | 终端 ls / 文件管理器列表改走 VFS；目录项布局与 ext2 直调结果一致 | dirent 结构跨后端统一；树状遍历的路径快照生命周期 |
 | S6 | 目录变更 ops（unlink/mkdir/rmdir） | 目录三件套走后端；失败回滚语义明确 | 写操作一致性、权限校验挂接点（接 P3-2 权限收口） |
 | S7 | ioctl / mmap / 页缓存 | 设备控制命令有统一通道；文件映射可工作 | mmap 与缓存一致性是大改动，需独立设计评审 |
@@ -355,7 +380,21 @@ SEC-TEST DONE
 
 ## 11. 进度结论
 
-- **已落地**：vfs64 骨架、ext2 后端、只读伪设备后端；read/write/pread/stat 经 VFS
-  路由（带回退）；探针与既有回归在 64 位 QEMU 通过；32 位 regress32 PASS。
-- **未全线切换**：open、readdir、目录三件套、ioctl、mmap 仍保持原直调路径（§4.2）。
-- 对应 ROADMAP 状态：**进行中（骨架落地，syscall 未全线切换）**，不标已完成。
+### S4 收尾（open 路由含 O_CREAT）
+
+- **本阶段切了哪些 syscall**：`fs_do_open`（非创建走后端 open 钩子；O_CREAT 走后端
+  create 分派，带回退）。read/write/pread/stat 维持 S2 路由不变。
+- **探针断言**：`[VFSP4]` 5 组 —— 既有文件 fd≥3 且读回 >0；O_CREAT|WR 新建写 12 B、
+  重开读回 12 B 逐字节一致；不存在文件按旧行为分配 fd（无 ENOENT）；close 后首槽
+  复用为 3。同轮 `[STATP]` PASS、`[FDSTRESS]` open_fail=0/close_fail=0/leak_probe_fd=3。
+- **regress32 判据行**：`serial=1 initrd=1 net=1 desk=1 fault=0 bound=1 lines=893`。
+- **未做项与风险**：open 缺失文件仍不返回 ENOENT（对齐旧实现，待后续补）；「先占 fd
+  再建文件」建失败占槽是已知缺口；readdir/getdents、目录三件套、ioctl、mmap 仍直调。
+
+### 累计状态
+
+- **已落地**：vfs64 骨架、ext2 后端、只读伪设备后端；read/write/pread/stat/open 经
+  VFS 路由（未命中回退 ext2 直调）；探针与既有回归在 64 位 QEMU 通过；32 位 regress32 PASS。
+- **未全线切换**：readdir/getdents、目录三件套（unlink/mkdir/rmdir）、ioctl、mmap
+  仍保持原直调路径（§4.2）。
+- 对应 ROADMAP 状态：**进行中（open 已走 VFS，枚举/目录变更待续）**，不标已完成。

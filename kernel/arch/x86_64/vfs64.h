@@ -83,10 +83,16 @@ struct vfs_file {
 };
 
 /* 后端：注册到挂载点表。lookup 按路径解析节点；0 = 命中并填好 out，
- * -1 = 未命中。 */
+ * -1 = 未命中。
+ *
+ * 路径式变更方法（create/mkdir/rmdir/unlink/iterate）挂在后端而不是冻结的
+ * vfs_file_ops 上：它们不依附某个已打开的句柄，是后端对路径的操作。
+ * 全部可选（NULL = 后端不支持，syscall 层回退直调）。 */
 struct vfs_backend {
     const char *name;
     int (*lookup)(const char *path, struct vfs_node *out);
+    /* S4：O_CREAT 新建普通文件。0 成功，-1 失败。 */
+    int (*create)(const char *path, uint32_t flags);
 };
 
 struct vfs_mount {
@@ -108,6 +114,10 @@ int  vfs64_lookup(const char *kpath, struct vfs_node *node);
 
 /* 打开：lookup + ops->open。f 由调用方提供，内嵌 node。 */
 int  vfs64_open(const char *kpath, uint32_t flags, struct vfs_file *f);
+
+/* S4：按路径新建普通文件（O_CREAT 后端入口）。0 成功，-1 未挂载/后端不支持。
+ * 调用方仍负责 fd 分配与失败回退；本入口只做后端分派。 */
+int  vfs64_create(const char *kpath, uint32_t flags);
 
 /* 读：entry 内 copy_to_user 回写；*done 回报实际字节。返回 0 成功，-1 失败。 */
 long vfs64_read(struct vfs_file *f, void *ubuf, uint64_t len, uint64_t *done);
