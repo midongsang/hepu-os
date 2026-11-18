@@ -447,9 +447,19 @@ void hepu_mem_init(uint32_t mem_kb)
          * 已被设成同一个物理基址，且是绘制路径真正使用的那一个；两个来源
          * 任一可用即可映射，不再单点依赖那个会被清零的 static。 */
         extern uint8_t *gfx_fb_addr;
+        extern uint32_t bochs_dispi_bar0(void);
         uint32_t fb = bochs_dispi_fb_phys();
+        if (!fb) fb = bochs_dispi_bar0();          /* 现读 BAR0，避开被清零的 static */
         if (!fb && (uint32_t)(uintptr_t)gfx_fb_addr >= 0x10000000u)
             fb = (uint32_t)(uintptr_t)gfx_fb_addr;
+        if (!fb) {
+            /* BAR0 仍拿不到时，PCI 0:2.0 的标准 LFB 缺省位 0xFD000000 兜底 */
+            extern uint32_t bochs_dispi_width(void);
+            extern uint32_t bochs_dispi_height(void);
+            if (bochs_dispi_width() > 0) fb = 0xFD000000u;
+        }
+        if (fb != (uint32_t)(uintptr_t)gfx_fb_addr && fb >= 0x10000000u)
+            gfx_fb_addr = (uint8_t *)fb;           /* 把绘制基址也校正到真 LFB */
         serial_puts(0x3F8, "[GFX] LFB phys=0x");
         { extern void serial_puthex(uint16_t, uint32_t); serial_puthex(0x3F8, fb); }
         serial_puts(0x3F8, "\n");

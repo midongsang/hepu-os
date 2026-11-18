@@ -94,6 +94,15 @@ static uint32_t bd_height = 0;
 static uint32_t bd_bpp = 0;
 
 uint32_t bochs_dispi_fb_phys(void) { return bd_fb_phys; }
+
+/* P3-13 兜底: bd_fb_phys 是 .bss 里的 static, 实测会在 dispi init 成功之后
+ * 被清成 0。这里每次现读 PCI BAR0 并返回, 供映射阶段使用, 不依赖那份缓存。 */
+uint32_t bochs_dispi_bar0(void)
+{
+    uint32_t bar0 = pci_read32(0, 2, 0, 0x10) & 0xFFFFFFF0u;
+    if (bar0 == 0 || bar0 == 0xFFFFFFF0u) return 0;
+    return bar0;
+}
 uint32_t bochs_dispi_width(void)   { return bd_width; }
 uint32_t bochs_dispi_height(void)  { return bd_height; }
 uint32_t bochs_dispi_bpp(void)     { return bd_bpp; }
