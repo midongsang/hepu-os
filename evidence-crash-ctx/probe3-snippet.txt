@@ -1,0 +1,3 @@
+[DEBUG] before fork-test at start
+[PROBE] restarts=0x0x00000003 state=0x00000002
+[PROBE] last_crash pc=0x0xC0FFEE03 syscall=0x0000002B msg=probe crash #3

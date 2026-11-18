@@ -11,6 +11,8 @@
 #include "process.h"
 #include "serial.h"
 #include "bsod.h"
+#include "kstdio.h"
+#include "crash_ctx.h"
 
 #define IDT_ENTRIES 256
 
@@ -264,6 +266,27 @@ void idt_handler(uint32_t isr_number, uint32_t error_code,
             }
             vga_printf("[HEPU] app crash: pid=%d (%s), killing...\n",
                        current->pid, current->name);
+            /* §3 崩溃现场：用户态异常入口填 pc/sp/regs/msg 并快照 last_crash */
+            {
+                uint32_t *frc = (uint32_t *)current->kernel_esp;
+                struct crash_ctx *cc = current->crash_ctx;
+                if (cc) {
+                    /* pusha 序: edi,esi,ebp,esp,ebx,edx,ecx,eax */
+                    uint32_t regs[16] = {
+                        frc[8], frc[7], frc[6], frc[5], frc[4],
+                        frc[3], frc[2], frc[1],
+                        0, 0, 0, 0, 0, 0, 0, 0
+                    };
+                    char cmsg[CRASH_MSG_LEN];
+                    snprintf(cmsg, sizeof(cmsg),
+                             "user #%s at 0x%x esp=0x%x",
+                             exception_messages[isr_number],
+                             frc[11], frc[14]);
+                    crash_ctx_fill_fault(cc, (uint64_t)frc[11],
+                                         (uint64_t)frc[14], regs, 8, cmsg);
+                    crash_ctx_dump_query_by_pid(current->pid);
+                }
+            }
             /* V3.89-E20: 崩溃帧落盘到数据盘 /crash.log(保留最近8条),
              * 真机黑屏后可挂载数据盘或 `crashlog` 命令查看历史. */
             {
@@ -350,6 +373,40 @@ void idt_handler(uint32_t isr_number, uint32_t error_code,
         vga_puts(" system halted . please reboot .\n");
         for (;;) { __asm__ volatile ("hlt"); }
     }
+}
+
+/* §3: 用户态 #PF 回收助手——供页错误处理器确认 user 态故障后调用。
+ * 切回内核目录 → 填崩溃现场 → 走与其他用户异常一致的杀进程路径(不整机停机)。 */
+void idt_pf_user_reap(uint32_t fault_addr, uint32_t error_code)
+{
+    extern page_directory_t *paging_get_kernel_dir(void);
+    extern void paging_switch_dir(page_directory_t *);
+    extern process_t *current;
+    extern uint32_t sys_exit(uint32_t, uint32_t, uint32_t, uint32_t);
+
+    paging_switch_dir(paging_get_kernel_dir());
+
+    if (current && current->kernel_esp) {
+        uint32_t *fr = (uint32_t *)current->kernel_esp;
+        struct crash_ctx *cc = current->crash_ctx;
+        if (cc) {
+            uint32_t regs[16] = {
+                fr[8], fr[7], fr[6], fr[5], fr[4], fr[3], fr[2], fr[1],
+                0, 0, 0, 0, 0, 0, 0, 0
+            };
+            char cmsg[CRASH_MSG_LEN];
+            snprintf(cmsg, sizeof(cmsg), "user page-fault at 0x%x rip=0x%x",
+                     fault_addr, fr[11]);
+            crash_ctx_fill_fault(cc, (uint64_t)fr[11], (uint64_t)fr[14],
+                                 regs, 8, cmsg);
+            crash_ctx_dump_query_by_pid(current->pid);
+        }
+        vga_printf("[HEPU] user page-fault: pid=%d addr=0x%x err=0x%x\n",
+                   current->pid, fault_addr, error_code);
+    }
+    serial_puts(0x3F8, "[UEXC] user page-fault reaped\n");
+    sys_exit(1, 0, 0, 0);
+    for (;;) { __asm__ volatile ("hlt"); }
 }
 
 void idt_init(void)

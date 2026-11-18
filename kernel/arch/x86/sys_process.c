@@ -181,6 +181,7 @@ u32 sys_exit(u32 code, u32 arg2,
             current->state = PROC_ZOMBIE;
             current->sleep_until = 0;
             sched_ready_clear(current->priority);   /* V3.90-E36 */
+            crash_ctx_release(cur_pid);
             proc_lock_release();
             need_resched = 1;
             return 0;   /* 中断返回路径检查 need_resched → schedule */
@@ -230,6 +231,7 @@ u32 sys_exit(u32 code, u32 arg2,
             }
             proc_table[i].state = PROC_UNUSED;
             sched_ready_clear(proc_table[i].priority);   /* V3.90-E36 */
+            crash_ctx_release(proc_table[i].pid);
         }
         /* 重置调度器状态: current=NULL + TSS.ESP0=内核初始栈顶, 保证
          * 释放自己栈之后的中断(键盘/PIT)不再压到悬垂栈. */
@@ -291,6 +293,7 @@ u32 sys_exit(u32 code, u32 arg2,
             }
             proc_table[i].state = PROC_UNUSED;
             sched_ready_clear(proc_table[i].priority);   /* V3.90-E36 */
+            crash_ctx_release(proc_table[i].pid);
         }
         proc_lock_release();   /* V3.89-E35: 回收完成、longjmp 前释放表锁 */
         /* V4.00-E45: 此处不再 sti——第二循环入口已 cli(IF=0), 保持到

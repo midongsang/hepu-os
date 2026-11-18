@@ -132,6 +132,21 @@ supersedes: null
 6. **修 32 位构建**：根 Makefile 的 C_SRCS 排除 arch/aarch64/%，否则 `find kernel` 会
    把 aarch64 源码编进 32 位；constants.h 与 syscall.h 的 SYS_MAX 双源冲突一并统一为 238。
 
+**0.61.1 迭代内容（2026-11-18，OBS-07 修复：32 位 `linuxhello` 自检卡死/退出）**
+
+1. **根因**：`transcomp_selftest()` test7 在内核栈上声明 64 KB+ 的 `transcomp_mgr_t stats`
+   （`block_map[4096]`×16 B ≈ 65 536 B + 计数字段），而 32 位内核栈仅 16 KB
+   （`KERNEL_STACK_SIZE=16384`）。栈帧向下越界踩坏相邻 BSS 的 binfmt 格式表
+   `formats[]`（ELF32/PE32/Mach-O 探测与加载指针）；`binfmt_exec` 按垃圾指针分发到野地址，
+   `#PF/#GP` 风暴 → 看门狗复位/挂起退出，自检卡在 `[AUTO] linuxhello start`，后续项全不跑。
+2. **修复**：test7 不再整体拷贝大结构，直接读 `tc_mgr.compress_count` 与
+   `transcomp_get_ratio()` 两个标量；`transcomp_get_stats()` 公共 API 保留。修复后自测帧
+   最大 `sub $0x24,%esp`（objdump 实量）。
+3. **验证**：干净构建实跑，transcomp 自测 7/7 PASS；`linuxhello` 建进程 pid=3、进用户态打印
+   `Hello from Linux ELF on HEPU!` 后 `done`，序列续跑 linuxc/linuxbrk/linuxcrt/winhello/
+   winargs/macho_demo。冒烟 `serial=1 initrd=1 net=1 desk=1 fault=0 bound=1`。
+   详见 `docs/status/OPEN_BUGS.md` OBS-07 与 `evidence-linuxhello32/`。
+
 **0.60.7 迭代内容（2026-11-17，内核正确性批次 + 安装器闭环）**
 
 1. **查清并修复"32 位加约 1 KB BSS 就启动失败"的真因**（此前误判为"BSS 已贴边界"）。

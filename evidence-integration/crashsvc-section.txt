@@ -1,0 +1,33 @@
+[CRASHCTX] query winargs.exe state=dead restarts=0x00000001
+[CRASHCTX]   pc=0x0x0040304B syscall=0x00000005 ts=0x00000104 msg=user #General Protection Fault at 0x40304b esp=0x4000b7f8
+[CRASHLOG] recorded: winargs.exe
+[CRASHCTX] query macho_demo state=dead restarts=0x00000001
+[CRASHCTX]   pc=0x0x00001012 syscall=0x0000000A ts=0x0000010E msg=user page-fault at 0x40010004 rip=0x1012
+[AUTO] ALL DONE
+[AUTO] crashsvc launch
+[UPROC] exec-static name=crashsvc rc=11
+[CRASHCTX] query crashsvc state=dead restarts=0x00000001
+[CRASHCTX]   pc=0x0x001A49BE syscall=0x00000006 ts=0x00000294 msg=user #Division By Zero at 0x1a49be esp=0x4000fff0
+[CRASHLOG] recorded: crashsvc
+[CRASHCTX] init pid=0x00000001 state=run restarts=0x00000000
+[CRASHCTX]   pc=0x0x00000000 syscall=0x00000000 ts=0x00000000 msg=
+[CRASHCTX] procb pid=0x00000002 state=run restarts=0x00000000
+[CRASHCTX]   pc=0x0x00000000 syscall=0x00000000 ts=0x00000000 msg=
+[CRASHCTX] linuxhello.elf pid=0x00000003 state=dead restarts=0x00000000
+[CRASHCTX]   pc=0x0x00000000 syscall=0x00000000 ts=0x00000000 msg=
+[CRASHCTX] linuxc.elf pid=0x00000004 state=dead restarts=0x00000000
+[CRASHCTX]   pc=0x0x00000000 syscall=0x00000000 ts=0x00000000 msg=
+[CRASHCTX] linuxbrk.elf pid=0x00000005 state=dead restarts=0x00000000
+[CRASHCTX]   pc=0x0x00000000 syscall=0x00000000 ts=0x00000000 msg=
+[CRASHCTX] linuxcrt.elf pid=0x00000006 state=dead restarts=0x00000000
+[CRASHCTX]   pc=0x0x00000000 syscall=0x00000000 ts=0x00000000 msg=
+[CRASHCTX] winhello.exe pid=0x00000007 state=dead restarts=0x00000000
+[CRASHCTX]   pc=0x0x00000000 syscall=0x00000000 ts=0x00000000 msg=
+[CRASHCTX] winargs.exe pid=0x00000008 state=dead restarts=0x00000001
+[CRASHCTX]   pc=0x0x0040304B syscall=0x00000005 ts=0x00000104 msg=user #General Protection Fault at 0x40304b esp=0x4000b7f8
+[CRASHCTX] macho_demo pid=0x00000009 state=dead restarts=0x00000001
+[CRASHCTX]   pc=0x0x00001012 syscall=0x0000000A ts=0x0000010E msg=user page-fault at 0x40010004 rip=0x1012
+[CRASHCTX] gfxtest.elf pid=0x0000000A state=dead restarts=0x00000000
+[CRASHCTX]   pc=0x0x00000000 syscall=0x00000000 ts=0x00000000 msg=
+[CRASHCTX] crashsvc pid=0x0000000B state=dead restarts=0x00000001
+[CRASHCTX]   pc=0x0x001A49BE syscall=0x00000006 ts=0x00000294 msg=user #Division By Zero at 0x1a49be esp=0x4000fff0

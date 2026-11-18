@@ -2,7 +2,7 @@
 title: 赫普OS 未关闭问题清单
 status: active
 sys_version: 0.62.0
-updated: 2026-11-18（OBS-05 撤销为取帧时机问题；登记 OBS-07 linuxhello 崩溃、64 空口令拒登、ASan/UBSan 链接清单失败、32 KUnit 既有基线失败；文末「台账遗留项清理（2026-11-18）」为 32 位 / 64 位与主机侧遗留项复核记录。历史：驱动层整固 BUG-52~56；BUG-49 更正为不成立；OPEN-02 复现未成功并写明下一步夹具。2026-11-18 桌面 GUI QEMU 实测：电源菜单、屏保、Accounts、tls12 探针四项均 PASS，结论与证据见文末「实测结论（2026-11-18）」表及 `evidence-desktop-gui-2026-11-18/`）
+updated: 2026-11-18（登记 OBS-08 32 位镜像布局位移敏感、OBS-09 x86 桌面局部刷新未生效；OBS-05 撤销为取帧时机问题；登记 OBS-07 linuxhello 崩溃、64 空口令拒登、ASan/UBSan 链接清单失败、32 KUnit 既有基线失败；文末「台账遗留项清理（2026-11-18）」为 32 位 / 64 位与主机侧遗留项复核记录；2026-11-18 桌面 GUI QEMU 实测：电源菜单、屏保、Accounts、tls12 探针四项均 PASS，结论与证据见文末「实测结论（2026-11-18）」表及 `evidence-desktop-gui-2026-11-18/`。历史：驱动层整固 BUG-52~56；BUG-49 更正为不成立；OPEN-02 复现未成功并写明下一步夹具）
 owner: status
 source_of_truth: kernel/arch/x86_64/
 ---
@@ -752,7 +752,7 @@ diag1/diag2/move/sb_up/hand），但系统目前只有 4 个形态场景，映�
 > 本节登记 2026-11-18 复跑回归线的四条实测；三态口径 PASS / FAIL / UNVERIFIED，
 > 证据目录 `evidence-regress-2026-11-17/`。
 
-### OBS-07 32 位 `linuxhello` 用户态崩溃（FAIL，既有不稳定项，未隔离编译验证）
+### OBS-07 32 位 `linuxhello` 用户态崩溃（2026-11-18 定位并修复；原 FAIL 既有不稳定项）
 
 **现象**：直启与 UEFI 两条路径都在 `[AUTO] linuxhello start` 后退出/重启回灌菜单：直启
 `-no-reboot` 下 QEMU 退出（`frames32-direct/state.txt` `CRASHED=1`）；UEFI 路径重启回灌
@@ -762,6 +762,91 @@ diag1/diag2/move/sb_up/hand），但系统目前只有 4 个形态场景，映�
 仅修 32 位文案空串兜底、`61c53fa` 仅统一顶栏 bar_height，未改动 32 位内核执行路径。
 **证据**：`evidence-regress-2026-11-17/frames32-direct/ser.log`、
 `frames32/ser.log`、`frames32-direct/state.txt`。
+
+#### 2026-11-18 定位结论（结论 A：定位并修好）
+
+**坏在哪一步**：自检序列 `cmd_run_auto("linuxhello")` → `binfmt_exec` 按格式表
+`formats[]` 分发到对应 ELF/PE/Mach-O 加载器之前，格式表已被踩坏；分发时跳到野指针，
+进入 `#PF/#GP` 异常风暴，看门狗复位/低电量挂起退出，`cmd_run_auto` 永远等不到
+`linuxhello done`，后续 `linuxc/linuxbrk/linuxcrt/winhello/winargs/macho_demo` 全部不再执行。
+**不是**用户态异常，**不是**调度/退出卡住，**不是**串口被遮挡：改后干净构建里
+`linuxhello` 能进用户态并打印 `Hello from Linux ELF on HEPU!`。
+
+**什么异常/为什么（根因）**：`kernel/fs/transcomp.c` `transcomp_selftest()` 的 test7 在
+**内核栈上**声明 `transcomp_mgr_t stats;` 并 `transcomp_get_stats(&stats)`。该结构含
+`block_map[4096]`，每项 16 B，共 65 536 B，再加 7 个计数字段 ≈ 65 564 B（`transcomp.h`）；
+而 32 位 `KERNEL_STACK_SIZE=16384`（`constants.h:85`）。64 KB 栈帧在 16 KB 主线栈上向下
+越界，踩踏相邻 BSS，正好覆盖 binfmt 格式探测/加载指针表 `formats[]`。
+探针（影子副本 + 完整性检查）二分结果：`binfmt_init` 结束时表完好（3 条：ELF32 id=1、
+PE32 id=2、MACHO id=3，probe/load 均为合法 `.text` 地址）；`after-kmalloc-test` 仍完好；
+到 `transcomp_selftest()` 之后 `fmt_count=2`、id/probe/load 全成垃圾。加载器随后按垃圾
+指针分发 → 野跳转。
+
+**旁证排除**：`fork-test rc=-2`（`HEPU_E_NOENT`）是 initrd 内无此文件的预期返回，
+不创建进程槽、不污染后续 exec，不是污染源；跳过 `transcomp_selftest()` 的隔离实验中
+格式表损坏窗口仍锁定在 transcomp 自测。
+
+**最小修复**：删掉 test7 的 64 KB 栈上局部 `stats`。自测只需要两个标量计数，改为直接读
+静态管理器字段 `tc_mgr.compress_count` 与 `transcomp_get_ratio()`；公共 API
+`transcomp_get_stats()` 原样保留未删。修复后 `transcomp_selftest` 帧最大
+`sub $0x24,%esp`（objdump 实量），在 16 KB 栈内。
+
+**修复后实跑验证**（干净构建，临时探针已全部移除）：transcomp 自测 7/7 PASS；
+`linuxhello` 创建进程 pid=3、entry=0x08049000、进入用户态打印
+`Hello from Linux ELF on HEPU!`，`[UPROC] exec path=linuxhello rc=3`（3 为子进程 pid，
+非错误码），`[AUTO] linuxhello done`；序列继续：`linuxc` pid=4、`linuxbrk` pid=5、
+`linuxcrt` pid=6、`noent` rc=-2、`winhello.exe` pid=7、`winargs.exe` pid=8、
+`macho_demo` 打印 `macho: hello from HEPU!`。
+五条冒烟判据：`serial=1 initrd=1 net=1 desk=1 fault=0 bound=1`（见
+`evidence-linuxhello32/smoke-results.txt`，判定脚本 `evidence-linuxhello32/smoke_check.sh`，
+未执行 `tools/regress32.sh`）。
+
+**证据路径**：`evidence-linuxhello32/before-baseline.log`（改前：`linuxhello start` 后
+`[PM] low battery, auto suspend pending`，无 `done`）、`after-fix.log`（改后：`done` 出现
+且序列续跑）、`excerpt-before.txt`、`excerpt-after.txt`、`investigation-trace-dbg12.log`
+（探针期完整性检查全部 `ok count=0x00000003`，`elf_load enter` 进入）。
+
+**遗留观察（非 OBS-07 残留缺陷）**：插桩构建（dbg14–16）曾在加载器绑定标准流时
+`vfs_find("/dev/console")` 遍历 VFS 链表尾部命中野指针触发 `#PF`（vec=0xE、err=0）；
+剥离探针后的干净构建未复现，判定为插桩导致内存布局偏移下的次生现象。若在干净树再次出现，
+下一步：在 desktop/app init 各阶段打点转储 root 子链表与 slab 块头，定位写入者。
+`winargs.exe` 运行期有一条 `[CRASHLOG]` 记录但仍返回 pid 并 `done`，属既有应用级行为。
+
+**探针处置**：所有临时 `[DBG32]` 打点（cmd_run_auto 入口/出口、exec 返回码、加载器分发、
+syscall、异常向量、`formats[]` 影子完整性、VFS 链表遍历转储）在收尾时已从源码删除；
+提交内只保留 `kernel/fs/transcomp.c` 的栈局部修复。
+
+### OBS-08 32 位镜像布局位移敏感（野指针写入源未定性；2026-11-18 登记）
+
+**现象（两类，均随镜像 text/data 体积变化出现或消失）**
+
+1. `fix/vfs-contract` 分支（text +1712 B / data +96 B，bss 整体后移一页）：
+   `integration/subsystem memory`、`performance/perf memory usage` 两项 KUNIT 断言
+   `heap_total > 0` 失败（运行时 `heap_total == 0`），干净基线 `391e1db` 同环境通过。
+   探针显示 `kheap_init` 时 `0x03000000` 正常，损坏发生在 `pae_init()` 内部；第 4 个
+   4K 对齐页表分配回落 `kf_pool` 兜底池，池内写波及紧邻的 kheap 静态变量
+   （`heap_total` 位于池起点前 0x1C 字节）。
+2. 同一 VFS 分支并入"391e1db + OBS-07 修复 + crash_ctx + diag"后：自检停在
+   `[AUTO] linuxhello start`，`process_create` 分配 64 KB 后踩野地址 `0x82630000`：
+   `[PF] MMIO trap addr=0x0x82630000 -> poison page` → `[WATCHDOG] kernel heartbeat
+   timeout, resetting...` → 复位，永不出现 `[AUTO] linuxhello done`。
+   把 VFS 分支从同一集成树移除后，同位置恢复正常（`Hello from Linux ELF on HEPU!` 后
+   `done`，`ALL DONE`，冒烟 `fault=0`）。
+
+**定性**：野指针写入源尚未定位；触发条件是**镜像布局位移**这一事实已由两组对照实验确证
+（含 VFS 自身的 KUNIT 对照）。倾向既有 32 位 kheap 首链 / PAE 对齐分配 / `kf_pool` 兜底
+路径的脆弱性，被布局位移暴露。与 OBS-07 属同族（OBS-07 已定性为 64 KB 栈帧踩穿 16 KB
+内核栈、覆盖邻接 bss 的 `formats[]`），但本条不是栈越界，写入者仍未知。
+
+**处置**：`fix/vfs-contract` **暂不合并**（分支保留，契约/门禁/只读设备本身已在其基线上
+验收通过）；集成交付只带 diag / OBS-07 修复 / crash_ctx 三条。
+
+**证据**：`evidence-integration/run-default-full.log`（去 VFS 后正常）、
+`evidence-integration/run-diag-hoisted.log`；`fix/vfs-contract` 分支的
+`docs/design/VFS_CONTRACT_LANDING.md` §9.1（KUNIT 对照与探针窗口）。
+
+**下一步**：在一棵"既复现又最小"的树上用写保护毒页 + 数据断点定位写入者；定位后再评估
+VFS 分支是可直接合并还是需要先修 kheap/PAE。
 
 ### 64 位空 Enter 拒登（预期行为，非回归）
 

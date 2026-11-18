@@ -8,6 +8,7 @@
 #include "vga.h"
 #include "string.h"
 #include "pit.h"
+#include "crash_ctx.h"
 
 static service_t services[SERVICE_MAX];
 static int service_count = 0;
@@ -102,6 +103,7 @@ int services_start(const char *name)
             svc->exit_code = ret;
             vga_printf("[SERVICES] start failed: %s(code=%d)\n", name, ret);
             if (svc->def.restart_on_failure && svc->restart_count < 3) {
+                crash_ctx_snapshot_for_restart((uint32_t)svc->def.pid);
                 svc->restart_count++;
                 vga_printf("[SERVICES] auto reboot(%d/3): %s\n", svc->restart_count, name);
                 return services_start(name);
@@ -331,6 +333,7 @@ void services_monitor_tick(void)
     for (int i = 0; i < SERVICE_MAX; i++) {
         if (services[i].used && services[i].state == SERVICE_FAILED &&
             services[i].def.restart_on_failure && services[i].restart_count < 3) {
+            crash_ctx_snapshot_for_restart((uint32_t)services[i].def.pid);
             services[i].restart_count++;
             services_start(services[i].def.name);
         }

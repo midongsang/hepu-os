@@ -85,6 +85,8 @@ struct audit_rec {
 - 故意用无权句柄调用敏感操作 → 返回 `-EPERM`，且 diag 里能看到这条拒绝记录（含 pid/op/对象）；
 - 全仓库 0 处绕过 `cap_check` 的授权判断。
 
+> 实跑验收记录（32 位 QEMU，空环态 + 真实拒绝态串口原文、syscall 返回值与二进制结构解码核对）：见 [DIAG_AUDIT_RUN.md](./DIAG_AUDIT_RUN.md)。
+
 ---
 
 ## 三、服务崩溃现场 + 结构化状态
@@ -125,6 +127,8 @@ diag.query(service_name) -> {
 ### 验收
 - 人为让某服务空指针崩溃 → 重启后 `diag.query` 能给出 `pc`、`last_syscall`、`msg`；
 - 重复崩溃 3 次后，`restarts=3` 且 `last_crash` 为最近一次。
+
+> 落地记录见 [CRASH_CTX_LANDING.md](./CRASH_CTX_LANDING.md)（实际达到程度、取舍与未完成项）。
 
 ---
 

@@ -23,6 +23,14 @@ CFLAGS  = -m32 \
           -fno-strict-aliasing -fno-tree-vectorize \
           -fno-strict-aliasing -ffunction-sections -fdata-sections -MMD -MP \
           -I kernel/include -I kernel -I kernel/shared -I services -DHEPU_BOOT_DEBUG -DHEPU_AUTO_FSCK
+# §3 崩溃现场验收通道：默认关闭。开启后自检序列末尾会拉起一个静态用户服务
+# 故意触发 #DE，用于验证 crash_ctx/查询接口；故意崩溃会回收全部进程并 longjmp
+# 回主线，所以不能作为默认启动行为。
+# 用法: make AUTO_CRASH_SVC=1
+ifneq ($(AUTO_CRASH_SVC),)
+CFLAGS += -DHEPU_AUTO_CRASH_SVC=$(AUTO_CRASH_SVC)
+endif
+
 LDFLAGS = -m elf_i386 -T kernel/linker.ld --gc-sections
 # GAS 汇编文件用 gcc 预处理编译
 ASFLAGS = -m32 -ffreestanding -nostdlib -DHEPU_BOOT_DEBUG -DHEPU_AUTO_FSCK

@@ -315,6 +315,9 @@ process_t *process_create(const char *name, uint32_t entry,
                proc->name, proc->pid,
                priv == PRIV_USER ? " user mode " : " kernel 态 ");
 
+    /* 绑定崩溃现场槽位（静态表项，失败不阻断进程创建） */
+    proc->crash_ctx = crash_ctx_alloc(proc->pid, proc->name);
+
     proc_lock_release();
     return proc;
 }
