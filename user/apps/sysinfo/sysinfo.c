@@ -16,7 +16,9 @@ int main(int argc, char **argv)
     printf("========================================\n\n");
 
     printf("[系统]\n");
-    printf("  内核版本: %s\n", hepu_info());
+    /* 同上: hepu_info 返回编码 u32 */
+    { unsigned int _v = (unsigned int)hepu_info();
+      printf("  内核版本: %u.%u.%u\n", (_v>>24)&0xFFu, (_v>>16)&0xFFu, (_v>>8)&0xFFu); }
     printf("  当前PID:  %d\n", hepu_getpid());
     printf("  系统调用: 63个 (SYS_MAX=63)\n\n");
 

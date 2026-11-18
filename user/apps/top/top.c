@@ -40,7 +40,8 @@ int main(int argc, char **argv)
 
     /* 系统概览 */
     printf("[系统概览]\n");
-    printf("  内核: %s\n", hepu_info());
+    { unsigned int _v = (unsigned int)hepu_info();
+      printf("  内核: %u.%u.%u\n", (_v>>24)&0xFFu, (_v>>16)&0xFFu, (_v>>8)&0xFFu); }
     printf("  运行时间: 0天 0小时 12分钟\n");
     printf("  负载: 0.25, 0.18, 0.12 (1/5/15分钟)\n\n");
 

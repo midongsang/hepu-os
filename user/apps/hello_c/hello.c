@@ -15,7 +15,9 @@ int main(int argc, char **argv)
     printf("=== 赫普OS C语言应用 ===\n");
     printf("你好！这是用C语言编写的用户态程序。\n");
     printf("PID: %d\n", hepu_getpid());
-    printf("内核版本: %s\n", hepu_info());
+    /* sys_hepu_info 返回编码版本号 (major<<24|minor<<16|patch<<8)，不是字符串 */
+    { unsigned int _v = (unsigned int)hepu_info();
+      printf("内核版本: %u.%u.%u\n", (_v>>24)&0xFFu, (_v>>16)&0xFFu, (_v>>8)&0xFFu); }
     printf("printf测试: %d + %d = %d, 十六进制=0x%x\n",
            3, 4, 3 + 4, 255);
     printf("字符串: %s, 长度=%d\n", "Hello HEPU", strlen("Hello HEPU"));
