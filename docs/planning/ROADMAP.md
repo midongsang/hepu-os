@@ -180,10 +180,10 @@ supersedes: DEVELOPMENT_ROADMAP.md, PRIORITY_ROADMAP.md, X86_64_DEVELOPMENT_PLAN
 | M1c：4KB 页（L3）白名单映射 + VBAR 异常向量，tlbi 后存活、QEMU exit=0 | ✅（`54c7bb6`） | `m1.c` |
 | M1d-1：GetMemoryMap 驱动全 RAM 混合映射（整 2MB 对齐 L2 block，首尾不齐 L3 4KB 页）+ 远端 RAM 写读回 | ✅（`391e1db`） | `m1.c` |
 | M1d-2：GIC 版本判定 + 虚拟定时器 PPI27 中断计数（EOIR 后重 arm） | ✅（`a60ffdb`） | `m1.c` GICD/GICC @0x08000000/0x08010000 |
-| M1d-3：ExitBootServices + 描述符静态副本 + 自有 bss 栈切换 | ❌ **HEAD 未做**；工作区另有未提交的 M1d-3 草稿（新栈 + ExitBootServices），结论待核实 | 计划项见 `m1.c:7`；HEAD 代码内未见 `ExitBootServices` 调用 |
+| M1d-3：ExitBootServices + 描述符静态副本 + 自有 bss 栈切换 | ✅ **已完成**（M1d 三步，2026-11-18 前收口）：ExitBootServices 返回 Status=0；切换 16KB 自有 bss 栈后继续运行；退出 Boot Services 后 GOP `0x58430000` 仍可写（写 `0x00ff00ff` 读回一致）。QEMU `exit=0` | 代码在 `kernel/arch/aarch64/m1/m1.c`；M1d 自检三次全 exit=0（全 RAM 混合映射 244 block+5376 页、GICv2+虚拟定时器 20 次 PPI27、EBS 换栈后 GOP 可写） |
 | 复用层接入：`shared/desktop`、`gfx64` 绘制基元接到 GOP 帧缓冲出界面 | ❌ 未开始 | — |
 
-> 边界说明：截至 M1d-2，ARM64 仍运行在固件 EL1 环境；M1d-3 完成前未切自有 bss 栈、未退出 Boot Services。32 位根 Makefile 已排除 `arch/aarch64/%` 源文件（0.62.0 批次第 6 项）。
+> 边界说明（2026-11-18 更新）：M1d-3 已完成，ARM64 已退出 Boot Services 并切自有 bss 栈；随后 M2/M2D/M2S 已出界面并完成脏区量化（详见 `kernel/arch/aarch64/README.md` 与 `docs/status/PERF_BASELINE_2026-11-18.md`）。32 位根 Makefile 已排除 `arch/aarch64/%` 源文件（0.62.0 批次第 6 项）。
 
 ---
 
