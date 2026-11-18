@@ -69,9 +69,40 @@ vfs_node_t *vfs_create_node(const char *name, vfs_node_type_t type)
     return node;
 }
 
+/* OBS-08 结构自证: 遍历前先判"这个指针像不像一个 vnode"。
+ * 2026-11-19 取证结论: 崩溃不是 VFS 自己写坏内存, 而是某处把一块未初始化的
+ * 内存当成了结构指针(poison 抓到 0x82630000/0xBBBBB000 这类值)。
+ * 这里不追写入者, 只保证"坏指针进来也不崩": 地址不在内核堆区、没对齐、
+ * name 在 VFS_MAX_NAME 内没有 NUL 收尾 —— 任一不满足就跳过并留一条日志。 */
+static int vfs_node_sane(const vfs_node_t *n)
+{
+    uintptr_t a = (uintptr_t)n;
+    int i;
+
+    if (a < 0x04000000u || a > 0x0FFFFFFFu) return 0;   /* 内核直接用到的地址区间 */
+    if (a & 3u) return 0;                              /* 结构指针至少 4 字节对齐 */
+    for (i = 0; i < VFS_MAX_NAME; i++) {
+        if (n->name[i] == '\0') return 1;             /* name 必须收得住 */
+    }
+    return 0;
+}
+
+static void vfs_insane_warn(void)
+{
+    static int warned;
+    extern void serial_puts(uint16_t, const char *);
+    if (warned) return;
+    warned = 1;
+    serial_puts(0x3F8, "[VFS] insane node pointer skipped (OBS-08 guard)\n");
+}
+
 void vfs_add_child(vfs_node_t *parent, vfs_node_t *child)
 {
     if (!parent || !child) return;
+    if (!vfs_node_sane(parent) || !vfs_node_sane(child)) {
+        vfs_insane_warn();
+        return;
+    }
     child->parent = parent;
     child->next = parent->children;
     parent->children = child;
@@ -100,6 +131,7 @@ vfs_node_t *vfs_find(const char *path)
         vfs_node_t *child = current->children;
         int found = 0;
         while (child) {
+            if (!vfs_node_sane(child)) { vfs_insane_warn(); break; }
             if (strcmp(child->name, component) == 0) {
                 current = child;
                 found = 1;
