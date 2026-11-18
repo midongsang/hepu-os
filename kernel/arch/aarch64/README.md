@@ -1,4 +1,4 @@
-# arch/aarch64 —— ARM64 支持（M0 已通，M1 未开）
+# arch/aarch64 —— ARM64 支持（M0 已通，M1c 已通）
 
 ## 已完成（M0）
 
@@ -107,7 +107,7 @@ qemu-system-aarch64 -M virt -cpu max -m 512 \
 | 读固件 MMU 配置 | ✅ | `[fw] TCR_EL1=0x580803510 (T0SZ=16)`、`TTBR0_EL1=0x5ffff000`、`SCTLR_EL1=0xc5183d` |
 | 建 48 位四级页表（L0→L1→L2 2MB block，0-1GB Device / 1-2GB Normal） | ✅ | `[M1] page tables built` |
 | 写 MAIR_EL1 / TCR_EL1 / TTBR0_EL1 / SCTLR_EL1（开 MMU） | ✅ | `[dbg] mair ok / tcr ok / ttbr ok / sctlr ok` |
-| 刷 TLB 后继续跑 | ❌ 失联 | `tlbi vmalle1` 之后没有任何输出，QEMU 不退出 |
+| 刷 TLB 后继续跑 | ✅（M1c） | M1b 之前是 `tlbi vmalle1` 后无输出；M1c 换 4KB L3 白名单映射 + VBAR 后：`[dbg] tlbi ok` → `[M1c] ALIVE after switch/tlbi` → `poweroff`，QEMU exit=0 |
 
 **关键结论（三条，都是实测）：**
 
