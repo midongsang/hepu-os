@@ -47,6 +47,9 @@ typedef struct {
 
 /* VFS 节点 (inode) */
 struct vfs_node {
+    /* OBS-08 结构自证: 每个 vnode 自带一个固定魔数, 被写坏时能立刻看出来。
+     * 放在最前面是为了让"字段错位/整体覆盖"最容易命中它。 */
+    uint32_t magic;
     char name[VFS_MAX_NAME];
     vfs_node_type_t type;
     uint32_t size;

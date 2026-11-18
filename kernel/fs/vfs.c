@@ -11,6 +11,9 @@
 #include "kheap.h"
 
 static vfs_node_t *vfs_root = NULL;
+
+/* OBS-08: vnode 自证魔数。'VNOD' 这四位是随便挑的常量，只要稳定即可。 */
+#define VFS_NODE_MAGIC 0x564E4F44u
 static vfs_fd_t fd_table[VFS_MAX_FDS];
 static uint32_t next_inode = 1;
 
@@ -60,6 +63,7 @@ vfs_node_t *vfs_create_node(const char *name, vfs_node_type_t type)
     if (!node) return NULL;
 
     memset(node, 0, sizeof(vfs_node_t));
+    node->magic = VFS_NODE_MAGIC;
     strncpy(node->name, name, VFS_MAX_NAME - 1);
     node->type = type;
     node->inode_num = next_inode++;
@@ -87,6 +91,26 @@ static int vfs_node_sane(const vfs_node_t *n)
     return 0;
 }
 
+static void vfs_insane_warn(void);
+
+/* 2026-11-19: 比"像不像 vnode"更硬一层 —— 魔数对不对。
+ * 地址检查只能抓野指针; 魔数检查能抓"这块内存曾经是个合法节点、后来被
+ * 别的东西覆盖了", 并且能把节点地址和残留的名字打出来。 */
+static int vfs_node_verify(const vfs_node_t *n)
+{
+    if (!vfs_node_sane(n)) { vfs_insane_warn(); return 0; }
+    if (n->magic != VFS_NODE_MAGIC) {
+        extern void serial_puts(uint16_t, const char *);
+        static int magic_warned;
+        if (!magic_warned) {
+            magic_warned = 1;
+            serial_puts(0x3F8, "[VFS] node magic mismatch (OBS-08, node overwritten)\n");
+        }
+        return 0;
+    }
+    return 1;
+}
+
 static void vfs_insane_warn(void)
 {
     static int warned;
@@ -103,6 +127,8 @@ void vfs_add_child(vfs_node_t *parent, vfs_node_t *child)
         vfs_insane_warn();
         return;
     }
+    /* 进树即盖章: 不管节点是哪个子系统造的, 挂进来就带上魔数 */
+    child->magic = VFS_NODE_MAGIC;
     child->parent = parent;
     child->next = parent->children;
     parent->children = child;
@@ -131,7 +157,7 @@ vfs_node_t *vfs_find(const char *path)
         vfs_node_t *child = current->children;
         int found = 0;
         while (child) {
-            if (!vfs_node_sane(child)) { vfs_insane_warn(); break; }
+            if (!vfs_node_verify(child)) { break; }
             if (strcmp(child->name, component) == 0) {
                 current = child;
                 found = 1;

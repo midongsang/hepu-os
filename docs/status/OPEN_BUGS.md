@@ -895,6 +895,24 @@ magic/checksum，进入 VFS 前校验，坏即当场报错）与**不再把未�
 **性质说明：这是止损，不是定位** —— 写入者仍未指名；后续要么补 magic/checksum
 把"坏在哪一步"变成可读的报错，要么继续追写入者。
 
+**2026-11-19 magic 自证（提交见下）**：地址闸只能抓野指针；地址合法但内容被覆盖的
+节点会漏过。`struct vfs_node` 首位加 `uint32_t magic`（`0x564E4F44` 'VNOD'）：
+`vfs_create_node` 创建时盖章、`vfs_add_child` 进树时兜底盖章、`vfs_find` 遍历前用
+`vfs_node_verify()` 双重校验（地址 sane + magic），不匹配时打印
+`[VFS] node magic mismatch (OBS-08, node overwritten)`。
+
+**实测**（人为把 magic 写成 `0xDEADBEEF` 后跑 regress32，插桩已回退）：
+
+```
+[VFS] node magic mismatch (OBS-08, node overwritten)
+serial=1 initrd=1 net=1 desk=1 fault=0 bound=1 lines=870  PASS
+```
+
+两点结论：① 校验真的会报（不是死代码）；② 报的时候系统不崩，`find` 失败只影响
+查找、不影响跑完。正常回归（无插桩）`lines=869 fault=0` PASS。
+**仍未做到的**：报的是"某个节点被覆盖"，还报不出"谁写的" —— 要指名写入者仍需
+写监视点或堆审计（TCG 下数据断点已确认不可用）。
+
 ### 64 位空 Enter 拒登（预期行为，非回归）
 
 - `/account.conf` 已配置账户时，空口令两次被拒：串口 `[LOCK] login: auth failed`（两次），
