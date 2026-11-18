@@ -419,6 +419,45 @@ uint64_t g_kernel_tick64 = 0;
 volatile uint64_t g_user_exception_count = 0;
 
 /* 中断处理主体（原irq_handler_64逻辑） */
+/* 2026-11-19: 与 32 位对齐的诊断报告格式 —— STOP 码/异常名/诊断提示。
+ * 64 位原先只有 vector/error/rip 三行，现场可读性远低于 32 位那一版。 */
+static const char *k64_exc_name(uint64_t v)
+{
+    static const char *n[32] = {
+        "Divide Error","Debug","NMI","Breakpoint","Overflow","BOUND Range",
+        "Invalid Opcode","Device Not Available","Double Fault","Coprocessor Segment",
+        "Invalid TSS","Segment Not Present","Stack Fault","General Protection",
+        "Page Fault","Reserved (15)","x87 FP","Alignment Check","Machine Check",
+        "SIMD FP","Virtualization","Control Protection","Reserved (22)",
+        "Reserved (23)","Reserved (24)","Reserved (25)","Reserved (26)",
+        "Reserved (27)","Hypervisor Injection","VMM Communication","Security",
+        "Reserved (31)"
+    };
+    return v < 32 ? n[v] : "Unknown";
+}
+
+static const char *k64_hint(uint64_t v)
+{
+    switch (v) {
+    case 14: return "page fault: CR2 holds faulting address; check the access bits above";
+    case 13: return "general protection: bad selector, non-canonical address, or privilege violation";
+    case 8:  return "double fault: exception handler itself faulted; check stack and IST";
+    case 12: return "stack fault: kernel stack overflow or bad SS:RSP";
+    case  6: return "invalid opcode: check instruction stream / corrupted code page";
+    case  0: return "divide error: divide by zero or quotient overflow";
+    default: return "unexpected exception in kernel mode; see rip and stack trace below";
+    }
+}
+
+static void k64_stop_code(uint64_t v, char *out)
+{
+    static const char hexd[] = "0123456789ABCDEF";
+    int i;
+    out[0] = '0'; out[1] = 'x';
+    for (i = 0; i < 8; i++) out[2 + i] = hexd[(v >> (4 * (7 - i))) & 0xF];
+    out[10] = 0;
+}
+
 static void hepu_panic_kernel_fault(uint64_t *sf);
 static void irq_handler_64_body(uint64_t *stack_frame)
 {
@@ -714,7 +753,16 @@ static void hepu_panic_kernel_fault(uint64_t *sf)
     extern void serial_puts(uint16_t port, const char *s);
     extern void serial_hex(uint64_t v);
 
-    serial_puts(0x3F8, "\n*** HEPU PANIC: kernel-mode exception ***\n");
+    {
+        char stop[11];
+        k64_stop_code(vector, stop);
+        serial_puts(0x3F8, "\n=== HEPU OS - DIAGNOSTIC REPORT (64-bit kernel) ===\n");
+        serial_puts(0x3F8, "STOP: "); serial_puts(0x3F8, stop);
+        serial_puts(0x3F8, "\nException: "); serial_puts(0x3F8, k64_exc_name(vector));
+        serial_puts(0x3F8, "\n");
+        serial_puts(0x3F8, "Hint: "); serial_puts(0x3F8, k64_hint(vector));
+        serial_puts(0x3F8, "\n\n");
+    }
     serial_puts(0x3F8, "  vector=0x"); serial_hex(vector);
     serial_puts(0x3F8, " error=0x");   serial_hex(error);
     serial_puts(0x3F8, "\n  rip=0x");    serial_hex(rip);
