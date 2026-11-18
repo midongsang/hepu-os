@@ -221,6 +221,9 @@ void shell_execute(char *cmd)
     } else if (strcmp(cmd, "crashlog") == 0) {
         extern int crashlog_dump(void);
         crashlog_dump();
+    } else if (strcmp(cmd, "bsod") == 0) {
+        extern void cmd_bsod(void);
+        cmd_bsod();
     } else if (strcmp(cmd, "ls") == 0) {
         cmd_ls();
     } else if (strcmp(cmd, "hug") == 0) {

@@ -278,3 +278,16 @@ void bsod_show(const char *reason, uint32_t isr_number,
 
     for (;;) __asm__ volatile ("cli; hlt");
 }
+
+/* shell `bsod` 命令：现场构造一次 Page Fault 并走完整蓝屏链路。
+ * 这是"诊断程序可自证"的入口 —— 不用改代码、不用等真崩溃，
+ * 敲一条命令就能验证 蓝屏渲染 / 串口字段 / crashlog 三处。 */
+void cmd_bsod(void)
+{
+    uint32_t eip, cs, esp;
+    __asm__ volatile ("mov %%cs, %0" : "=r"(cs));
+    __asm__ volatile ("mov %%esp, %0" : "=r"(esp));
+    __asm__ volatile ("call 1f\n1:\tpopl %0" : "=r"(eip));
+    serial_puts(0x3F8, "[BSOD] self-test requested from shell\n");
+    bsod_show("user-requested BSOD self-test", 14, 0x2, eip, cs, esp, 0xDEADB000);
+}
