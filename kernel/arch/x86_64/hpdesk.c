@@ -7452,6 +7452,22 @@ void hpdesk_render(void)
     static uint32_t pf_n;
     extern uint64_t gfx64_prof_present;
 
+    /* A-2 帧率基准: 记录相邻两帧的 TSC 间隔, 供 P99 卡顿统计。
+     * 只看平均 fps 会把"偶发掉帧"抹平, 而用户感知到的恰恰是那几帧。 */
+    static uint32_t a2_dt[256];
+    static uint32_t a2_dt_n;
+    static uint32_t a2_dt_wi;
+    {
+        static uint64_t a2_last_ts;
+        uint64_t now_ts = hs_rdtsc();
+        if (a2_last_ts) {
+            a2_dt[a2_dt_wi] = (uint32_t)(now_ts - a2_last_ts);
+            a2_dt_wi = (a2_dt_wi + 1u) & 255u;
+            if (a2_dt_n < 256u) a2_dt_n++;
+        }
+        a2_last_ts = now_ts;
+    }
+
     uint64_t t0 = hs_rdtsc();
     uint64_t p0 = gfx64_prof_present;
     hpdesk_render_inner();
@@ -7488,6 +7504,22 @@ void hpdesk_render(void)
         serial_puts(0x3F8, " renderK=");         serial_puthex(0x3F8, renderK);
         serial_puts(0x3F8, " presentK=");        serial_puthex(0x3F8, presentK);
         serial_puts(0x3F8, " ratio=");           serial_puthex(0x3F8, intervalK ? (renderK * 100 / intervalK) : 0);
+
+        /* A-2: P99 帧间隔。样本环做一次插入排序(256 项, 每 300 帧才排一次,
+         * 开销可忽略), 取 99% 分位, 用来抓"偶发卡顿"而不是平均值。 */
+        {
+            uint32_t srt[256];
+            uint32_t n = a2_dt_n;
+            for (uint32_t i = 0; i < n; i++) srt[i] = a2_dt[i];
+            for (uint32_t i = 1; i < n; i++) {
+                uint32_t v = srt[i], j = i;
+                while (j > 0 && srt[j - 1] > v) { srt[j] = srt[j - 1]; j--; }
+                srt[j] = v;
+            }
+            uint32_t p99 = n ? srt[(n * 99u) / 100u >= n ? n - 1 : (n * 99u) / 100u] : 0u;
+            serial_puts(0x3F8, " p99K="); serial_puthex(0x3F8, (uint32_t)(p99 / 1000u));
+            serial_puts(0x3F8, " maxK="); serial_puthex(0x3F8, (uint32_t)(n ? srt[n - 1] / 1000u : 0u));
+        }
         serial_puts(0x3F8, "\n");
 
         pf_t_first = t0;
