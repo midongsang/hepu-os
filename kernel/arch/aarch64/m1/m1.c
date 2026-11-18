@@ -14,6 +14,7 @@
 /* ---------------- 实验开关 ---------------- */
 #define EXP_FLUSH       1   /* 1=切表后 tlbi 刷 TLB；0=不刷（对照） */
 #define EXP_FLUSH_KIND  0   /* 0=vmalle1 全刷；1=vaae1 单地址刷 */
+#define EXP_NO_EOIR     0   /* 1=对照：handler 不写 EOIR，验证后续中断不再来 */
 
 /* ---------------- PL011 ---------------- */
 #define PL011_BASE 0x09000000UL
@@ -64,8 +65,8 @@ __asm__ (
 /* 0x200 sync, current EL, SP_EL1 */
 "  b .Lv_sync\n"
 ".align 7\n"
-/* 0x280 irq, current EL（M1d-2 接） */
-"  b .Lv_hang\n"
+/* 0x280 irq, current EL, SP_EL1 */
+"  b .Lv_irq\n"
 ".align 7\n"
 /* 0x300 fiq, current EL */
 "  b .Lv_hang\n"
@@ -82,9 +83,20 @@ __asm__ (
 "  mrs x2, far_el1\n"
 "  mrs x3, CurrentEL\n"
 "  bl el1_sync_c\n"
+".Lv_irq:\n"
+"  stp x0, x1, [sp, #-16]!\n"
+"  stp x2, x3, [sp, #-16]!\n"
+"  stp x4, x5, [sp, #-16]!\n"
+"  bl el1_irq_c\n"
+"  ldp x4, x5, [sp], #16\n"
+"  ldp x2, x3, [sp], #16\n"
+"  ldp x0, x1, [sp], #16\n"
+"  eret\n"
 ".Lv_hang:\n"
 "  b .\n"
 );
+
+void el1_irq_c(void);
 
 void el1_sync_c(uint64_t esr, uint64_t elr, uint64_t far, uint64_t el)
 {
@@ -200,6 +212,13 @@ static void map_descriptor(EFI_MEMORY_DESCRIPTOR *d)
     }
     stat_bytes += end - start;
 }
+
+/* ---- GIC 寄存器 ---- */
+#define GICD_BASE 0x08000000UL
+#define GICC_BASE 0x08010000UL
+
+static uint32_t mmio_read32(uint64_t a)  { return *(volatile uint32_t *)a; }
+static void     mmio_write32(uint64_t a, uint32_t v) { *(volatile uint32_t *)a = v; }
 
 /* 设备 MMIO：UART / GICD / GICC，各给 4KB Device 页 */
 static void map_devices(void)
@@ -346,6 +365,72 @@ static void remote_ram_check(uint64_t image_base)
     uart_puts("[M1d] no remote conventional RAM found\n");
 }
 
+/* ---------------- GICv2 + 虚拟定时器（PPI 27） ---------------- */
+#define GICD_ISENABLER0   0x100
+#define GICD_ITARGETSR0   0x800
+#define GICC_CTLR         0x00
+#define GICC_PMR          0x04
+#define GICC_IAR          0x0C
+#define GICC_EOIR         0x10
+#define PPI_VTIMER        27
+
+static volatile uint64_t irq_count;
+static volatile uint32_t irq_last;
+static uint64_t cntv_freq;
+static uint32_t gic_ver;
+
+void el1_irq_c(void)
+{
+    uint32_t iar = mmio_read32(GICC_BASE + GICC_IAR);
+    uint32_t intid = iar & 0x3FFu;
+    irq_last = intid;
+    irq_count++;
+    if (irq_count <= 3 || irq_count % 10 == 0) {
+        uint64_t esr;
+        __asm__ volatile("mrs %0, esr_el1" : "=r"(esr));
+        uart_puts("[IRQ] enter vector, n="); uart_dec(irq_count);
+        uart_puts(" intid="); uart_dec(intid);
+        uart_puts(" ESR=0x"); uart_hex(esr); uart_puts("\n");
+    }
+    /* EOIR 必须写回 IAR 值；漏写会导致后续中断不再来（EXP_NO_EOIR 对照） */
+#if !EXP_NO_EOIR
+    mmio_write32(GICC_BASE + GICC_EOIR, iar);
+#endif
+    /* 重 arm 虚拟定时器：TVVAL 是有符号偏移，正值=未来比较值（负值=已过期，会风暴） */
+    __asm__ volatile("msr cntv_tval_el0, %0" :: "r"(cntv_freq / 10));
+}
+
+static void gic_timer_init(void)
+{
+    __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(cntv_freq));
+    uart_puts("[M1d] CNTFRQ="); uart_dec(cntv_freq); uart_puts("\n");
+
+    if (gic_ver == 2) {
+        /* GICv2：distributor 先使能，再配 PPI27 路由，最后开 CPU interface */
+        mmio_write32(GICD_BASE + 0x00, 0x01);                       /* GICD_CTLR */
+        mmio_write32(GICD_BASE + GICD_ISENABLER0, 1u << PPI_VTIMER);/* 使能 PPI27 */
+        /* ITARGETSR27：字内字节 lane = 27%4，目标 CPU0 */
+        uint32_t off = GICD_ITARGETSR0 + (PPI_VTIMER / 4) * 4;
+        uint32_t lane = PPI_VTIMER % 4;
+        uint32_t w = mmio_read32(GICD_BASE + off);
+        w &= ~(0xFFu << (lane * 8));
+        w |= 0x01u << (lane * 8);
+        mmio_write32(GICD_BASE + off, w);
+        mmio_write32(GICC_BASE + GICC_PMR, 0xFF);                   /* 优先级掩码全放 */
+        mmio_write32(GICC_BASE + GICC_CTLR, 0x01);                  /* GICC_CTLR enable */
+        uart_puts("[M1d] GICv2: D/C enabled, PPI27 -> CPU0\n");
+    } else {
+        uart_puts("[M1d] GICv3 路径未实现（PIDR2 判定非 v2）\n");
+    }
+
+    /* 虚拟定时器：100ms 周期，ENABLE=1、IMASK=0；TVVAL 正值=未来偏移 */
+    __asm__ volatile("msr cntv_tval_el0, %0" :: "r"(cntv_freq / 10));
+    __asm__ volatile("msr cntv_ctl_el0, %0" :: "r"(1UL));
+    __asm__ volatile("isb");
+    uart_puts("[M1d] timer armed, unmask IRQ\n");
+    __asm__ volatile("msr daifclr, #2");   /* 清 DAIF.IRQ 掩码 */
+}
+
 EFI_STATUS
 efi_main(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE *st)
 {
@@ -383,6 +468,18 @@ efi_main(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE *st)
 
     mmu_build_from_map();
     uart_puts("[M1d] page tables built (map-driven mixed block/page)\n");
+
+    /* GIC 版本判定：PIDR2 bits[7:4]，0x2=v2，0x3=v3 */
+    {
+        uint32_t pidr2 = mmio_read32(GICD_BASE + 0xFE8);
+        uint32_t typer = mmio_read32(GICD_BASE + 0x004);
+        gic_ver = (pidr2 >> 4) & 0xF;
+        uint32_t ver = gic_ver;
+        uart_puts("[M1d] GICD_PIDR2=0x"); uart_hex(pidr2);
+        uart_puts(" TYPER=0x"); uart_hex(typer);
+        uart_puts(" version="); uart_dec(ver);
+        uart_puts(ver == 2 ? " (GICv2)\n" : ver == 3 ? " (GICv3)\n" : " (unknown)\n");
+    }
 
     /* 异常向量：PC 相对 adrp/add 取址（不走 GOT，见 M1c 踩坑记录） */
     {
@@ -422,6 +519,17 @@ efi_main(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE *st)
     }
 
     remote_ram_check(pc & ~0x1FFFFFULL);
+
+    gic_timer_init();
+    uint64_t main_ticks = 0;
+    while (irq_count < 20) main_ticks++;
+    uart_puts("[M1d] IRQ count="); uart_dec(irq_count);
+    uart_puts(" main_ticks="); uart_dec(main_ticks);
+    uart_puts(" last intid="); uart_dec(irq_last); uart_puts("\n");
+
+    /* 关定时器、重新 mask IRQ，再关机 */
+    __asm__ volatile("msr cntv_ctl_el0, %0" :: "r"(0UL));
+    __asm__ volatile("msr daifset, #2");
 
     uart_puts("[M1d] poweroff\n");
     psci_off();

@@ -208,7 +208,62 @@ type11 两段 MMIO（`0x04000000` 64MB、`0x09010000` 4KB）按规则跳过。
 - 未处理 `EFI_MEMORY_XP`（执行保护）属性：当前所有映射 PXN/UXN=0，后续内核代码段需要时再按属性细化。
 - 509MB 已映射；未映射部分即 Reserved/MMIO，未做访问校验。
 
-**下一步：** M1d-2 GIC 版本判定 + 虚拟定时器 PPI27 中断计数；M1d-3 ExitBootServices + 自有栈。
+## M1d-2（已通）：GICv2 初始化 + 虚拟定时器 PPI27 中断计数
+
+**结论：PIDR2 判定为 GICv2；使能 distributor/cpu interface、PPI27 指 CPU0，虚拟定时器 100ms 周期，
+handler 读 IAR → 计数打印 → 写 EOIR → 重 arm，稳定计数 20 次后关定时器 PSCI 关机，QEMU exit=0。**
+
+### 做法
+
+- 版本判定：读 `GICD_PIDR2`（`0x08000FE8`）bits[7:4]，实测 `0x2b` → version=2（GICv2）；
+  不假设版本。**GICv3 路径本轮未实现**：若为 v3 需走 `ICC_SRE_EL1` 使能系统寄存器接口、
+  `ICC_PMR_EL1` 优先级掩码、`ICC_IGRPEN1_EL1` 组使能，外加 redistributor 探测与每 CPU 初始化；
+  v2 用内存映射的 GICD/GICC 寄存器，v3 走 `ICC_*` 系统寄存器，这是两条路径的主要差异。
+- GICv2：`GICD_CTLR` 使能 group0；`GICD_ISENABLER0` bit27 使能 PPI27；
+  `GICD_ITARGETSR27` 指 CPU0（按字内字节 lane 读改写）；`GICC_PMR=0xFF`；`GICC_CTLR` 使能。
+- 定时器：读 `CNTFRQ_EL0=62500000`；`CNTV_TVAL_EL0=+(freq/10)`（100ms）；`CNTV_CTL_EL0=1`
+  （ENABLE=1、IMASK=0）；`msr daifclr, #2` 开 IRQ。
+- 向量：IRQ 槽偏移 `0x280`（current EL, SP_EL1 组），桩内保存 x0–x5 → C handler → 恢复 → `eret`。
+  handler 读 `GICC_IAR` 取 intid，计数并打印（前 3 次 + 每 10 次），写 `GICC_EOIR` 回写 IAR 值，
+  再重 arm `CNTV_TVAL`。计数到 20 后 `CNTV_CTL=0` 关定时器、`daifset #2` 重 mask，再关机。
+
+### 本轮修掉的自身 bug
+
+- **TVVAL 写成负值导致中断风暴**：`CNTV_TVAL_EL0` 是有符号偏移，正值=未来比较值，负值=比较值落在
+  过去、定时器立即过期。初版写 `-(freq/10)`，中断以 handler 限速反复重入、主循环被饿死，计数冲到
+  2 万+ 超时 124。改正值后 20 次稳定触发、exit=0。
+- **EOIR 必要性对照**（`EXP_NO_EOIR=1`）：handler 不写 EOIR 时只进 1 次中断（n=1），之后再无中断，
+  主循环永久等待 → 超时 124；证明漏写 EOIR 中断不会再派发。
+
+### 证据
+
+主路径 `/tmp/m1d-2-final.log`，exit=0：
+
+```
+[M1d] GICD_PIDR2=0x000000000000002b TYPER=0x0000000000000008 version=2 (GICv2)
+[M1d] CNTFRQ=62500000
+[M1d] GICv2: D/C enabled, PPI27 -> CPU0
+[M1d] timer armed, unmask IRQ
+[IRQ] enter vector, n=1 intid=27 ESR=0x0000000000000000
+[IRQ] enter vector, n=20 intid=27 ESR=0x0000000000000000
+[M1d] IRQ count=20 main_ticks=1477386241 last intid=27
+[M1d] poweroff
+```
+
+EOIR 对照 `/tmp/m1d-2-noeoir.log`，exit=124（超时）：
+
+```
+[M1d] timer armed, unmask IRQ
+[IRQ] enter vector, n=1 intid=27 ESR=0x0000000000000000
+（此后无新中断，主循环等待至超时）
+```
+
+### 遗留
+
+- GICv3 路径（`ICC_SRE/PMR/IGRPEN1` + redistributor）未实现，留待机器换 v3 时补。
+- 未处理中断优先级分组、spurious intid（1023）分支；定时器未读 `CNTV_CVAL` 做高精度比对。
+
+**下一步：** M1d-3 ExitBootServices + 描述符静态副本 + 自有 bss 栈切换 + GOP framebuffer 写读回。
 
 **复现命令：** 见本文档 M0 段（`-cpu max` + `-bios QEMU_EFI.fd` + `-drive if=virtio` + `-device ramfb`），
 `kernel/arch/aarch64/m1` 目录直接 `make`，产物 `M1.EFI` 拷成 `EFI/BOOT/BOOTAA64.EFI`。
