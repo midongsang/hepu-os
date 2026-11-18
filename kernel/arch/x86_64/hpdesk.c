@@ -3873,6 +3873,7 @@ void hpdesk_add_app(const char *name, const char *command, const char *icon)
  * ========================================================================== */
 
 /* 前向声明渲染函数 */
+static int g_power_menu_open = 0;  /* V0.62: 顶栏电源按钮弹出的菜单（注销/重启/关机） */
 static void hs_top_bar_render(void);
 static void hs_dock_render(void);
 static void hs_sidebar_render(void);
@@ -4525,6 +4526,23 @@ static void hs_top_bar_render(void)
      * 旧实现这里单独用 32px 的 hs_ico_wifi_std, 24px 显示时笔画比邻居细一档,
      * 并排放着像两套图标拼的 —— 与 V0.57.1 修掉的"各自一套手绘矢量"是同一类问题。 */
     icon_x -= hs_sx(6) + icon_size; hs_icon_bmp64(icon_x, icon_y, icon_size, fg, g_shell.colors.panel_bg, hs_ico64_wifi64);
+
+    /* V0.62: 电源按钮弹出的菜单 —— 注销 / 重启 / 关机 */
+    if (g_power_menu_open) {
+        int mw = hs_sx(150);
+        int mh = hs_sy(34);
+        int mx = g_shell.screen_width - margin - hs_sx(14) - mw;
+        int my = bar_top + bar_h + hs_sy(4);
+        hs_fill_rounded_rect(mx - hs_sx(4), my - hs_sy(4), mw + hs_sx(8), mh * 3 + hs_sy(8), hs_s(8), g_shell.colors.panel_bg);
+        for (int i = 0; i < 3; i++) {
+            int iy = my + i * mh;
+            uint32_t c = g_shell.colors.panel_fg;
+            hs_fill_rounded_rect(mx, iy, mw, mh - hs_sy(4), hs_s(6), g_shell.colors.panel_bg);
+            const char *label = (i == 0) ? "Log out" : ((i == 1) ? "Reboot" : "Shut down");
+            font64_draw_string(gfx64_get_framebuffer(), g_shell.screen_width, g_shell.screen_height,
+                               mx + hs_sx(12), iy + (mh - hs_sy(4) - hs_sy(16)) / 2, label, c, 14);
+        }
+    }
 }
 
 /* 桌面大时钟 */
@@ -6408,11 +6426,42 @@ void hpdesk_mouse_down(int x, int y)
         int bar_top = hs_sy(8);
         int bar_h = hs_sy(g_shell.ui.bar_height);
         int gear_y = bar_top + (bar_h - icon_size) / 2;
+        /* V0.62: power 图标（最右）→ 弹出注销/重启/关机菜单 */
+        if (x >= power_x && x <= power_x + icon_size &&
+            y >= gear_y && y <= gear_y + icon_size) {
+            g_power_menu_open = !g_power_menu_open;
+            g_content_dirty = 1;
+            return;
+        }
+        /* V0.62: 菜单项命中（优先于其他点击） */
+        if (g_power_menu_open) {
+            int mw = hs_sx(150), mh = hs_sy(34);
+            int mx = g_shell.screen_width - margin - hs_sx(14) - mw;
+            int my = bar_top + bar_h + hs_sy(4);
+            if (x >= mx && x <= mx + mw && y >= my && y <= my + mh * 3) {
+                int idx = (y - my) / mh;
+                if (idx == 0) {         /* 注销：回登录界面 */
+                    g_power_menu_open = 0;
+                    g_locked = 1;
+                    g_content_dirty = 1;
+                } else if (idx == 1) {  /* 重启 */
+                    arch_reboot();
+                } else {                /* 关机 */
+                    arch_poweroff();
+                }
+                return;
+            }
+        }
         if (x >= gear_x && x <= gear_x + icon_size &&
             y >= gear_y && y <= gear_y + icon_size) {
             g_cc_open = !g_cc_open;
             g_content_dirty = 1;
             return;
+        }
+        /* 点到菜单外：收起 */
+        if (g_power_menu_open) {
+            g_power_menu_open = 0;
+            g_content_dirty = 1;
         }
     }
     /* Files 列表项拖拽: 必须命中最顶层窗口是 Files, 否则被压住的窗口会"隔空"接管 */

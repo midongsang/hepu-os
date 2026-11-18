@@ -30,5 +30,6 @@ void arch_console_puts(const char *s);
 /* 整机关机，不返回。
  * x86_64/x86: ACPI PM1a (0x604 <- 0x2000); ARM64: PSCI SYSTEM_OFF。 */
 void arch_poweroff(void) __attribute__((noreturn));
+void arch_reboot(void) __attribute__((noreturn));
 
 #endif /* HEPU_ARCH_PORT_H */

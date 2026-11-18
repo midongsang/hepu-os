@@ -23,3 +23,11 @@ void arch_poweroff(void)
         "outl %%eax, %%dx" : : : "eax", "edx");
     for (;;) __asm__ volatile("hlt");
 }
+
+/* V0.62: 重启 —— ACPI 0xCF9 system reset，失败再退回 8042 脉冲 */
+void arch_reboot(void)
+{
+    __asm__ volatile("movw $0xCF9, %%dx\n movb $0x06, %%al\n outb %%al, %%dx" ::: "eax", "edx");
+    __asm__ volatile("movw $0x64, %%dx\n movb $0xFE, %%al\n outb %%al, %%dx" ::: "eax", "edx");
+    for (;;) __asm__ volatile("hlt");
+}
