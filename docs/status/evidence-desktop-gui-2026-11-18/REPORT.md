@@ -118,8 +118,8 @@
 `kernel/arch/aarch64/m1/*`、`epoll64.*`、`user/apps/epolltest.c`、`docs/planning/ROADMAP*`、`docs/architecture/ARM64_REALBOARD_EVAL.md` 等一律未改、未提交。
 
 ## 服务端与进程收尾状态
-- 宿主 4433：`openssl s_server -accept 4433 -cert /tmp/tlstest/cert.pem -key /tmp/tlstest/key.pem -www`，本机回环 `openssl s_client` 握手成功（TLSv1.3，CN=test）。
-- 本轮 QEMU 实例在归档完成后关闭；仅保留其他 agent 线的 QEMU（`hepu_vfs.img`，VNC 5903），未 kill、未复用其端口/socket。
+- 宿主 4433：`openssl s_server -accept 4433 -cert /tmp/tlstest/cert.pem -key /tmp/tlstest/key.pem -www`，本机回环 `openssl s_client` 握手成功（TLSv1.3，CN=test）。**收尾时仍在监听 4433**（`ss -ltn` 见 `*:4433` LISTEN），未关闭，便于后续复测。
+- 本轮 QEMU 实例已关闭；收尾时 `pgrep qemu-system-x86_64` 无残留。其他 agent 线的 QEMU（`hepu_vfs.img`，VNC 5903）在本轮收尾前已自行退出，未被本线 kill、未复用其端口/socket。
 - 提交仅 `git add <具体路径>`，未 `git add -A`；未 push（环境无推送凭据）。
 
 ## 遗留问题与下一步
