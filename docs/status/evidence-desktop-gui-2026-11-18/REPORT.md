@@ -5,6 +5,7 @@
 - 交互：QMP abs 指针被 guest 拒绝（`Input handler not found for event type abs`，设备为 PS/2 相对指针），实测走 monitor `mouse_move` 相对位移 + 每步截图闭环核对；按钮 down/up 走 QMP。
 - 构建：64 位 `make -C kernel/arch/x86_64`（`flock /tmp/hepu-build.lock`）三轮均 **0 error**；仅有一条与本轮无关的既有多字符常量 warning（`hpdesk.c` `'日'`）。
 - 证据目录：`docs/status/evidence-desktop-gui-2026-11-18/`（`shots/`、`serial/`、`tlsserver.log`）。
+- 代码修复提交：`dbf9b4a`（本地提交，未 push）。
 
 ## 结论一览
 
