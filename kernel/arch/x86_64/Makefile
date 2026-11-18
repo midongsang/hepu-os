@@ -156,6 +156,7 @@ C_SOURCES = \
     $(ARCH_DIR)/hs_systools64.c \
     $(ARCH_DIR)/klog64.c \
     $(ARCH_DIR)/hs_oobe64.c \
+    $(ARCH_DIR)/arch_port_x86_64.c \
     $(ARCH_DIR)/hpdesk.c \
     $(ARCH_DIR)/icons_win_data.c \
     $(ARCH_DIR)/hsqml.c \

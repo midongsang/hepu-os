@@ -7,6 +7,7 @@
 #include "hs_ui.h"
 #include "hpdesk.h"
 #include "spinlock.h"
+#include "arch_port.h"
 #include "hs_icons_data.h"   /* V0.57.0: 系统图标位图集(32x32 1bit) */
 #include "png64.h"
 #include "jpeg64.h"
@@ -3019,9 +3020,8 @@ static uint64_t g_t_drag_start __attribute__((unused));
 /* V0.59.13 分段计时: rdtsc 周期数, 定位瓶颈用 */
 static inline uint64_t hs_rdtsc(void)
 {
-    uint32_t a, d;
-    __asm__ volatile("rdtsc" : "=a"(a), "=d"(d));
-    return ((uint64_t)d << 32) | a;
+    /* 架构移植点：x86 的 rdtsc 收进 arch_ticks()，ARM64 侧换成 CNTVCT_EL0 */
+    return arch_ticks();
 }
 
 /* P1-4: 32 位跑 hpdesk 时的阶段打点。64 位为空宏, 行为完全不变。 */
@@ -5873,11 +5873,7 @@ void hpdesk_handle_click(int x, int y)
             int po_x = kb_x + hs_sx(104);
             if (x >= po_x && x <= po_x + hs_sx(88) && y >= kb_y && y <= kb_y + hs_sy(34)) {
                 vga_puts("Shutting down (ACPI)...\n");
-                __asm__ volatile(
-                    "movw $0x604, %%dx\n"
-                    "movl $0x2000, %%eax\n"
-                    "outl %%eax, %%dx\n" : : : "eax", "edx");
-                while (1) { asm volatile("hlt"); }
+                arch_poweroff();
             }
         }
         /* 登录按钮 */
