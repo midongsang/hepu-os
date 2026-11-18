@@ -1,0 +1,11 @@
+### after-fix.log
+log=evidence-linuxhello32/after-fix.log
+serial=1 initrd=1 net=1 desk=1 fault=0 bound=1
+== 冒烟 PASS
+exit=0
+
+### before-baseline.log
+log=evidence-linuxhello32/before-baseline.log
+serial=1 initrd=1 net=1 desk=1 fault=0 bound=1
+== 冒烟 PASS
+exit=0

@@ -1,0 +1,101 @@
+===== AFTER (仅 transcomp.c test7 栈局部修复) =====
+619:
+[UPROC] exec-static name=init rc=1
+621:
+[UPROC] exec-static name=procb rc=2
+629:
+[AUTO] fork-test start
+630:
+[UPROC] exec path=fork-test rc=-2
+631:
+[RUN] fork-test -> rc=0xFFFFFFFE
+632:
+[AUTO] fork-test done
+634:
+[AUTO] linuxhello start
+636:
+[ELF-DBG] proc created pid=0x00000003 pdir=0x09156000 entry=0x08049000 usrstack=0x40010000 kstack=0x07157BD4 kesp=0x07157B94
+644:
+[ELF-DBG] mapped segs done, stack=0x4000FD98 entering usermode
+646:
+Hello from Linux ELF on HEPU!
+647:
+[UPROC] exec path=linuxhello rc=3
+648:
+[RUN] linuxhello -> rc=0x00000003
+649:
+[AUTO] linuxhello done
+650:
+[AUTO] linuxc start
+652:
+[ELF-DBG] proc created pid=0x00000004 pdir=0x09156000 entry=0x0804917F usrstack=0x40010000 kstack=0x07157BD4 kesp=0x07157B94
+662:
+[ELF-DBG] mapped segs done, stack=0x4000FD98 entering usermode
+664:
+LinuxC on HEPU: pid=0x00000004
+665:
+LinuxC: open /data/t.txt -> 0xFFFFFFFF
+666:
+LinuxC: open /system/x -> 0xFFFFFFFF
+667:
+LinuxC: done, exit
+668:
+[UPROC] exec path=linuxc rc=4
+669:
+[RUN] linuxc -> rc=0x00000004
+670:
+[AUTO] linuxc done
+671:
+[AUTO] linuxbrk start
+673:
+[ELF-DBG] proc created pid=0x00000005 pdir=0x09156000 entry=0x08049135 usrstack=0x40010000 kstack=0x07157BD4 kesp=0x07157B94
+683:
+[ELF-DBG] mapped segs done, stack=0x4000FD98 entering usermode
+691:
+[UPROC] exec path=linuxbrk rc=5
+692:
+[RUN] linuxbrk -> rc=0x00000005
+693:
+[AUTO] linuxbrk done
+694:
+[AUTO] linuxcrt start
+696:
+[ELF-DBG] proc created pid=0x00000006 pdir=0x09156000 entry=0x08049000 usrstack=0x40010000 kstack=0x07157BD4 kesp=0x07157B94
+708:
+[ELF-DBG] mapped segs done, stack=0x4000FDA0 entering usermode
+723:
+[UPROC] exec path=linuxcrt rc=6
+724:
+[RUN] linuxcrt -> rc=0x00000006
+725:
+[AUTO] linuxcrt done
+726:
+[AUTO] noent probe start
+727:
+[UPROC] exec path=no_such_uproc rc=-2
+728:
+[RUN] no_such_uproc -> rc=0xFFFFFFFE
+729:
+[AUTO] noent probe done
+730:
+[AUTO] winhello.exe start
+733:
+Hello from Win32 PE on HEPU!
+734:
+[UPROC] exec path=winhello.exe rc=7
+735:
+[RUN] winhello.exe -> rc=0x00000007
+736:
+[AUTO] winhello.exe done
+737:
+[AUTO] winargs.exe start
+765:
+[UPROC] exec path=/app/winargs.exe rc=8
+766:
+[RUN] /app/winargs.exe -> rc=0x00000008
+767:
+[AUTO] winargs.exe done
+768:
+[AUTO] macho_demo start
+771:
+macho: hello from HEPU!
