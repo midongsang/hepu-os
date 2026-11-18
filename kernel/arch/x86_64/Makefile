@@ -65,6 +65,8 @@ C_SOURCES = \
     $(ARCH_DIR)/domain64.c \
     $(ARCH_DIR)/capability64.c \
     $(ARCH_DIR)/devfs64.c \
+    $(ARCH_DIR)/vfs64.c \
+    $(ARCH_DIR)/vfs64_ext2.c \
     $(ARCH_DIR)/hepu_fs64.c \
     $(ARCH_DIR)/security64.c \
     $(ARCH_DIR)/auth64.c \

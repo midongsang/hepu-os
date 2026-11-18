@@ -20,6 +20,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include "fs_sys.h"
+#include "vfs64.h"
 
 /* 与 syscall64_full.c 的错误码保持一致（同 #define，不是另一套） */
 #define FS_EFAULT   (-14)
@@ -65,6 +66,20 @@ static void fill_stat(uint8_t *sb, uint32_t sz, uint8_t isdir, uint32_t ino)
      * 排序/缓存场景里后果不同，这里选前者。 */
 }
 
+/* P3-6: 属性解析先走 VFS（后端 -> vfs_stat）；未命中挂载后端时回退
+ * ext2_64_stat_ino 直调。已走/未走清单见 docs/design/VFS64.md。 */
+static int resolve_stat(const char *kp, uint32_t *sz, uint8_t *isdir, uint32_t *ino)
+{
+    struct vfs_stat vs;
+    if (vfs64_stat(kp, &vs) == 0) {
+        *sz     = (uint32_t)vs.size;
+        *isdir  = (vs.mode & 0x4000) ? 1 : 0;
+        *ino    = (uint32_t)vs.ino;
+        return 0;
+    }
+    return ext2_64_stat_ino(kp, sz, isdir, ino);
+}
+
 int64_t sys_stat(const char *path, void *statbuf)
 {
     if (!path) return -1;
@@ -72,7 +87,7 @@ int64_t sys_stat(const char *path, void *statbuf)
     if (copy_user_path(kp, sizeof(kp), path) < 0) return -1;
 
     uint32_t sz = 0; uint8_t id = 0; uint32_t ino = 0;
-    if (ext2_64_stat_ino(kp, &sz, &id, &ino) != 0) return -1;
+    if (resolve_stat(kp, &sz, &id, &ino) != 0) return -1;
 
     uint8_t sb[STAT_BYTES];
     fill_stat(sb, sz, id, ino);
@@ -88,7 +103,7 @@ int64_t sys_fstat(int fd, void *statbuf)
     if (fs_fd_get_path(fd, kp, sizeof(kp)) != 0) return -1;
 
     uint32_t sz = 0; uint8_t id = 0; uint32_t ino = 0;
-    if (ext2_64_stat_ino(kp, &sz, &id, &ino) != 0) return FS_ENOENT;
+    if (resolve_stat(kp, &sz, &id, &ino) != 0) return FS_ENOENT;
 
     uint8_t sb[STAT_BYTES];
     fill_stat(sb, sz, id, ino);

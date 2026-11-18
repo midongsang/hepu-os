@@ -393,6 +393,10 @@ void syscall64_full_init(void)
     for (int t = 0; t < MAX_FD_TABLES; t++)
         for (int i = 0; i < MAX_FILES; i++)
             sys_files_tbl[t][i].used = 0;
+    /* P3-6: VFS 抽象层挂载表初始化（后端 lookup 在调用时才检查 ext2 是否挂载，
+     * 顺序不依赖此处先于 ext2 mount）。 */
+    { extern void vfs64_init(void); vfs64_init(); }
+
     syscall_initialized = 1;
     vga_puts("[SYSCALL64] Full syscall interface initialized\n");
 }

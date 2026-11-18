@@ -1,0 +1,130 @@
+/* ============================================================================
+ * HepuOS 64 位 - VFS 抽象层（P3-6）
+ *
+ * 对外契约冻结来源：docs/design/UNIX_LESSONS.md 第一节「VFS ops 表冻结为
+ * 对外契约」。本文件的数据结构与 ops 签名与该节逐字对齐，不得另立一套：
+ *
+ *   struct vfs_file_ops { open, close, read, write, ioctl, stat }
+ *
+ * 四条铁律（与 lessons 第一节一致）：
+ *   1. ubuf 永远是用户态指针，内核负责校验与拷贝；ops 实现内禁止直接解引用
+ *      （不得出现 *(uint32_t*)ubuf 这类写法）。
+ *   2. 短读写必须走 *done 回报；返回值只表示成功/失败。
+ *   3. 字段只增不改：v1 之后新增能力走 ioctl 或在结构体尾部追加函数指针。
+ *   4. ops 表编译期常量（const struct vfs_file_ops），不允许运行时替换。
+ *
+ * v1 拷贝边界说明：vfs64_* kernel-side 入口先把用户缓冲拷到内核缓冲，再调
+ * ops；ops 收到的指针是内核缓冲。冻结签名里的形参名 ubuf 保留，以对齐契约
+ * 文本。静态自检（grep 直接解引用 ubuf）见 docs/design/VFS64.md。
+ * ========================================================================== */
+#ifndef HEPU_VFS64_H
+#define HEPU_VFS64_H
+
+#include <stdint.h>
+#include <stddef.h>
+
+/* 节点类型：对应 Linux S_IFDIR / S_IFREG / S_IFCHR / S_IFBLK 的 v1 子集。 */
+enum vfs_type {
+    VFS_DIR  = 1,
+    VFS_FILE = 2,
+    VFS_CHR  = 3,
+    VFS_BLK  = 4,
+};
+
+/* 后端无关的属性快照。ext2 拿不到的字段（如 mtime）置 0，如实标注，
+ * 不伪造 epoch 时间戳。 */
+struct vfs_stat {
+    uint64_t dev;
+    uint64_t ino;
+    uint64_t nlink;
+    uint32_t mode;
+    uint32_t uid;
+    uint32_t gid;
+    uint64_t size;
+    uint64_t blksize;
+    uint64_t blocks;
+    int64_t  mtime;      /* 拿不到置 0 */
+};
+
+struct vfs_node;
+struct vfs_file;
+struct vfs_backend;
+
+/* 冻结契约 ops 表。函数指针顺序与 lessons 第一节一致；
+ * read/write 带 uint64_t *done（短读写回报）。 */
+struct vfs_file_ops {
+    int  (*open)(struct vfs_node *v, struct vfs_file *f, uint32_t flags);
+    int  (*close)(struct vfs_file *f);
+    long (*read)(struct vfs_file *f, void *ubuf, uint64_t len, uint64_t *done);
+    long (*write)(struct vfs_file *f, const void *ubuf, uint64_t len, uint64_t *done);
+    long (*ioctl)(struct vfs_file *f, uint64_t cmd, void *uarg);
+    int  (*stat)(struct vfs_node *v, struct vfs_stat *out);
+};
+
+/* VFS 节点：一次 lookup 的产物。priv 是后端私有指针（ext2 v1 不用，
+ * 路径存在 node->path；伪设备用 priv 区分节点）。 */
+struct vfs_node {
+    enum vfs_type              type;
+    uint64_t                   size;
+    uint64_t                   ino;
+    char                       path[256];
+    const struct vfs_file_ops *ops;
+    struct vfs_backend        *be;
+    void                      *priv;
+};
+
+/* 打开后的文件句柄。v1 的读位置仍由 syscall 层 fd 表维护（见 fs_sys.h），
+ * 这里的 offset 是打开时刻的快照，ops 实现按它定位。 */
+struct vfs_file {
+    struct vfs_node  node;
+    uint64_t         offset;
+    uint32_t         flags;
+    void            *priv;
+};
+
+/* 后端：注册到挂载点表。lookup 按路径解析节点；0 = 命中并填好 out，
+ * -1 = 未命中。 */
+struct vfs_backend {
+    const char *name;
+    int (*lookup)(const char *path, struct vfs_node *out);
+};
+
+struct vfs_mount {
+    const char         *prefix;
+    struct vfs_backend *be;
+};
+
+/* ---- kernel-side 入口（用户指针校验与拷贝的落实点） ---- */
+
+/* 注册内置后端（ext2 挂 "/"，伪设备挂 "/dev"）。幂等。 */
+int  vfs64_init(void);
+
+/* 显式挂载：prefix 为路径前缀（"/" 或 "/dev"）。返回 0 成功，-1 表满/参数错。 */
+int  vfs64_mount(const char *prefix, struct vfs_backend *be);
+
+/* 路径解析：最长前缀匹配后端并调其 lookup。node 由调用方提供。
+ * 0 = 命中；-1 = 未挂载或后端未命中。 */
+int  vfs64_lookup(const char *kpath, struct vfs_node *node);
+
+/* 打开：lookup + ops->open。f 由调用方提供，内嵌 node。 */
+int  vfs64_open(const char *kpath, uint32_t flags, struct vfs_file *f);
+
+/* 读：entry 内 copy_to_user 回写；*done 回报实际字节。返回 0 成功，-1 失败。 */
+long vfs64_read(struct vfs_file *f, void *ubuf, uint64_t len, uint64_t *done);
+
+/* 写：entry 内 copy_from_user 拷入；*done 回报实际字节。 */
+long vfs64_write(struct vfs_file *f, const void *ubuf, uint64_t len, uint64_t *done);
+
+int  vfs64_close(struct vfs_file *f);
+
+/* 按路径取属性；0 成功，-1 未命中/后端无 stat。 */
+int  vfs64_stat(const char *kpath, struct vfs_stat *out);
+
+/* 便捷入口：按路径 + 指定偏移读/写（不回写 fd 游标，语义对齐 pread）。
+ * 返回实际字节数；-1 表示失败；未命中由调用方回退直调。 */
+long vfs64_read_path(const char *kpath, uint64_t offset,
+                     void *ubuf, uint64_t len, uint64_t *done);
+long vfs64_write_path(const char *kpath, uint64_t offset,
+                      const void *ubuf, uint64_t len, uint64_t *done);
+
+#endif /* HEPU_VFS64_H */

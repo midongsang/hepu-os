@@ -26,6 +26,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include "fs_sys.h"
+#include "vfs64.h"
 
 /* ---- 内核侧依赖（与 syscall64_full.c 现有实现同一份，不另起一套） ---- */
 extern int  copy_to_user(void *user_dst, const void *kernel_src, size_t size);
@@ -55,6 +56,20 @@ int64_t fs_do_write(int fd, const fs_fd_info_t *fi, const char *ubuf, int count)
 
     int n = count;
     if (n > FS_RW_MAX_XFER) n = FS_RW_MAX_XFER;
+
+    /* P3-6: 先走 VFS 抽象层（路径 -> lookup -> ops->write）。未命中挂载后端时
+     * 回退下面的 ext2 直调；已走/未走清单见 docs/design/VFS64.md。 */
+    struct vfs_node vnode;
+    if (vfs64_lookup(fi->path, &vnode) == 0) {
+        uint64_t done = 0;
+        long vr = vfs64_write_path(fi->path, (uint64_t)fi->offset,
+                                     ubuf, (uint64_t)n, &done);
+        if (vr >= 0) {
+            (void)fs_fd_set_offset(fd, fi->offset + (int64_t)done);
+            return (int64_t)done;
+        }
+        return -1;
+    }
 
     uint8_t *kbuf = (uint8_t *)kmalloc((uint32_t)n);
     if (!kbuf) return -1;
@@ -94,6 +109,15 @@ int64_t fs_do_pread(int fd, const fs_fd_info_t *fi, char *ubuf, int count,
     int n = count;
     if (n > FS_RW_MAX_XFER) n = FS_RW_MAX_XFER;
 
+    /* P3-6: pread 同样先走 VFS；不回写 fd 游标（与本函数原有语义一致）。 */
+    struct vfs_node vnode;
+    if (vfs64_lookup(fi->path, &vnode) == 0) {
+        uint64_t done = 0;
+        long vr = vfs64_read_path(fi->path, (uint64_t)offset,
+                                   ubuf, (uint64_t)n, &done);
+        return vr >= 0 ? (int64_t)done : 0;
+    }
+
     uint8_t *kbuf = (uint8_t *)kmalloc((uint32_t)n);
     if (!kbuf) return -1;
 
@@ -127,6 +151,21 @@ int64_t fs_do_read(int fd, const fs_fd_info_t *fi, char *ubuf, int count)
 
     int n = count;
     if (n > FS_RW_MAX_XFER) n = FS_RW_MAX_XFER;
+
+    /* P3-6: 先走 VFS 抽象层（路径 -> lookup -> ops->read）。未命中挂载后端时
+     * 回退下面的 ext2 直调；已走/未走清单见 docs/design/VFS64.md。 */
+    struct vfs_node vnode;
+    if (vfs64_lookup(fi->path, &vnode) == 0) {
+        uint64_t done = 0;
+        long vr = vfs64_read_path(fi->path, (uint64_t)fi->offset,
+                                   ubuf, (uint64_t)n, &done);
+        if (vr >= 0) {
+            (void)fs_fd_set_offset(fd, fi->offset + (int64_t)done);
+            return (int64_t)done;
+        }
+        /* 后端 IO 失败：与旧实现同口径，按 0 字节返回（EOF/失败不分）。 */
+        return 0;
+    }
 
     uint8_t *kbuf = (uint8_t *)kmalloc((uint32_t)n);
     if (!kbuf) return -1;
