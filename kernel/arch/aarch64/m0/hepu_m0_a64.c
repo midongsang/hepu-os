@@ -94,7 +94,7 @@ efi_main(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE *st)
 
     uart_puts("[HEPU-A64] powering off via PSCI\n");
     /* 等 1 秒让串口刷完，再关 */
-    uefi_call_wrapper(st->BootServices->Stall, 1, 1000000);
+    uefi_call_wrapper(st->BootServices->Stall, 1, 8000000);
     psci_off();
     return EFI_SUCCESS;
 }

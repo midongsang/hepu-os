@@ -46,22 +46,51 @@ PE 头缺 optional header（`magic` 读到 `.text` 的 0x742e、subsystem=0）�
 gnu-efi 的 aarch64 产物：`make -C tools/gnu-efi ARCH=aarch64 CC=aarch64-linux-gnu-gcc`
 （生成 tools/gnu-efi/aarch64/，已入 .gitignore 的话不必提交）。
 
-## UEFI 引导现状（2026-11-18，卡点）
+## UEFI 引导：已通（M0 完成，2026-11-18）
 
-已解决：PE 头。binutils 2.38 的 `objcopy --output-target=efi-app-aarch64` 生成的不是合规 EFI image
-（缺 optional header → magic 读到 0x742e、subsystem=0）。现改用 `tools/pe_wrap_aarch64.py`
-手工构造 PE32+（DOS 头 + COFF + PE32+ 可选头 + 节表 + .reloc）。产物 `file` 已能正确识别为
-`PE32+ executable (EFI application) Aarch64`。
+`m0/hepu_m0_a64.c` 现在能经 UEFI 走到我们的 EFI 应用，拿到 GOP 并整屏填色：
 
-未解决：固件不枚举块设备。用 AAVMF_CODE.fd / QEMU_EFI.fd（QEMU 6.2, `-M virt`）时，
-无论 virtio-blk-pci / virtio-blk-device / NVMe，串口都只有
-`BdsDxe: failed to load Boot0001 "UEFI Misc Device" ... Not Found` 然后掉 PXE，
-从未走到读 ESP 里的 BOOTAA64.EFI。属 QEMU 6.2 + Ubuntu AAVMF 的块设备侧问题，
-与我们的 EFI 二进制无关（PE 头已合规）。
-下一步候选：换 QEMU 8.x / 用 `-M virt` + edk2-arm 的完整 FV / 或真板（RK3588S）。
+```
+BdsDxe: starting Boot0002 "UEFI Misc Device 2" from PciRoot(0x0)/Pci(0x2,0x0)
+[HEPU-A64] M0: reached UEFI entry on aarch64
+[M0] GOP res = 800x600
+[M0] framebuffer filled (2 bands)
+[HEPU-A64] M0 complete (GOP + PL011)
+[HEPU-A64] powering off via PSCI
+```
 
-## 帧缓冲
+实拍：`docs/assets/aarch64-m0-framebuffer.jpg`（上深蓝/下墨绿两色带 + 固件打印的一行字）。
 
-M0 的 GOP 填色代码（`m0/hepu_m0_a64.c` 的 `gop_fill_demo`）已写好但未跑成 ——
-它需要 UEFI 走到我们的 EFI 应用，而这一关被上面的块设备问题挡住。
-裸机路径（`m0/bare`）已验证 PL011/CNTVCT/PSCI 三件事，帧缓冲留给 UEFI 或 M1。
+### 这一关踩过的四个坑（按发现顺序）
+
+1. **`objcopy --output-target=efi-app-aarch64` 产出的 PE 不合规**（binutils 2.38；缺 optional header，
+   magic 读到 0x742e、subsystem=0）。→ 不用它。
+2. **正确做法是"不另造 PE 头"**：gnu-efi 的 `crt0-efi-aarch64.S` 已把完整 PE 头写在 `.text.head`，
+   `_start` 用 `_DYNAMIC` 自举重定位。EFI 文件 = `.text`（从偏移 0，含 PE 头）+ `.data` 按节表 VirtualAddress 落位。
+   见 `tools/pe_flatten_aarch64.py`。
+3. **`EFI_SUBSYSTEM` 必须用链接器 `--defsym=EFI_SUBSYSTEM=10` 传入**，否则 crt0 里的 `.short EFI_SUBSYSTEM`
+   求值为 0，固件判 Unsupported。
+4. **文件必须补齐到 PE 的 `SizeOfImage`**（crt0 的 `.data` VirtualSize 含 .bss，比实际数据大），
+   否则固件同样报 Unsupported。`pe_flatten_aarch64.py` 已做补齐。
+
+### QEMU 侧的两个必要参数
+
+- **`-cpu max`**：用 `cortex-a53` 时固件枚举不到 virtio-blk（连 Boot0002 都不出现）。
+- **`-device ramfb`**：没有它 GOP 拿不到（应用里会打 `[M0] no GOP`）。
+
+启动命令：
+
+```
+qemu-system-aarch64 -M virt -cpu max -m 512 \
+  -bios /usr/share/qemu-efi-aarch64/QEMU_EFI.fd \
+  -drive file=<img>,format=raw,if=virtio \
+  -device ramfb -vnc 127.0.0.1:5938 -display none
+```
+
+镜像：GPT + ESP(FAT32, 1MiB 起, `mkfs.vfat --offset=2048`)，放 `EFI/BOOT/BOOTAA64.EFI`。
+
+## 还没做的（M1 起点）
+
+- 从 EFI 环境下降到 EL1、建页表和异常向量（现在仍跑在固件的 EL1 环境里，没换栈/没关 MMU 接管）
+- GIC 初始化、定时器中断（CNTV 已在用，但没开中断）
+- 接入复用层：把 `shared/desktop`、`gfx64` 的绘制基元接到 GOP 帧缓冲上，看能不能出界面

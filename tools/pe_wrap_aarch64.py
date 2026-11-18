@@ -27,8 +27,10 @@ def main(src, dst):
                 continue
             if sec['sh_type'] in ('SHT_NULL', 'SHT_NOBITS'):
                 continue
-            if sec.name in ('.dynamic', '.dynsym', '.dynstr', '.hash'):
+            if sec.name in ('.dynamic', '.dynsym', '.dynstr', '.hash', '.gnu.hash'):
                 continue
+            if sec.name.startswith('.rela') or sec.name.startswith('.rel'):
+                continue   # 重定位源，已转成 .reloc
             secs.append(sec)
         data = {s.name: s.data() for s in secs}
         sizes = {s.name: s['sh_size'] for s in secs}
