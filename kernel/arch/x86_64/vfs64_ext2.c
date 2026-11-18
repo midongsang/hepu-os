@@ -36,6 +36,9 @@ extern int      ext2_64_write_file_offset(const char *path, const uint8_t *buf,
 extern int      ext2_64_list_dir_entries_ex(const char *path, char names[][256],
                                              uint8_t *types, uint32_t *sizes,
                                              int max_entries);
+extern int      ext2_64_delete_file(const char *path);
+extern int      ext2_64_create_dir(const char *path);
+extern int      ext2_64_delete_dir(const char *path);
 extern void    *kmalloc(uint32_t size);
 extern void     kfree(void *ptr);
 
@@ -187,9 +190,30 @@ static int ext2_iterate(const char *path, struct vfs_dirent *out, int max)
     return n;
 }
 
+/* S6：目录变更三件套。返回 ext2 原始错误码透传：0 成功；-1 未命中/非目录等；
+ * -2 目录非空（rmdir）。mode 与旧 sys_mkdir 口径一致，v1 忽略。 */
+static int ext2_unlink(const char *path)
+{
+    return ext2_64_delete_file(path);
+}
+
+static int ext2_mkdir(const char *path, int mode)
+{
+    (void)mode;
+    return ext2_64_create_dir(path);
+}
+
+static int ext2_rmdir(const char *path)
+{
+    return ext2_64_delete_dir(path);
+}
+
 struct vfs_backend vfs64_be_ext2 = {
     .name     = "ext2",
     .lookup   = ext2_lookup,
     .create   = ext2_create,
     .iterate  = ext2_iterate,
+    .unlink   = ext2_unlink,
+    .mkdir    = ext2_mkdir,
+    .rmdir    = ext2_rmdir,
 };

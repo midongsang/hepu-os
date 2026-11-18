@@ -97,6 +97,30 @@ int vfs64_iterate(const char *kpath, struct vfs_dirent *out, int max)
     return best->be->iterate(kpath, out, max);
 }
 
+int vfs64_unlink(const char *kpath)
+{
+    if (!kpath) return -1;
+    const struct vfs_mount *best = find_mount(kpath);
+    if (!best || !best->be->unlink) return -1;
+    return best->be->unlink(kpath);
+}
+
+int vfs64_mkdir(const char *kpath, int mode)
+{
+    if (!kpath) return -1;
+    const struct vfs_mount *best = find_mount(kpath);
+    if (!best || !best->be->mkdir) return -1;
+    return best->be->mkdir(kpath, mode);
+}
+
+int vfs64_rmdir(const char *kpath)
+{
+    if (!kpath) return -1;
+    const struct vfs_mount *best = find_mount(kpath);
+    if (!best || !best->be->rmdir) return -1;
+    return best->be->rmdir(kpath);
+}
+
 int vfs64_open(const char *kpath, uint32_t flags, struct vfs_file *f)
 {
     if (!kpath || !f) return -1;

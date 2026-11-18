@@ -111,6 +111,11 @@ struct vfs_backend {
     int (*create)(const char *path, uint32_t flags);
     /* S5：枚举目录项，填 out[0..max)，返回条目数；<0 失败。 */
     int (*iterate)(const char *path, struct vfs_dirent *out, int max);
+    /* S6：删除普通文件 / 建目录 / 删空目录。返回后端原始错误码（0 成功，
+     * <0 失败；非空目录 rmdir 可能返回 -2）。NULL = 后端不支持。 */
+    int (*unlink)(const char *path);
+    int (*mkdir)(const char *path, int mode);
+    int (*rmdir)(const char *path);
 };
 
 struct vfs_mount {
@@ -139,6 +144,11 @@ int  vfs64_create(const char *kpath, uint32_t flags);
 
 /* S5：按路径枚举目录，填内核 staging 数组；返回条目数，-1 未挂载/后端不支持。 */
 int  vfs64_iterate(const char *kpath, struct vfs_dirent *out, int max);
+
+/* S6：目录变更三件套分派。返回后端原始返回码；-1 表示未挂载/后端不支持。 */
+int  vfs64_unlink(const char *kpath);
+int  vfs64_mkdir(const char *kpath, int mode);
+int  vfs64_rmdir(const char *kpath);
 
 /* 读：entry 内 copy_to_user 回写；*done 回报实际字节。返回 0 成功，-1 失败。 */
 long vfs64_read(struct vfs_file *f, void *ubuf, uint64_t len, uint64_t *done);

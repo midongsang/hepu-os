@@ -194,6 +194,84 @@ int main(void)
         fails += s5;
     }
 
+    /* ================= [VFSP6] S6 目录变更（unlink/mkdir/rmdir） ================= */
+    out("[VFSP6] directory mutation probe\n");
+    {
+        unsigned char sb[144];
+        int s6 = 0;
+        #define S6_IFMT  0170000
+        #define S6_IFDIR 0040000
+        #define S6_IFREG 0100000
+
+        /* 6.1 mkdir 后 stat 可见且为目录。 */
+        int m1 = (int)syscall2(SYS_MKDIR, (uint64_t)"/vfs6_dir", 0);
+        out("[VFSP6] mkdir(/vfs6_dir) rc="); out_num(m1); out("\n");
+        if (m1 != 0) s6++;
+        else {
+            int st1 = (int)syscall2(SYS_STAT, (uint64_t)"/vfs6_dir", (uint64_t)sb);
+            uint32_t md1 = (uint32_t)sb[24] | ((uint32_t)sb[25] << 8) |
+                           ((uint32_t)sb[26] << 16) | ((uint32_t)sb[27] << 24);
+            out("[VFSP6] stat(/vfs6_dir) rc="); out_num(st1);
+            out(" isdir="); out(((md1 & S6_IFMT) == S6_IFDIR) ? "yes" : "no"); out("\n");
+            if (st1 != 0 || (md1 & S6_IFMT) != S6_IFDIR) s6++;
+        }
+
+        /* 6.2 新建普通文件，stat 可见且为普通文件。 */
+        fd = open("/vfs6_file", 1 | VFS_O_CREAT);
+        if (fd >= 0) { write(fd, "HEPU-VFS6!", 10); close(fd); }
+        int st2 = (int)syscall2(SYS_STAT, (uint64_t)"/vfs6_file", (uint64_t)sb);
+        uint32_t md2 = (uint32_t)sb[24] | ((uint32_t)sb[25] << 8) |
+                       ((uint32_t)sb[26] << 16) | ((uint32_t)sb[27] << 24);
+        out("[VFSP6] stat(/vfs6_file) rc="); out_num(st2);
+        out(" isreg="); out(((md2 & S6_IFMT) == S6_IFREG) ? "yes" : "no"); out("\n");
+        if (st2 != 0 || (md2 & S6_IFMT) != S6_IFREG) s6++;
+
+        /* 6.3 unlink 文件后 stat 应失败（消失）。 */
+        int u1 = (int)syscall2(SYS_UNLINK, (uint64_t)"/vfs6_file", 0);
+        out("[VFSP6] unlink(/vfs6_file) rc="); out_num(u1); out("\n");
+        if (u1 != 0) s6++;
+        int st3 = (int)syscall2(SYS_STAT, (uint64_t)"/vfs6_file", (uint64_t)sb);
+        out("[VFSP6] stat(after unlink) rc="); out_num(st3);
+        out(" (expect !=0)\n");
+        if (st3 == 0) s6++;
+
+        /* 6.4 rmdir 空目录后 stat 应失败（消失）。 */
+        int r1 = (int)syscall2(SYS_RMDIR, (uint64_t)"/vfs6_dir", 0);
+        out("[VFSP6] rmdir(/vfs6_dir) rc="); out_num(r1); out("\n");
+        if (r1 != 0) s6++;
+        int st4 = (int)syscall2(SYS_STAT, (uint64_t)"/vfs6_dir", (uint64_t)sb);
+        out("[VFSP6] stat(after rmdir) rc="); out_num(st4);
+        out(" (expect !=0)\n");
+        if (st4 == 0) s6++;
+
+        /* 6.5 非空目录 rmdir：对齐 ext2 旧口径返回 -2；随后清理子项再删目录。 */
+        int m2 = (int)syscall2(SYS_MKDIR, (uint64_t)"/vfs6_dir2", 0);
+        out("[VFSP6] mkdir(/vfs6_dir2) rc="); out_num(m2); out("\n");
+        if (m2 != 0) s6++;
+        fd = open("/vfs6_dir2/child", 1 | VFS_O_CREAT);
+        if (fd >= 0) { write(fd, "child", 5); close(fd); }
+        int r2 = (int)syscall2(SYS_RMDIR, (uint64_t)"/vfs6_dir2", 0);
+        out("[VFSP6] rmdir(nonempty) rc="); out_num(r2);
+        out(" (expect -2)\n");
+        if (r2 != -2) s6++;
+        int u2 = (int)syscall2(SYS_UNLINK, (uint64_t)"/vfs6_dir2/child", 0);
+        out("[VFSP6] unlink(child) rc="); out_num(u2); out("\n");
+        if (u2 != 0) s6++;
+        int r3 = (int)syscall2(SYS_RMDIR, (uint64_t)"/vfs6_dir2", 0);
+        out("[VFSP6] rmdir(now empty) rc="); out_num(r3); out("\n");
+        if (r3 != 0) s6++;
+
+        /* 6.6 不存在目标：unlink/rmdir 均返回非正数（对齐旧实现）。 */
+        int u3 = (int)syscall2(SYS_UNLINK, (uint64_t)"/vfs6_nope", 0);
+        int r4 = (int)syscall2(SYS_RMDIR, (uint64_t)"/vfs6_nope", 0);
+        out("[VFSP6] unlink(missing) rc="); out_num(u3);
+        out(" rmdir(missing) rc="); out_num(r4); out(" (expect <=0)\n");
+        if (u3 > 0 || r4 > 0) s6++;
+
+        out("[VFSP6] local fails="); out_num(s6); out("\n");
+        fails += s6;
+    }
+
     out(fails ? "[VFSP] RESULT: FAIL\n" : "[VFSP] RESULT: PASS\n");
     return fails ? 1 : 0;
 }
