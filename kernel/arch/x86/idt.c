@@ -395,16 +395,16 @@ void idt_pf_user_reap(uint32_t fault_addr, uint32_t error_code)
                 0, 0, 0, 0, 0, 0, 0, 0
             };
             char cmsg[CRASH_MSG_LEN];
-            snprintf(cmsg, sizeof(cmsg), "user #PF at 0x%x rip=0x%x",
+            snprintf(cmsg, sizeof(cmsg), "user page-fault at 0x%x rip=0x%x",
                      fault_addr, fr[11]);
             crash_ctx_fill_fault(cc, (uint64_t)fr[11], (uint64_t)fr[14],
                                  regs, 8, cmsg);
             crash_ctx_dump_query_by_pid(current->pid);
         }
-        vga_printf("[HEPU] user #PF: pid=%d addr=0x%x err=0x%x\n",
+        vga_printf("[HEPU] user page-fault: pid=%d addr=0x%x err=0x%x\n",
                    current->pid, fault_addr, error_code);
     }
-    serial_puts(0x3F8, "[UEXC] user #PF reaped\n");
+    serial_puts(0x3F8, "[UEXC] user page-fault reaped\n");
     sys_exit(1, 0, 0, 0);
     for (;;) { __asm__ volatile ("hlt"); }
 }

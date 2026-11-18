@@ -231,19 +231,6 @@ void shell_main(void)
         extern int cmd_run_auto(const char *);
         cmd_run_auto("fork-test");
         serial_puts(0x3F8, "[AUTO] fork-test done\n");
-        /* §3 crash_ctx 验收通道：静态用户入口在 ring3 触发 #DE，异常入口填
-         * pc/sp/regs/msg 并快照 last_crash，restarts 累计。放在 linuxhello
-         * 之前：后者在本环境会阻塞，靠后的自检到不了。
-         * 注：当前 sys_exit 回收后 longjmp 回主线，本块 C 栈被展开，无法在
-         * 同一轮内连续拉起多次；多次重启依赖 supervisor 自动拉起（未实现）。 */
-        {
-            serial_puts(0x3F8, "[AUTO] crashsvc launch\n");
-            crashsvc_launch_once();
-            {
-                extern void crash_ctx_dump_all(void);
-                crash_ctx_dump_all();
-            }
-        }
         serial_puts(0x3F8, "[DEBUG] after fork-test at start\n");
         vga_puts(" [SHELL] auto-test: run linuxhello...\n");
         serial_puts(0x3F8, "[AUTO] linuxhello start\n");
@@ -334,6 +321,23 @@ void shell_main(void)
          * 旧桌面已下线, 内核桌面统一由 hpdesk 提供, 这一段不再调它 ——
          * 否则自检会拉出一套跟真实桌面不同的界面, 反而误导。 */
         serial_puts(0x3F8, "[AUTO] desktop preview skipped (desktop moved to hpdesk)\n");
+#ifdef HEPU_AUTO_CRASH_SVC
+        /* §3 crash_ctx 验收通道（**默认关闭**，make AUTO_CRASH_SVC=1 才编进来）：
+         * 静态用户入口在 ring3 触发 #DE，异常入口填 pc/sp/regs/msg 并快照
+         * last_crash，restarts 累计。
+         * 放在自检序列最后：崩溃后 sys_exit 回收全部进程并 longjmp 回主线，本块
+         * C 栈被展开，放在中间会把后续自检项整批截断。
+         * 注：当前无法在同一轮内连续拉起多次；多次重启依赖 supervisor 自动
+         * 拉起（尚未实现）。 */
+        {
+            serial_puts(0x3F8, "[AUTO] crashsvc launch\n");
+            crashsvc_launch_once();
+            {
+                extern void crash_ctx_dump_all(void);
+                crash_ctx_dump_all();
+            }
+        }
+#endif
         } else {
             /* 保护模式: 跳过整批用户态自动演示(含 gfxtest 图形测试), 直接进交互 shell */
             serial_puts(0x3F8, "[AUTO] protect mode: autostart demos skipped, text shell only\n");
