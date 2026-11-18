@@ -3270,8 +3270,27 @@ static void shell_cmd_devmode(int argc, char **argv)
     }
 }
 
+/* V0.62: TLS 1.2 真连接探针 —— 发真实 ClientHello、解析 ServerHello
+ * 用法: tls12 [host|ip] [port]  默认 10.0.2.2:4433 */
+static void shell_cmd_tls12(const char *args)
+{
+    extern int tls12_probe(const char *hostname, uint16_t port);
+    const char *host = "10.0.2.2";
+    uint16_t port = 4433;
+    if (args && *args) host = args;
+    vga_puts("tls12: probing ");
+    vga_puts(host);
+    vga_puts(" ...\n");
+    int r = tls12_probe(host, port);
+    if (r == 0) vga_puts("tls12: ServerHello parsed OK\n");
+    else        vga_puts("tls12: probe failed\n");
+}
+
 /* 命令表 */
 static shell_command_t shell_commands[] = {
+
+
+    {"tls12", shell_cmd_tls12},
     {"help", shell_cmd_help},
     {"hepu", shell_cmd_hepu},
     {"devmode", shell_cmd_devmode},
