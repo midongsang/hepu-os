@@ -329,6 +329,7 @@ void schedule(void)
 void sched_init(void)
 {
     process_init();
+    crash_ctx_init();
 }
 
 uint32_t sched_current_pid(void)

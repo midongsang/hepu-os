@@ -14,6 +14,7 @@
 #include <string.h>
 #include "paging.h"
 #include "pae.h"
+#include "process.h"
 #include "kheap.h"
 #include "vga.h"
 #include "serial.h"
@@ -292,6 +293,14 @@ void paging_pae_fault_handler(uint32_t fault_addr, uint32_t error_code)
     }
 
 fatal:
+    /* §3: 用户态 #PF 不再整机停机——填现场后走杀进程回收路径 */
+    {
+        extern process_t *current;
+        extern void idt_pf_user_reap(uint32_t, uint32_t);
+        if (user && current && current->privilege == PRIV_USER) {
+            idt_pf_user_reap(fault_addr, error_code);
+        }
+    }
     vga_set_color(VGA_COLOR_RED, VGA_COLOR_BLACK);
     vga_printf("\n[PAE-PAGING] fatal page fault\n");
     vga_printf(" fault addr: 0x%x\n", fault_addr);

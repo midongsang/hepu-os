@@ -7,6 +7,7 @@
 
 #include "constants.h"  /* 统一 MAX_PROCESSES/PROC_NAME_LEN/KERNEL_STACK_SIZE/USER_STACK_SIZE 定义来源 */
 #include "process/hepu_process.h"  /* hepu_process_stat_t — V0.54.6 统一视图层类型 */
+#include "crash_ctx.h"
 
 /* V3.90-E36: 调度优先级分级(自 process.c 提升为公共定义) */
 #define PRIO_RT    0   /* 实时: 抢占, 短片2, 交互/中断敏感 */
@@ -95,6 +96,9 @@ typedef struct process {
      * MMAP_BASE。放在结构体末尾, 不影响上面注释里硬编码的
      * kernel_stack@48 / kernel_esp@52 / page_dir@68 偏移。 */
     uint32_t    mmap_next;
+    /* 崩溃现场槽位指针（crash_ctx.c 静态表项）。挂在结构体末尾，
+     * 不影响汇编硬编码的前部偏移。NULL = 未分配。 */
+    struct crash_ctx *crash_ctx;
 } process_t;
 
 /* V3.87-E7: 应用默认内存限额(16MB = 4096页)——.hug/ELF 用户程序创建时生效

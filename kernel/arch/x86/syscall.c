@@ -17,6 +17,7 @@
 #include "ipc.h"
 #include "process.h"
 #include "serial.h"
+#include "crash_ctx.h"
 
 extern const char *hepu_kernel_version;
 
@@ -166,6 +167,7 @@ static uint32_t sys_cap_audit(uint32_t a1, uint32_t a2, uint32_t a3, uint32_t a4
 static syscall_fn_t syscall_table[SYS_MAX] = {
     [SYS_HEPU_INFO]      = sys_hepu_info,
     [SYS_CAP_AUDIT]      = sys_cap_audit,
+    [SYS_CRASH_QUERY]     = sys_crash_query,
     [SYS_HEPU_FP_VERIFY] = sys_hepu_fp_verify,
     [SYS_PRINT]          = sys_print,
     [SYS_MALLOC]         = sys_malloc,
@@ -289,6 +291,12 @@ uint32_t syscall_handler(uint32_t num, uint32_t arg1, uint32_t arg2,
     if (num >= SYS_MAX || !syscall_table[num]) {
         vga_printf("[SYSCALL] unknown syscall: %d\n", num);
         return (uint32_t)-1;
+    }
+    /* §3 崩溃现场：快路径仅两次内存写——缓存到 PCB 的 ctx 指针，
+     * 不遍历服务表、不加锁。记录翻译后的 HEPU 调用号与第 0 参数。 */
+    if (current && current->crash_ctx) {
+        current->crash_ctx->last_syscall = (uint64_t)num;
+        current->crash_ctx->last_arg0     = (uint64_t)arg1;
     }
     /* V3.81 止血: 表项地址范围校验——内核 .text 在 0x100000-0x1A0000. */
     {

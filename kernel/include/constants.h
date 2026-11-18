@@ -98,7 +98,7 @@
 /* === 系统调用 === */
 /* D-8: 与 syscall.h 统一为 236。两处曾一个 222 一个 236, 32 位表按 222 开,
  * SYS_FB_DESC(229) 直接越界编译失败。 */
-#define SYS_MAX             238          /* 最大系统调用号, 与 syscall.h 一致 */
+#define SYS_MAX             239          /* 最大系统调用号, 与 syscall.h 一致 */
 
 /* === 网络 === */
 #define MAX_SOCKETS         128         /* V6.77: 最大socket数(原64) */
