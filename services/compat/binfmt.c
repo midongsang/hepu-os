@@ -39,17 +39,31 @@ const char *binfmt_get_cmdline(void)
 
 /* UPROC ABI: 结构化 argv 通道（单任务模型全局缓冲，与 g_cmdline 同生命周期） */
 static int g_hepu_argc = 0;
-static const char *g_hepu_argv[8] = { 0 };
+/* V0.62.x: 原实现只保存调用者传入的字符串指针（`g_hepu_argv[i] = argv[i]`），
+ * 而 argv 字符串常是栈上/调用者的临时缓冲，函数返回后即失效 —— 之后任何
+ * 读 g_hepu_argv 的地方拿到的都是悬空指针（OBS-08 的动态取证已确认
+ * g_hepu_argv 指针悬空，且 argv 字符串 "/app/winargs.exe --mode demo hello"
+ * 的字节出现在 vfs 节点的 children/next 槽里）。
+ * 修法：把字符串拷进本模块自有缓冲，指针生命周期与 g_hepu_argv 绑定。 */
+#define HEPU_ARGV_MAX 8
+#define HEPU_ARG_LEN  128
+static char        g_hepu_argbuf[HEPU_ARGV_MAX][HEPU_ARG_LEN];
+static const char *g_hepu_argv[HEPU_ARGV_MAX] = { 0 };
 
 void binfmt_set_argv(int argc, const char *const argv[])
 {
     g_hepu_argc = 0;
-    for (int i = 0; i < 8; i++) g_hepu_argv[i] = 0;
-    if (argc > 8) argc = 8;
-    if (argc > 0 && argv) {
-        for (int i = 0; i < argc; i++) g_hepu_argv[i] = argv[i];
-        g_hepu_argc = argc;
+    for (int i = 0; i < HEPU_ARGV_MAX; i++) g_hepu_argv[i] = 0;
+    if (argc > HEPU_ARGV_MAX) argc = HEPU_ARGV_MAX;
+    if (argc <= 0 || !argv) return;
+    for (int i = 0; i < argc; i++) {
+        if (!argv[i]) continue;
+        int j = 0;
+        while (j < HEPU_ARG_LEN - 1 && argv[i][j]) { g_hepu_argbuf[i][j] = argv[i][j]; j++; }
+        g_hepu_argbuf[i][j] = '\0';
+        g_hepu_argv[i] = g_hepu_argbuf[i];
     }
+    g_hepu_argc = argc;
 }
 
 int binfmt_get_argv(int *argc_out, const char ***argv_out)
