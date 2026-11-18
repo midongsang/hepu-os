@@ -1,4 +1,4 @@
-# arch/aarch64 —— ARM64 支持（M0 已通，M1c 已通）
+# arch/aarch64 —— ARM64 支持（M0 已通，M1d 已通）
 
 ## 已完成（M0）
 
@@ -89,11 +89,14 @@ qemu-system-aarch64 -M virt -cpu max -m 512 \
 
 镜像：GPT + ESP(FAT32, 1MiB 起, `mkfs.vfat --offset=2048`)，放 `EFI/BOOT/BOOTAA64.EFI`。
 
-## 还没做的（M1 起点）
+## 还没做的（M1 起点 → 现状）
 
-- 从 EFI 环境下降到 EL1、建页表和异常向量（现在仍跑在固件的 EL1 环境里，没换栈/没关 MMU 接管）
-- GIC 初始化、定时器中断（CNTV 已在用，但没开中断）
-- 接入复用层：把 `shared/desktop`、`gfx64` 的绘制基元接到 GOP 帧缓冲上，看能不能出界面
+- ✅ 从 EFI 环境下降到 EL1、建页表和异常向量：M1c 建 L0→L3 的 4KB 页表 + VBAR/el1_sync，
+  M1d 换成自有 bss 栈并 ExitBootServices
+- ✅ GIC 初始化、定时器中断：M1d-2 实测机器为 GICv2，GICD/GICC 使能 + PPI27 + CNTV，20 次中断稳定
+- ❌ 接入复用层：把 `shared/desktop`、`gfx64` 的绘制基元接到 GOP 帧缓冲上，看能不能出界面
+- ❌ GICv3 路径（ICC_SRE_EL1/ICC_PMR_EL1/ICC_IGRPEN1_EL1 + redistributor）：本轮机器是 v2，未实现
+- ❌ 从 M1d 的验证态交接成正式内核入口（现在只是证明"能接管"，还没有真正的 entry 分级）
 
 ## M1（进行中）：接管 MMU
 
