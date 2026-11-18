@@ -414,13 +414,6 @@ static uint64_t us_elapsed(uint64_t t0)
 {
     return (cntvct() - t0) * 1000000 / cntv_freq;
 }
-/* 一位小数 ms：us/1000 整数部分 + 十分位，避免微秒级耗时在 ms 下全是 0 */
-static void uart_ms(uint64_t us)
-{
-    uart_dec(us / 1000);
-    uart_putc('.');
-    uart_dec((us % 1000) / 100);
-}
 
 /* ---------------- MemoryMap 取取与打印 ---------------- */
 #define MAP_BUF_SIZE (32u * 1024u)
@@ -886,38 +879,19 @@ efi_main(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE *st)
             uart_puts("[M2] readback accent@(28,20)=0x"); uart_hex(a);
             uart_puts(a == COL_ACCENT ? " OK\n" : " MISMATCH\n");
 
-            /* ---- M2D：脏区重绘 + 来回弹跳的移动方块，量化带宽 ---- */
-            const uint32_t BLK = 24, BLK_Y = 520;    /* 低区无遮挡带：避开 40px 栏与中部标题 */
+            /* ---- M2S：变尺寸矩形扫描，拟合「固定开销 + 每像素成本」 ----
+             * 尺寸数组驱动：24/48/96/192 在下方无遮挡带左右反弹（旧位填底色 + 新位画块），
+             * 800x600 是整屏端点（present_region 全屏，dirty==全屏）。
+             * px = 旧块写入 + 新块写入 − 重叠（实测裁剪后像素，不是 s²）。 */
+            const uint32_t SIZES[5] = {24, 48, 96, 192, 800};
             const int32_t  STEP = 8;
-            const uint32_t TOTAL_PX = fb_w * fb_h;
-            const uint64_t FRAME_TICKS = cntv_freq * 25 / 1000;  /* 25ms/帧 ≈ 40fps */
-            const uint32_t WARM = 10;                 /* 前 N 帧不计入平均（预热） */
+            const uint32_t NFRAMES = 80;              /* 每尺寸测量帧数 */
+            const uint32_t WARM = 5;                  /* 前 5 帧预热不计入平均 */
+            const uint32_t NFILL = 7, FILL_WARM = 2;   /* 全屏/端点填充次数与预热 */
+            const uint64_t FRAME_TICKS = cntv_freq * 24 / 1000;  /* 24ms/帧节拍 */
+            const uint32_t TITLE_BOTTOM = 324;        /* 标题带下沿，方块不得侵入 */
 
-            /* 整屏填充耗时基线：预热 2 次后测 5 次取平均；测完重绘静态场景。
-             * 与脏区走同一套 4 字节像素写入路径，不是抄 M2 的旧耗时。 */
-            uint64_t full_us_sum = 0;
-            for (int k = 0; k < 7; k++) {
-                uint64_t ft = cntvct();
-                fill_rect(0, 0, fb_w, fb_h, COL_BG);
-                uint64_t fu = us_elapsed(ft);
-                if (k >= 2) full_us_sum += fu;
-            }
-            /* 基线整屏填的是底色，把被抹掉的栏/块/标题重画回来 */
-            fill_rect(0, 0, fb_w, fb_h, COL_BG);
-            fill_rect(0, 0, fb_w, BAR_H, COL_BAR);
-            present_region(16, 8, 24, 24, COL_ACCENT);
-            draw_text_center(title, SCALE, GAP, COL_FG, COL_BG);
-            uint64_t avg_full_us = full_us_sum / 5;
-
-            uart_puts("[M2D] block "); uart_dec(BLK);
-            uart_puts("x"); uart_dec(BLK);
-            uart_puts(" y="); uart_dec(BLK_Y);
-            uart_puts(" step="); uart_dec((uint32_t)STEP);
-            uart_puts(" frame_ticks="); uart_dec(FRAME_TICKS);
-            uart_puts(" total_px="); uart_dec(TOTAL_PX);
-            uart_puts("\n");
-
-            /* EBS 后重新使能 GIC（固件可能复位过 CPU interface），再 arm 定时器 */
+            /* EBS 后重新使能 GIC；扫描窗口内 IRQ 只计数、不打印（避免 PL011 轮询污染耗时） */
             uint64_t irq0 = irq_count;
             mmio_write32(GICD_BASE + 0x00, 0x01);
             mmio_write32(GICD_BASE + GICD_ISENABLER0, 1u << PPI_VTIMER);
@@ -929,70 +903,111 @@ efi_main(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE *st)
             timer_armed = 1;
             __asm__ volatile("msr daifclr, #2");
 
-            int32_t bx = 0, dir = 1;
-            uint32_t frame = 0, anim_frames = 0;
-            uint64_t dirty_sum = 0, dirty_us_sum = 0;
-            uint64_t anim0 = cntvct();
+            uart_puts("[M2S] sweep start, frames/size="); uart_dec(NFRAMES);
+            uart_puts(" warm="); uart_dec(WARM);
+            uart_puts(" frame_ticks="); uart_dec(FRAME_TICKS);
+            uart_puts("\n");
 
-            uart_puts("[M2D] framebuffer drawn, holding\n");
-            while (ms_elapsed(anim0) < 10000) {
-                uint64_t fs = cntvct();
+            for (uint32_t si = 0; si < 5; si++) {
+                uint32_t s = SIZES[si];
+                int is_full = (s == fb_w);             /* 800x600 整屏端点 */
 
-                int32_t nx = bx + dir * STEP;
-                if (nx < 0) { nx = 0; dir = 1; }
-                if (nx > (int32_t)fb_w - (int32_t)BLK) { nx = fb_w - BLK; dir = -1; }
-
-                /* 两方块同行同尺寸：重叠宽 = x 区间交叠，高恒为 BLK；重叠像素不重复计脏区 */
-                int32_t lo = bx > nx ? bx : nx;
-                int32_t hi = (bx + BLK) < (nx + BLK) ? (bx + BLK) : (nx + BLK);
-                uint32_t overlap = (hi > lo ? (uint32_t)(hi - lo) : 0) * BLK;
-
-                uint64_t ds = cntvct();
-                uint32_t wold = present_region((uint32_t)bx, BLK_Y, BLK, BLK, COL_BG);
-                uint32_t wnew = present_region((uint32_t)nx, BLK_Y, BLK, BLK, COL_ACCENT);
-                uint64_t dus = us_elapsed(ds);
-                uint32_t dirty = wold + wnew - overlap;
-
-                bx = nx;
-                if (frame >= WARM) {
-                    dirty_sum += dirty;
-                    dirty_us_sum += dus;
-                    anim_frames++;
+                /* full_us：同一套 present_region 路径整屏填 NFILL 次、去预热取均值。
+                 * 计时段临时屏蔽 IRQ，避免定时器中断抢进把某一次填充抬高；pending IRQ
+                 * 解封后仍会被计数。 */
+                uint64_t fu_sum = 0;
+                for (uint32_t k = 0; k < NFILL; k++) {
+                    __asm__ volatile("msr daifset, #2");
+                    uint64_t ft = cntvct();
+                    present_region(0, 0, fb_w, fb_h, COL_BG);
+                    uint64_t fu = us_elapsed(ft);
+                    __asm__ volatile("msr daifclr, #2");
+                    if (k >= FILL_WARM) fu_sum += fu;
                 }
-                if (frame % 25 == 0) {
-                    uart_puts("[M2D] frame="); uart_dec(frame);
-                    uart_puts(" dirty="); uart_dec(dirty);
-                    uart_puts(" total_px="); uart_dec(TOTAL_PX);
-                    uart_puts(" pct="); uart_dec((uint64_t)dirty * 100 / TOTAL_PX);
-                    uart_puts(" permille="); uart_dec((uint64_t)dirty * 1000 / TOTAL_PX);
-                    uart_puts(" basispt="); uart_dec((uint64_t)dirty * 10000 / TOTAL_PX);
-                    uart_puts(" dirty_us="); uart_dec(dus);
-                    uart_puts("\n");
-                }
-                frame++;
+                uint64_t full_us = fu_sum / (NFILL - FILL_WARM);
 
-                /* 节拍：忙等到下一帧时刻，保证两帧截图有可辨位移 */
-                uint64_t next = fs + FRAME_TICKS;
-                while (cntvct() < next) { }
+                uint64_t px_sum = 0, du_sum = 0;
+                uint32_t n = 0;
+
+                if (is_full) {
+                    /* 上端点：全屏 present_region，dirty == 全屏；同样多次取均值 */
+                    uint32_t w = 0;
+                    for (uint32_t k = 0; k < NFILL; k++) {
+                        __asm__ volatile("msr daifset, #2");
+                        uint64_t ds = cntvct();
+                        w = present_region(0, 0, fb_w, fb_h, COL_BG);
+                        uint64_t du = us_elapsed(ds);
+                        __asm__ volatile("msr daifclr, #2");
+                        if (k >= FILL_WARM) du_sum += du;
+                    }
+                    px_sum = w; du_sum /= (NFILL - FILL_WARM); n = 1;
+                } else {
+                    /* 垂直放在标题下方的下半区，整块不被底边裁剪（裁剪会让 px/成本失真） */
+                    uint32_t y = (TITLE_BOTTOM + fb_h) / 2 - s / 2;
+                    if (y < TITLE_BOTTOM + 16) y = TITLE_BOTTOM + 16;
+                    int32_t bx = 0, dir = 1;
+                    for (uint32_t f = 0; f < NFRAMES; f++) {
+                        uint64_t fs = cntvct();
+                        int32_t nx = bx + dir * STEP;
+                        if (nx < 0) { nx = 0; dir = 1; }
+                        if (nx > (int32_t)fb_w - (int32_t)s) { nx = fb_w - s; dir = -1; }
+
+                        /* 同行同尺寸：重叠宽 = x 区间交叠，高恒为 s；重叠像素不重复计 */
+                        int32_t lo = bx > nx ? bx : nx;
+                        int32_t hi = (bx + (int32_t)s) < (nx + (int32_t)s)
+                                   ? (bx + (int32_t)s) : (nx + (int32_t)s);
+                        uint32_t overlap = (hi > lo ? (uint32_t)(hi - lo) : 0) * s;
+
+                        /* 计时只包两次 present_region，不含节拍等待；段内屏蔽 IRQ 防抢占 */
+                        __asm__ volatile("msr daifset, #2");
+                        uint64_t ds = cntvct();
+                        uint32_t wold = present_region((uint32_t)bx, y, s, s, COL_BG);
+                        uint32_t wnew = present_region((uint32_t)nx, y, s, s, COL_ACCENT);
+                        uint64_t du = us_elapsed(ds);
+                        __asm__ volatile("msr daifclr, #2");
+                        uint32_t dirty = wold + wnew - overlap;
+
+                        bx = nx;
+                        if (f >= WARM) { px_sum += dirty; du_sum += du; n++; }
+
+                        uint64_t next = fs + FRAME_TICKS;
+                        while (cntvct() < next) { }
+                    }
+                    present_region((uint32_t)bx, y, s, s, COL_BG);  /* 收尾清掉末帧块 */
+                }
+
+                uint64_t avg_px = n ? px_sum / n : 0;
+                uint64_t avg_du = n ? du_sum / n : 0;
+                uint64_t ns_px = avg_px ? avg_du * 1000 / avg_px : 0;
+                uint64_t ratio_t = avg_du ? full_us * 10 / avg_du : 0;  /* 一位小数 ×10 */
+
+                uart_puts("[M2S] size="); uart_dec(s);
+                uart_puts("x"); uart_dec(is_full ? fb_h : s);
+                uart_puts(" px="); uart_dec(avg_px);
+                uart_puts(" full_us="); uart_dec(full_us);
+                uart_puts(" dirty_us="); uart_dec(avg_du);
+                uart_puts(" ns_per_px="); uart_dec(ns_px);
+                uart_puts(" ratio="); uart_dec(ratio_t / 10);
+                uart_putc('.'); uart_dec(ratio_t % 10);
+                uart_puts("\n");
             }
 
             __asm__ volatile("msr cntv_ctl_el0, %0" :: "r"(0UL));
             __asm__ volatile("msr daifset, #2");
 
-            uint64_t avg_dirty_px = anim_frames ? dirty_sum / anim_frames : 0;
-            uint64_t avg_dirty_us = anim_frames ? dirty_us_sum / anim_frames : 0;
-            uart_puts("[M2D] avg_dirty_px="); uart_dec(avg_dirty_px);
-            uart_puts(" avg_full_us="); uart_dec(avg_full_us);
-            uart_puts(" avg_dirty_us="); uart_dec(avg_dirty_us);
-            uart_puts(" avg_full_ms="); uart_ms(avg_full_us);
-            uart_puts(" avg_dirty_ms="); uart_ms(avg_dirty_us);
-            uart_puts("\n");
+            /* 扫描把静态场景抹掉了，重绘底色/栏/块/标题，再保持几秒后关机 */
+            fill_rect(0, 0, fb_w, fb_h, COL_BG);
+            fill_rect(0, 0, fb_w, BAR_H, COL_BAR);
+            present_region(16, 8, 24, 24, COL_ACCENT);
+            draw_text_center(title, SCALE, GAP, COL_FG, COL_BG);
 
-            uart_puts("[M2D] held "); uart_dec(ms_elapsed(anim0));
-            uart_puts(" ms, IRQ during hold="); uart_dec(irq_count - irq0);
-            uart_puts(" total IRQ="); uart_dec(irq_count);
-            uart_puts(" frames="); uart_dec(frame);
-            uart_puts(" vct="); uart_hex(cntvct()); uart_puts("\n");
+            uint64_t hold0 = cntvct();
+            while (ms_elapsed(hold0) < 3000) { }
+
+            uart_puts("[M2S] held "); uart_dec(ms_elapsed(hold0));
+            uart_puts(" ms, IRQ total="); uart_dec(irq_count);
+            uart_puts(" (sweep start="); uart_dec(irq_count - irq0);
+            uart_puts(") vct="); uart_hex(cntvct()); uart_puts("\n");
         } else {
             uart_puts("[M2] no GOP, nothing to draw\n");
         }
