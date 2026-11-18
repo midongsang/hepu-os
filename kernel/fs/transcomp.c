@@ -414,13 +414,16 @@ void transcomp_selftest(void)
         fail++;
     }
 
-    /* 测试7：统计信息和压缩率 */
-    transcomp_mgr_t stats;
-    transcomp_get_stats(&stats);
+    /* 测试7：统计信息和压缩率
+     * OBS-07: 这里原来在栈上声明 `transcomp_mgr_t stats;` 并整体拷贝。
+     * 该结构含 4096 个块映射项, 共 64KB+ 字节, 而 32 位内核栈只有 16KB,
+     * 64KB 栈帧向下踩穿栈底, 覆盖相邻 bss（binfmt formats[] 等）,
+     * 后续 ELF/PE/Mach-O 探测表被踩坏, linuxhello 加载时分发野指针崩溃/卡死。
+     * 自测只需要两个标量计数, 直接读静态管理器字段, 不再整体拷贝大结构。 */
     uint32_t ratio = transcomp_get_ratio();
-    if (stats.compress_count >= 2 && ratio <= 100) {
+    if (tc_mgr.compress_count >= 2 && ratio <= 100) {
         TCLOG("[TRANSCOMP] test7 stats: PASS (compress=");
-        serial_puthex(0x3F8, stats.compress_count);
+        serial_puthex(0x3F8, tc_mgr.compress_count);
         TCLOG(", ratio=");
         serial_puthex(0x3F8, ratio);
         TCLOG("%)\n");

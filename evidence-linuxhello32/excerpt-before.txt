@@ -1,0 +1,24 @@
+===== BEFORE (baseline 391e1db, 未修复) =====
+619:
+[UPROC] exec-static name=init rc=1
+621:
+[UPROC] exec-static name=procb rc=2
+629:
+[AUTO] fork-test start
+630:
+[UPROC] exec path=fork-test rc=-2
+631:
+[RUN] fork-test -> rc=0xFFFFFFFE
+632:
+[AUTO] fork-test done
+634:
+[AUTO] linuxhello start
+635:
+[PM] low battery, auto suspend pending
+
+----- 原始尾部 -----
+[RUN] fork-test -> rc=0xFFFFFFFE
+[AUTO] fork-test done
+[DEBUG] after fork-test at start
+[AUTO] linuxhello start
+[PM] low battery, auto suspend pending
