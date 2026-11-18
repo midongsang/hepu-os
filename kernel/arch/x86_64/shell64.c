@@ -25,6 +25,9 @@ extern int  usb64_kbd_haschar(void);
 extern int  usb64_kbd_getchar(void);
 extern void usb64_poll(void);
 extern void serial_puts_raw(const char *s);
+/* V0.62.x: 串口 RX 接入 shell —— uart64 已有 RX ring 与 IRQ4 handler, 但从未被消费 */
+extern int uart64_haschar(int com);
+extern int uart64_getchar(int com);
 extern int  bootopts_nographics(void);
 extern void rtc64_get_time(int *year, int *month, int *day,
                             int *hour, int *minute, int *second);
@@ -133,6 +136,11 @@ static int shell_read_line(char *buf, int max)
         int c;
         if (usb64_kbd_available() && usb64_kbd_haschar()) {
             c = usb64_kbd_getchar();
+        } else if (uart64_haschar(0)) {
+            /* 串口 shell: 从 COM1 RX ring 取字符。
+             * 这条分支让"在 guest 里敲命令"不再依赖桌面终端/坐标点击，
+             * 而是直接走 QEMU -serial 通道，便于自动化验证。 */
+            c = (char)uart64_getchar(0);
         } else if (keyboard64_haschar()) {
             c = keyboard64_getchar();
         } else {

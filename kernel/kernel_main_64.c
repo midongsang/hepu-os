@@ -1413,6 +1413,19 @@ void x86_64_kernel_main(void)
          * 放在进桌面主循环之前 —— 之后画面就归桌面管了。 */
         { extern int gfx64_display_backend_selftest(void);
           gfx64_display_backend_selftest(); }
+        /* 串口 shell 旁路（V0.62.x）: 图形模式的桌面主循环是阻塞的，
+         * 启动后无法再从串口敲命令。这里在进桌面之前给串口一个窗口——
+         * 若 COM1 RX 已有字符（自动化脚本在启动阶段写入），先跑一次 shell，
+         * 跑完再进桌面。这使 sysprof / 探针类命令可以纯串口驱动，
+         * 不必依赖桌面终端的坐标点击。 */
+        {
+            extern int uart64_haschar(int com);
+            if (uart64_haschar(0)) {
+                vga_puts("[INIT] serial shell (pre-desktop) entered\n");
+                shell64_run();
+                vga_puts("[INIT] serial shell exited, entering desktop\n");
+            }
+        }
         desktop64_run();
     } else {
         vga_puts("[INIT] Falling back to text shell\n");
