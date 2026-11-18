@@ -879,6 +879,22 @@ syscall、异常向量、`formats[]` 影子完整性、VFS 链表遍历转储）
 magic/checksum，进入 VFS 前校验，坏即当场报错）与**不再把未初始化内存当指针**的入口
 校验（`vfs_find` 遍历前校验 name/type）。定位到写入者后再评估 VFS 分支合并。
 
+**2026-11-19 止损落地（提交 `6d3404e`）**：按上面的收敛版做了第一道闸 ——
+`vfs_node_sane()`：地址落在内核可直接使用的区间、4 字节对齐、`name` 在
+`VFS_MAX_NAME` 内必须有 NUL 收尾；`vfs_add_child` 与 `vfs_find` 遍历前都过这道闸，
+非法则跳过并限流打印 `[VFS] insane node pointer skipped (OBS-08 guard)`。
+
+**实测拦截证据**（`tools/regress32.sh` 串口原文）：
+
+```
+[PF] MMIO trap addr=0x0x11400000 -> poison page (no real mem touched)
+[VFS] insane node pointer skipped (OBS-08 guard)
+```
+
+即真实启动中确实挡住了一次野指针，系统随后正常跑完（`fault=0 lines=896` PASS）。
+**性质说明：这是止损，不是定位** —— 写入者仍未指名；后续要么补 magic/checksum
+把"坏在哪一步"变成可读的报错，要么继续追写入者。
+
 ### 64 位空 Enter 拒登（预期行为，非回归）
 
 - `/account.conf` 已配置账户时，空口令两次被拒：串口 `[LOCK] login: auth failed`（两次），
