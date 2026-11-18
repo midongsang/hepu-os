@@ -343,6 +343,25 @@ static void fill_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t c
     }
 }
 
+/* 最小脏区提交：把裁剪后的矩形写进 FB，返回实际写入像素数。
+ * 裁剪在区域级先算好（x/w、y/h 一次性 clamp），再按行写，避免逐像素判断时
+ * x 越界按 stride 跨行串写到下一行。 */
+static uint32_t present_region(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t color)
+{
+    if (x >= fb_w || y >= fb_h || w == 0 || h == 0) return 0;
+    if (x + w > fb_w) w = fb_w - x;
+    if (y + h > fb_h) h = fb_h - y;
+    uint32_t written = 0;
+    for (uint32_t j = 0; j < h; j++) {
+        volatile uint32_t *row =
+            (volatile uint32_t *)(fb_base + (uint64_t)(y + j) * fb_stride * 4);
+        for (uint32_t i = 0; i < w; i++)
+            row[x + i] = color;
+        written += w;
+    }
+    return written;
+}
+
 static void draw_char(char ch, uint32_t x, uint32_t y, uint32_t scale,
                       uint32_t fg, uint32_t bg)
 {
@@ -390,6 +409,17 @@ static uint64_t cntvct(void)
 static uint64_t ms_elapsed(uint64_t t0)
 {
     return (cntvct() - t0) * 1000 / cntv_freq;
+}
+static uint64_t us_elapsed(uint64_t t0)
+{
+    return (cntvct() - t0) * 1000000 / cntv_freq;
+}
+/* 一位小数 ms：us/1000 整数部分 + 十分位，避免微秒级耗时在 ms 下全是 0 */
+static void uart_ms(uint64_t us)
+{
+    uart_dec(us / 1000);
+    uart_putc('.');
+    uart_dec((us % 1000) / 100);
 }
 
 /* ---------------- MemoryMap 取取与打印 ---------------- */
@@ -856,10 +886,39 @@ efi_main(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE *st)
             uart_puts("[M2] readback accent@(28,20)=0x"); uart_hex(a);
             uart_puts(a == COL_ACCENT ? " OK\n" : " MISMATCH\n");
 
-            /* 4) 保持画面：先打就绪信号，再重新 arm 定时器忙等约 9s */
-            uart_puts("[M2] framebuffer drawn, holding\n");
-            uint64_t irq0 = irq_count;
+            /* ---- M2D：脏区重绘 + 来回弹跳的移动方块，量化带宽 ---- */
+            const uint32_t BLK = 24, BLK_Y = 520;    /* 低区无遮挡带：避开 40px 栏与中部标题 */
+            const int32_t  STEP = 8;
+            const uint32_t TOTAL_PX = fb_w * fb_h;
+            const uint64_t FRAME_TICKS = cntv_freq * 25 / 1000;  /* 25ms/帧 ≈ 40fps */
+            const uint32_t WARM = 10;                 /* 前 N 帧不计入平均（预热） */
+
+            /* 整屏填充耗时基线：预热 2 次后测 5 次取平均；测完重绘静态场景。
+             * 与脏区走同一套 4 字节像素写入路径，不是抄 M2 的旧耗时。 */
+            uint64_t full_us_sum = 0;
+            for (int k = 0; k < 7; k++) {
+                uint64_t ft = cntvct();
+                fill_rect(0, 0, fb_w, fb_h, COL_BG);
+                uint64_t fu = us_elapsed(ft);
+                if (k >= 2) full_us_sum += fu;
+            }
+            /* 基线整屏填的是底色，把被抹掉的栏/块/标题重画回来 */
+            fill_rect(0, 0, fb_w, fb_h, COL_BG);
+            fill_rect(0, 0, fb_w, BAR_H, COL_BAR);
+            present_region(16, 8, 24, 24, COL_ACCENT);
+            draw_text_center(title, SCALE, GAP, COL_FG, COL_BG);
+            uint64_t avg_full_us = full_us_sum / 5;
+
+            uart_puts("[M2D] block "); uart_dec(BLK);
+            uart_puts("x"); uart_dec(BLK);
+            uart_puts(" y="); uart_dec(BLK_Y);
+            uart_puts(" step="); uart_dec((uint32_t)STEP);
+            uart_puts(" frame_ticks="); uart_dec(FRAME_TICKS);
+            uart_puts(" total_px="); uart_dec(TOTAL_PX);
+            uart_puts("\n");
+
             /* EBS 后重新使能 GIC（固件可能复位过 CPU interface），再 arm 定时器 */
+            uint64_t irq0 = irq_count;
             mmio_write32(GICD_BASE + 0x00, 0x01);
             mmio_write32(GICD_BASE + GICD_ISENABLER0, 1u << PPI_VTIMER);
             mmio_write32(GICC_BASE + GICC_PMR, 0xFF);
@@ -870,14 +929,69 @@ efi_main(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE *st)
             timer_armed = 1;
             __asm__ volatile("msr daifclr, #2");
 
-            uint64_t ht0 = cntvct();
-            while (ms_elapsed(ht0) < 9000) { }
+            int32_t bx = 0, dir = 1;
+            uint32_t frame = 0, anim_frames = 0;
+            uint64_t dirty_sum = 0, dirty_us_sum = 0;
+            uint64_t anim0 = cntvct();
+
+            uart_puts("[M2D] framebuffer drawn, holding\n");
+            while (ms_elapsed(anim0) < 10000) {
+                uint64_t fs = cntvct();
+
+                int32_t nx = bx + dir * STEP;
+                if (nx < 0) { nx = 0; dir = 1; }
+                if (nx > (int32_t)fb_w - (int32_t)BLK) { nx = fb_w - BLK; dir = -1; }
+
+                /* 两方块同行同尺寸：重叠宽 = x 区间交叠，高恒为 BLK；重叠像素不重复计脏区 */
+                int32_t lo = bx > nx ? bx : nx;
+                int32_t hi = (bx + BLK) < (nx + BLK) ? (bx + BLK) : (nx + BLK);
+                uint32_t overlap = (hi > lo ? (uint32_t)(hi - lo) : 0) * BLK;
+
+                uint64_t ds = cntvct();
+                uint32_t wold = present_region((uint32_t)bx, BLK_Y, BLK, BLK, COL_BG);
+                uint32_t wnew = present_region((uint32_t)nx, BLK_Y, BLK, BLK, COL_ACCENT);
+                uint64_t dus = us_elapsed(ds);
+                uint32_t dirty = wold + wnew - overlap;
+
+                bx = nx;
+                if (frame >= WARM) {
+                    dirty_sum += dirty;
+                    dirty_us_sum += dus;
+                    anim_frames++;
+                }
+                if (frame % 25 == 0) {
+                    uart_puts("[M2D] frame="); uart_dec(frame);
+                    uart_puts(" dirty="); uart_dec(dirty);
+                    uart_puts(" total_px="); uart_dec(TOTAL_PX);
+                    uart_puts(" pct="); uart_dec((uint64_t)dirty * 100 / TOTAL_PX);
+                    uart_puts(" permille="); uart_dec((uint64_t)dirty * 1000 / TOTAL_PX);
+                    uart_puts(" basispt="); uart_dec((uint64_t)dirty * 10000 / TOTAL_PX);
+                    uart_puts(" dirty_us="); uart_dec(dus);
+                    uart_puts("\n");
+                }
+                frame++;
+
+                /* 节拍：忙等到下一帧时刻，保证两帧截图有可辨位移 */
+                uint64_t next = fs + FRAME_TICKS;
+                while (cntvct() < next) { }
+            }
+
             __asm__ volatile("msr cntv_ctl_el0, %0" :: "r"(0UL));
             __asm__ volatile("msr daifset, #2");
 
-            uart_puts("[M2] held "); uart_dec(ms_elapsed(ht0));
+            uint64_t avg_dirty_px = anim_frames ? dirty_sum / anim_frames : 0;
+            uint64_t avg_dirty_us = anim_frames ? dirty_us_sum / anim_frames : 0;
+            uart_puts("[M2D] avg_dirty_px="); uart_dec(avg_dirty_px);
+            uart_puts(" avg_full_us="); uart_dec(avg_full_us);
+            uart_puts(" avg_dirty_us="); uart_dec(avg_dirty_us);
+            uart_puts(" avg_full_ms="); uart_ms(avg_full_us);
+            uart_puts(" avg_dirty_ms="); uart_ms(avg_dirty_us);
+            uart_puts("\n");
+
+            uart_puts("[M2D] held "); uart_dec(ms_elapsed(anim0));
             uart_puts(" ms, IRQ during hold="); uart_dec(irq_count - irq0);
             uart_puts(" total IRQ="); uart_dec(irq_count);
+            uart_puts(" frames="); uart_dec(frame);
             uart_puts(" vct="); uart_hex(cntvct()); uart_puts("\n");
         } else {
             uart_puts("[M2] no GOP, nothing to draw\n");

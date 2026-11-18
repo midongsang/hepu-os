@@ -448,3 +448,100 @@ screendump /tmp/m2.ppm
 - FB 按 Normal NC 映射，整屏填充性能未优化；后续若上复杂 UI 再评估 WC/NC 取舍与缓存清理。
 - GICv3 路径仍未实现（同 M1d-2 遗留）；保持期中断只做计数，未测中断嵌套/优先级分组。
 - `info display` 在本 QEMU monitor 下为 `unknown command`，分辨率以 GOP Info 与 PPM 头互证为准。
+
+## M2D（已通）：脏区重绘 + 一个来回弹跳的移动方块（量化带宽）
+
+**结论：在 M2 静态背景（底色/状态栏/accent/标题）之上叠加动画层——一个 24×24 accent 方块在
+低区 y=520 左右来回弹；每帧只重绘「旧位填底色 + 新位画方块」两块脏区，不重算全屏。
+两帧 screendump 逐像素差分 = **1152**（=2×24×24，两块不重叠），bbox 正好框住两个方块；
+串口自证脏区仅占整屏 0.16%，脏区帧耗时远小于整屏填充。动画 10s 后 PSCI 关机，QEMU exit=0。**
+
+### 布局与脏区算法
+
+| 项 | 值 |
+|---|---|
+| 方块尺寸 | 24×24 |
+| 方块颜色 | accent `0xFF6B35`（255,107,53） |
+| 旧位恢复色 | 底色 `0x141822`（20,24,34） |
+| y 固定 | 520（520..543），避开 0..40 状态栏与 276..324 标题带 |
+| 步长 | 8px/帧；x ∈ [0, 776]，到头反向 |
+| 帧节拍 | 25ms/帧（`FRAME_TICKS = CNTFRQ*25/1000 = 1562500`），约 40fps |
+| 动画时长 | 10000ms，实测 398 帧 |
+
+- 脏区提交原语 `present_region(x,y,w,h,color)`：**区域级先裁剪**（x/w、y/h 一次性 clamp 到
+  `fb_w/fb_h`），再按行写；返回裁剪后实际写入像素数。不做整屏重算。
+- 每帧脏区像素：`dirty = 旧块写入 + 新块写入 − 重叠`。两方块同行同尺寸，
+  重叠宽 = x 区间交叠，高恒为 24；步长 8 时重叠 16 列 → 重叠 `16×24=384`，
+  `dirty = 576+576−384 = 768`。
+- 整屏基线：静态场景画完后，预热 2 次再测 5 次整屏 BG 填充取平均；基线填的是底色，测完把
+  栏/块/标题重画回来。基线与脏区走同一套 4 字节像素写入路径。
+
+### 量化数据（串口实测，CNTVCT_EL0 + CNTFRQ=62500000，1 tick=16ns）
+
+| 指标 | 普通运行 `/tmp/m2d-run1.log` | 抓图运行 `/tmp/m2d-cap.log` |
+|---|---|---|
+| `avg_dirty_px` | 766 | 766 |
+| 单帧 `dirty`（常态） | 768 | 768 |
+| `total_px` | 480000 | 480000 |
+| dirty/total | 0.16%（basispt=16，permille≈1.6） | 同左 |
+| `avg_full_us` | 1463（1.5ms） | 1532（1.5ms） |
+| `avg_dirty_us` | 16（0.0ms，约 16µs） | 7（0.0ms，约 7µs） |
+| 整屏/脏区耗时比 | ≈91× | ≈219× |
+| 保持期 IRQ | 99（total 119） | 99（total 119） |
+| frames / held | 398 / 10021ms | 398 / 10013ms |
+| QEMU exit | 0 | 0 |
+
+- 脏区时间占比远小于像素占比：整屏 ≈3.0ns/px，脏区帧是小矩形固定开销主导（7–16µs 量级），
+  两次运行 `avg_dirty_us` 有抖动（7 vs 16），受中断/NC 写序/节拍噪声影响，属正常范围，未做
+  缓存清理调优。
+- `avg_dirty_px=766` 而非 768：边界反弹帧重叠/裁剪略有出入，计入平均后略低。
+
+### 两帧差分与截图（`kernel/arch/aarch64/m1/`）
+
+- `m2d-frame-a.png`、`m2d-frame-b.png`（均 800×600；PPM 留 `/tmp/m2d-a.ppm`、`/tmp/m2d-b.ppm`）。
+- python 逐像素差分：`diff_pixels=1152`，`bbox=(112,520)..(615,543) w=504 h=24`。
+- 移动块独立定位（仅 y∈500..560 扫描 accent）：
+  - frame A：x=112..135，y=520..543，n=576
+  - frame B：x=592..615，y=520..543，n=576
+- 判读：两帧背景底色干净，旧位置无橙色残留；顶部蓝条、左上 accent 块、中央 `HEPU ARM64`
+  标题均未被误擦；方块位移明显，字形未错位。
+
+### 取舍与已知坑（先写下来）
+
+- **方块只走无遮挡带，所以「旧位填纯底色」成立。** 若之后让方块穿过标题/状态栏，restore 不能
+  填底色——会把背景文字/条盖掉；那时必须先保存被覆盖的背景像素（离屏缓冲或块截图）再回填，
+  或整块重画文字。当前实现没有背景保存层。
+- FB 为 Normal NC（AttrIdx2），写穿直达内存；本轮截图与读回一致，未触发缓存残留。若后续出现
+  「脏区提交了截图没更新」，先在矩形写完后 `dc civac` + `dsb sy`，再查 `present_region` 裁剪/
+  stride 跨行。
+- 单缓冲、无 vsync；节拍靠 CNTVCT 忙等，帧间隔受调度/中断影响，不保证稳定帧率。
+
+### 复现命令
+
+1. `kernel/arch/aarch64/m1` 下 `make`，产物 `M1.EFI` 拷成 `EFI/BOOT/BOOTAA64.EFI` 进 ESP。
+2. 起 QEMU（前台，`-display none`，加 monitor unix socket；抓图实例直起不占构建锁）：
+
+```
+qemu-system-aarch64 -M virt -cpu max -m 512 \
+  -bios /usr/share/qemu-efi-aarch64/QEMU_EFI.fd \
+  -drive file=/tmp/m1.img,format=raw,if=virtio -device ramfb \
+  -vnc 127.0.0.1:5939 -display none \
+  -monitor unix:/tmp/m2d-mon.sock,server,nowait \
+  -serial file:/tmp/m2d-cap.log
+```
+
+3. 串口出现 `[M2D] framebuffer drawn, holding` 后，连 socket 依次发（间隔 ≥1s）：
+
+```
+screendump /tmp/m2d-a.ppm
+screendump /tmp/m2d-b.ppm
+```
+
+4. python + zlib 手写 P6→PNG（环境无 `pnmtopng`），逐像素差分输出 diff 像素数与 bbox。
+
+### 没做 / 存疑
+
+- 无离屏背景保存层，穿遮挡元素的回退未实现（见上取舍）。
+- 脏区只有矩形，无文字/图元的局部重绘与脏区合并。
+- 未测双缓冲/vsync；`avg_dirty_us` 两次运行抖动未做平滑（未跑更多帧取中位数）。
+- GICv3、字模覆盖范围、EFI_MEMORY_XP 等遗留同 M2 段。
