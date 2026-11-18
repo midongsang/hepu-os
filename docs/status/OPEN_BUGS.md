@@ -578,8 +578,13 @@ diag1/diag2/move/sb_up/hand），但系统目前只有 4 个形态场景，映�
 2. **32 位 `net=1` 冒烟口径（基线 `61c53fa` 复核）**：`regress32.sh` 不带网卡，`eth.c`
    从不绑定 e1000 ops，串口里那条 `[ETH] eth0 MAC: 00:1A:36:5D:A7:C9` 是默认模拟 MAC，
    冒烟 `net=1` 不代表真实收发。真实收发以 `b34a5bc`/`ff5d603` 的直载取证为准
-   （`evidence-rxnet-2026-11-17/serial/rxnet-rebase-61c53fa.log`）：两帧 UDP 上送、MAC 回读正确、link up；
-   **ICMP echo reply 与 TCP 路径本轮未复测**，不能据冒烟 `net=1` 记为已通。
+   （`evidence-rxnet-2026-11-17/serial/rxnet-rebase-61c53fa.log`）：两帧 UDP 上送、MAC 回读正确、link up。
+   **2026-11-18 复测结论：ICMP echo reply 与 TCP 对外路径 FAIL**（非未复测）：保护模式 +
+   `qemu-system-i386 -nic user,model=e1000` 实跑，交互 DHCP 完成后 `ping 10.0.2.2` 4 次 ARP miss
+   无 Echo Reply，`tcp connect 10 0 2 2 18080` SYN_SENT 后 ARP miss、宿主 listener 0 连接；
+   阻塞于 ARP 解析（`kernel/net/ip.c:128-133`）。证据
+   `evidence-ledger-2026-11-18/32/net/ser.log`、`net/host-listener.log`、`net/evidence-summary.md`。
+   仍不得以冒烟 `net=1` / DHCP 收包记为 ICMP/TCP 已通。
 
 ## 本轮闭环批次（2026-11-17，分支 `docs/sync-2026-11-17`）
 
@@ -632,7 +637,7 @@ diag1/diag2/move/sb_up/hand），但系统目前只有 4 个形态场景，映�
 
 | 修复项 | 提交 | 代码位置 | 验证方式与证据 | 状态 |
 |---|---|---|---|---|
-| 32 位 IP/UDP/DHCP 整数字节序 + IP 校验和修正，打通 DHCP 收包 | `b34a5bc` | `kernel/net/ip.c`（total_length/id/src_ip/dest_ip/checksum 发送侧 `htons/htonl`、接收侧 `ntohs/ntohl`，校验和按 RFC1071 大端拼字）；`kernel/net/udp.c`（端口/长度 `htons/ntohs`）；`kernel/net/dhcp.c`（xid/flags/magic_cookie `htonl/htons`/`ntohl`，Discover 复用 `iface->xid`） | 直载 `qemu-system-i386 -kernel build_v250/kernel.elf -nic user,model=e1000`；`evidence-rxnet-2026-11-17/serial/rxnet-rebase-61c53fa.log`：after-dhcp-poll `RDH=0→2`、`rx_cur=2`、两帧 UDP 上送、MAC `52:54:00:12:34:56`、link up；构建 `evidence-rxnet-2026-11-17/build32-rebase-61c53fa.log`、`evidence-rxnet-2026-11-17/build64-rebase-61c53fa.log` 0 error。Offer 字段级解析（op=2、xid 匹配、msg_type=2）见旧档 `evidence-rxnet-2026-11-17/serial/rxnet-dbg2.log`。**根因**：发送侧小端直写 + 校验和按小端 u16 取字，slirp 按大端解析判非法帧丢弃；**不是硬件没收到，也不是 `5f93c2d` 的 BSIZE 常量问题**。**未复测**：32 位 ICMP echo reply、TCP 路径 | 已闭环（32 位 DHCP 收包路径；ICMP/TCP 未复测） |
+| 32 位 IP/UDP/DHCP 整数字节序 + IP 校验和修正，打通 DHCP 收包 | `b34a5bc` | `kernel/net/ip.c`（total_length/id/src_ip/dest_ip/checksum 发送侧 `htons/htonl`、接收侧 `ntohs/ntohl`，校验和按 RFC1071 大端拼字）；`kernel/net/udp.c`（端口/长度 `htons/ntohs`）；`kernel/net/dhcp.c`（xid/flags/magic_cookie `htonl/htons`/`ntohl`，Discover 复用 `iface->xid`） | 直载 `qemu-system-i386 -kernel build_v250/kernel.elf -nic user,model=e1000`；`evidence-rxnet-2026-11-17/serial/rxnet-rebase-61c53fa.log`：after-dhcp-poll `RDH=0→2`、`rx_cur=2`、两帧 UDP 上送、MAC `52:54:00:12:34:56`、link up；构建 `evidence-rxnet-2026-11-17/build32-rebase-61c53fa.log`、`evidence-rxnet-2026-11-17/build64-rebase-61c53fa.log` 0 error。Offer 字段级解析（op=2、xid 匹配、msg_type=2）见旧档 `evidence-rxnet-2026-11-17/serial/rxnet-dbg2.log`。**根因**：发送侧小端直写 + 校验和按小端 u16 取字，slirp 按大端解析判非法帧丢弃；**不是硬件没收到，也不是 `5f93c2d` 的 BSIZE 常量问题**。**2026-11-18 复测：ICMP echo reply、TCP 路径 FAIL**——阻塞于 ARP 解析（`kernel/net/ip.c:128-133`），证据 `evidence-ledger-2026-11-18/32/net/` | 已闭环（32 位 DHCP 收包路径）；**ICMP/TCP 对外路径 FAIL（2026-11-18 复测）** |
 | BUG-58：e1000 RAL/RAH 改对齐 32 位写，补只读 RX 诊断 dump | `ff5d603` | `kernel/drivers/e1000.c`（RAL 0x5400 放 mac[0..3]，RAH 0x5404 低 16 位放 mac[4..5]、AV bit31=1）；`kernel/net/net_selftest.c`（`e1000_diag_dump`） | 构建 `evidence-rxnet-2026-11-17/build32-rebase-61c53fa.log`、`evidence-rxnet-2026-11-17/build64-rebase-61c53fa.log` 0 error；`evidence-rxnet-2026-11-17/serial/rxnet-rebase-61c53fa.log` 串口 MAC 回读 `52:54:00:12:34:56`、link up | 已闭环（编译 + 串口 MAC/link 取证） |
 | OPEN-04 子项（误授权）：匹配条件收紧为规范绝对路径整串匹配 | `0e30c70` | `kernel/arch/x86_64/user_process.c`：宏 `INSTALLER_CANON_PATH "/bin/install64.elf"`（`:2544`）；`installer_name_match`（`:2547-2557`）先要求 `path[0]=='/'`，再整串逐字节比、长度必须相等，拒绝裸名/相对路径/前缀同名。改动类型是只收紧匹配条件，不是加白名单配置、也不是编译期排除；无配置项、无默认清单，唯一可信路径是编译期单值宏 | 64 位 `make -C kernel/arch/x86_64` 0 error；静态核对 `tools/make_hybrid_img.sh`、`tools/make_single_img64.sh` 写到 `/bin/install64.elf`、autostart 绝对路径 exec。**没跑过真实安装**：未在双盘 QEMU 跑安装流程，未检查目标盘系统文件是否齐全；主体（安装器拷贝系统文件的真实安装流程）仍开放，详见 OPEN-04 行 | **子项（误授权匹配）已修；主体真实安装流程仍开放，运行时未验证** |
 | OPEN-02：三处 TD 发布帧列表指针前加写屏障 | `4524f79` | `kernel/drivers/usb/uhci.c`：control/bulk/interrupt 三处发布前 `uhci_wmb()` 编译器屏障 | **未验证**：当前 QEMU 配置 xhci + usb-kbd/mouse，无 UHCI 控制器，`uhci_detect` 不命中，传输路径未执行；仅 32 位根目录 `make` 0 error（uhci.o 重编）。复现需 `-device piix3-usb-uhci` 并带 usb-storage 夹具；其余疑点（`frame_list[0]` 单点抢占、超时裸循环、端口复位保持时长、链接指针类型位）未改，分析见 `evidence-rxnet-2026-11-17/OPEN-02-uhci-analysis.md` | **未关闭（写屏障加固；运行时未验证）** |
@@ -689,6 +694,11 @@ diag1/diag2/move/sb_up/hand），但系统目前只有 4 个形态场景，映�
 - 64 位桌面/锁屏各 4 帧 strict NONBLACK 最低 2,073,597/2,073,600，九宫格无黑块分区。
 - UEFI 链路那 4 帧 `evidence-regress-2026-11-17/frames32/desktop_1..4.png` 是 `linuxhello`
   崩溃后回灌菜单的残留，**不代表桌面**，不计入任何桌面度量；UEFI 链路 32 位桌面记 **UNVERIFIED**。
+- **2026-11-18 复核（仍不可取证，依赖 `fix/linuxhello32`）**：本轮在 UEFI 链路重新高频采帧 12 帧
+  （`evidence-ledger-2026-11-18/32/frames32-uefi/`，0→17.05s），崩溃前窗口仅见菜单、OBS-06 稀疏
+  过渡帧与固件重启早期 GOP 文本帧，`f009–f011` 为回灌菜单残留；崩溃前未抓到可度量的真实桌面帧。
+  串口 `desk_start` / `first frame via registry` 在场，但可见表面未出现桌面终态。该链路桌面取证
+  **依赖 `fix/linuxhello32` 修复**（已分派，本仓不修）；在修复合入前维持不可取证，不以菜单残留凑数。
 
 **旧记录（保留备查，结论已作废）**：2026-11-17 旧档
 `evidence-regress-2026-11-17/old-3d0bd23/frames32/desktop_1..4.png` NONBLACK 均为
@@ -713,13 +723,29 @@ diag1/diag2/move/sb_up/hand），但系统目前只有 4 个形态场景，映�
 5. **复核结论**：`61c53fa` 上 32 位桌面 2,073,598≈100.00%，与旧 38% 不一致，差异来自
    取帧时机，非分区回退。
 
-### 32 位锁屏 / 登录路径现状限制（2026-11-17 实测）
+### 32 位锁屏 / 登录路径现状限制（2026-11-18 复核）
 
-- 32 位本树兜底关闭锁屏（`lock_cfg_disabled()` 32 位分支返回 1），链路直进旧桌面，
-  串口无 `booting to lock` 标记；登录页未被拉起，`login_authenticate` /
-  `login_unlock_screen` / `mu_private_unlock` 三处桩路径未触发，串口无 LOGIN WARNING。
-- 这是**现状限制**，不是 32 位锁屏/认证已通过；要复现该路径需先具备拉起 32 位登录页的入口。
-  证据：`evidence-regress-2026-11-17/old-3d0bd23/frames32/ser.log`、`old-3d0bd23/REPORT.md` 32-锁屏 / 32-登录行。
+**锁屏（N/A，设计现状，非证据缺失）**：
+
+- 32 位在设计上兜底关闭锁屏。`kernel/arch/x86_64/hpdesk.c:4634-4637` 为 `#else`（32 位）分支，
+  `lock_cfg_disabled()` 直接 `return 1`（`:4636`）；调用点 `:7652-7657`，禁用时 `g_locked=0`，
+  `[Hepu Desktop] booting to lock screen` 仅在 `:7656` else 分支打印。本轮三份 32 位串口
+  （直启 KUnit、保护模式网络、UEFI 链路）均无 `booting to lock` 标记。
+- 这是产品现状限制，不是 32 位锁屏已通过；三态记 **N/A**，不再记 UNVERIFIED。
+- 证据：`/home/user/Doubao/chats/38452875115179010/evidence-ledger-2026-11-18/32/tests/ser32.txt`、
+  `/home/user/Doubao/chats/38452875115179010/evidence-ledger-2026-11-18/32/net/ser.log`、
+  `/home/user/Doubao/chats/38452875115179010/evidence-ledger-2026-11-18/32/frames32-uefi/ser.log`。
+
+**登录/认证路径（不可取证：无调用方）**：
+
+- 全仓 grep 核实：`login_show`（`kernel/arch/x86/login.c:47`，声明 `kernel/include/login.h:34`）
+  无外部调用方；`login_authenticate`（`login.c:85`）仅被内部状态机 `login.c:305` 调用，
+  `login_unlock_screen`（`login.c:164`）仅被 `login.c:319` 调用，`mu_private_unlock`
+  （`kernel/arch/x86/multi_user.c:232`）零调用方。内核 shell 分发 `kernel/sched/shell_execute.c:102-160`、
+  用户态 shell `user/shell.c:219-245` 均无 login/unlock 命令，autostart 无登录应用。
+- 三处显式未实现桩路径不可达，本轮串口无 `[LOGIN] WARNING` / `[MULTI_USER] WARNING`；
+  要复现该路径需先在 32 位侧接上拉起登录页的入口（命令或 autostart 应用）。
+- 证据：同上三份串口；代码位置见上一条各文件行号。
 
 ## 回归线实测登记（基线 `61c53fa`，分支 `test/regress-2026-11-17`：`576c6c1` → `93c3147` → `0f4b9d4`）
 
@@ -759,11 +785,20 @@ diag1/diag2/move/sb_up/hand），但系统目前只有 4 个形态场景，映�
 ### 32 位 KUnit：4 套件 / 6 用例失败（既有基线项，非本轮新增）
 
 - 失败套件：`syscall deep`（1 用例）、`user scenario`（3 用例）、`integration`（1 用例）、
-  `security E2E`（1 用例），共 4 套件 6 用例。与
-  `evidence-regress-2026-11-17/old-a787a01/tests/baseline/a787a01-kunit32.txt` 快照逐条一致，
-  `new_fails` 空、`fixed_fails` 空；属既有基线项，非本轮新增。
-- 证据：`evidence-regress-2026-11-17/tests/ser32.txt`、
-  `tests/baseline/61c53fa-kunit32.txt`、`tests/results.json`。
+  `security E2E`（1 用例），共 4 套件 6 用例。
+- **2026-11-18 实跑复核**：直启 `kernel.elf` 跑 32 位 KUnit，`[KTEST] RESULT: FAIL`，4 套件 6 用例；
+  与 `old-a787a01/tests/baseline/a787a01-kunit32.txt`、`tests/baseline/61c53fa-kunit32.txt`
+  两份基线逐条一致（same_as_baseline），`new_fails` 空、`fixed_fails` 空；属既有基线项，非新增回归。
+- **根因定位**：5 例时间/中断类——KUnit 在 `kernel/arch/x86/kernel.c:638-651` 早于 `sti`
+  （`kernel/sched/shell.c:180`）运行，PIT tick 仅 IRQ0 自增（`kernel/arch/x86/pit.c:48-50`）、IF=0，
+  `sys_time`/`pit_get_ticks` 返回 0；断言点 `kunit_syscall_deep.c:68`、`kunit_user_scenario.c:17/:27/:140`、
+  `kunit_integration.c:149`。1 例超大分配——`kunit_security_e2e.c:29-30` `kmalloc(0xFFFFFFFF)` 期望 NULL；
+  `kernel/mm/kheap.c:260` 仅拒收 size==0，`:261` ALIGN 回绕，`kf_pool_alloc`（`kheap.c:48-55`）
+  `need=HEADER_SIZE+size` 32 位回绕后按小块落池，返回非 NULL。
+- 证据：`/home/user/Doubao/chats/38452875115179010/evidence-ledger-2026-11-18/32/tests/kunit32-ledger.txt`、
+  `/home/user/Doubao/chats/38452875115179010/evidence-ledger-2026-11-18/32/tests/ser32.txt`；
+  旧档 `evidence-regress-2026-11-17/tests/ser32.txt`、`tests/baseline/61c53fa-kunit32.txt`、`tests/results.json`。
+
 
 ## 待验证（本轮新增，未在 QEMU 内实测）
 
@@ -775,3 +810,85 @@ diag1/diag2/move/sb_up/hand），但系统目前只有 4 个形态场景，映�
 | TLS ClientHello 探针（`tls12` 命令） | `kernel/net/tls.c` tls12_probe | 编译通过；**未触发** |
 
 以上均为"代码就位 + 编译 0 error"，均需在单独 QEMU 实例里实测后才可标 PASS。
+
+## 台账遗留项清理（2026-11-18）—— 32 位项
+
+> 工作树 `wt-ledger32-2026-11-18`（分支 `test/ledger-32-2026-11-18`，基于 main HEAD `391e1db`）；
+> 证据根 `/home/user/Doubao/chats/38452875115179010/evidence-ledger-2026-11-18/32/`。
+> 每条：原文摘要 → 本次结论 → 证据绝对路径 → 代码位置。未改产品源码；未 push。
+
+### L1. 32-锁屏 —— N/A（现状限制，非未取证）
+
+- **原文摘要**：REPORT 三态表原记 UNVERIFIED；旧档记「32 位兜底关闭锁屏，串口无 `booting to lock` 标记」。
+- **本次结论**：设计上 32 位兜底关闭锁屏。`lock_cfg_disabled()` 32 位分支恒返回 1；调用点禁用时
+  `g_locked=0`，`booting to lock screen` 标记只在 64 位（else）分支打印。本轮三份 32 位串口均无该标记。
+  属产品现状限制，三态改 **N/A**，不是证据缺失。
+- **证据**：`/home/user/Doubao/chats/38452875115179010/evidence-ledger-2026-11-18/32/tests/ser32.txt`、
+  `/home/user/Doubao/chats/38452875115179010/evidence-ledger-2026-11-18/32/net/ser.log`、
+  `/home/user/Doubao/chats/38452875115179010/evidence-ledger-2026-11-18/32/frames32-uefi/ser.log`。
+- **代码位置**：`kernel/arch/x86_64/hpdesk.c:4619-4637`（32 位兜底 `:4634-4637`，`:4636` 返回 1）、
+  `:7652-7657`（置锁/打印分支）。
+
+### L2. 32-登录/认证路径 —— 不可取证：无调用方
+
+- **原文摘要**：三处显式未实现桩（`login_authenticate` / `login_unlock_screen` / `mu_private_unlock`）
+  未触发，串口无 LOGIN WARNING；旧档记 UNVERIFIED。
+- **本次结论**：`login_show` 全仓无外部调用方；两桩仅被登录状态机内部调用，`mu_private_unlock` 零调用方；
+  内核 shell 与用户态 shell 命令表均无 login/unlock 命令，autostart 无登录应用。路径不可达，
+  判 **不可取证：无调用方**；不存在不改产品行为的低成本入口（无命令可拉起登录页），故未实跑注入。
+- **证据**：`/home/user/Doubao/chats/38452875115179010/evidence-ledger-2026-11-18/32/tests/ser32.txt`、
+  `/home/user/Doubao/chats/38452875115179010/evidence-ledger-2026-11-18/32/net/ser.log`、
+  `/home/user/Doubao/chats/38452875115179010/evidence-ledger-2026-11-18/32/frames32-uefi/ser.log`。
+- **代码位置**：`kernel/arch/x86/login.c:47`（`login_show`）、`:85`（`login_authenticate`）、
+  `:164`（`login_unlock_screen`）、`:305`/`:319`（内部调用点）；`kernel/include/login.h:34`；
+  `kernel/arch/x86/multi_user.c:232`（`mu_private_unlock`）；`kernel/sched/shell_execute.c:102-160`；
+  `user/shell.c:219-245`。
+
+### L3. 32-UEFI 链路桌面帧 —— 不可取证（依赖 `fix/linuxhello32`）
+
+- **原文摘要**：旧 4 帧为 linuxhello 崩溃后回灌菜单残留，UEFI 链路 32 位桌面记 UNVERIFIED。
+- **本次结论**：本轮 UEFI 链路 12 帧采帧（0→17.05s；TCG 全帧 dump 阻塞，实测间隔约 1.6–2.1s），
+  崩溃前窗口仅见菜单、OBS-06 稀疏过渡帧（strict≈786,385–786,387）与重启早期 GOP 文本帧；
+  `f009–f011` 为回灌菜单残留（中心色 `(232,234,236)`）。崩溃前未抓到可度量的真实桌面帧，
+  **不以菜单残留凑数**；该链路桌面取证依赖 `fix/linuxhello32` 修复（已分派，本仓不修）。
+- **证据**：`/home/user/Doubao/chats/38452875115179010/evidence-ledger-2026-11-18/32/frames32-uefi/measure.csv`、
+  `frames.csv`、`ser.log`、`state.txt`、`f000.png`–`f011.png`；脚本
+  `/home/user/Doubao/chats/38452875115179010/evidence-ledger-2026-11-18/32/run_uefi_frames_v2.sh`、
+  度量 `analyze_uefi_frames.py`。
+- **代码位置**：桌面启动链 `kernel/arch/x86_64/hpdesk.c`；崩溃项 OBS-07 `linuxhello`（修复分支
+  `fix/linuxhello32`，不在本仓）。
+
+### L4. 32 位 KUnit 4 套件 / 6 用例失败 —— FAIL（既有基线项，非新增回归）
+
+- **原文摘要**：4 套件 6 用例失败，与 a787a01 快照逐条一致。
+- **本次结论**：实跑 `[KTEST] RESULT: FAIL`，4 套件 6 用例；与 a787a01、61c53fa 两份基线逐条一致
+  （same_as_baseline），**既有基线项，非新增回归**。根因：5 例时间/中断类（KUnit 早于 `sti` 运行，
+  PIT tick 未累加、IF=0）；1 例超大分配未拒收（大小校验缺失 + 32 位回绕落池）。
+- **证据**：`/home/user/Doubao/chats/38452875115179010/evidence-ledger-2026-11-18/32/tests/kunit32-ledger.txt`、
+  `/home/user/Doubao/chats/38452875115179010/evidence-ledger-2026-11-18/32/tests/ser32.txt`；
+  脚本 `run_kunit32.sh`。
+- **代码位置**：断言 `kernel/kunit/kunit_syscall_deep.c:68`、`kunit_user_scenario.c:17/:27/:140`、
+  `kunit_integration.c:149`、`kunit_security_e2e.c:29-30`；机制 `kernel/arch/x86/kernel.c:638-651`、
+  `kernel/sched/shell.c:180`、`kernel/arch/x86/pit.c:48-50`、`kernel/arch/x86/sys_time.c:39-47`、
+  `kernel/mm/kheap.c:260-261`、`kheap.c:48-55`。
+
+### L5. 32 位 ICMP echo reply 与 TCP 路径 —— FAIL（阻塞于 ARP，部分根因未定位）
+
+- **原文摘要**：578-582、635 两处标「ICMP echo reply 与 TCP 路径本轮未复测」；不得以冒烟 `net=1` / DHCP 冒充已通。
+- **本次结论**：命令行入口存在（`ping`、`tcp connect/...`、`net_selftest`），保护模式 +
+  `qemu-system-i386 -nic user,model=e1000` 实跑，宿主 listener `127.0.0.1:18080`。交互 DHCP 完成后
+  `ping 10.0.2.2` 4 次 ARP miss、无 Echo Reply；`tcp connect 10 0 2 2 18080` SYN_SENT 后 ARP miss、
+  无 established；宿主 listener 0 连接。**FAIL**：ICMP echo reply 未通、TCP 对外连接未建立。
+  阻塞点 ARP 解析（miss 即 `return -1`，帧未出 guest；ARP 请求 `sender_ip=0`）。
+  另有一条现场线索：交互 DHCP 已打印 `DHCP configuration complete`，但紧接着 `ifconfig` 输出 `DOWN`
+  （接口标志位未置 up），与 ARP 无应答同时出现，未证实二者因果，按待查线索记录
+  （串口 `.../32/net/ser.log:1575-1593`）。
+  ARP 应答未进缓存的根因未完全定位（缺 guest 侧 ARP 抓包 / slirp 报文计数；DHCP 分配 IP 仅打 VGA 未镜像串口）。
+- **证据**：`/home/user/Doubao/chats/38452875115179010/evidence-ledger-2026-11-18/32/net/ser.log`、
+  `/home/user/Doubao/chats/38452875115179010/evidence-ledger-2026-11-18/32/net/host-listener.log`、
+  `/home/user/Doubao/chats/38452875115179010/evidence-ledger-2026-11-18/32/net/evidence-summary.md`；
+  脚本 `run_net32.sh`。
+- **代码位置**：`kernel/net/ip.c:107-133`（发送/ARP miss 分支）、`kernel/net/arp.c:28-62`（`:52` sender_ip=0）、
+  `kernel/net/icmp.c:51-80`（自检组包不上线）、`:112-163`（`ping_once`）、`kernel/net/tcp.c:185-230`
+  （connect/握手）、`kernel/net/ip.c:209-252`（协议/以太网类型分发）；命令入口
+  `kernel/sched/shell.c:375-410`、`kernel/sched/shell_cmd_adv.c:283`、`kernel/sched/shell_execute.c:152-160,465-466`。
