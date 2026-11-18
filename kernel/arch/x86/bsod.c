@@ -186,28 +186,29 @@ static void bsod_gfx_draw(uint32_t isr_number, uint32_t error_code,
 {
     char hb[11];
     char sb[11];
-    int y = 6;
+    int x = 24, y = 48, lh = 30;   /* 3 倍字（8x8 -> 24x24），1920 宽下可读 */
 
     gfx_fillrect(0, 0, gfx_width, gfx_height, 1);
-    gfx_puts(6, y, "HEPU OS - DIAGNOSTIC REPORT", 15); y += 11;
-    gfx_puts(6, y, "------------------------------------------", 15); y += 12;
+    gfx_puts_big(x, y, "HEPU OS - DIAGNOSTIC REPORT", 15, 3); y += lh + 8;
+    gfx_puts_big(x, y, "-----------------------------------------------", 15, 3); y += lh + 8;
     bsod_stop_code(isr_number, sb);
-    gfx_puts(6, y, "STOP: ", 15); gfx_puts(6 + 6*8, y, sb, 15); y += 10;
-    gfx_puts(6, y, "Exception: ", 15);
-    gfx_puts(6 + 11*8, y, isr_number < 32 ? bsod_exception_names[isr_number] : "Unknown", 15);
-    y += 12;
-    gfx_puts(6, y, "ERR=", 15); bsod_hex32(error_code, hb); gfx_puts(6 + 4*8, y, hb, 15);
-    gfx_puts(6 + 12*8, y, "CR2=", 15); bsod_hex32(cr2, hb); gfx_puts(6 + 16*8, y, hb, 15);
-    y += 10;
-    gfx_puts(6, y, "EIP=", 15); bsod_hex32(eip, hb); gfx_puts(6 + 4*8, y, hb, 15);
-    gfx_puts(6 + 12*8, y, "CS=", 15); bsod_hex32(cs, hb); gfx_puts(6 + 15*8, y, hb, 15);
-    y += 10;
-    gfx_puts(6, y, "ESP=", 15); bsod_hex32(esp, hb); gfx_puts(6 + 4*8, y, hb, 15);
-    gfx_puts(6 + 12*8, y, "EFL=", 15); bsod_hex32(eflags, hb); gfx_puts(6 + 16*8, y, hb, 15);
-    y += 12;
-    gfx_puts(6, y, "Hint: ", 15); gfx_puts(6 + 6*8, y, bsod_hint(isr_number), 15); y += 10;
-    gfx_puts(6, y, "log: /crash.log   run 'crashlog' after reboot", 15); y += 10;
-    gfx_puts(6, y, "system halted - please reboot", 15);
+    gfx_puts_big(x, y, "STOP:   ", 15, 3); gfx_puts_big(x + 8*3*8, y, sb, 15, 3); y += lh;
+    gfx_puts_big(x, y, "Reason: ", 15, 3);
+    gfx_puts_big(x + 8*8*3, y, isr_number < 32 ? bsod_exception_names[isr_number] : "Unknown", 15, 3);
+    y += lh + 6;
+    gfx_puts_big(x, y, "ERR=", 15, 3); bsod_hex32(error_code, hb); gfx_puts_big(x + 4*8*3, y, hb, 15, 3);
+    gfx_puts_big(x + 18*8*3, y, "CR2=", 15, 3); bsod_hex32(cr2, hb); gfx_puts_big(x + 22*8*3, y, hb, 15, 3);
+    y += lh;
+    gfx_puts_big(x, y, "EIP=", 15, 3); bsod_hex32(eip, hb); gfx_puts_big(x + 4*8*3, y, hb, 15, 3);
+    gfx_puts_big(x + 18*8*3, y, "CS=", 15, 3); bsod_hex32(cs, hb); gfx_puts_big(x + 21*8*3, y, hb, 15, 3);
+    y += lh;
+    gfx_puts_big(x, y, "ESP=", 15, 3); bsod_hex32(esp, hb); gfx_puts_big(x + 4*8*3, y, hb, 15, 3);
+    gfx_puts_big(x + 18*8*3, y, "EFL=", 15, 3); bsod_hex32(eflags, hb); gfx_puts_big(x + 22*8*3, y, hb, 15, 3);
+    y += lh + 10;
+    gfx_puts_big(x, y, "Hint: ", 15, 3); gfx_puts_big(x + 6*8*3, y, bsod_hint(isr_number), 15, 3);
+    y += lh + 10;
+    gfx_puts_big(x, y, "log: /crash.log   run 'crashlog' after reboot", 15, 3); y += lh;
+    gfx_puts_big(x, y, "system halted - please reboot", 15, 3);
     gfx_flip();
 }
 
@@ -220,12 +221,6 @@ void bsod_text_mode_ex(const char *reason, uint32_t isr_number,
     uint32_t frames[4];
     int nf;
     (void)reason;
-
-    /* gfx 可用则走图形绘制（与桌面同源，可见性最好） */
-    if (gfx_width > 0 && gfx_height > 0 && gfx_fb_addr) {
-        bsod_gfx_draw(isr_number, error_code, eip, cs, esp, cr2, eflags);
-        return;
-    }
 
     vga_set_color(VGA_COLOR_WHITE, VGA_COLOR_BLUE);
     vga_clear();
@@ -271,8 +266,15 @@ void bsod_show(const char *reason, uint32_t isr_number,
      * 理由：崩溃时 VGA 可能停在 0x13 图形模式/寄存器已损坏，图形路径
      * (back_buffer+flip) 依赖 pitch/调色板，实测会丢字；文本模式只依赖
      * VGA 端口，是最可靠的"最后一块屏"。 */
-    bsod_force_text_mode();
-    bsod_text_mode_ex(reason, isr_number, error_code, eip, cs, esp, cr2, eflags);
+    /* gfx 可用时直接走图形绘制，绝不能先 force_text_mode ——
+     * 那一步会 DISPI disable 关掉 VBE，显示表面退回 720x400 文本模式，
+     * 之后往 LFB 写什么都没人看得到（实测全黑）。 */
+    if (gfx_width > 0 && gfx_height > 0 && gfx_fb_addr) {
+        bsod_gfx_draw(isr_number, error_code, eip, cs, esp, cr2, eflags);
+    } else {
+        bsod_force_text_mode();
+        bsod_text_mode_ex(reason, isr_number, error_code, eip, cs, esp, cr2, eflags);
+    }
 
     for (;;) __asm__ volatile ("cli; hlt");
 }

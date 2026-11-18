@@ -154,6 +154,16 @@ int bochs_dispi_init(uint32_t want_w, uint32_t want_h, uint32_t want_bpp)
     dputhex(rx); dputs("x"); dputhex(ry);
     dputs("@"); dputhex(rb); dputs("bpp\n");
 
+    /* 读回 enable 位：QEMU 若没真正进 VBE，表面会停在 720x400 文本模式 */
+    {
+        uint16_t re = dispi_read(DISPI_ENABLE);
+        dputs("[BD-VBE] enable readback=0x"); dputhex(re); dputs("\n");
+        if (!(re & DISPI_ENABLED)) {
+            dputs("[BD-VBE] VBE enable bit rejected by adapter\n");
+            return -4;
+        }
+    }
+
     if (rx != want_w || ry != want_h || rb != want_bpp) {
         dputs("[BD-VBE] mode not accepted by adapter\n");
         dispi_write(DISPI_ENABLE, DISPI_DISABLED);
