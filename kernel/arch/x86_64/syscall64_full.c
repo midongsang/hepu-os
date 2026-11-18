@@ -6,6 +6,7 @@
  * ========================================================================== */
 
 #include <stdint.h>
+#include "shared/capability/hepu_cap.h"
 #include <stddef.h>
 #include "hepu_smap.h"
 #include "elf64.h"
@@ -2787,6 +2788,19 @@ static int64_t wrap_net_stats(int64_t a1, int64_t a2, int64_t a3, int64_t a4, in
 }
 
 /* 系统调用表（函数指针数组，参考32位实现） */
+/* 读取能力授权审计环（只返回拒绝记录）。a1=用户缓冲(cap_audit_rec_t[]) a2=最多条数 */
+static int64_t wrap_cap_audit(int64_t a1, int64_t a2, int64_t a3, int64_t a4, int64_t a5, int64_t a6) {
+    (void)a3;(void)a4;(void)a5;(void)a6;
+    extern int      cap_audit_read(cap_audit_rec_t *out, int max);
+    extern int      copy_to_user(void *user_dst, const void *kernel_src, size_t size);
+    if (a1 <= 0 || a2 <= 0 || a2 > 64) return -1;
+    static cap_audit_rec_t recs[64];
+    int n = cap_audit_read(recs, (int)a2);
+    if (n <= 0) return n;
+    if (copy_to_user((void *)(uintptr_t)a1, recs, (size_t)n * sizeof(cap_audit_rec_t)) != 0) return -1;
+    return n;
+}
+
 static syscall_fn_t syscall_table[SYSCALL_MAX] = {
     [SYSCALL_WRITE]  = wrap_write,
     [SYSCALL_READ]   = wrap_read,
@@ -2902,6 +2916,7 @@ static syscall_fn_t syscall_table[SYSCALL_MAX] = {
     [SYS_FB_ACQUIRE]    = wrap_fb_acquire,
     [SYS_FB_RELEASE]    = wrap_fb_release,
     [SYS_FB_FLIP]       = wrap_fb_flip,
+    [SYS_CAP_AUDIT]     = wrap_cap_audit,
 };
 
 /* 安全修复：旧实现用 char tmp[8]/buf[8] 打印调用号，用户传入 rax=2147483647

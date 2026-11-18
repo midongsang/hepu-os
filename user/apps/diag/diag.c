@@ -7,6 +7,17 @@
 #include <hepu/stdio.h>
 #include <hepu/string.h>
 
+/* 与内核 kernel/shared/capability/hepu_cap.h 的 cap_audit_rec_t 保持一致 */
+typedef struct {
+    unsigned long long ts;
+    int   domain_id;
+    int   handle_idx;
+    unsigned int required_rights;
+    unsigned char reason;
+} cap_audit_rec_t;
+
+#define SYS_CAP_AUDIT 237
+
 #define CHECK_OK   "[  OK  ]"
 #define CHECK_WARN "[ WARN ]"
 #define CHECK_FAIL "[ FAIL ]"
@@ -116,6 +127,31 @@ int main(int argc, char **argv)
     printf("  代码行数: ~51000行\n");
     printf("  .hug应用: 11个\n");
     printf("  系统调用: 63个\n");
+
+    printf("\n[权限审计：最近被拒绝的操作]\n");
+    {
+        cap_audit_rec_t recs[32];
+        unsigned int n = hepu_syscall2(SYS_CAP_AUDIT, (unsigned int)recs, 32);
+        if ((int)n <= 0) {
+            printf("  (暂无记录)\n");
+        } else {
+            printf("  %-6s %-6s %-10s %s\n", "域", "句柄", "所需权利", "原因");
+            for (unsigned int i = 0; i < n && i < 32; i++) {
+                const char *why;
+                switch (recs[i].reason) {
+                    case 1: why = "句柄无效/已撤销"; break;
+                    case 2: why = "权利不足"; break;
+                    case 3: why = "超出能力上限"; break;
+                    case 4: why = "域号越界"; break;
+                    default: why = "未知"; break;
+                }
+                printf("  %-6d %-6d 0x%-8x %s\n",
+                       recs[i].domain_id, recs[i].handle_idx,
+                       recs[i].required_rights, why);
+            }
+            printf("  共 %u 条拒绝记录\n", n);
+        }
+    }
 
     printf("\n[建议]\n");
     if (warn_count > 0) {

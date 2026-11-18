@@ -169,7 +169,8 @@
 #define SYS_LIST_USERS       219 /* 列出用户 (V8.46) */
 #define SYS_GET_CURRENT_USER 220 /* 获取当前用户 (V8.46) */
 #define SYS_GFX_3D_DEMO      221 /* 3D图形演示 (V0.9.0: P5-5硬件加速) */
-#define SYS_MAX              236
+#define SYS_CAP_AUDIT     237   /* 读取能力授权审计环（拒绝记录） */
+#define SYS_MAX              238
 #endif
 
 /* 初始化系统调用 */

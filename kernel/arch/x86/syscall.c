@@ -11,6 +11,7 @@
 #include "kheap.h"
 #include "sched.h"
 #include "hepu.h"
+#include "shared/capability/hepu_cap.h"
 #include "fingerprint.h"
 #include "vfs.h"
 #include "ipc.h"
@@ -148,8 +149,23 @@ extern uint32_t sys_get_current_user(uint32_t, uint32_t, uint32_t, uint32_t);
 /* 文件描述符操作 */
 /* 用户/组ID */
 /* 系统调用表 */
+/* 读取能力授权审计环（只返回拒绝记录）。a1=用户缓冲(cap_audit_rec_t[]) a2=最多条数 */
+static uint32_t sys_cap_audit(uint32_t a1, uint32_t a2, uint32_t a3, uint32_t a4)
+{
+    (void)a3; (void)a4;
+    extern int      cap_audit_read(cap_audit_rec_t *out, int max);
+    extern uint32_t copy_to_user(void *dst, const void *src, uint32_t n);
+    if (a1 == 0 || a2 == 0 || a2 > 64) return (uint32_t)-1;
+    static cap_audit_rec_t recs[64];
+    int n = cap_audit_read(recs, (int)a2);
+    if (n <= 0) return (uint32_t)n;
+    if (copy_to_user((void *)(uintptr_t)a1, recs, (uint32_t)(n * (int)sizeof(cap_audit_rec_t))) != 0) return (uint32_t)-1;
+    return (uint32_t)n;
+}
+
 static syscall_fn_t syscall_table[SYS_MAX] = {
     [SYS_HEPU_INFO]      = sys_hepu_info,
+    [SYS_CAP_AUDIT]      = sys_cap_audit,
     [SYS_HEPU_FP_VERIFY] = sys_hepu_fp_verify,
     [SYS_PRINT]          = sys_print,
     [SYS_MALLOC]         = sys_malloc,
