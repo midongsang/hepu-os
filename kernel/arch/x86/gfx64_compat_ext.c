@@ -61,6 +61,26 @@ uint8_t rtc64_get_weekday(void)
     return (uint8_t)(((hh + 6) % 7) + 1);                                /* -> 1=Sunday */
 }
 
+/* Unix 时间戳：接 32 位 rtc_get_time 读 CMOS 折算（口径同 64 位 rtc64.c：
+ * 从 2000-01-01 起算，加 946684800）。读失败返回 0。 */
+uint64_t rtc64_get_timestamp(void)
+{
+    int h, m, s, d, mo, y;
+    if (rtc_get_time(&h, &m, &s, &d, &mo, &y) != 0) return 0;
+
+    uint64_t days = 0;
+    for (int yy = 2000; yy < y; yy++) {
+        if ((yy % 4 == 0 && yy % 100 != 0) || (yy % 400 == 0)) days += 366;
+        else days += 365;
+    }
+    int mdays[12] = {31, 28, 31, 30, 31, 30, 31, 30, 31, 30, 31, 30};
+    if ((y % 4 == 0 && y % 100 != 0) || (y % 400 == 0)) mdays[1] = 29;
+    for (int mm = 0; mm < mo - 1; mm++) days += mdays[mm];
+    days += d - 1;
+
+    return days * 86400ULL + (uint64_t)h * 3600 + (uint64_t)m * 60 + s + 946684800ULL;
+}
+
 /* ---- PIT: 32 位 pit_get_ticks 是 uint32_t, 64 位签名是 uint64_t ---- */
 uint64_t pit64_get_ticks(void)
 {
