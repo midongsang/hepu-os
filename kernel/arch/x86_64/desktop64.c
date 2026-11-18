@@ -278,9 +278,12 @@ void desktop64_run(void)
          * 还带重试), 表现为桌面启动一段时间内时钟与画面一起冻住。
          * 现在推迟到启动 60 秒后只试一次: 首屏完全不受影响, 顶栏天气卡片在这之前
          * 显示 "--" 占位(本来就有占位逻辑)。 */
-        if (wx_tries < 1) {
-            /* 主循环一轮约 1ms, 60000 轮 ≈ 60 秒墙钟(按轮数算, 不是帧数) */
-            if (++wx_tick >= 60000) {
+        /* BUG-59：原实现只在 wx_tries < 1 时试一次，失败后 wx_tries++ 就永久放弃，
+         * 网络晚一点就绪就再也没有天气。改为最多 6 次：首次 5000 轮后试，
+         * 之后每次间隔 60000 轮。成功即停（wx_tries=6）。 */
+        if (wx_tries < 6) {
+            int wx_every = (wx_tries == 0) ? 5000 : 60000;
+            if (++wx_tick >= wx_every) {
                 wx_tick = 0;
                 extern int hpdesk_fetch_weather(void);
                 if (hpdesk_fetch_weather()) wx_tries = 6;

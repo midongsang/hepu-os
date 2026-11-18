@@ -8657,9 +8657,9 @@ int hpdesk_fetch_weather(void)
     extern int http64_get_body(const uint8_t *response, int response_len,
                                uint8_t *body, int max_body);
     static const char *url =
-        "http://api.open-meteo.com/v1/forecast?latitude=29.03&longitude=111.69&current_weather=true";
-    uint8_t resp[2048];
-    uint8_t body[1024];
+        "http://t.weather.itboy.net/api/weather/city/101250601";
+    static uint8_t resp[8192];
+    static uint8_t body[8192];
     /* V0.56.1: 失败要能让调用方知道(此前失败静默 return, 桌面只在第 60 帧试一次,
      * 网络没就绪就永久没有天气) */
     /* 天气是"拿不到就拉倒"的请求: 3 秒拿不到就放弃, 别把桌面主循环堵住 */
@@ -8676,46 +8676,27 @@ int hpdesk_fetch_weather(void)
     int blen = http64_get_body(resp, rlen, body, sizeof(body));
     if (blen <= 0) return 0;
 
-    /* 温度: open-meteo 的响应里 "temperature" 会先出现在 current_weather_units 段
-     * (值是单位字符串 "..C"), 旧实现只找第一个、解析失败就放弃, 于是永远取不到温度。
-     * 改为从上一个命中点继续往下找, 直到某个值真的是数字为止。 */
+    /* 国内源 t.weather.itboy.net（又拍云 CDN，非 Cloudflare）：
+     * 温度在 data.wendu（字符串 "9.3"），天气在 data.forecast[0].type（中文 "多云"）。
+     * open-meteo 那套 temperature/weathercode 在本机链路上拿不到响应（见 BUG-59：
+     * 服务器 ACK 了请求却不发数据），故换源并一并换掉解析口径。 */
     int t = -999;
-    int tp = 0;
-    while ((tp = hs_find_key_from(body, blen, "\"temperature\":", tp)) >= 0) {
-        if (hs_parse_int_at(body, tp, blen, &t) == 0) { hs_itoa(t, g_weather_temp); break; }
-        t = -999;
-        tp += 1;
-    }
-    /* 天气码 → 描述 (同样跳过 units 段里的字符串值) */
-    int wc = -1;
-    int wp = 0;
-    while ((wp = hs_find_key_from(body, blen, "\"weathercode\":", wp)) >= 0) {
-        if (hs_parse_int_at(body, wp, blen, &wc) == 0) break;
-        wc = -1;
-        wp += 1;
-    }
-    if (wc >= 0) {
-        const char *desc = "Cloudy";
-        switch (wc) {
-            case 0: desc = "Clear"; break;
-            case 1: case 2: desc = "Few clouds"; break;
-            case 3: desc = "Cloudy"; break;
-            case 45: case 48: desc = "Fog"; break;
-            case 51: case 53: case 55: case 56: case 57: desc = "Drizzle"; break;
-            case 61: case 63: case 65: case 66: case 67: desc = "Rain"; break;
-            case 71: case 73: case 75: case 77: desc = "Snow"; break;
-            case 80: case 81: case 82: desc = "Showers"; break;
-            case 85: case 86: desc = "Snow showers"; break;
-            case 95: case 96: case 99: desc = "Thunderstorm"; break;
-            default: break;
-        }
-        strcpy(g_weather_desc, desc);
+    int tp = hs_find_key_from(body, blen, "\"wendu\":", 0);
+    if (tp >= 0 && hs_parse_int_at(body, tp, blen, &t) == 0) hs_itoa(t, g_weather_temp);
+
+    int wsp = hs_find_key_from(body, blen, "\"type\":", 0);
+    if (wsp >= 0) {
+        while (wsp < blen && (body[wsp] == ' ' || body[wsp] == ':' || body[wsp] == '"')) wsp++;
+        int n = 0;
+        while (wsp < blen && body[wsp] != '"' && n < 23) g_weather_desc[n++] = (char)body[wsp++];
+        g_weather_desc[n] = 0;
     }
     g_weather_ok = 1;
     /* V0.57.0: 数据到手必须请重绘 —— 按需合成下不标脏, 桌面右下角组件会一直
      * 停在抓取前的 "-- / N/A" 占位(而 Weather 页因切页重绘能显示, 两处观感不一致)。 */
     hpdesk_mark_dirty();
-    vga_puts("[WX] weather fetched\n");
+    vga_puts("[WX] weather fetched temp="); vga_puts(g_weather_temp);
+    vga_puts(" desc="); vga_puts(g_weather_desc); vga_puts("\n");
     return 1;
 }
 
