@@ -79,3 +79,23 @@ e77fbfc feat(diag): /bsod_selftest 自动自测入口
 8b688e7 feat(diag): 蓝屏图形版面（3 倍字、1920x1080 可读）
 da813a4 fix(gfx): 32 位 LFB 地址被 .bss 清零导致从未映射
 ```
+
+## 附：32 位磁盘级验证路径（2026-11-19）
+
+32 位是 multiboot 内核，`stage2` 只引导 64 位，镜像启动没有 32 位入口 ——
+这是 readdir 行为、32 位自检、`bsod` 交互三处验证卡住的**同一个原因**。实测找到替代路径：
+
+```
+qemu-system-i386 -kernel build_v250/kernel.elf -drive file=<带 ext2 的盘>
+```
+
+串口输出 `[FS] ext2 filesystem found on IDE drive partition LBA=0x32C8`
++ `[EXT2] selftest: mounted`，ext2 正常挂载、桌面正常起来。
+
+用它跑通了 32 位 readdir 的镜像级验证（提交 `4f42795` 的行为证据）：
+
+```
+[RD-TEST] root entries=14  first=lost+found
+```
+
+（临时探针已在提交前移除，工作树干净；`regress32` 复跑 `fault=0 lines=869` PASS）
