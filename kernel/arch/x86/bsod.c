@@ -291,3 +291,45 @@ void cmd_bsod(void)
     serial_puts(0x3F8, "[BSOD] self-test requested from shell\n");
     bsod_show("user-requested BSOD self-test", 14, 0x2, eip, cs, esp, 0xDEADB000);
 }
+
+/* 2026-11-19: 32 位自检入口（对应 64 位的 diag_selftest64）。
+ * 不做会停机的事，只检查零件是否齐全，供镜像启动时按标记文件触发。 */
+void diag_selftest32(void)
+{
+    extern void serial_puts(uint16_t, const char *);
+    extern int ext2_mounted;
+    int pass = 0, fail = 0;
+    int i, named = 0;
+
+    serial_puts(0x3F8, "\r\n[DIAG32] ===== HepuOS 32-bit self-test =====\r\n");
+
+    /* 1. 串口通道 */
+    serial_puts(0x3F8, "[DIAG32] 1. serial channel: PASS\r\n");
+    pass++;
+
+    /* 2. 异常名表覆盖 32/32 */
+    for (i = 0; i < 32; i++) {
+        if (bsod_exception_names[i] && bsod_exception_names[i][0]) named++;
+    }
+    serial_puts(0x3F8, "[DIAG32] 2. exception names: ");
+    if (named == 32) { serial_puts(0x3F8, "PASS (32/32)\r\n"); pass++; }
+    else { serial_puts(0x3F8, "FAIL ("); serial_puts(0x3F8, "incomplete)\r\n"); fail++; }
+
+    /* 3. STOP 码定长 */
+    {
+        char sb[11];
+        bsod_stop_code(14, sb);
+        serial_puts(0x3F8, "[DIAG32] 3. stop code format: ");
+        if (sb[0] == '0' && strlen(sb) == 10) { serial_puts(0x3F8, "PASS\r\n"); pass++; }
+        else { serial_puts(0x3F8, "FAIL\r\n"); fail++; }
+    }
+
+    /* 4. ext2 已挂载 */
+    serial_puts(0x3F8, "[DIAG32] 4. ext2 mounted: ");
+    if (ext2_mounted) { serial_puts(0x3F8, "PASS\r\n"); pass++; }
+    else { serial_puts(0x3F8, "FAIL\r\n"); fail++; }
+
+    serial_puts(0x3F8, "[DIAG32] RESULT: ");
+    serial_puts(0x3F8, fail == 0 ? "PASS" : "FAIL");
+    serial_puts(0x3F8, "\r\n");
+}

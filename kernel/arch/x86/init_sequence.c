@@ -548,6 +548,17 @@ int hepu_init_phase(init_phase_t phase)
             rtk_kernel_init(); i18ns_system_init();
             multilingual_ime_init(); app_freeze_init();
             id_randomizer_init();
+            /* 2026-11-19: 32 位自检入口 —— 根分区有 /diag_selftest 就跑一遍 */
+            {
+                extern void serial_puts(uint16_t, const char *);
+                extern int ide_ext2_read_file(const char *, const char *, char *, int);
+                extern void diag_selftest32(void);
+                char tag[8];
+                if (ide_ext2_read_file("/", "diag_selftest", tag, 4) > 0) {
+                    serial_puts(0x3F8, "[DIAG32] /diag_selftest found -> running self-test\n");
+                    diag_selftest32();
+                }
+            }
             if (!protect_gfx) {
                 extern void serial_puts(uint16_t, const char *);
                 serial_puts(0x3F8, "[APPS] 6/7: pre-desktop done, calling elastic_desktop_init...\n");
