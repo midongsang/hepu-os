@@ -233,6 +233,10 @@ void uart64_irq_handler(void)
 int uart64_haschar(int com)
 {
     if (com < 0 || com >= 4) return 0;
+    /* 2026-11-19: 光看环形缓冲不够 —— IRQ4 没使能/被屏蔽时，字符留在
+     * UART FIFO 里，ring 永远是空的，串口 shell 旁路于是永远不触发。
+     * 先主动排空一次 FIFO（drain 会入 ring 并回显），再看有没有东西。 */
+    if (uart_devices[com].initialized) uart64_drain_rx(uart_devices[com].port);
     return uart_rx_head != uart_rx_tail;
 }
 
