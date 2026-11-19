@@ -548,6 +548,22 @@ int hepu_init_phase(init_phase_t phase)
             rtk_kernel_init(); i18ns_system_init();
             multilingual_ime_init(); app_freeze_init();
             id_randomizer_init();
+            /* 2026-11-19: 崩溃摘要跨重启横幅 */
+            {
+                extern void crash_nvram_print_banner(void);
+                crash_nvram_print_banner();
+            }
+            /* 2026-11-19: 崩溃摘要验证入口 —— 根分区有 /bsod_selftest 就崩一次 */
+            {
+                extern void serial_puts(uint16_t, const char *);
+                extern int ide_ext2_read_file(const char *, const char *, char *, int);
+                extern void bsod_show(const char *, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
+                char tag2[8];
+                if (ide_ext2_read_file("/", "bsod_selftest", tag2, 4) > 0) {
+                    serial_puts(0x3F8, "[SELFTEST] /bsod_selftest found -> bsod\n");
+                    bsod_show("crash-nvram selftest", 14, 0x2, 0xDEADBEEF, 0x08, 0x1000, 0xDEADB000);
+                }
+            }
             /* 2026-11-19: 32 位自检入口 —— 根分区有 /diag_selftest 就跑一遍 */
             {
                 extern void serial_puts(uint16_t, const char *);

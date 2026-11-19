@@ -103,6 +103,7 @@ static void bsod_serial_output(const char *reason, uint32_t isr_number,
     bsod_hex32(cs, hexbuf); serial_puts(0x3F8, " CS="); serial_puts(0x3F8, hexbuf);
     bsod_hex32(eflags, hexbuf); serial_puts(0x3F8, " EFLAGS="); serial_puts(0x3F8, hexbuf);
     bsod_hex32(esp, hexbuf); serial_puts(0x3F8, " ESP="); serial_puts(0x3F8, hexbuf);
+    crash_nvram_save((uint32_t)isr_number, eip, cr2);
     serial_puts(0x3F8, "\r\nHint: "); serial_puts(0x3F8, bsod_hint(isr_number));
     serial_puts(0x3F8, "\r\n");
     nf = bsod_walk_stack(esp, frames, 4);
@@ -294,6 +295,94 @@ void cmd_bsod(void)
 
 /* 2026-11-19: 32 位自检入口（对应 64 位的 diag_selftest64）。
  * 不做会停机的事，只检查零件是否齐全，供镜像启动时按标记文件触发。 */
+
+/* === 2026-11-19: 崩溃摘要跨重启（CMOS NVRAM，对齐 64 位 9352803） ===
+ * 崩溃时不能碰 ext2（会再次 GPF halt），所以走纯端口 IO 的 CMOS。
+ * 布局从 0x50 起：magic(4) stop(4) eip(4) cr2(4) = 16 字节。
+ * 注意 0x30/0x31 不能用 —— 0x31 是 BIOS 的"扩展内存大小"，reset 时会被重写。 */
+#define CRASH_NV_MAGIC 0x53415243u   /* 'CRAS' */
+#define CRASH_NV_BASE  0x50
+
+static void ccmos_write(uint8_t reg, uint8_t val)
+{
+    __asm__ volatile ("outb %%al, %%dx" : : "a"(reg), "d"((uint16_t)0x70));
+    __asm__ volatile ("outb %%al, %%dx" : : "a"(val), "d"((uint16_t)0x71));
+}
+
+static uint8_t ccmos_read(uint8_t reg)
+{
+    uint8_t v;
+    __asm__ volatile ("outb %%al, %%dx" : : "a"(reg), "d"((uint16_t)0x70));
+    __asm__ volatile ("inb %%dx, %%al" : "=a"(v) : "d"((uint16_t)0x71));
+    return v;
+}
+
+static void nv_put32(uint8_t off, uint32_t v)
+{
+    int i;
+    for (i = 0; i < 4; i++) ccmos_write((uint8_t)(CRASH_NV_BASE + off + i), (uint8_t)(v >> (8 * i)));
+}
+static uint32_t nv_get32(uint8_t off)
+{
+    uint32_t v = 0; int i;
+    for (i = 0; i < 4; i++) v |= (uint32_t)ccmos_read((uint8_t)(CRASH_NV_BASE + off + i)) << (8 * i);
+    return v;
+}
+
+void crash_nvram_save(uint32_t stop, uint32_t eip, uint32_t cr2)
+{
+    nv_put32(0, CRASH_NV_MAGIC);
+    nv_put32(4, stop);
+    nv_put32(8, eip);
+    nv_put32(12, cr2);
+}
+
+int crash_nvram_load(uint32_t *stop, uint32_t *eip, uint32_t *cr2)
+{
+    if (nv_get32(0) != CRASH_NV_MAGIC) return 0;
+    if (stop) *stop = nv_get32(4);
+    if (eip)  *eip  = nv_get32(8);
+    if (cr2)  *cr2  = nv_get32(12);
+    return 1;
+}
+
+void crash_nvram_clear(void)
+{
+    nv_put32(0, 0);
+    nv_put32(4, 0);
+    nv_put32(8, 0);
+    nv_put32(12, 0);
+}
+
+
+static void nv_puts_hex(uint32_t v)
+{
+    extern void serial_puts(uint16_t, const char *);
+    char buf[11];
+    int i;
+    const char *h = "0123456789abcdef";
+    buf[0] = '0'; buf[1] = 'x';
+    for (i = 0; i < 8; i++) buf[2 + i] = h[(v >> (28 - 4 * i)) & 0xF];
+    buf[10] = 0;
+    serial_puts(0x3F8, buf);
+}
+
+/* 开机横幅：上次是不是异常停的 */
+void crash_nvram_print_banner(void)
+{
+    extern void serial_puts(uint16_t, const char *);
+    uint32_t s = 0, r = 0, c = 0;
+    if (!crash_nvram_load(&s, &r, &c)) return;
+    serial_puts(0x3F8, "[CRASH-LAST] previous abnormal halt: STOP=");
+    nv_puts_hex(s);
+    serial_puts(0x3F8, " eip=");
+    nv_puts_hex(r);
+    serial_puts(0x3F8, " cr2=");
+    nv_puts_hex(c);
+    serial_puts(0x3F8, "\n");
+    crash_nvram_clear();
+}
+
 void diag_selftest32(void)
 {
     extern void serial_puts(uint16_t, const char *);
