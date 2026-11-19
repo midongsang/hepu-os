@@ -351,6 +351,13 @@ int vfs_readdir(const char *path, vfs_dirent_t *buf, int max_entries)
 {
     vfs_node_t *dir = vfs_find(path);
     if (!dir || dir->type != VFS_DIRECTORY) return -1;
+    /* 与 vfs_readdir_fd 同口径：ext2 目录挂载时只填了一层，子目录的 children
+     * 是空的，按路径列目录时要直接问 ext2 要真实条目。 */
+    if (dir->private_data && !dir->children) {
+        extern int ext2_readdir_ino(uint32_t ino, vfs_dirent_t *buf, int max_entries);
+        int n = ext2_readdir_ino((uint32_t)(uintptr_t)dir->private_data, buf, max_entries);
+        if (n >= 0) return n;
+    }
 
     int count = 0;
     vfs_node_t *child = dir->children;
