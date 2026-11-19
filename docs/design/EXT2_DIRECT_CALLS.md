@@ -63,3 +63,38 @@ vfs_readdir / vfs_readdir_fd     （已接 ext2 真实目录，4f42795 / f5aa34d
 
 - `init_sequence.c` 的自测与标记文件读取：它就是要验底层，走 VFS 反而绕远了
 - `klog.c`：崩溃路径，任何额外层都可能害事
+
+## 七、写入同步核实结果（2026-11-19）
+
+**结论：VFS 的写路径不落盘，改过去必须先接同步，否则"写了但没落盘"。**
+
+链路：
+
+```
+vfs_write(fd, buf, size)                      kernel/fs/vfs.c
+  └─ node->ops->write = ext2_vfs_write        kernel/fs/ext2_dir.c:115
+       ├─ ext2_write_data(...)                → 写块缓存 + 标脏
+       ├─ ext2_write_inode(...)               → 写 inode 缓存
+       └─ 结束，没有任何 flush
+```
+
+对照两个 sync：
+
+| 函数 | 做什么 | 是否真落盘 |
+|---|---|---|
+| `ext2_sync()` | `ext2_block_flush()` + 把 `ext2_disk`（仅 32KB 常驻区）写回 | **否**（只动内存镜像） |
+| `ide_ext2_sync()` | `ide_write_range(sb_area, data_lba, 64)` + `ext2_block_flush()` | **是** |
+
+所以现在的直调之所以"写得进去"，是因为它们都是
+`ide_ext2_writefile/write_raw(...)` **末尾自己调了 `ide_ext2_sync()`**
+（`apps/ime.c:88`、`permission_manager.c:81`、`mobile.c:394/451` 都能看到）。
+
+**已补的接口**：`vfs_sync()`（`vfs.c`，2026-11-19），包装 `ide_ext2_sync()`。
+设计上**不**在每次 `write` 后自动调（那会每写一次全盘同步）；由"写完必须落盘"
+的调用方显式调用。
+
+**改造时的硬规则**：
+
+1. 任何经 `vfs_write` 的写操作，在业务结束点必须调一次 `vfs_sync()`
+2. 不允许把 `ide_ext2_sync()` 直接暴露给应用层（保持单一入口）
+3. 改完必须验"写 → 重启 → 读回"，不能只看"写返回成功"

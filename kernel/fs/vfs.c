@@ -311,6 +311,15 @@ int vfs_write(int fd, const void *buf, uint32_t size)
     return ret;
 }
 
+/* 2026-11-19: VFS 写只进块缓存，不落盘（ext2_vfs_write → ext2_write_data
+ * → cache_dirty，真正写盘靠 ide_ext2_sync）。这里补一个显式同步入口，
+ * 给"写完必须落盘"的调用方用；不自动在每次 write 后调，否则每写一次全盘同步。 */
+int vfs_sync(void)
+{
+    extern int ide_ext2_sync(void);
+    return ide_ext2_sync();
+}
+
 int vfs_lseek(int fd, int32_t offset, int whence)
 {
     if (fd < 0 || fd >= VFS_MAX_FDS || !fd_table[fd].used) return -1;
