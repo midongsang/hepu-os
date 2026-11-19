@@ -488,6 +488,13 @@ int vfs_readdir_fd(int fd, vfs_dirent_t *buf, int max_entries)
     if (fd < 0 || fd >= VFS_MAX_FDS || !fd_table[fd].used) return -1;
     vfs_node_t *dir = fd_table[fd].node;
     if (!dir || dir->type != VFS_DIRECTORY) return -1;
+    /* 来自 ext2 的目录（带 inode 号）且挂载时没填过子节点 —— 直接问 ext2，
+     * 别只信挂载时那一层快照，否则 ls 子目录永远是空的。 */
+    if (dir->private_data && !dir->children) {
+        extern int ext2_readdir_ino(uint32_t ino, vfs_dirent_t *buf, int max_entries);
+        int n = ext2_readdir_ino((uint32_t)(uintptr_t)dir->private_data, buf, max_entries);
+        if (n >= 0) return n;
+    }
     int count = 0;
     vfs_node_t *child = dir->children;
     while (child && count < max_entries) {

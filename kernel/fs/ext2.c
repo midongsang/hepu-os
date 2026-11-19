@@ -260,6 +260,46 @@ static vfs_file_ops_t ext2_file_ops = {
     .ioctl = NULL,
 };
 
+/* 2026-11-19: 真正的 readdir —— 挂载时只填充了根目录一层，子目录的
+ * children 是空的，所以 ls /bin 这类看不到内容。这里按 inode 号直接读
+ * 目录块，跳过 . 和 ..，填跨后端统一的 vfs_dirent_t。 */
+int ext2_readdir_ino(uint32_t ino, vfs_dirent_t *buf, int max_entries)
+{
+    ext2_inode_t dir_inode;
+    static uint8_t blk[4096];
+    uint32_t offset = 0;
+    int count = 0;
+
+    if (!buf || max_entries <= 0) return -1;
+    if (ext2_read_inode(ino, &dir_inode) != 0) return -1;
+    if ((dir_inode.i_mode & 0xF000) != 0x4000) return -1;
+
+    while (offset < dir_inode.i_size && count < max_entries) {
+        uint32_t to_read = dir_inode.i_size - offset;
+        uint32_t n, pos = 0;
+        if (to_read > 4096) to_read = 4096;
+        n = (uint32_t)ext2_read_data(&dir_inode, offset, blk, (int)to_read);
+        if ((int32_t)n <= 0) break;
+        while (pos + 8 <= n && count < max_entries) {
+            ext2_dir_entry_t *e = (ext2_dir_entry_t *)(blk + pos);
+            if (e->rec_len < 8 || e->name_len >= VFS_MAX_NAME) break;
+            if (pos + e->rec_len > n) break;
+            if (e->name_len > 0 && e->name[0] != '.') {
+                uint32_t k;
+                for (k = 0; k < e->name_len && k < VFS_MAX_NAME - 1; k++)
+                    buf[count].name[k] = e->name[k];
+                buf[count].name[k] = '\0';
+                buf[count].type = (e->file_type == EXT2_FT_DIR) ? VFS_DIRECTORY : VFS_REGULAR;
+                buf[count].size = 0;
+                count++;
+            }
+            pos += e->rec_len;
+        }
+        offset += n;
+    }
+    return count;
+}
+
 int ext2_mount(const char *mountpoint)
 {
     if (!ext2_mounted) return -1;
