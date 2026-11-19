@@ -289,14 +289,22 @@ int ide_ext2_mount(void)
     data_sectors = found_data_sectors;
 
     /* V3.87-D6: 数据盘容量上限 = IDE 28位LBA 硬件上限 128GB (不再受内存镜像限制) */
-    if (data_sectors == 0 || (uint64_t)data_sectors * 512 > (uint64_t)128ULL * 1024 * 1024 * 1024)
+    if (data_sectors == 0 || (uint64_t)data_sectors * 512 > (uint64_t)128ULL * 1024 * 1024 * 1024) {
+        serial_puts(0x3F8, "[FS] mount: bad data_sectors\n");
         return -1;
+    }
 
     /* 读块0-31 常驻区: superblock(块1) + GDT(块2起) */
-    if (ide_read_range(sb_area, data_lba, 64) != 0) return -1;
+    if (ide_read_range(sb_area, data_lba, 64) != 0) {
+        serial_puts(0x3F8, "[FS] mount: resident read failed\n");
+        return -1;
+    }
 
     /* 校验 superblock */
-    if (*(uint16_t *)(sb_area + 1024 + 56) != 0xEF53) return -1;
+    if (*(uint16_t *)(sb_area + 1024 + 56) != 0xEF53) {
+        serial_puts(0x3F8, "[FS] mount: superblock magic mismatch\n");
+        return -1;
+    }
 
     /* 检查 GDT 是否在常驻区内 (gdt_bytes <= 32KB - gdt偏移) */
     {
@@ -330,7 +338,10 @@ int ide_ext2_mount(void)
         cache_bs = bs;
     }
 
-    if (ext2_init(sb_area, sizeof(sb_area)) != 0) return -1;
+    if (ext2_init(sb_area, sizeof(sb_area)) != 0) {
+        serial_puts(0x3F8, "[FS] mount: ext2_init failed\n");
+        return -1;
+    }
     fs_mounted = 1;
 
     /* V6.49: 初始化页缓存（二级缓存）
