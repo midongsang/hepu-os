@@ -29,7 +29,7 @@ fs mount | ls | cat | write | stat | df | sync | mkdir | rm | cp <src> <dst>
 | `rm` | `ide_ext2_delete` / `fs_rm_recursive` | `vfs_unlink` / `vfs_rmdir`（递归版重写） |
 | `cp` / `cpall` | `fs_cp_recursive` | read + write + mkdir 组合 |
 | `sync` | `ide_ext2_sync()` | `vfs_sync()` |
-| `mv` | 直调 | **待定**：`vfs` 无 `rename` 接口，先保留 |
+| `mv` | 直调 | `vfs_rename(old, new)`（`vfs.c:445` 已有，之前判断有误已更正） |
 | `df` / `fsck` | ext2 专有 | **保留直调**（不是文件语义，是卷级操作） |
 
 ## 三、必须先补的两个 helper
@@ -68,7 +68,8 @@ fs mount | ls | cat | write | stat | df | sync | mkdir | rm | cp <src> <dst>
 2. `write` 之后必须 `vfs_sync()`，否则"返回成功但重启就没了"。
 3. 递归删除前先确认 `vfs_rmdir` 对非空目录的返回码（ext2 是 `-2`），
    shell 的错误提示依赖这个区分。
-4. `mv` 在 `vfs` 没有 `rename` 接口前不动；要动就先补接口，别在 shell 里拼。
+4. `mv` 走 `vfs_rename(old, new)` —— 接口在 `vfs.c:445` 已存在（`hepu_fs_rename` 也是它），
+   可直接改；改前确认它对"目标已存在"的语义与 ext2 直调一致。
 5. 每一阶段都要跑 `regress32`，`fault=0` 才算过。
 
 ## 六、预期收益
