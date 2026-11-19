@@ -77,6 +77,35 @@ void cmd_loglevel(char *arg)
 /* V4.44-E89: 递归复制 helper——支持文件/目录/批量
  * dirpath: 源目录 ("/" 或 "docs"), name: 源条目名, dstbase: 目标目录名 (根下)
  * depth 防循环 (最大 4 层) */
+
+/* 2026-11-20 P1: 路径拼接 helper —— 现在各处手工 while 拼路径重复了 6 处，
+ * 改走 VFS 前先收敛，避免把同样的边界 bug 复制一遍。 */
+static void fs_join_path(const char *dir, const char *name, char *out, int max)
+{
+    int n = 0;
+    if (dir && dir[0]) {
+        while (*dir && n < max - 1) out[n++] = *dir++;
+    } else {
+        out[n++] = '/';
+    }
+    if (n > 1 && out[n - 1] == '/') n--;
+    if (name && name[0]) {
+        if (n < max - 1) out[n++] = '/';
+        while (*name && n < max - 1) out[n++] = *name++;
+    }
+    out[n] = 0;
+}
+
+/* 把 "hello" / "/hello" 统一成 "/hello" */
+static void fs_abs_path(const char *in, char *out, int max)
+{
+    int n = 0;
+    if (!in || !in[0]) { if (max > 1) { out[0] = '/'; out[1] = 0; } return; }
+    if (in[0] != '/') out[n++] = '/';
+    while (*in && n < max - 1) out[n++] = *in++;
+    out[n] = 0;
+}
+
 static int fs_cp_recursive(const char *dirpath, const char *name,
                            const char *dstbase, int depth)
 {
@@ -245,14 +274,43 @@ void cmd_fs(char *args)
         if (ide_ext2_mount() == 0) vga_puts(" ext2 fs mounted (IDE disk)\n");
         else vga_puts(" mount FAIL\n");
     } else if (strncmp(args, "ls", 2) == 0) {
-        extern void ide_ext2_list_dir(void);
-        ide_ext2_list_dir();
+        /* P1: 改走 VFS（支持带目录参数，子目录经 ext2_readdir_ino 读真实条目） */
+        const char *path = args + 2;
+        while (*path == ' ') path++;
+        if (*path == 0) path = "/";
+        vfs_dirent_t ents[64];
+        int cnt = vfs_readdir(path, ents, 64);
+        if (cnt < 0) {
+            vga_printf(" ls %s FAIL\n", path);
+        } else {
+            vga_printf(" %s (%d):\n", path, cnt);
+            for (int i = 0; i < cnt; i++)
+                vga_printf("   %s%s  %d\n", ents[i].name,
+                           ents[i].type == VFS_DIRECTORY ? "/" : "", ents[i].size);
+        }
     } else if (strncmp(args, "cat ", 4) == 0) {
-        extern int ide_ext2_cat(const char *name);
-        const char *name = args + 4;
-        if (ide_ext2_cat(name) != 0) vga_printf(" cat %s FAIL\n", name);
+        /* P2: 改走 VFS（open + read + close） */
+        char abs[192];
+        fs_abs_path(args + 4, abs, sizeof(abs));
+        int fd = vfs_open(abs, VFS_O_RDONLY);
+        if (fd < 0) {
+            vga_printf(" cat %s FAIL (open)\n", abs);
+        } else {
+            static char cbuf[4096];
+            int rd = 0;
+            while (rd < (int)sizeof(cbuf) - 1) {
+                int n = vfs_read(fd, cbuf + rd, sizeof(cbuf) - 1 - rd);
+                if (n <= 0) break;
+                rd += n;
+            }
+            cbuf[rd > 0 ? rd : 0] = 0;
+            vga_puts(" ");
+            vga_puts(cbuf);
+            vga_puts("\n");
+            vfs_close(fd);
+        }
     } else if (strncmp(args, "write ", 6) == 0) {
-        extern int ide_ext2_writefile(const char *name, const char *data);
+        /* P2: 改走 VFS（open+write+close+sync） */
         const char *rest = args + 6;
         /* 拆分 name 和 text(第一个空格分隔) */
         const char *name = rest;
@@ -265,13 +323,45 @@ void cmd_fs(char *args)
         memcpy(nm, name, nl);
         nm[nl] = 0;
         const char *data = sp + 1;
-        int w = ide_ext2_writefile(nm, data);
-        if (w >= 0) vga_printf(" wrote %d bytes to /%s\n", w, nm);
-        else vga_printf(" write /%s FAIL\n", nm);
+        {
+            char abs[192];
+            fs_abs_path(nm, abs, sizeof(abs));
+            /* 32 位 vfs_open 不处理 O_CREAT（只 vfs_find，不存在返回 -1），
+             * 所以新文件先走 ext2_path_create 建出来，再 open 写入。 */
+            if (!vfs_find(abs)) {
+                extern int ext2_path_create(const char *path, uint16_t mode);
+                if (ext2_path_create(abs, 0x81A4) <= 0) {
+                    vga_printf(" write %s FAIL (create)\n", abs);
+                    return;
+                }
+            }
+            int fd = vfs_open(abs, VFS_O_WRONLY | VFS_O_TRUNC);
+            if (fd < 0) {
+                vga_printf(" write %s FAIL (open)\n", abs);
+            } else {
+                int w = vfs_write(fd, data, strlen(data));
+                vfs_close(fd);
+                /* 必须显式同步：vfs_write 只进块缓存，不落盘 */
+                if (w >= 0 && vfs_sync() == 0)
+                    vga_printf(" wrote %d bytes to %s (synced)\n", w, abs);
+                else if (w >= 0)
+                    vga_printf(" wrote %d bytes to %s (SYNC FAIL)\n", w, abs);
+                else
+                    vga_printf(" write %s FAIL\n", abs);
+            }
+        }
     } else if (strncmp(args, "stat ", 5) == 0) {
-        extern int ide_ext2_stat(const char *name);
-        const char *name = args + 5;
-        if (ide_ext2_stat(name) != 0) vga_printf(" stat %s FAIL\n", name);
+        /* P1: 改走 VFS */
+        char abs[192];
+        fs_abs_path(args + 5, abs, sizeof(abs));
+        vfs_node_t *n = vfs_find(abs);
+        if (!n) {
+            vga_printf(" stat %s: not found\n", abs);
+        } else {
+            vga_printf(" stat %s: %s size=%d inode=%d\n", abs,
+                       n->type == VFS_DIRECTORY ? "dir" : "file",
+                       n->size, n->inode_num);
+        }
     } else if (strcmp(args, "df") == 0) {
         extern int ide_ext2_df(void);
         if (ide_ext2_df() != 0) vga_puts(" df FAIL\n");
