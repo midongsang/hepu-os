@@ -383,6 +383,31 @@ void crash_nvram_print_banner(void)
     crash_nvram_clear();
 }
 
+
+/* 2026-11-19: CMOS 编解码自检 —— 不需要真崩溃、不需要 reset，
+ * 写一组测试值再读回比对，验的是编解码本身对不对。 */
+int crash_nvram_selftest(void)
+{
+    extern void serial_puts(uint16_t, const char *);
+    uint32_t s0 = 0, r0 = 0, c0 = 0;
+    int had = crash_nvram_load(&s0, &r0, &c0);
+    uint32_t s = 0, r = 0, c = 0;
+    int ok;
+
+    crash_nvram_save(0xA5A5A5A5u, 0x12345678u, 0xDEADBEEFu);
+    ok = crash_nvram_load(&s, &r, &c) && s == 0xA5A5A5A5u && r == 0x12345678u && c == 0xDEADBEEFu;
+    if (!ok) {
+        serial_puts(0x3F8, "[NV-SELFTEST] readback mismatch: stop=");
+        nv_puts_hex(s); serial_puts(0x3F8, " eip=");
+        nv_puts_hex(r); serial_puts(0x3F8, " cr2=");
+        nv_puts_hex(c); serial_puts(0x3F8, "\n");
+    }
+    /* 恢复原值，别把上一次的真摘要冲掉 */
+    if (had) crash_nvram_save(s0, r0, c0);
+    else crash_nvram_clear();
+    return ok ? 0 : -1;
+}
+
 void diag_selftest32(void)
 {
     extern void serial_puts(uint16_t, const char *);
@@ -417,6 +442,14 @@ void diag_selftest32(void)
     serial_puts(0x3F8, "[DIAG32] 4. ext2 mounted: ");
     if (ext2_mounted) { serial_puts(0x3F8, "PASS\r\n"); pass++; }
     else { serial_puts(0x3F8, "FAIL\r\n"); fail++; }
+
+    /* 5. CMOS 崩溃摘要编解码往返 */
+    {
+        extern int crash_nvram_selftest(void);
+        serial_puts(0x3F8, "[DIAG32] 5. crash nvram r/w: ");
+        if (crash_nvram_selftest() == 0) { serial_puts(0x3F8, "PASS\r\n"); pass++; }
+        else { serial_puts(0x3F8, "FAIL\r\n"); fail++; }
+    }
 
     serial_puts(0x3F8, "[DIAG32] RESULT: ");
     serial_puts(0x3F8, fail == 0 ? "PASS" : "FAIL");
