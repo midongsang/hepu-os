@@ -1413,6 +1413,16 @@ void x86_64_kernel_main(void)
          * 放在进桌面主循环之前 —— 之后画面就归桌面管了。 */
         { extern int gfx64_display_backend_selftest(void);
           gfx64_display_backend_selftest(); }
+        /* 诊断自检套件: 只验零件, 不停机 */
+        {
+            extern int ext2_64_read_file(const char *path, uint8_t *buf, uint32_t max_size);
+            extern int diag_selftest64(void);
+            uint8_t db[4];
+            if (ext2_64_read_file("/diag_selftest", db, 4) > 0) {
+                vga_puts("[SELFTEST] /diag_selftest found -> diag battery\n");
+                diag_selftest64();
+            }
+        }
         /* 自测入口: 根分区里有 /bsod_selftest 时自动跑一次 bsod。
          * 目的是让诊断链路在无头环境也能验证 —— 不依赖串口注入，也不
          * 依赖桌面终端交互。正常镜像里没有这个文件，不会触发。 */

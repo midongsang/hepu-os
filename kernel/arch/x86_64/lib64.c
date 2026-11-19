@@ -923,6 +923,72 @@ static void bsod64_gfx_report(uint64_t vector, uint64_t error, uint64_t rip,
     }
 }
 
+/* 2026-11-19: 开机诊断自检套件。
+ * 和 /bsod_selftest 不同: 那个跑完会停机(它是真崩溃路径), 这个只验证
+ * 诊断子系统的各个零件还完好, 跑完系统继续正常启动。
+ * 检查: 串口通道 / 图形表面 / 异常名表 / STOP 码格式化。 */
+int diag_selftest64(void)
+{
+    extern void serial_puts(uint16_t port, const char *s);
+    extern uint8_t *gfx64_get_framebuffer(void);
+    extern int gfx64_get_width(void);
+    extern int gfx64_get_height(void);
+    extern void gfx64_set_target_front(void);
+    int pass = 0, total = 0, i;
+
+    /* 1. 串口通道: 能写出去就算通 */
+    total++;
+    serial_puts(0x3F8, "[DIAG-SELFTEST] serial channel: PASS\n");
+    pass++;
+
+    /* 2. 图形表面: 崩溃时唯一能画屏的通道, 必须可用 */
+    total++;
+    {
+        uint8_t *fb;
+        int w, h;
+        gfx64_set_target_front();
+        fb = gfx64_get_framebuffer();
+        w = gfx64_get_width();
+        h = gfx64_get_height();
+        if (fb && w >= 640 && w <= 3840 && h >= 400 && h <= 2160) {
+            serial_puts(0x3F8, "[DIAG-SELFTEST] gfx surface: PASS\n");
+            pass++;
+        } else {
+            serial_puts(0x3F8, "[DIAG-SELFTEST] gfx surface: FAIL (no usable framebuffer)\n");
+        }
+    }
+
+    /* 3. 异常名表: 32 个向量都要能取到非空名字, 否则报告会出现空白 */
+    total++;
+    {
+        int ok = 1;
+        for (i = 0; i < 32; i++) {
+            const char *n = k64_exc_name((uint64_t)i);
+            if (!n || !n[0]) { ok = 0; break; }
+        }
+        if (ok) { serial_puts(0x3F8, "[DIAG-SELFTEST] exception names: PASS (32/32)\n"); pass++; }
+        else    { serial_puts(0x3F8, "[DIAG-SELFTEST] exception names: FAIL\n"); }
+    }
+
+    /* 4. STOP 码格式化: 必须是 0x + 8 位定长, 否则日志检索会错位 */
+    total++;
+    {
+        int ok = 1;
+        for (i = 0; i < 32; i++) {
+            char sb[11];
+            k64_stop_code((uint64_t)i, sb);
+            if (sb[0] != '0' || sb[1] != 'x' || sb[10] != 0) { ok = 0; break; }
+        }
+        if (ok) { serial_puts(0x3F8, "[DIAG-SELFTEST] stop code format: PASS\n"); pass++; }
+        else    { serial_puts(0x3F8, "[DIAG-SELFTEST] stop code format: FAIL\n"); }
+    }
+
+    serial_puts(0x3F8, pass == total
+        ? "[DIAG-SELFTEST] RESULT: PASS\n"
+        : "[DIAG-SELFTEST] RESULT: FAIL\n");
+    return pass;
+}
+
 /* 2026-11-19: shell `bsod` 的 64 位实现 —— 构造一个假中断帧，
  * 直接走 hepu_panic_kernel_fault，验证 STOP 码/异常名/Hint/回溯整条链。 */
 void cmd_bsod64(void)
