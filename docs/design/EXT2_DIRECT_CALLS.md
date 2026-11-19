@@ -98,3 +98,40 @@ vfs_write(fd, buf, size)                      kernel/fs/vfs.c
 1. 任何经 `vfs_write` 的写操作，在业务结束点必须调一次 `vfs_sync()`
 2. 不允许把 `ide_ext2_sync()` 直接暴露给应用层（保持单一入口）
 3. 改完必须验"写 → 重启 → 读回"，不能只看"写返回成功"
+
+## 八、P3 阻塞：32 位 VFS 的目录操作是"内存树"，不落盘（2026-11-20）
+
+动 P3 之前先核对了实现，结论是先别动。
+
+```
+vfs_mkdir(path)   → vfs_create_node + vfs_add_child      （0 处 ext2 调用）
+vfs_unlink(path)  → remove_child + kfree
+vfs_rmdir(path)   → remove_parent 检查 + remove_child + kfree
+```
+
+三个函数**只改内存里的 VFS 树，一个字节都不写盘**。对照直调版：
+
+- `ide_ext2_mkdir` → 真的在 ext2 里建目录项
+- `ext2_path_unlink_v2` → `ext2_write_inode(...)`（`ext2_path.c:35/38/94/96`），真删
+
+**如果照方案把 shell 的 `mkdir` / `rm` 换成 `vfs_mkdir` / `vfs_rmdir`，
+结果是"当次会话看起来成功、重启全没了"——比不改更糟。**
+
+### 正确顺序
+
+1. **先给 32 位 VFS 补"目录操作 → ext2 后端"的分派**
+   （参考 64 位 S6 的 `backend unlink/mkdir/rmdir` 做法：路径式方法挂在
+   backend 上、失败回退直调、返回码透传）
+2. 再改 shell 的 `mkdir` / `rm`
+
+在补完分派之前，`mkdir` / `rm` **保持直调**，不做"看起来更统一"的假改造。
+
+## 九、为什么 P1 / P2 是安全的
+
+- **P1（`ls` / `stat`）是纯读**：`vfs_readdir` 已接 `ext2_readdir_ino`（真读盘），
+  `vfs_find` 读的是挂载时建好的树 → 都是真数据
+- **P2（`cat` / `write`）的写是真写**：`vfs_write` → `ext2_vfs_write` →
+  `ext2_write_data`（真写缓存）+ `vfs_sync()` 落盘 → 落地
+
+两者的共同点：**VFS 在"文件读写"这块确实接了 ext2 后端，只是"目录增删"没接。**
+这个边界之前没人明确写过，是这次动 P3 才暴露出来的。
