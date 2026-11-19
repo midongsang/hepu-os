@@ -1413,6 +1413,24 @@ void x86_64_kernel_main(void)
          * 放在进桌面主循环之前 —— 之后画面就归桌面管了。 */
         { extern int gfx64_display_backend_selftest(void);
           gfx64_display_backend_selftest(); }
+        /* 上次异常横幅: CMOS 里有崩溃摘要就报出来并清掉 */
+        {
+            extern int crash_nvram_load(uint32_t *stop, uint64_t *rip, uint64_t *cr2);
+            extern void crash_nvram_clear(void);
+            extern void serial_puts(uint16_t, const char *);
+            extern void serial_hex(uint64_t);
+            uint32_t stop; uint64_t rip, cr2;
+            if (crash_nvram_load(&stop, &rip, &cr2)) {
+                serial_puts(0x3F8, "[CRASH-LAST] previous abnormal halt: STOP=0x");
+                serial_hex(stop);
+                serial_puts(0x3F8, " rip=0x");
+                serial_hex(rip);
+                serial_puts(0x3F8, " cr2=0x");
+                serial_hex(cr2);
+                serial_puts(0x3F8, "\n");
+                crash_nvram_clear();
+            }
+        }
         /* 诊断自检套件: 只验零件, 不停机 */
         {
             extern int ext2_64_read_file(const char *path, uint8_t *buf, uint32_t max_size);

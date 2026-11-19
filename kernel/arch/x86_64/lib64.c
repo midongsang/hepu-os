@@ -819,7 +819,94 @@ static void hepu_panic_kernel_fault(uint64_t *sf)
     serial_puts(0x3F8, "System halted (kernel fault, cannot isolate).\n");
     /* 屏幕通道: 图形模式下也能看见, 不只是串口 */
     bsod64_gfx_report(vector, error, rip, sf[22], cr2);
+    /* 跨重启摘要: 只写 CMOS, 不碰磁盘 */
+    {
+        extern void crash_nvram_save(uint32_t, uint64_t, uint64_t);
+        crash_nvram_save((uint32_t)vector, rip, cr2);
+    }
     while (1) { __asm__ volatile("hlt"); }
+}
+
+/* 2026-11-19: 崩溃摘要跨重启。
+ * crashlog 只写内存环形缓冲，重启即清；崩溃上下文又不能用 ext2（会 GPF）。
+ * 折中: 把最小的现场信息（STOP 码 / RIP / CR2）写进 CMOS NVRAM —— 纯端口 IO，
+ * 不碰磁盘控制器，崩溃现场相对安全。下次启动读回来打一条横幅再清掉。 */
+#define CRASH_NV_MAGIC 0x53415243u   /* 'CRAS' */
+/* 0x30-0x31 是传统 BIOS 的"扩展内存大小"字节, reset 时会被重写 ——
+ * 实测把 0x41 打成 0x17 就是这个原因。改用 0x50 起的真正空闲区。 */
+#define CRASH_NV_BASE  0x50
+
+static void ccmos_write(uint8_t reg, uint8_t val)
+{
+    __asm__ volatile ("outb %%al, %%dx" : : "a"(reg), "d"((uint16_t)0x70));
+    __asm__ volatile ("outb %%al, %%dx" : : "a"(val), "d"((uint16_t)0x71));
+}
+
+static uint8_t ccmos_read(uint8_t reg)
+{
+    uint8_t v;
+    __asm__ volatile ("outb %%al, %%dx" : : "a"(reg), "d"((uint16_t)0x70));
+    __asm__ volatile ("inb %%dx, %%al" : "=a"(v) : "d"((uint16_t)0x71));
+    return v;
+}
+
+static void nv_put32(uint8_t off, uint32_t v)
+{
+    int i;
+    for (i = 0; i < 4; i++) ccmos_write(CRASH_NV_BASE + off + i, (uint8_t)(v >> (8 * i)));
+    for (i = 0; i < 4; i++) ccmos_write(CRASH_NV_BASE + off + i, (uint8_t)(v >> (8 * i)));
+}
+
+static uint32_t nv_get32(uint8_t off)
+{
+    uint32_t v = 0;
+    int i;
+    for (i = 0; i < 4; i++) {
+        uint8_t b = ccmos_read(CRASH_NV_BASE + off + i);
+        v |= (uint32_t)b << (8 * i);
+    }
+    return v;
+}
+
+static void nv_put64(uint8_t off, uint64_t v)
+{
+    nv_put32(off, (uint32_t)(v & 0xFFFFFFFFu));
+    nv_put32(off + 4, (uint32_t)(v >> 32));
+}
+
+static uint64_t nv_get64(uint8_t off)
+{
+    uint64_t lo = nv_get32(off);
+    uint64_t hi = nv_get32(off + 4);
+    return lo | (hi << 32);
+}
+
+/* 布局: 0x30 magic / 0x34 stop / 0x38 rip(8) / 0x40 cr2(8) —— 共 24 字节 */
+void crash_nvram_save(uint32_t stop, uint64_t rip, uint64_t cr2)
+{
+    nv_put32(0, CRASH_NV_MAGIC);
+    nv_put32(4, stop);
+    nv_put64(8, rip);
+    nv_put64(16, cr2);
+}
+
+uint32_t crash_nvram_raw_magic(void)
+{
+    return nv_get32(0);
+}
+
+int crash_nvram_load(uint32_t *stop, uint64_t *rip, uint64_t *cr2)
+{
+    if (nv_get32(0) != CRASH_NV_MAGIC) return 0;
+    if (stop) *stop = nv_get32(4);
+    if (rip)  *rip  = nv_get64(8);
+    if (cr2)  *cr2  = nv_get64(16);
+    return 1;
+}
+
+void crash_nvram_clear(void)
+{
+    nv_put32(0, 0);
 }
 
 /* 2026-11-19: 64 位崩溃也要能"看见"。原先只有串口 + vga_puts 文本，
