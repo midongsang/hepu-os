@@ -99,3 +99,40 @@ qemu-system-i386 -kernel build_v250/kernel.elf -drive file=<带 ext2 的盘>
 ```
 
 （临时探针已在提交前移除，工作树干净；`regress32` 复跑 `fault=0 lines=869` PASS）
+
+## 附二：32 位诊断实现现状（2026-11-19 更新）
+
+| 能力 | 32 位入口 | 状态 |
+|---|---|---|
+| 自检套件 | `diag_selftest32()`（`bsod.c`），5 项 | 前 4 项实测全 PASS（`3ac31f4`）；第 5 项代码就位未取证 |
+| 崩溃触发 | 根分区 `/bsod_selftest` | 实测可用（`4ae5117`，串口打出完整 DIAGNOSTIC） |
+| 崩溃摘要 | `crash_nvram_save/load/clear`（CMOS 0x50） | 写入路径已执行；跨重启横幅未取证 |
+| 编解码自检 | `crash_nvram_selftest()`（diag 第 5 项） | 代码就位；镜像级未取到 |
+
+**32 位标记注入**（不需要 stage2，multiboot 直接带盘）：
+
+```bash
+qemu-system-i386 -kernel build_v250/kernel.elf -m 256 -display none \
+  -drive file=<带 ext2 的盘> -serial file:/tmp/ser32.log
+```
+
+盘要求：MBR 签名 `0x55AA` + 一个 `0x83` 分区。实测分区起始 LBA 2048 可被识别
+（`[FS] ext2 filesystem found ... LBA=0x800`），但同一套盘在不同构建里会随机
+出现 `[EXT2] selftest: mount FAIL`，这个不稳定点本身值得单独查。
+
+注入：
+
+```bash
+mke2fs -t ext2 -F /tmp/part.img
+echo 1 > /tmp/marker
+debugfs -w -R "write /tmp/marker /diag_selftest" /tmp/part.img
+```
+
+**两条未取证的验证**（代码与 64 位同构，64 位侧已验证）：
+
+1. CMOS 跨重启横幅：`system_reset` 在无头 QEMU 下不可靠，第二次启动不产日志
+2. 编解码自检第 5 项：验证过程中 QEMU 进程被 SIGKILL、自造 ext2 盘 mount 不稳
+
+**新登记的疑点**：`[EXT2] selftest: mount FAIL` 与 `[SELFTEST] /bsod_selftest found`
+在同一日志里同时出现 —— mount 报失败但文件又能读到，说明 `ide_ext2` 的
+挂载状态判断和实际可用性不一致，值得单独排查。
