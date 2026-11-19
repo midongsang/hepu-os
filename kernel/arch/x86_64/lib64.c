@@ -458,6 +458,9 @@ static void k64_stop_code(uint64_t v, char *out)
     out[10] = 0;
 }
 
+static void bsod64_gfx_report(uint64_t vector, uint64_t error, uint64_t rip,
+                              uint64_t rsp, uint64_t cr2);
+
 static void hepu_panic_kernel_fault(uint64_t *sf);
 static void irq_handler_64_body(uint64_t *stack_frame)
 {
@@ -814,7 +817,110 @@ static void hepu_panic_kernel_fault(uint64_t *sf)
         }
     }
     serial_puts(0x3F8, "System halted (kernel fault, cannot isolate).\n");
+    /* 屏幕通道: 图形模式下也能看见, 不只是串口 */
+    bsod64_gfx_report(vector, error, rip, sf[22], cr2);
     while (1) { __asm__ volatile("hlt"); }
+}
+
+/* 2026-11-19: 64 位崩溃也要能"看见"。原先只有串口 + vga_puts 文本，
+ * 图形模式下屏幕一片空白，等于现场只剩串口一份。
+ * 这里不经过 gfx 状态机(崩溃时它未必完好)，直接拿 front_buffer 逐像素画：
+ * 深蓝底 + 白字，字形取自 font_data.c 的 font8x16。 */
+static void bsod64_gfx_report(uint64_t vector, uint64_t error, uint64_t rip,
+                              uint64_t rsp, uint64_t cr2)
+{
+    extern void gfx64_set_target_front(void);
+    extern uint8_t *gfx64_get_framebuffer(void);
+    extern int gfx64_get_width(void);
+    extern int gfx64_get_height(void);
+    extern const uint8_t font8x16[128][16];
+
+    uint8_t *fb8;
+    uint32_t *fb;
+    int w, h, i, y;
+    int scale = 2;
+    uint32_t blue = 0x0000008Bu, white = 0x00FFFFFFu;
+
+    gfx64_set_target_front();
+    fb8 = gfx64_get_framebuffer();
+    w = gfx64_get_width();
+    h = gfx64_get_height();
+    /* 合理性检查: 崩溃现场这些值本身可能是坏的 */
+    if (!fb8 || w < 640 || w > 3840 || h < 400 || h > 2160) return;
+    fb = (uint32_t *)fb8;
+
+    for (y = 0; y < h; y++) {
+        uint32_t *row = fb + (uint64_t)y * w;
+        for (i = 0; i < w; i++) row[i] = blue;
+    }
+
+    {
+        int x = 48, ty = 60;
+        const char *lines[7];
+        char l2[40], l3[40], l4[40], l5[48];
+        /* STOP 码 */
+        l2[0]='S';l2[1]='T';l2[2]='O';l2[3]='P';l2[4]=':';l2[5]=' ';l2[6]='0';l2[7]='x';
+        for (i = 0; i < 8; i++) {
+            static const char hx[] = "0123456789ABCDEF";
+            l2[8 + i] = hx[(vector >> (4 * (7 - i))) & 0xF];
+        }
+        l2[16] = 0;
+        /* Exception 名 */
+        { const char *nm = k64_exc_name(vector); int k = 0;
+          const char *pfx = "Exception: ";
+          while (pfx[k]) { l3[k] = pfx[k]; k++; }
+          i = 0; while (nm[i] && k < 38) l3[k++] = nm[i++];
+          l3[k] = 0; }
+        /* RIP */
+        { const char *pfx = "RIP: 0x"; int k = 0; i = 0;
+          while (pfx[k]) { l4[k] = pfx[k]; k++; }
+          for (i = 0; i < 16; i++) {
+            static const char hx[] = "0123456789ABCDEF";
+            l4[k++] = hx[(rip >> (4 * (15 - i))) & 0xF];
+          }
+          l4[k] = 0; }
+        { const char *pfx = "CR2: 0x"; int k = 0; i = 0;
+          while (pfx[k]) { l5[k] = pfx[k]; k++; }
+          for (i = 0; i < 16; i++) {
+            static const char hx[] = "0123456789ABCDEF";
+            l5[k++] = hx[(cr2 >> (4 * (15 - i))) & 0xF];
+          }
+          l5[k] = 0; }
+        (void)error; (void)rsp;
+
+        lines[0] = "*** HEPU OS - DIAGNOSTIC REPORT (64-bit) ***";
+        lines[1] = l2; lines[2] = l3; lines[3] = l4; lines[4] = l5;
+        lines[5] = "";
+        lines[6] = "System halted. See serial log for full stack trace.";
+        for (y = 0; y < 7; y++) {
+            const char *sp = lines[y];
+            x = 48; ty = 60 + y * (16 * scale + 10);
+            while (*sp) {
+                unsigned char c = (unsigned char)*sp;
+                if (c >= 32 && c < 128) {
+                    const uint8_t *gl = font8x16[c];
+                    int gy, gx;
+                    for (gy = 0; gy < 16; gy++) {
+                        uint8_t rowb = gl[gy];
+                        for (gx = 0; gx < 8; gx++) {
+                            if (rowb & (0x80 >> gx)) {
+                                int sy, sx;
+                                for (sy = 0; sy < scale; sy++)
+                                    for (sx = 0; sx < scale; sx++) {
+                                        int px = x + gx * scale + sx;
+                                        int py = ty + gy * scale + sy;
+                                        if (px >= 0 && px < w && py >= 0 && py < h)
+                                            fb[(uint64_t)py * w + px] = white;
+                                    }
+                            }
+                        }
+                    }
+                }
+                x += 8 * scale;
+                sp++;
+            }
+        }
+    }
 }
 
 /* 2026-11-19: shell `bsod` 的 64 位实现 —— 构造一个假中断帧，
