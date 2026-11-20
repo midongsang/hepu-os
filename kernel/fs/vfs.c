@@ -414,6 +414,18 @@ static int remove_child(vfs_node_t *parent, vfs_node_t *child)
 int vfs_mkdir(const char *path)
 {
     if (!path || !*path || vfs_find(path)) return -1;
+    /* 2026-11-20: 目录操作必须落 ext2 —— 之前只改内存树，重启就消失。
+     * 顺序是先落盘再建节点：落盘失败就整体失败，不留"看起来成功"的假状态。 */
+    {
+        extern int ext2_mounted;
+        extern int ext2_path_mkdir(const char *, uint16_t);
+        if (ext2_mounted) {
+            if (ext2_path_mkdir(path, 0x41ED) != 0) {
+                vga_puts("[VFS] mkdir: ext2 backend failed\n");
+                return -1;
+            }
+        }
+    }
     char pp[VFS_MAX_PATH], name[VFS_MAX_NAME];
     split_path(path, pp, name);
     vfs_node_t *parent = vfs_find(pp);
@@ -428,6 +440,17 @@ int vfs_rmdir(const char *path)
 {
     vfs_node_t *node = vfs_find(path);
     if (!node || node->type != VFS_DIRECTORY || node->children || node == vfs_root) return -1;
+    /* 2026-11-20: 空目录才删；先落 ext2，成功再摘内存节点 */
+    {
+        extern int ext2_mounted;
+        extern int ext2_path_unlink_v2(const char *);
+        if (ext2_mounted) {
+            if (ext2_path_unlink_v2(path) != 0) {
+                vga_puts("[VFS] rmdir: ext2 backend failed\n");
+                return -1;
+            }
+        }
+    }
     remove_child(node->parent, node);
     kfree(node);
     return 0;
@@ -437,6 +460,17 @@ int vfs_unlink(const char *path)
 {
     vfs_node_t *node = vfs_find(path);
     if (!node || node->type == VFS_DIRECTORY) return -1;
+    /* 2026-11-20: 先落 ext2 删除，成功再摘内存节点 */
+    {
+        extern int ext2_mounted;
+        extern int ext2_path_unlink_v2(const char *);
+        if (ext2_mounted) {
+            if (ext2_path_unlink_v2(path) != 0) {
+                vga_puts("[VFS] unlink: ext2 backend failed\n");
+                return -1;
+            }
+        }
+    }
     remove_child(node->parent, node);
     kfree(node);
     return 0;
