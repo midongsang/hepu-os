@@ -575,6 +575,19 @@ int hepu_init_phase(init_phase_t phase)
                     diag_selftest32();
                 }
             }
+            /* 2026-11-20: shell FS→VFS 回归自测（P1/P2/P3 落盘验证）
+             * 标记文件 /vfs_selftest 首字节 'w' 跑写阶段、'r' 跑读阶段。
+             * 两次独立启动 + 同一张盘 = 真跨重启证据，不依赖 system_reset。 */
+            {
+                extern void serial_puts(uint16_t, const char *);
+                extern int ide_ext2_read_file(const char *, const char *, char *, int);
+                extern int fs_vfs_selftest(char);
+                char tag[8];
+                if (ide_ext2_read_file("/", "vfs_selftest", tag, 4) > 0 && (tag[0] == 'w' || tag[0] == 'r')) {
+                    serial_puts(0x3F8, "[VFS-TEST] /vfs_selftest found\n");
+                    fs_vfs_selftest(tag[0]);
+                }
+            }
             if (!protect_gfx) {
                 extern void serial_puts(uint16_t, const char *);
                 serial_puts(0x3F8, "[APPS] 6/7: pre-desktop done, calling elastic_desktop_init...\n");

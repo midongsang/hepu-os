@@ -252,7 +252,7 @@ static int ext2_vfs_read(vfs_node_t *node, uint32_t offset, void *buf, uint32_t 
     return ext2_read_data(&inode, offset, buf, size);
 }
 
-static vfs_file_ops_t ext2_file_ops = {
+vfs_file_ops_t ext2_file_ops = {   /* 非 static：vfs_open 建新节点时也要挂这套 ops */
     .open = NULL,
     .close = NULL,
     .read = ext2_vfs_read,
@@ -284,7 +284,9 @@ int ext2_readdir_ino(uint32_t ino, vfs_dirent_t *buf, int max_entries)
             ext2_dir_entry_t *e = (ext2_dir_entry_t *)(blk + pos);
             if (e->rec_len < 8 || e->name_len >= VFS_MAX_NAME) break;
             if (pos + e->rec_len > n) break;
-            if (e->name_len > 0 && e->name[0] != '.') {
+            /* inode==0 是被删除的目录项（unlink 只把 inode 清 0），必须跳过，
+             * 否则 ls 会把已经删掉的文件继续列出来。 */
+            if (e->inode != 0 && e->name_len > 0 && e->name[0] != '.') {
                 uint32_t k;
                 for (k = 0; k < e->name_len && k < VFS_MAX_NAME - 1; k++)
                     buf[count].name[k] = e->name[k];

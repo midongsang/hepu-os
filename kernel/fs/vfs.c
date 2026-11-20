@@ -244,10 +244,42 @@ int vfs_mount(const char *path, vfs_node_t *root)
  * 文件描述符操作
  * -------------------------------------------------------------------------- */
 
+/* split_path 定义在本文件后半段，vfs_open 要用它，先前置声明 */
+static void split_path(const char *path, char *parent, char *name);
+
 int vfs_open(const char *path, int flags)
 {
     vfs_node_t *node = vfs_find(path);
-    if (!node) return -1;
+    if (!node) {
+        /* 2026-11-20: 32 位原先完全不认 VFS_O_CREAT —— 只 vfs_find，不存在就 -1。
+         * 结果是"盘上建出来了（ext2_path_create）、VFS 里却找不到"，shell 的 write
+         * 永远开不了新文件。这里补齐：先落 ext2，再在内存树里补节点并记 inode 号。 */
+        if (!(flags & VFS_O_CREAT)) return -1;
+        {
+            extern int ext2_mounted;
+            extern int ext2_path_create(const char *, uint16_t);
+            if (!ext2_mounted) return -1;
+            int ino = ext2_path_create(path, 0x81A4);
+            if (ino < 0) {
+                vga_puts("[VFS] open: ext2 create failed\n");
+                return -1;
+            }
+            char pp[VFS_MAX_PATH], nm[VFS_MAX_NAME];
+            split_path(path, pp, nm);
+            vfs_node_t *parent = vfs_find(pp);
+            if (!parent || parent->type != VFS_DIRECTORY) return -1;
+            node = vfs_create_node(nm, VFS_REGULAR);
+            if (!node) return -1;
+            node->inode_num = (uint32_t)ino;
+            /* 关键：vfs_write/vfs_read 都要求 node->ops 非空。vfs_create_node 不设 ops，
+             * 漏了这一步就会"打开了但写不进去"（返回 -1）。 */
+            {
+                extern vfs_file_ops_t ext2_file_ops;
+                node->ops = &ext2_file_ops;
+            }
+            vfs_add_child(parent, node);
+        }
+    }
 
     /* 找空闲文件描述符 */
     for (int i = 0; i < VFS_MAX_FDS; i++) {
@@ -415,12 +447,16 @@ int vfs_mkdir(const char *path)
 {
     if (!path || !*path || vfs_find(path)) return -1;
     /* 2026-11-20: 目录操作必须落 ext2 —— 之前只改内存树，重启就消失。
-     * 顺序是先落盘再建节点：落盘失败就整体失败，不留"看起来成功"的假状态。 */
+     * 顺序是先落盘再建节点：落盘失败就整体失败，不留"看起来成功"的假状态。
+     * 注意返回语义：ext2_path_mkdir/create 成功返回 inode 号(>0)，unlink 成功返回 0，
+     * 失败统一 -1 —— 所以判失败必须用 < 0，写成 != 0 会把成功当失败（踩过）。 */
+    int ino = 0;
     {
         extern int ext2_mounted;
         extern int ext2_path_mkdir(const char *, uint16_t);
         if (ext2_mounted) {
-            if (ext2_path_mkdir(path, 0x41ED) != 0) {
+            ino = ext2_path_mkdir(path, 0x41ED);
+            if (ino < 0) {
                 vga_puts("[VFS] mkdir: ext2 backend failed\n");
                 return -1;
             }
@@ -432,6 +468,8 @@ int vfs_mkdir(const char *path)
     if (!parent || parent->type != VFS_DIRECTORY) return -1;
     vfs_node_t *dir = vfs_create_node(name, VFS_DIRECTORY);
     if (!dir) return -1;
+    /* 记下 inode 号：vfs_readdir 靠它判断能不能走 ext2_readdir_ino 读子目录 */
+    if (ino > 0) dir->inode_num = (uint32_t)ino;
     vfs_add_child(parent, dir);
     return 0;
 }
@@ -445,7 +483,7 @@ int vfs_rmdir(const char *path)
         extern int ext2_mounted;
         extern int ext2_path_unlink_v2(const char *);
         if (ext2_mounted) {
-            if (ext2_path_unlink_v2(path) != 0) {
+            if (ext2_path_unlink_v2(path) < 0) {
                 vga_puts("[VFS] rmdir: ext2 backend failed\n");
                 return -1;
             }
@@ -465,7 +503,7 @@ int vfs_unlink(const char *path)
         extern int ext2_mounted;
         extern int ext2_path_unlink_v2(const char *);
         if (ext2_mounted) {
-            if (ext2_path_unlink_v2(path) != 0) {
+            if (ext2_path_unlink_v2(path) < 0) {
                 vga_puts("[VFS] unlink: ext2 backend failed\n");
                 return -1;
             }
