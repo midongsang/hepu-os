@@ -56,11 +56,29 @@
 
 `unlink` 只把目录项 `inode` 清 0。readdir 没查这一位，于是已经删掉的文件还会被 `ls` 列出来。补 `e->inode != 0`。
 
-## 三、已知缺口（未修，明确记录）
+## 三、懒加载：补上「重启后按路径访问」
 
-**第二次启动时 VFS 内存树不重建。** `ext2_mount` 只填根目录一层，不扫描盘上已有什么，所以 `vfs_find("/p2test.txt")` 重启后必然返回 NULL。
+原来的缺口是：`vfs_find("/p2test.txt")` 重启后必然 NULL，只能操作当次会话新建的东西。查下去发现缺口比想象的深，两层：
 
-这不影响落盘结论——落盘一律用 ext2 直查（`ide_ext2_read_file` / `ext2_readdir_ino`）证明。但意味着**「重启后能用路径访问到已有文件」这件事还没有**，需要懒加载路径解析或递归建树。这是 S 系列（VFS 懒加载）的事，不是本轮范围。
+**第一层：`ext2_mount()` 是死代码。** 整个内核没有任何调用点。它的实现里还有两个致命 bug：
+
+```c
+vfs_create_node(path, ...)   // 用完整路径当 name，应该是 entry->name
+...                          // 建完之后从没 vfs_add_child，节点建一个泄漏一个
+```
+
+也就是说它就算被调也是坏的：节点全泄漏、按名字查不到。
+
+**第二层：`vfs_root->inode_num` 是 0。** `vfs_root` 是第一个 `vfs_create_node` 建的，`next_inode` 从 0 起，所以它的 inode_num 恰好是 0。而 ext2 的根目录是 inode 2。拿 0 去读盘只会读到无关 inode。
+
+修法：
+
+1. `vfs_find` 找不到名字时，调 `vfs_lazy_lookup(parent, name)`：读父目录 inode → `ext2_lookup` 查名字 → 读子 inode 拿 mode/size → `vfs_create_node` → `vfs_add_child` 挂树。只在 `ext2_mounted`、父节点是目录时才动手，其它情况保持原语义。
+2. 根节点豁免 `inode_num == 0` 判据，强制对到 `EXT2_ROOT_INODE`。
+
+验证直接体现在脚本里：读阶段新增 `tree.p2` 判定项，`vfs_find("/p2test.txt")` 返回 `found`、`vfs_lazy_rc=0`（0=成功，1=前置条件，2=读父 inode，3=非目录，4=lookup，5=读子 inode，6=建节点）。
+
+`ext2_mount` 的两个 bug 也一并修了（用 `entry->name`、挂树、跳过 `inode==0` 的已删除项），但它目前仍无调用点——修好是为了将来接「启动时全量建树」这条路时不用再查一遍。
 
 ## 四、诊断陷阱（下次别再踩）
 

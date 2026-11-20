@@ -9,6 +9,7 @@
 #include "vga.h"
 #include "string.h"
 #include "kheap.h"
+#include "ext2.h"   /* 懒加载要用 ext2_inode_t / ext2_lookup */
 
 static vfs_node_t *vfs_root = NULL;
 
@@ -139,6 +140,72 @@ vfs_node_t *vfs_get_root(void)
     return vfs_root;
 }
 
+/* 懒加载的最近一次失败原因，排查用（0=成功，负数=各分支） */
+int vfs_lazy_rc = -99;
+
+/* 2026-11-21: 按需加载 —— 内存树里找不到某个名字时，从 ext2 盘上查一次。
+ *
+ * 为什么必须有这一步：ext2_mount 只扫根目录一层，子目录的 children 是空的。
+ * 没有懒加载的话，"重启后按路径访问盘上已有的文件"根本不成立
+ * （vfs_find("/docs/readme.txt") 会在第二级就返回 NULL）。
+ *
+ * 只在 ext2 已挂载、父节点带真实 inode 号、且父节点确实是目录时才动手；
+ * 其它情况（initrd 内存 FS、parent 没有 inode 号）一律返回 NULL，保持原语义。
+ */
+static vfs_node_t *vfs_lazy_lookup(vfs_node_t *parent, const char *name)
+{
+    extern int ext2_mounted;
+    extern int ext2_read_inode(uint32_t, ext2_inode_t *);
+    extern int ext2_lookup(ext2_inode_t *, const char *, uint32_t *);
+    extern vfs_file_ops_t ext2_file_ops;
+
+    vfs_lazy_rc = 1;
+    if (!ext2_mounted || !parent || !name || !*name) return NULL;
+    /* 注意：vfs_root 是第一个建的节点，next_inode 从 0 起，所以它的 inode_num
+     * 恰好是 0 —— 不能拿==0 当"没有 inode 号"的判据，根节点是豁免的
+     * （下面会把它强制对到 EXT2_ROOT_INODE）。 */
+    if (parent->type != VFS_DIRECTORY) return NULL;
+    if (parent->inode_num == 0 && parent != vfs_root) return NULL;
+
+    /* 根挂载点必须对到盘上的 inode 2。vfs_root 不是 ext2_mount 建的
+     * （ext2_mount 在整个内核里没有调用点），它的 inode_num 是 vfs_create_node
+     * 给的自增假号，直接拿去读盘只会读到无关 inode。 */
+    uint32_t pino = parent->inode_num;
+    if (parent == vfs_root) pino = EXT2_ROOT_INODE;
+    if (pino == 0) return NULL;
+
+    vfs_lazy_rc = 2;
+    ext2_inode_t din;
+    if (ext2_read_inode(pino, &din) != 0) return NULL;
+    vfs_lazy_rc = 3;
+    if ((din.i_mode & 0xF000) != 0x4000) return NULL;   /* 不是目录 */
+
+    vfs_lazy_rc = 4;
+    uint32_t ino = 0;
+    if (ext2_lookup(&din, name, &ino) != 0 || ino == 0) return NULL;
+
+    vfs_lazy_rc = 5;
+    ext2_inode_t ci;
+    if (ext2_read_inode(ino, &ci) != 0) return NULL;
+
+    uint32_t m = ci.i_mode & 0xF000;
+    vfs_node_type_t t = VFS_REGULAR;
+    if (m == 0x4000) t = VFS_DIRECTORY;
+    else if (m == 0xA000) t = VFS_SYMLINK;
+
+    vfs_lazy_rc = 6;
+    vfs_node_t *node = vfs_create_node(name, t);
+    if (!node) return NULL;
+    node->inode_num = ino;
+    node->size = ci.i_size;
+    node->permissions = ci.i_mode & 0x0FFF;
+    node->private_data = (void *)(uintptr_t)ino;
+    if (t != VFS_DIRECTORY) node->ops = &ext2_file_ops;
+    vfs_add_child(parent, node);
+    vfs_lazy_rc = 0;
+    return node;
+}
+
 vfs_node_t *vfs_find(const char *path)
 {
     if (!path || !vfs_root) return NULL;
@@ -159,13 +226,17 @@ vfs_node_t *vfs_find(const char *path)
         while (child) {
             if (!vfs_node_verify(child)) { break; }
             if (strcmp(child->name, component) == 0) {
-                current = child;
                 found = 1;
                 break;
             }
             child = child->next;
         }
-        if (!found) return NULL;
+        if (!found) {
+            /* 内存树没有 → 问一次盘（懒加载），仍没有才认输 */
+            child = vfs_lazy_lookup(current, component);
+            if (!child) return NULL;
+        }
+        current = child;
 
         /* V8.21: 软链接解析（跟随符号链接） */
         if (current->type == VFS_SYMLINK && current->private_data) {

@@ -43,13 +43,17 @@ static void vs_put_hex(uint16_t port, unsigned v)
     for (int j = i - 1; j >= 0; j--) { char c[2]; c[0] = b[j]; c[1] = 0; serial_puts(port, c); }
 }
 
+static int vs_total = 6;   /* 两个阶段都是 6 项 */
+
 static void vs_line(uint16_t port, const char *tag, int no, int ok, const char *detail)
 {
     serial_puts(port, "[VFS-TEST] ");
     serial_puts(port, tag);
     serial_puts(port, " ");
     vs_put_dec(port, no);
-    serial_puts(port, "/6 ");
+    serial_puts(port, "/");
+    vs_put_dec(port, vs_total);
+    serial_puts(port, " ");
     serial_puts(port, ok ? "PASS" : "FAIL");
     if (detail && *detail) {
         serial_puts(port, "  ");
@@ -144,7 +148,7 @@ int fs_vfs_selftest(char phase)
         serial_puts(port, "\n");
         serial_puts(port, "[VFS-TEST] === NOW RESET AND RUN READ PHASE ON SAME DISK ===\n");
     } else {
-        /* ---- 读阶段：验"落盘"，不验"内存树" ----
+        /* ---- 读阶段：验"落盘" + 懒加载 ----
          * 关键认知：第二次启动时 VFS 内存树是全新的，ext2_mount 只填根目录一层，
          * 不会扫描磁盘上已有什么。所以 vfs_find("/p2test.txt") 必然返回 NULL ——
          * 那不能证明"没落盘"，只能证明"内存树没重建"。
@@ -181,12 +185,23 @@ int fs_vfs_selftest(char phase)
         vs_line(port, "disk.p3_dir", 3, found_dir, found_dir ? "盘上存在（跨启动存活）" : "盘上没有");
         if (!found_dir) fails++;
 
-        /* 内存树：如实记录缺口，不算失败 */
+        /* 懒加载：重启后按路径能不能访问到盘上已有的文件。
+         * 这条曾经是"已知缺口"（ext2_mount 只扫根目录一层 + 节点没挂树），
+         * 修掉之后它应该 PASS —— 不 PASS 就说明懒加载又断了。 */
         {
             extern vfs_node_t *vfs_find(const char *);
-            serial_puts(port, "[VFS-TEST] INFO tree.p2: vfs_find(\"/p2test.txt\")=");
-            serial_puts(port, vfs_find(VS_FILE) ? "found" : "NULL");
-            serial_puts(port, " (32位内存树不重建，属已知缺口)\n");
+            extern int vfs_lazy_rc;
+            vfs_node_t *tf = vfs_find(VS_FILE);
+            int ok7 = (tf != 0);
+            serial_puts(port, "[VFS-TEST] tree.p2 4/");
+            vs_put_dec(port, vs_total);
+            serial_puts(port, " ");
+            serial_puts(port, ok7 ? "PASS" : "FAIL");
+            serial_puts(port, ok7 ? "  懒加载找到（重启后可按路径访问）" : "  NULL（懒加载未生效）");
+            serial_puts(port, "  lazy_rc=");
+            vs_put_dec(port, vfs_lazy_rc);
+            serial_puts(port, "\n");
+            if (!ok7) fails++;
         }
 
         /* 删除也要落盘：直调 ext2 删，再枚举确认消失 */

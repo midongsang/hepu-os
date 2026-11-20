@@ -316,6 +316,11 @@ int ext2_mount(const char *mountpoint)
     ext2_inode_t root_inode;
     if (ext2_read_inode(EXT2_ROOT_INODE, &root_inode) != 0) return -1;
 
+    /* 挂载点节点必须记下真实 inode 号 —— vfs_readdir / 懒加载都靠它判断
+     * 这个目录能不能从盘上读。vfs_create_node 给的是自增假号，这里覆盖掉。 */
+    mnt->inode_num = EXT2_ROOT_INODE;
+    mnt->type = VFS_DIRECTORY;
+
     /* 遍历根目录，注册文件 */
     uint32_t offset = 0;
     static uint8_t block[4096];
@@ -329,25 +334,32 @@ int ext2_mount(const char *mountpoint)
             ext2_dir_entry_t *entry = (ext2_dir_entry_t *)(block + pos);
             if (entry->rec_len < 8 || entry->name_len >= 255) break;
             if (pos + entry->rec_len > n) break;
-            if (entry->name_len > 0 && entry->name[0] != '.') {
-                char path[256];
-                strcpy(path, mountpoint);
-                int plen = strlen(path);
-                if (plen + 1 + entry->name_len >= 255) { pos += entry->rec_len; continue; }
-                path[plen] = '/';
-                for (int k = 0; k < entry->name_len; k++) {
-                    path[plen + 1 + k] = entry->name[k];
-                }
-                path[plen + 1 + entry->name_len] = '\0';
-                vfs_node_t *node = vfs_create_node(path,
-                    (entry->file_type == EXT2_FT_DIR) ? VFS_DIRECTORY : VFS_REGULAR);
+            /* inode==0 是被删除的目录项，跳过 */
+            if (entry->inode != 0 && entry->name_len > 0 && entry->name[0] != '.') {
+                /* 节点名必须是文件名本身，不能是完整路径 —— 之前传 path 导致
+                 * name="/p2test.txt"，按名字永远查不到。 */
+                char nm[VFS_MAX_NAME];
+                int nn = entry->name_len;
+                if (nn > VFS_MAX_NAME - 1) nn = VFS_MAX_NAME - 1;
+                for (int k = 0; k < nn; k++) nm[k] = entry->name[k];
+                nm[nn] = '\0';
+
+                vfs_node_type_t t = VFS_REGULAR;
+                if (entry->file_type == EXT2_FT_DIR) t = VFS_DIRECTORY;
+                else if (entry->file_type == EXT2_FT_SYMLINK) t = VFS_SYMLINK;
+
+                vfs_node_t *node = vfs_create_node(nm, t);
                 if (node) {
                     ext2_inode_t finode;
-                    ext2_read_inode(entry->inode, &finode);
-                    node->size = finode.i_size;
+                    if (ext2_read_inode(entry->inode, &finode) == 0) {
+                        node->size = finode.i_size;
+                        node->permissions = finode.i_mode & 0x0FFF;
+                    }
                     node->inode_num = entry->inode;
-                    node->ops = &ext2_file_ops;
                     node->private_data = (void *)(uintptr_t)entry->inode;
+                    if (t != VFS_DIRECTORY) node->ops = &ext2_file_ops;
+                    /* 关键：建完必须挂进树，否则节点直接泄漏、vfs_find 永远查不到 */
+                    vfs_add_child(mnt, node);
                 }
             }
             pos += entry->rec_len;
