@@ -1,0 +1,87 @@
+# 32 位 VFS 与 ext2 后端：验证链与四个真 bug
+
+日期：2026-11-20
+提交：`9b55b06`（目录操作接 ext2 后端）、`c82e1f6`（本轮修复 + 验证链）
+
+## 一、验证方式
+
+`tools/verify_p1p3.sh`，一条命令跑完，不需要键盘交互：
+
+```
+同一张 ext2 盘 → 第一次 QEMU 进程（标记 'w'）跑写阶段 → 进程退出
+                → 改标记为 'r' → 第二次 QEMU 进程跑读阶段
+```
+
+判据：两个阶段都 `[VFS-TEST] RESULT: PASS`。
+
+**为什么不用 `system_reset`**：无头 QEMU 下 reset 之后第二次启动不产日志（这轮四个路子全失败）。两次独立进程不但更稳，证据链也更干净——第一个进程根本不知道第二个存在。
+
+结果：
+
+| 阶段 | 项 | 结果 |
+|---|---|---|
+| 写 | root / readdir（走 VFS） | PASS |
+| 写 | `vfs_open(O_CREAT)` 建出并打开 | PASS |
+| 写 | write 9 字节 + `vfs_sync` | PASS |
+| 写 | 同进程立刻读回 | PASS |
+| 写 | `vfs_mkdir` | PASS |
+| 读 | 重启后 `p2test.txt` 还在 | PASS |
+| 读 | 内容仍为 `HEPU_P2_OK` | PASS |
+| 读 | `p3test` 目录还在 | PASS |
+| 读 | 删除后确认消失 | PASS |
+
+`regress32`：`fault=0 lines=895` PASS。
+
+## 二、修掉的四个真 bug
+
+**1. `vfs_open` 完全不认 `VFS_O_CREAT`**
+
+只 `vfs_find`，不存在就返回 -1。但 P2 里已经先调 `ext2_path_create` 把文件建在盘上了，于是出现「盘上有、VFS 里找不到」——shell 的 `write` 永远开不了新文件。现在补齐：先落 ext2，再在内存树补节点并记 inode 号。
+
+**2. 新建节点没挂 `ops`**
+
+`vfs_write` / `vfs_read` 都要求 `node->ops` 非空。`vfs_create_node` 不设 ops，漏了就是「打开了但写不进去」（返回 -1 而非报错）。`ext2_file_ops` 去 `static` 以便复用。
+
+**3. 返回码判断写反（最危险的一个）**
+
+`ext2_path_mkdir` / `ext2_path_create` **成功返回 inode 号（> 0）**，`ext2_path_unlink_v2` **成功返回 0**，失败统一返回 -1。原先判 `!= 0` 会把成功当失败：
+
+```
+盘上目录已经建好了 → 判断成失败 → return -1 → 内存节点不建
+```
+
+结果比原来的「只改内存树」更糟：**盘上有、VFS 里没有**，反向假状态。统一改成 `< 0` 判失败。
+
+**4. `ext2_readdir_ino` 没过滤 `inode == 0`**
+
+`unlink` 只把目录项 `inode` 清 0。readdir 没查这一位，于是已经删掉的文件还会被 `ls` 列出来。补 `e->inode != 0`。
+
+## 三、已知缺口（未修，明确记录）
+
+**第二次启动时 VFS 内存树不重建。** `ext2_mount` 只填根目录一层，不扫描盘上已有什么，所以 `vfs_find("/p2test.txt")` 重启后必然返回 NULL。
+
+这不影响落盘结论——落盘一律用 ext2 直查（`ide_ext2_read_file` / `ext2_readdir_ino`）证明。但意味着**「重启后能用路径访问到已有文件」这件事还没有**，需要懒加载路径解析或递归建树。这是 S 系列（VFS 懒加载）的事，不是本轮范围。
+
+## 四、诊断陷阱（下次别再踩）
+
+**返回码语义不统一。** 同族函数里 create/mkdir 返回 inode 号、unlink 返回 0。写之前必须逐个确认，否则「成功」和「失败」会整体倒置。
+
+**inode 1 不是根目录。** 标准 ext2 里 inode 1 是「坏块 inode」（mode 恒为 0），**根目录是 inode 2**。用 `ext2_readdir_ino(1, ...)` 会因为 `mode & 0xF000 != 0x4000` 直接返回 -1。我第一次就写成 1，白跑两轮。
+
+**`debugfs -R "stat <1>"` 在同一环境里对干净盘也报 `bad type`。** 它不可信——判断盘是否被写坏，必须拿干净盘做对照，或看 `inode_bitmap` 这类硬证据，不能只看这条命令的输出。
+
+**验证脚本自己会丢数据。** 第一版脚本改标记时，用旧的 `$PART` 分区文件覆盖回 `$DISK`，把第一次 QEMU 刚写进去的数据全抹了——于是无论内核是否落盘，读阶段都显示「盘上没有」。改标记前必须先从盘上把分区取回来：
+
+```bash
+dd if="$DISK" of="$PART" bs=512 skip=2048 count=115200 conv=notrunc
+# 改标记
+dd if="$PART" of="$DISK" bs=512 seek=2048 conv=notrunc
+```
+
+**跑过的盘上会多出 `firstboot.flag` / `hepu_boot.log` 等条目**——桌面自己会写文件。核对目录内容时别以为是自己建的。
+
+## 五、仍然没验的
+
+- **shell 命令层**（`3c52bbd`）：`fs ls/stat/cat/write` 改走 VFS 的代码仍未做端到端验证。本脚本覆盖的是 VFS 层，不是 `cmd_fs` 的字符串解析和真实 shell 调用。
+- **`vfs_unlink` 对文件的路径**：只在目录上验过删除，文件删除没单独验。
+- **多级路径**：只验了根目录下的一层（`/p2test.txt`、`/p3test`），`/a/b/c` 没验。
