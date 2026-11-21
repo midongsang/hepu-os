@@ -34,15 +34,6 @@ static void vs_put_dec(uint16_t port, int v)
 }
 
 
-static void vs_put_hex(uint16_t port, unsigned v)
-{
-    char b[12]; int i = 0;
-    if (v == 0) { b[i++] = '0'; }
-    while (v > 0) { b[i++] = "0123456789ABCDEF"[v & 15]; v >>= 4; }
-    serial_puts(port, "0x");
-    for (int j = i - 1; j >= 0; j--) { char c[2]; c[0] = b[j]; c[1] = 0; serial_puts(port, c); }
-}
-
 static int vs_total = 6;   /* 两个阶段都是 6 项 */
 
 static void vs_line(uint16_t port, const char *tag, int no, int ok, const char *detail)
@@ -81,7 +72,7 @@ int fs_vfs_selftest(char phase)
     serial_puts(port, "\n");
 
     if (phase == 'w') {
-        vs_total = 15;
+        vs_total = 16;
         /* ---- 诊断：先把挂载状态和底层返回码打出来，别靠猜 ---- */
         {
             extern int ext2_mounted;
@@ -155,7 +146,7 @@ int fs_vfs_selftest(char phase)
 
             /* shell.write */
             { char c[] = "write /p2shell.txt HELLO_SHELL"; int i;
-              for (i = 0; c[i]; i++) cmdbuf[i] = c[i]; cmdbuf[i] = 0; }
+              for (i = 0; c[i]; i++) { cmdbuf[i] = c[i]; } cmdbuf[i] = 0; }
             cmd_fs(cmdbuf);
             int rd = ide_ext2_read_file("/", "p2shell.txt", rb, 32);
             int okw = 0;
@@ -169,7 +160,7 @@ int fs_vfs_selftest(char phase)
 
             /* shell.mkdir */
             { char c[] = "mkdir /p3shell"; int i;
-              for (i = 0; c[i]; i++) cmdbuf[i] = c[i]; cmdbuf[i] = 0; }
+              for (i = 0; c[i]; i++) { cmdbuf[i] = c[i]; } cmdbuf[i] = 0; }
             cmd_fs(cmdbuf);
             vfs_dirent_t se[16];
             int sn = ext2_readdir_ino(2, se, 16);
@@ -184,7 +175,7 @@ int fs_vfs_selftest(char phase)
 
             /* shell.rm */
             { char c[] = "rm /p3shell"; int i;
-              for (i = 0; c[i]; i++) cmdbuf[i] = c[i]; cmdbuf[i] = 0; }
+              for (i = 0; c[i]; i++) { cmdbuf[i] = c[i]; } cmdbuf[i] = 0; }
             cmd_fs(cmdbuf);
             int sn2 = ext2_readdir_ino(2, se, 16);
             int still = 0;
@@ -198,7 +189,7 @@ int fs_vfs_selftest(char phase)
 
             /* shell.ls（ls 是 void 输出到屏幕，只能验"跑完还活着、根节点还有效"） */
             { char c[] = "ls /"; int i;
-              for (i = 0; c[i]; i++) cmdbuf[i] = c[i]; cmdbuf[i] = 0; }
+              for (i = 0; c[i]; i++) { cmdbuf[i] = c[i]; } cmdbuf[i] = 0; }
             cmd_fs(cmdbuf);
             {
                 extern vfs_node_t *vfs_find(const char *);
@@ -209,7 +200,7 @@ int fs_vfs_selftest(char phase)
 
             /* shell.cp */
             { char c[] = "cp /p2shell.txt /p2shell.copy"; int i;
-              for (i = 0; c[i]; i++) cmdbuf[i] = c[i]; cmdbuf[i] = 0; }
+              for (i = 0; c[i]; i++) { cmdbuf[i] = c[i]; } cmdbuf[i] = 0; }
             cmd_fs(cmdbuf);
             {
                 int rd2 = ide_ext2_read_file("/", "p2shell.copy", rb, 32);
@@ -225,7 +216,7 @@ int fs_vfs_selftest(char phase)
 
             /* shell.mv */
             { char c[] = "mv /p2shell.copy /p2shell.moved"; int i;
-              for (i = 0; c[i]; i++) cmdbuf[i] = c[i]; cmdbuf[i] = 0; }
+              for (i = 0; c[i]; i++) { cmdbuf[i] = c[i]; } cmdbuf[i] = 0; }
             cmd_fs(cmdbuf);
             {
                 int has_new = ide_ext2_read_file("/", "p2shell.moved", rb, 32);
@@ -262,7 +253,7 @@ int fs_vfs_selftest(char phase)
                 }
 
                 { char c[] = "cp /bigsrc.bin /bigdst.bin"; int i;
-                  for (i = 0; c[i]; i++) cmdbuf[i] = c[i]; cmdbuf[i] = 0; }
+                  for (i = 0; c[i]; i++) { cmdbuf[i] = c[i]; } cmdbuf[i] = 0; }
                 cmd_fs(cmdbuf);
 
                 /* 落盘证据走 fm 路径直读，不经过 VFS 缓存 */
@@ -317,7 +308,7 @@ int fs_vfs_selftest(char phase)
              * 成本很低，可以验。 */
             {
                 char c[] = "cpall /cpall_dst"; int i;
-                for (i = 0; c[i]; i++) cmdbuf[i] = c[i]; cmdbuf[i] = 0;
+                for (i = 0; c[i]; i++) { cmdbuf[i] = c[i]; } cmdbuf[i] = 0;
                 cmd_fs(cmdbuf);
                 int rdc = ide_ext2_read_file("/cpall_dst", "p2test.txt", rb, 16);
                 int okc = (rdc >= VS_LEN);
@@ -328,6 +319,29 @@ int fs_vfs_selftest(char phase)
                 vs_line(port, "shell.cpall", 15, okc,
                         okc ? "根目录递归复制，子文件内容正确" : "cpall 没复制出来");
                 if (!okc) fails++;
+            }
+
+            /* term.ls：终端那一层真的读到了盘。以前 ls 是写死的
+             * "dev initrd proc sys bin"，这里验它列出来的东西来自 VFS。 */
+            {
+                extern int term_selftest_ls(void);
+                extern const char *term_selftest_buf(void);
+                int tn = term_selftest_ls();
+                const char *tb = term_selftest_buf();
+                int okt = (tn > 0);
+                if (okt) {
+                    const char *hay = "p2test";
+                    int found = 0;
+                    for (int i = 0; tb[i] && !found; i++) {
+                        int j = 0;
+                        while (hay[j] && tb[i + j] == hay[j]) j++;
+                        if (hay[j] == 0) found = 1;
+                    }
+                    if (!found) okt = 0;
+                }
+                vs_line(port, "term.ls", 16, okt,
+                        okt ? "终端 ls 列出真实目录项" : "终端 ls 没读到盘");
+                if (!okt) fails++;
             }
         }
 
@@ -392,7 +406,7 @@ int fs_vfs_selftest(char phase)
                 extern int ext2_mounted;
                 vfs_node_t *rr = vfs_find("/");
                 serial_puts(port, " root=");
-                vs_put_dec(port, rr ? rr->type : -1);
+                vs_put_dec(port, rr ? (int)rr->type : -1);
                 serial_puts(port, " rino=");
                 vs_put_dec(port, rr ? (int)rr->inode_num : -1);
                 serial_puts(port, " em=");

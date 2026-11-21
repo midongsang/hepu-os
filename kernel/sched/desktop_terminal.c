@@ -9,6 +9,7 @@
 #include "wm.h"
 #include "vga_gfx.h"
 #include "hepu.h"
+#include "vfs.h"
 
 /* 终端窗口指针（与desktop.c共享，由on_launch_terminal管理） */
 static wm_window_t *terminal_win = NULL;
@@ -37,6 +38,54 @@ static void term_puts(const char *s)
     term_buf[term_buf_len] = 0;
 }
 
+/* 2026-11-21: 终端以前是演示壳 —— ls 直接写死 "dev initrd proc sys bin"，
+ * date 写死 "2026-08-30"，跟盘上内容毫无关系。把 ls / cat 接到真 VFS 上。 */
+static int term_cmd_ls(void)
+{
+    extern int vfs_readdir(const char *, vfs_dirent_t *, int);
+    vfs_dirent_t ents[32];
+    int n, shown = 0, i;
+
+    n = vfs_readdir("/", ents, 32);
+    if (n <= 0) { term_puts("(empty)\n"); return 0; }
+    for (i = 0; i < n; i++) {
+        const char *nm = ents[i].name;
+        if (nm[0] == '.' &&
+            (nm[1] == 0 || (nm[1] == '.' && nm[2] == 0))) continue;
+        term_puts(nm);
+        term_puts(ents[i].type == VFS_DIRECTORY ? "/  " : "  ");
+        shown++;
+    }
+    term_puts("\n");
+    return shown;
+}
+
+static void term_cmd_cat(const char *name)
+{
+    extern int vfs_open(const char *, int);
+    extern int vfs_read(int, void *, uint32_t);
+    extern int vfs_close(int);
+    static char cbuf[1024];
+    int fd, n;
+
+    if (!name || !*name) { term_puts("cat: need a name\n"); return; }
+    fd = vfs_open(name, VFS_O_RDONLY);
+    if (fd < 0) {
+        term_puts("cat: "); term_puts(name); term_puts(": not found\n");
+        return;
+    }
+    n = vfs_read(fd, cbuf, sizeof(cbuf) - 1);
+    vfs_close(fd);
+    if (n <= 0) { term_puts("(empty)\n"); return; }
+    cbuf[n] = 0;
+    term_puts(cbuf);
+    term_puts("\n");
+}
+
+/* 测试钩子：让内核自测验证"终端这一层真的读到了盘"，而不是写死字符串 */
+int term_selftest_ls(void) { return term_cmd_ls(); }
+const char *term_selftest_buf(void) { return term_buf; }
+
 static void term_exec(const char *cmd)
 {
     /* 记录历史 */
@@ -52,9 +101,21 @@ static void term_exec(const char *cmd)
     /* 解析命令 */
     if (cmd[0] == 0) return;
     if (strcmp(cmd, "help") == 0) {
-        term_puts("Commands: help ls echo clear version whoami date\n");
-    } else if (strncmp(cmd, "ls", 2) == 0) {
-        term_puts("dev  initrd  proc  sys  bin\n");
+        term_puts("Commands: help ls cat <file> fs ls echo clear version whoami date\n");
+    } else if (strncmp(cmd, "ls", 2) == 0 && (cmd[2] == 0 || cmd[2] == ' ')) {
+        term_cmd_ls();
+    } else if (strncmp(cmd, "cat ", 4) == 0) {
+        term_cmd_cat(cmd + 4);
+    } else if (strncmp(cmd, "fs", 2) == 0 && (cmd[2] == 0 || cmd[2] == ' ')) {
+        const char *sub = cmd + 2;
+        while (*sub == ' ') sub++;
+        if (strncmp(sub, "ls", 2) == 0 && (sub[2] == 0 || sub[2] == ' ')) {
+            term_cmd_ls();
+        } else if (strncmp(sub, "cat ", 4) == 0) {
+            term_cmd_cat(sub + 4);
+        } else {
+            term_puts("fs: support ls | cat <name>\n");
+        }
     } else if (strncmp(cmd, "echo ", 5) == 0) {
         term_puts(cmd + 5);
         term_puts("\n");
