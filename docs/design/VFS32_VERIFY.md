@@ -294,3 +294,75 @@ if (slab_caches[i].obj_size >= offset && offset % slab_caches[i].obj_size == 0)
 
 **不挪 KTEST 位置、也不放宽断言** —— 放宽会掩盖以后的真失败。诊断码留在
 `kunit_run_all` 里，每次启动都能直接看到是哪个套件返回非 0。
+
+## 14. `disk.p2_content` 失败的根因：buddy 与 pmm 两套页账（已修）
+
+### 现象
+
+读阶段 6 项里只有第 2 项挂：`rd=9`（字节数对）但 `b0=0x10 b1=0x20`，不是
+`HEPU_P2_OK`。其余 5 项、写阶段 16 项全 PASS。
+
+### 定位过程（每一步都是串口实测，不靠推断）
+
+| 观察 | 结论 |
+|---|---|
+| `p2test.txt` inode=33，`i_block[0]=16`，`i_size=9`，mode=`0x81A4` | inode 正常，数据块被换成了块 16 |
+| 盘上解析：GDT0 块位图=230，块 230 前 384 位全 `ff` | 盘本身没坏 |
+| `meta read 230 lba=0x9CC first4=FFFFFFFF` | 读盘内容正确 |
+| 之后 `L2 hit 230 phys=0x09155000 b0=0x00000000` | 页缓存里的块位图页被清零 |
+| `e1000-diag` 打印四个缓冲区：`RX_B=0x09145000 RX_D=0x0925A000 TX_D=0x09155000 TX_B=0x09156000` | 网卡发送描述符环就落在这个页上 |
+| `[PMNDBG] FREE 0x09155000` 出现在 `[DMA] test7 alloc 64KB (phys=0x09150000)` 之后 | 一次 64KB DMA 缓冲区释放把这个页从 pmm 位图清掉 |
+
+### 真正的根因：两个分配器各记一套账
+
+- `mm_alloc_page` 用 `memory_bitmap` 记账；
+- `buddy_alloc_pages` 只看自己的 `buddy_free_bitmap`，**从不查 `memory_bitmap`**；
+  分配后虽然逐页调 `mm_alloc_page_at` 补记，但**返回值被丢弃**，
+  已占用的页照样随整块交付；
+- `buddy_free_pages` 反过来把整块每一页无条件交给 `mm_free_page`。
+
+于是 DMA 自测的 64KB 块（`0x09150000..0x0915FFFF`）与 e1000 的
+RX 缓冲尾部、TX 描述符页、TX 缓冲完全重叠。释放后 `0x09155000` 在 pmm
+侧变成空闲，`meta_get(230)` 随后把它分给页缓存；网卡初始化
+`memset(tx_descs, 0, 128)` 把块位图首字节清零，`ext2_alloc_block`
+从块 0 开始把超级块/GDT/inode 表当空闲数据块分出去，`p2test.txt`
+的数据块被覆盖成目录块，读回自然不匹配。
+
+> 顺带记一个误判：第一轮把 `TDBAL=0x0915500`（7 位十六进制 =
+> `0x00915500`）当成了 `0x09155000`（8 位），差点把锅扣在网卡地址上。
+> 串口读出来的地址要数位数，别用眼睛对齐。
+
+### 修法
+
+1. `kernel/mm/pmm.c` 新增 `mm_page_used(page)`：保留区、页表页、越界、
+   位图已置位一律算“已用”，作为唯一的归属查询入口。
+2. `buddy_alloc_pages`：候选块必须**逐页**通过 `mm_page_used` 检查才交付；
+   补记 `mm_alloc_page_at` 失败时返回 0（宁可分配失败，不带病返回）。
+   分裂逻辑不变。
+3. `buddy_free_pages` 保持原样 —— 分配侧不再越界交付后，它释放的块
+   必然是 buddy 自己标记过的页。
+
+### 防线（防御性，不替代上面的修复）
+
+`ext2_alloc_block` 增加一条硬校验：组 0 的块位图第 0 位对应块 0（引导块），
+合法 ext2 上必为已用。若读出为 0，直接打印
+`block bitmap corrupted (bit0 free), refuse alloc` 并返回 0，
+不再“在坏位图上继续分配”。
+
+### 修复后的实测
+
+- `tools/verify_p1p3.sh`：**RC=0**，写阶段 16/16 PASS，读阶段 6/6 PASS，
+  `disk.p2_content PASS HEPU_P2_OK`；连续 3 次 RC=0。
+- `[DMA]` 自测 7/7 PASS，缓冲区落在 `0x0FF60000 / 0x0FF78000 / 0x0FF7E000`，
+  与 e1000 的 `0x0914x/0x0915x` 不再有任何重叠。
+- `tools/regress32.sh`：PASS（`serial=1 initrd=1 net=1 desk=1 fault=0 bound=1`，
+  `lines=909`）。
+- 全部临时串口诊断（`[EXT2DBG]`/`[PMNDBG]`/缓冲区地址打印）已清除，
+  `-Wall -Wextra` 构建 **0 告警**。
+
+### 结论（给后来者）
+
+**页归属只能有一个权威账本（pmm 的 `memory_bitmap`）。** 任何二级分配器
+（buddy、DMA 缓冲池、将来的 slab 大页）在交付前都必须查这本账，
+释放时只释放自己确实标记过的页。两套账并行，短期看不出问题，
+一旦有人释放了“别人的页”，故障会以完全不相干的形式出现在文件系统里。

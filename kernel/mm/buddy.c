@@ -172,16 +172,32 @@ uint32_t buddy_alloc_pages(uint32_t count)
     int found_order = -1;
     uint32_t found_block = 0;
 
-    for (int o = order; o <= BUDDY_MAX_ORDER; o++) {
-        uint32_t block_size = 1u << o;
-        uint32_t num_blocks = (buddy_total_pages + block_size - 1) / block_size;
-        for (uint32_t block = 0; block < num_blocks; block++) {
-            uint32_t idx = block / 32;
-            uint32_t bit = block % 32;
-            if (buddy_free_bitmap[o][idx] & (1u << bit)) {
+    /* V6.87: buddy 位图只记录"本分配器视角的连续块", 真正的页归属以
+     * pmm 的 memory_bitmap 为准。早期版本只查 buddy 位图就交付, 会把
+     * pmm 已分给驱动/页缓存的页再次交给 DMA 调用方(实测: 64KB DMA 块
+     * 覆盖 e1000 的 TX 描述符环, 释放时把该页从 pmm 位图清掉, 页缓存
+     * 随后复用该页, 网卡 memset 把 ext2 块位图清零)。
+     * 因此候选块必须逐页确认 pmm 侧全部空闲才可交付。 */
+    {
+        extern int mm_page_used(uint32_t page);
+        for (int o = order; o <= BUDDY_MAX_ORDER && found_order < 0; o++) {
+            uint32_t block_size = 1u << o;
+            uint32_t num_blocks = (buddy_total_pages + block_size - 1) / block_size;
+            for (uint32_t block = 0; block < num_blocks; block++) {
+                uint32_t idx = block / 32;
+                uint32_t bit = block % 32;
+                if (!(buddy_free_bitmap[o][idx] & (1u << bit))) continue;
+
+                uint32_t start_page = block * block_size;
+                uint32_t conflict = 0;
+                for (uint32_t i = 0; i < block_size; i++) {
+                    if (mm_page_used(start_page + i)) { conflict = 1; break; }
+                }
+                if (conflict) continue;
+
                 found_order = o;
                 found_block = block;
-                goto found;
+                break;
             }
         }
     }
@@ -219,7 +235,8 @@ found:
     uint32_t num_pages = 1u << order;
     extern int mm_alloc_page_at(uint32_t);
     for (uint32_t i = 0; i < num_pages; i++) {
-        mm_alloc_page_at((start_page + i) * PAGE_SIZE);
+        /* 过滤后此处不应失败; 若失败说明归属判断被绕过, 返回 0 让调用方失败而非带病返回 */
+        if (mm_alloc_page_at((start_page + i) * PAGE_SIZE) != 0) return 0;
     }
 
     return start_page * PAGE_SIZE;

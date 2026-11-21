@@ -255,6 +255,16 @@ int mm_alloc_page_at(uint32_t phys_addr)
     return 0;
 }
 
+/* 查询某物理页是否已被占用(含保留区/越界), 供 buddy 等次级分配器做归属过滤 */
+int mm_page_used(uint32_t page)
+{
+    if (!memory_bitmap) return 1;
+    if (page >= total_pages) return 1;
+    if (mm_is_page_reserved(page)) return 1;
+    if (is_page_table_page(page)) return 1;
+    return (memory_bitmap[page / 32] & (1u << (page % 32))) ? 1 : 0;
+}
+
 /* 释放物理页 */
 void mm_free_page(uint32_t phys_addr)
 {

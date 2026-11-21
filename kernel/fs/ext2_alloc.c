@@ -24,6 +24,15 @@ uint32_t ext2_alloc_block(void)
         if (ext2_gdt[g].bg_free_blocks_count == 0) continue;
         uint8_t *bitmap = ext2_block_access(ext2_gdt[g].bg_block_bitmap);
         if (!bitmap) return 0;
+        /* V6.87 防线: 组0的位图第0位对应块0(引导块), 合法 ext2 上必为已用。
+         * 若读出为 0, 说明位图页已被踩坏(实测曾因 DMA 缓冲区与页缓存共页,
+         * 网卡 memset 把整页清零, 分配器随即从块0起把超级块/GDT/inode 表
+         * 当空闲数据块分出去, 静默毁掉文件内容)。此处宁可分配失败, 也不
+         * 在坏位图上继续写。 */
+        if (g == 0 && bitmap[0] == 0) {
+            vga_puts("[EXT2] error: block bitmap corrupted (bit0 free), refuse alloc\n");
+            return 0;
+        }
         for (uint32_t b = 0; b < ext2_sb->s_blocks_per_group; b++) {
             if (!(bitmap[b / 8] & (1 << (b % 8)))) {
                 bitmap[b / 8] |= (1 << (b % 8));
