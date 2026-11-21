@@ -108,15 +108,20 @@ dd if="$PART" of="$DISK" bs=512 seek=2048 conv=notrunc
 | `shell.mkdir`：`mkdir /p3shell` → 盘上建出目录 | PASS |
 | `shell.rm`：`rm /p3shell` → 盘上消失 | PASS |
 | `shell.ls`：`ls /` → 跑完 VFS 树仍完整 | PASS |
+| `shell.cp`：`cp /p2shell.txt /p2shell.copy` → 副本内容正确 | PASS |
+| `shell.mv`：`mv /p2shell.copy /p2shell.moved` → 旧名消失、新名存在 | PASS |
 
 **过程中发现 `rm` 一直是坏的**：旧写法把整段 `/p3shell` 当名字传给 `fs_rm_recursive("/", name)`，拼出来是 `//p3shell`，永远找不到——所以 `rm` 看起来跑了、实际什么都没删。
 
 **同时发现 P3 其实没做**：`mkdir` 分支还在直调 `ide_ext2_mkdir`。这次才真正改成 `vfs_mkdir` / `vfs_rmdir` / `vfs_unlink`，`write` 分支里那段 `ext2_path_create` 兜底也去掉了（`vfs_open` 已认 `O_CREAT`）。
 
-现在 `fs` 的 `ls` / `cat` / `stat` / `write` / `mkdir` / `rm` 六条全部走 VFS，一个直调都不剩。剩 `df` / `fsck` / `mount` / `sync` / `cp` / `cpall` / `mv` 还是直调（`cp`/`mv` 是 P4，没开始）。
+现在 `fs` 的 `ls` / `cat` / `stat` / `write` / `mkdir` / `rm` / `cp` / `cpall` / `mv` 九条全部走 VFS。
+只剩 `df` / `fsck` / `mount` / `sync` 还是直调——这四条本来就是管理类操作（挂载、检查、同步、统计），
+不走 VFS 是合理的。
 
 ## 六、仍然没验的
 
 - **键盘那一跳**：自测直接调 `cmd_fs`，没有经过 `shell_commands[]` 的 `strcmp` 分发和串口/键盘输入。命令实现体是对的，但"敲 `fs ls` 回车真的能到这"没验。
-- **`cp` / `cpall` / `mv`**：P4，未开始。
+- **`cpall` 的端到端**：代码改了但没在自测里跑（它会复制整个根目录，太慢），只验了 `cp`/`mv`。
+- **大文件 cp**：自测只拷了 9 字节，多块读写（>2KB 走循环）没验。
 - **多级路径**：自测只覆盖根目录一层（`/p2shell.txt`、`/p3shell`），`/a/b/c` 没验。

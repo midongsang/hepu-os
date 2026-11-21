@@ -593,12 +593,20 @@ int vfs_rename(const char *old_path, const char *new_path)
     split_path(new_path, np, name);
     vfs_node_t *parent = vfs_find(np);
     if (!parent || parent->type != VFS_DIRECTORY) return -1;
+    /* 2026-11-21: 先落盘，成功再改内存树。原实现反着来、且不看返回值，
+     * 盘上 rename 失败时内存树已经改了 —— 又一个"看着成功"的假状态。 */
+    {
+        extern int ext2_mounted;
+        extern int ext2_path_rename(const char *old_path, const char *new_path);
+        if (ext2_mounted && ext2_path_rename(old_path, new_path) < 0) {
+            vga_puts("[VFS] rename: ext2 backend failed\n");
+            return -1;
+        }
+    }
     remove_child(node->parent, node);
     strncpy(node->name, name, VFS_MAX_NAME - 1);
+    node->name[VFS_MAX_NAME - 1] = 0;
     vfs_add_child(parent, node);
-    /* ext2持久化 */
-    extern int ext2_path_rename(const char *old_path, const char *new_path);
-    ext2_path_rename(old_path, new_path);
     return 0;
 }
 

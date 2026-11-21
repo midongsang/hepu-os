@@ -81,7 +81,7 @@ int fs_vfs_selftest(char phase)
     serial_puts(port, "\n");
 
     if (phase == 'w') {
-        vs_total = 10;
+        vs_total = 12;
         /* ---- 诊断：先把挂载状态和底层返回码打出来，别靠猜 ---- */
         {
             extern int ext2_mounted;
@@ -205,6 +205,34 @@ int fs_vfs_selftest(char phase)
                 int okl = (vfs_find("/") != 0);
                 vs_line(port, "shell.ls", 10, okl, okl ? "跑完 VFS 树仍完整" : "ls 之后树坏了");
                 if (!okl) fails++;
+            }
+
+            /* shell.cp */
+            { char c[] = "cp /p2shell.txt /p2shell.copy"; int i;
+              for (i = 0; c[i]; i++) cmdbuf[i] = c[i]; cmdbuf[i] = 0; }
+            cmd_fs(cmdbuf);
+            {
+                int rd2 = ide_ext2_read_file("/", "p2shell.copy", rb, 32);
+                int okc = 0;
+                if (rd2 > 0) {
+                    const char *exp = "HELLO_SHELL"; int i;
+                    okc = 1;
+                    for (i = 0; exp[i]; i++) if (rb[i] != exp[i]) { okc = 0; break; }
+                }
+                vs_line(port, "shell.cp", 11, okc, okc ? "副本内容正确" : "cp 没落盘/内容不对");
+                if (!okc) fails++;
+            }
+
+            /* shell.mv */
+            { char c[] = "mv /p2shell.copy /p2shell.moved"; int i;
+              for (i = 0; c[i]; i++) cmdbuf[i] = c[i]; cmdbuf[i] = 0; }
+            cmd_fs(cmdbuf);
+            {
+                int has_new = ide_ext2_read_file("/", "p2shell.moved", rb, 32);
+                int has_old = ide_ext2_read_file("/", "p2shell.copy", rb, 32);
+                int okv = (has_new > 0 && has_old <= 0);
+                vs_line(port, "shell.mv", 12, okv, okv ? "旧名消失、新名存在" : "mv 没生效");
+                if (!okv) fails++;
             }
         }
 

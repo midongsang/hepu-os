@@ -263,6 +263,55 @@ static int fs_rm_recursive(const char *dirpath, const char *name)
     return -1;
 }
 
+
+/* ===== P4: VFS 版复制 =====
+ * 原来的 fs_cp_recursive 全是 ide_ext2_* 直调（fm_entry_t、write_raw 那一套），
+ * 这里换成 vfs_open/read/write + vfs_readdir，目录递归靠 vfs_mkdir 建目标。 */
+static int fs_cp_file_vfs(const char *src, const char *dst)
+{
+    int sfd = vfs_open(src, VFS_O_RDONLY);
+    if (sfd < 0) return -1;
+    int dfd = vfs_open(dst, VFS_O_WRONLY | VFS_O_CREAT | VFS_O_TRUNC);
+    if (dfd < 0) { vfs_close(sfd); return -1; }
+
+    static char cpbuf[2048];
+    int total = 0, err = 0;
+    for (int guard = 0; guard < 8192; guard++) {
+        int r = vfs_read(sfd, cpbuf, sizeof(cpbuf));
+        if (r < 0) { err = 1; break; }
+        if (r == 0) break;
+        int w = vfs_write(dfd, cpbuf, (uint32_t)r);
+        if (w != r) { err = 1; break; }
+        total += w;
+    }
+    vfs_close(sfd);
+    vfs_close(dfd);
+    vfs_sync();          /* 复制完必须落盘，否则重启就没了 */
+    return err ? -1 : total;
+}
+
+static int fs_cp_dir_vfs(const char *src, const char *dst, int depth)
+{
+    if (depth > 6) return -1;    /* 防深递归把栈打穿 */
+    if (vfs_mkdir(dst) != 0) {
+        vfs_node_t *d = vfs_find(dst);
+        if (!d || d->type != VFS_DIRECTORY) return -1;
+    }
+    vfs_dirent_t ents[64];
+    int n = vfs_readdir(src, ents, 64);
+    if (n < 0) return -1;
+    int ok = 0;
+    for (int i = 0; i < n; i++) {
+        if (strcmp(ents[i].name, ".") == 0 || strcmp(ents[i].name, "..") == 0) continue;
+        char sp[192], dp[192];
+        fs_join_path(src, ents[i].name, sp, sizeof(sp));
+        fs_join_path(dst, ents[i].name, dp, sizeof(dp));
+        if (ents[i].type == VFS_DIRECTORY) ok += fs_cp_dir_vfs(sp, dp, depth + 1);
+        else ok += fs_cp_file_vfs(sp, dp);
+    }
+    return ok;
+}
+
 void cmd_fs(char *args)
 {
     if (!args || args[0] == 0) {
@@ -380,82 +429,94 @@ void cmd_fs(char *args)
             else vga_printf(" rm: %s FAIL\n", abs);
         }
     } else if (strncmp(args, "cpall ", 6) == 0) {
-        /* V4.44-E89: fs cpall <dst>——批量复制根目录全部条目 */
-        extern int ide_ext2_list_entries(const char *, fm_entry_t *, int);
+        /* P4: 改走 VFS —— 遍历根目录，逐项递归复制 */
         const char *dst = args + 6;
         while (*dst == ' ') dst++;
         if (*dst == 0) { vga_puts(" fs cpall <dst>\n"); return; }
-        /* V4.44-E89 修复: 目标根目录必须先建 (write_raw 依赖目录存在) */
-        extern int ide_ext2_mkdir(const char *);
-        ide_ext2_mkdir(dst);
-        fm_entry_t ents[FM_MAX_ENTRIES];
-        int cnt = ide_ext2_list_entries("/", ents, FM_MAX_ENTRIES);
-        if (cnt <= 0) { vga_puts(" cpall: empty root\n"); return; }
-        int ok = 0;
-        for (int i = 0; i < cnt; i++) {
-            if (strcmp(ents[i].name, ".") == 0 || strcmp(ents[i].name, "..") == 0)
-                continue;
-            /* V4.44-E89: 跳过目标自身, 防自我嵌套 (backupall2 -> backupall2/backupall2) */
-            if (strcmp(ents[i].name, dst) == 0) continue;
-            /* 子项目标 = dst + "/" + 条目名 (保留原名) */
-            static char cdst[160];
-            int cn = 0;
-            const char *cd = dst;
-            while (*cd && cn < 140) cdst[cn++] = *cd++;
-            if (cn > 0 && cdst[cn - 1] != '/') cdst[cn++] = '/';
-            for (int j = 0; ents[i].name[j] && cn < 150; j++) cdst[cn++] = ents[i].name[j];
-            cdst[cn] = 0;
-            if (fs_cp_recursive("/", ents[i].name, cdst, 0) == 0) ok++;
+        char dabs[192];
+        fs_abs_path(dst, dabs, sizeof(dabs));
+        if (!vfs_find(dabs) && vfs_mkdir(dabs) != 0) {
+            vga_printf(" cpall: mkdir %s FAIL\n", dabs);
+            return;
         }
-        vga_printf(" cpall: %d items copied to %s\n", ok, dst);
+
+        vfs_dirent_t ents[64];
+        int cnt = vfs_readdir("/", ents, 64);
+        if (cnt <= 0) { vga_puts(" cpall: empty root\n"); return; }
+        int ok = 0, bad = 0;
+        for (int i = 0; i < cnt; i++) {
+            if (strcmp(ents[i].name, ".") == 0 || strcmp(ents[i].name, "..") == 0) continue;
+            char sp[192], dp[192];
+            fs_join_path("/", ents[i].name, sp, sizeof(sp));
+            if (strcmp(sp, dabs) == 0) continue;   /* 跳过目标自身，防自我嵌套 */
+            fs_join_path(dabs, ents[i].name, dp, sizeof(dp));
+            int r = (ents[i].type == VFS_DIRECTORY)
+                  ? fs_cp_dir_vfs(sp, dp, 1)
+                  : fs_cp_file_vfs(sp, dp);
+            if (r >= 0) ok++; else bad++;
+        }
+        vga_printf(" cpall: %d items copied to %s", ok, dabs);
+        if (bad) vga_printf(" (%d failed)", bad);
+        vga_puts("\n");
     } else if (strncmp(args, "cp ", 3) == 0) {
-        /* V4.44-E89: fs cp <src> <dst>——自动识别文件/目录递归复制 (大文件整量) */
+        /* P4: 改走 VFS。目标若是已存在目录，拷到它里面（保留源文件名）。 */
         const char *p1 = args + 3;
         const char *p2 = p1;
         while (*p2 && *p2 != ' ') p2++;
         if (*p2 == 0) { vga_puts(" fs cp: need src and dst\n"); return; }
-        static char cpsrc[128], cpdst[128];
-        uint32_t n1 = p2 - p1;
-        if (n1 > 127) n1 = 127;
-        memcpy(cpsrc, p1, n1);
-        cpsrc[n1] = 0;
+        char srcn[128], dstn[128];
+        uint32_t n1 = p2 - p1; if (n1 > 127) n1 = 127;
+        memcpy(srcn, p1, n1); srcn[n1] = 0;
         const char *p3 = p2 + 1;
         while (*p3 == ' ') p3++;
         uint32_t n2 = 0;
         while (p3[n2] && p3[n2] != ' ' && n2 < 127) n2++;
-        memcpy(cpdst, p3, n2);
-        cpdst[n2] = 0;
-        /* V4.47-E92: src 支持子目录路径 (data/backup -> parent=/data name=backup) */
-        const char *srcname = cpsrc;
-        static char srcparent[128];
-        const char *slash = NULL;
-        for (const char *q = cpsrc; *q; q++) if (*q == '/') slash = q;
-        if (slash && slash != cpsrc) {
-            uint32_t pn = (uint32_t)(slash - cpsrc);
-            if (pn > 126) pn = 126;
-            int k = 0;
-            if (cpsrc[0] != '/') srcparent[k++] = '/';
-            for (uint32_t i = 0; i < pn; i++) srcparent[k++] = cpsrc[i];
-            srcparent[k] = 0;
-            srcname = slash + 1;
-            fs_cp_recursive(srcparent, srcname, cpdst, 0);
-        } else if (slash == cpsrc) {
-            fs_cp_recursive("/", slash + 1, cpdst, 0);
+        memcpy(dstn, p3, n2); dstn[n2] = 0;
+
+        char sabs[192], dabs[192], final[192];
+        fs_abs_path(srcn, sabs, sizeof(sabs));
+        fs_abs_path(dstn, dabs, sizeof(dabs));
+
+        vfs_node_t *sn = vfs_find(sabs);
+        if (!sn) { vga_printf(" cp: %s not found\n", sabs); return; }
+
+        vfs_node_t *dn = vfs_find(dabs);
+        if (dn && dn->type == VFS_DIRECTORY) {
+            const char *base = sabs;
+            for (const char *q = sabs; *q; q++) if (*q == '/') base = q + 1;
+            if (!*base) { vga_puts(" cp: bad src name\n"); return; }
+            fs_join_path(dabs, base, final, sizeof(final));
         } else {
-            fs_cp_recursive("/", cpsrc, cpdst, 0);
+            int k = 0;
+            while (dabs[k] && k < 191) { final[k] = dabs[k]; k++; }
+            final[k] = 0;
         }
+
+        int r = (sn->type == VFS_DIRECTORY)
+              ? fs_cp_dir_vfs(sabs, final, 0)
+              : fs_cp_file_vfs(sabs, final);
+        if (r >= 0) vga_printf(" cp %s -> %s ok\n", sabs, final);
+        else vga_printf(" cp %s -> %s FAIL\n", sabs, final);
     } else if (strncmp(args, "mv ", 3) == 0) {
-        extern int ide_ext2_mv(const char *oldn, const char *newn);
+        /* P4: 改走 VFS（vfs_rename 内部先落 ext2 再改内存树） */
         const char *p1 = args + 3;
         const char *p2 = p1;
         while (*p2 && *p2 != ' ') p2++;
-        if (*p2 == 0) { vga_puts(" fs mv: need old and new name\n"); return; }
-        static char oldn[128];
-        uint32_t olen = p2 - p1;
-        if (olen > 127) olen = 127;
-        memcpy(oldn, p1, olen); oldn[olen] = 0;
+        if (*p2 == 0) { vga_puts(" fs mv: need old and new\n"); return; }
+        char on[128], nn[128];
+        uint32_t ol = p2 - p1; if (ol > 127) ol = 127;
+        memcpy(on, p1, ol); on[ol] = 0;
         const char *p3 = p2 + 1;
-        ide_ext2_mv(oldn, p3);
+        while (*p3 == ' ') p3++;
+        uint32_t nl = 0;
+        while (p3[nl] && p3[nl] != ' ' && nl < 127) nl++;
+        memcpy(nn, p3, nl); nn[nl] = 0;
+
+        char oabs[192], nabs[192];
+        fs_abs_path(on, oabs, sizeof(oabs));
+        fs_abs_path(nn, nabs, sizeof(nabs));
+        if (vfs_rename(oabs, nabs) == 0) vga_printf(" mv %s -> %s ok\n", oabs, nabs);
+        else vga_printf(" mv %s -> %s FAIL\n", oabs, nabs);
     } else if (strncmp(args, "mkdir ", 6) == 0) {
         /* P3: 改走 VFS（vfs_mkdir 内部先落 ext2 再建内存节点） */
         char abs[192];
