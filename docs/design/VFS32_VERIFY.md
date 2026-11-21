@@ -98,8 +98,25 @@ dd if="$PART" of="$DISK" bs=512 seek=2048 conv=notrunc
 
 **跑过的盘上会多出 `firstboot.flag` / `hepu_boot.log` 等条目**——桌面自己会写文件。核对目录内容时别以为是自己建的。
 
-## 五、仍然没验的
+## 五、shell 命令层（P3 真正落地）
 
-- **shell 命令层**（`3c52bbd`）：`fs ls/stat/cat/write` 改走 VFS 的代码仍未做端到端验证。本脚本覆盖的是 VFS 层，不是 `cmd_fs` 的字符串解析和真实 shell 调用。
-- **`vfs_unlink` 对文件的路径**：只在目录上验过删除，文件删除没单独验。
-- **多级路径**：只验了根目录下的一层（`/p2test.txt`、`/p3test`），`/a/b/c` 没验。
+之前只验到 VFS 层，`cmd_fs` 自己的参数解析没跑过。这次把自测扩到 10 项，直接在内核里调 `cmd_fs`（绕开键盘），判定一律看盘上结果：
+
+| 项 | 结果 |
+|---|---|
+| `shell.write`：`write /p2shell.txt HELLO_SHELL` → 盘上内容正确 | PASS |
+| `shell.mkdir`：`mkdir /p3shell` → 盘上建出目录 | PASS |
+| `shell.rm`：`rm /p3shell` → 盘上消失 | PASS |
+| `shell.ls`：`ls /` → 跑完 VFS 树仍完整 | PASS |
+
+**过程中发现 `rm` 一直是坏的**：旧写法把整段 `/p3shell` 当名字传给 `fs_rm_recursive("/", name)`，拼出来是 `//p3shell`，永远找不到——所以 `rm` 看起来跑了、实际什么都没删。
+
+**同时发现 P3 其实没做**：`mkdir` 分支还在直调 `ide_ext2_mkdir`。这次才真正改成 `vfs_mkdir` / `vfs_rmdir` / `vfs_unlink`，`write` 分支里那段 `ext2_path_create` 兜底也去掉了（`vfs_open` 已认 `O_CREAT`）。
+
+现在 `fs` 的 `ls` / `cat` / `stat` / `write` / `mkdir` / `rm` 六条全部走 VFS，一个直调都不剩。剩 `df` / `fsck` / `mount` / `sync` / `cp` / `cpall` / `mv` 还是直调（`cp`/`mv` 是 P4，没开始）。
+
+## 六、仍然没验的
+
+- **键盘那一跳**：自测直接调 `cmd_fs`，没有经过 `shell_commands[]` 的 `strcmp` 分发和串口/键盘输入。命令实现体是对的，但"敲 `fs ls` 回车真的能到这"没验。
+- **`cp` / `cpall` / `mv`**：P4，未开始。
+- **多级路径**：自测只覆盖根目录一层（`/p2shell.txt`、`/p3shell`），`/a/b/c` 没验。

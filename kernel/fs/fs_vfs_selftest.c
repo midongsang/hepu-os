@@ -81,6 +81,7 @@ int fs_vfs_selftest(char phase)
     serial_puts(port, "\n");
 
     if (phase == 'w') {
+        vs_total = 10;
         /* ---- 诊断：先把挂载状态和底层返回码打出来，别靠猜 ---- */
         {
             extern int ext2_mounted;
@@ -142,6 +143,70 @@ int fs_vfs_selftest(char phase)
         int ok6 = (mk == 0 && vfs_find(VS_DIR) != 0);
         vs_line(port, "P3.mkdir", 6, ok6, ok6 ? "created" : "vfs_mkdir 失败");
         if (!ok6) fails++;
+
+        /* ---- shell 命令层：直接调 cmd_fs，绕开键盘输入 ----
+         * 前面 6 项验的是 VFS 这一层；这里验的是 cmd_fs 自己的参数解析
+         * 和路径拼接是否真的把活干成了 —— 判定一律看盘上结果，不看它打印什么。 */
+        {
+            extern void cmd_fs(char *);
+            extern int ide_ext2_read_file(const char *, const char *, char *, int);
+            char cmdbuf[96];
+            char rb[64];
+
+            /* shell.write */
+            { char c[] = "write /p2shell.txt HELLO_SHELL"; int i;
+              for (i = 0; c[i]; i++) cmdbuf[i] = c[i]; cmdbuf[i] = 0; }
+            cmd_fs(cmdbuf);
+            int rd = ide_ext2_read_file("/", "p2shell.txt", rb, 32);
+            int okw = 0;
+            if (rd > 0) {
+                const char *exp = "HELLO_SHELL"; int i;
+                okw = 1;
+                for (i = 0; exp[i]; i++) if (rb[i] != exp[i]) { okw = 0; break; }
+            }
+            vs_line(port, "shell.write", 7, okw, okw ? "盘上内容正确" : "write 没落盘/内容不对");
+            if (!okw) fails++;
+
+            /* shell.mkdir */
+            { char c[] = "mkdir /p3shell"; int i;
+              for (i = 0; c[i]; i++) cmdbuf[i] = c[i]; cmdbuf[i] = 0; }
+            cmd_fs(cmdbuf);
+            vfs_dirent_t se[16];
+            int sn = ext2_readdir_ino(2, se, 16);
+            int okm = 0;
+            for (int i = 0; i < sn; i++) {
+                const char *e = se[i].name; const char *t = "p3shell"; int j = 0;
+                while (e[j] && t[j] && e[j] == t[j]) j++;
+                if (e[j] == 0 && t[j] == 0) { okm = 1; break; }
+            }
+            vs_line(port, "shell.mkdir", 8, okm, okm ? "盘上建出目录" : "mkdir 没落盘");
+            if (!okm) fails++;
+
+            /* shell.rm */
+            { char c[] = "rm /p3shell"; int i;
+              for (i = 0; c[i]; i++) cmdbuf[i] = c[i]; cmdbuf[i] = 0; }
+            cmd_fs(cmdbuf);
+            int sn2 = ext2_readdir_ino(2, se, 16);
+            int still = 0;
+            for (int i = 0; i < sn2; i++) {
+                const char *e = se[i].name; const char *t = "p3shell"; int j = 0;
+                while (e[j] && t[j] && e[j] == t[j]) j++;
+                if (e[j] == 0 && t[j] == 0) { still = 1; break; }
+            }
+            vs_line(port, "shell.rm", 9, !still, still ? "删完还在" : "已消失");
+            if (still) fails++;
+
+            /* shell.ls（ls 是 void 输出到屏幕，只能验"跑完还活着、根节点还有效"） */
+            { char c[] = "ls /"; int i;
+              for (i = 0; c[i]; i++) cmdbuf[i] = c[i]; cmdbuf[i] = 0; }
+            cmd_fs(cmdbuf);
+            {
+                extern vfs_node_t *vfs_find(const char *);
+                int okl = (vfs_find("/") != 0);
+                vs_line(port, "shell.ls", 10, okl, okl ? "跑完 VFS 树仍完整" : "ls 之后树坏了");
+                if (!okl) fails++;
+            }
+        }
 
         serial_puts(port, "[VFS-TEST] write phase done, fails=");
         vs_put_dec(port, fails);

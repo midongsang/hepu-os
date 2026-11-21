@@ -326,16 +326,9 @@ void cmd_fs(char *args)
         {
             char abs[192];
             fs_abs_path(nm, abs, sizeof(abs));
-            /* 32 位 vfs_open 不处理 O_CREAT（只 vfs_find，不存在返回 -1），
-             * 所以新文件先走 ext2_path_create 建出来，再 open 写入。 */
-            if (!vfs_find(abs)) {
-                extern int ext2_path_create(const char *path, uint16_t mode);
-                if (ext2_path_create(abs, 0x81A4) <= 0) {
-                    vga_printf(" write %s FAIL (create)\n", abs);
-                    return;
-                }
-            }
-            int fd = vfs_open(abs, VFS_O_WRONLY | VFS_O_TRUNC);
+            /* vfs_open 现在认 O_CREAT（先落 ext2、再补内存节点），
+             * 不用再手工 ext2_path_create 兜底了 —— shell 这条路径彻底走 VFS。 */
+            int fd = vfs_open(abs, VFS_O_WRONLY | VFS_O_CREAT | VFS_O_TRUNC);
             if (fd < 0) {
                 vga_printf(" write %s FAIL (open)\n", abs);
             } else {
@@ -370,13 +363,22 @@ void cmd_fs(char *args)
         if (ide_ext2_sync() == 0) vga_puts(" fs synced\n");
         else vga_puts(" sync FAIL\n");
     } else if (strncmp(args, "rm ", 3) == 0) {
-        /* V4.45-E90: fs rm <name>——自动识别文件/目录递归删除 */
-        const char *name = args + 3;
-        static char rmname[128];
-        uint32_t k = 0;
-        while (name[k] && name[k] != ' ' && k < 127) { rmname[k] = name[k]; k++; }
-        rmname[k] = 0;
-        fs_rm_recursive("/", rmname);
+        /* P3: 改走 VFS。
+         * 旧写法把整段 "/p3shell" 当名字传给 fs_rm_recursive("/", name)，
+         * 拼出来是 "//p3shell"，永远找不到 —— 所以 rm 一直"删完还在"。
+         * 现在统一规整成绝对路径，再按节点类型分派 rmdir / unlink。 */
+        char abs[192];
+        fs_abs_path(args + 3, abs, sizeof(abs));
+        vfs_node_t *node = vfs_find(abs);
+        if (!node) {
+            vga_printf(" rm %s: not found\n", abs);
+        } else if (node->type == VFS_DIRECTORY) {
+            if (vfs_rmdir(abs) == 0) vga_printf(" rm: dir %s removed\n", abs);
+            else vga_printf(" rm: dir %s FAIL (非空或删除失败)\n", abs);
+        } else {
+            if (vfs_unlink(abs) == 0) vga_printf(" rm: %s removed\n", abs);
+            else vga_printf(" rm: %s FAIL\n", abs);
+        }
     } else if (strncmp(args, "cpall ", 6) == 0) {
         /* V4.44-E89: fs cpall <dst>——批量复制根目录全部条目 */
         extern int ide_ext2_list_entries(const char *, fm_entry_t *, int);
@@ -455,13 +457,11 @@ void cmd_fs(char *args)
         const char *p3 = p2 + 1;
         ide_ext2_mv(oldn, p3);
     } else if (strncmp(args, "mkdir ", 6) == 0) {
-        extern int ide_ext2_mkdir(const char *name);
-        const char *name = args + 6;
-        static char dname[128];
-        uint32_t k = 0;
-        while (name[k] && name[k] != ' ' && k < 127) { dname[k] = name[k]; k++; }
-        dname[k] = 0;
-        ide_ext2_mkdir(dname);
+        /* P3: 改走 VFS（vfs_mkdir 内部先落 ext2 再建内存节点） */
+        char abs[192];
+        fs_abs_path(args + 6, abs, sizeof(abs));
+        if (vfs_mkdir(abs) == 0) vga_printf(" mkdir %s ok\n", abs);
+        else vga_printf(" mkdir %s FAIL\n", abs);
     } else if (strncmp(args, "lsdir ", 6) == 0) {
         extern int ide_ext2_ls_dir(const char *name);
         const char *name = args + 6;
