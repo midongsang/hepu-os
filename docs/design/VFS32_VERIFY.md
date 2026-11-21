@@ -110,6 +110,7 @@ dd if="$PART" of="$DISK" bs=512 seek=2048 conv=notrunc
 | `shell.ls`：`ls /` → 跑完 VFS 树仍完整 | PASS |
 | `shell.cp`：`cp /p2shell.txt /p2shell.copy` → 副本内容正确 | PASS |
 | `shell.mv`：`mv /p2shell.copy /p2shell.moved` → 旧名消失、新名存在 | PASS |
+| `shell.cp_big`：8KB 大文件 `cp`，读回 8192 字节逐字节比对（内容 = `i&0xFF`） | PASS |
 
 **过程中发现 `rm` 一直是坏的**：旧写法把整段 `/p3shell` 当名字传给 `fs_rm_recursive("/", name)`，拼出来是 `//p3shell`，永远找不到——所以 `rm` 看起来跑了、实际什么都没删。
 
@@ -123,5 +124,51 @@ dd if="$PART" of="$DISK" bs=512 seek=2048 conv=notrunc
 
 - **键盘那一跳**：自测直接调 `cmd_fs`，没有经过 `shell_commands[]` 的 `strcmp` 分发和串口/键盘输入。命令实现体是对的，但"敲 `fs ls` 回车真的能到这"没验。
 - **`cpall` 的端到端**：代码改了但没在自测里跑（它会复制整个根目录，太慢），只验了 `cp`/`mv`。
-- **大文件 cp**：自测只拷了 9 字节，多块读写（>2KB 走循环）没验。
+
 - **多级路径**：自测只覆盖根目录一层（`/p2shell.txt`、`/p3shell`），`/a/b/c` 没验。
+
+## 8. 大文件 cp（多块循环 + EOF 边界）
+
+`fs_cp_file_vfs` 的循环只用 9 字节小文件跑过时，>2048 字节要走多次 `vfs_read`/`vfs_write` 这件事从没验过，
+`vfs_read` 在文件末尾返回 0 的 EOF 边界也没有证据。补第 13 项 `shell.cp_big`：
+
+- 用 `vfs_write` 循环写 8KB 到 `/bigsrc.bin`，内容 `i & 0xFF`（位置错位立刻可辨）
+- `cmd_fs("cp /bigsrc.bin /bigdst.bin")`
+- 用 `ide_ext2_read_file` 读回 8192 字节，逐字节比对
+
+结果：**8KB（8 个 1024 字节块）逐字节一致**，多块循环和 EOF 都成立。
+
+### 诊断陷阱：`ide_ext2_read_file` 按 `max-1` 裁剪
+
+第一版判定用 `max=8192`，读回只有 **8191** 字节，一度以为是少写了 1 字节。真实原因在函数自身语义：
+
+```c
+uint32_t sz = fi.i_size;
+if (sz > (uint32_t)max - 1) sz = (uint32_t)max - 1;   /* 留 1 字节给 '\0' */
+...
+buf[rd] = 0;
+```
+
+它是"文本读"，无论内容多大都要保证能补 `\0`。传 `max=8192` 就只能读 8191。
+修法是把缓冲开到 8193、`max` 传 8193 —— **这是测试写错，不是内核 bug**，和 inode 1 不是根目录那次同一类。
+
+## 9. 偶发不稳定（未定位，必须记录）
+
+13 项版本累计跑 9 次，**2 次异常**：
+
+| 次数 | 现象 | 位置 |
+|---|---|---|
+| 1 | `P1.root` 起全红（`vfs_find("/")` 不是目录，`vfs_open` 全失败） | 内存树 |
+| 1 | 写阶段 13/13 PASS，读阶段 `tree.p2` FAIL（`lazy_rc=1`） | 内存树（懒加载） |
+| 7 | 写 13/13 PASS、读 6/6 PASS | — |
+
+两次异常的共同点：**都落在 VFS 内存树判定上，与磁盘内容无关**（同一次运行里 `disk.p2_file` /
+`disk.p2_content` / `disk.p3_dir` 都是 PASS，`ide_ext2_read_file` 能正常读盘）。
+`P1.root` 那条根本不读盘，只判断 `vfs_find("/")->type == VFS_DIRECTORY`。
+
+所以指向的不是挂载问题，而是 `vfs_root` / 根节点被越界写破坏。加诊断打印后连续 5 次全 PASS，
+但**这很可能只是编译器布局变化带来的偶然**（诊断只加打印不改行为），不能当成已修复。
+
+诊断码已留在自测里：`tree.p2` 一行会带 `lazy_rc=0 root=1 rino=0 em=1`，
+`root` 是 `vfs_find("/")->type`（1 = `VFS_DIRECTORY`），`rino` 是根节点 `inode_num`（正常为 0），
+`em` 是 `ext2_mounted`。下次一旦复现，这三个值能直接区分"树坏了""盘没挂""根为 NULL"。

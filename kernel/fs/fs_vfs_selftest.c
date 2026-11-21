@@ -81,7 +81,7 @@ int fs_vfs_selftest(char phase)
     serial_puts(port, "\n");
 
     if (phase == 'w') {
-        vs_total = 12;
+        vs_total = 13;
         /* ---- 诊断：先把挂载状态和底层返回码打出来，别靠猜 ---- */
         {
             extern int ext2_mounted;
@@ -234,6 +234,57 @@ int fs_vfs_selftest(char phase)
                 vs_line(port, "shell.mv", 12, okv, okv ? "旧名消失、新名存在" : "mv 没生效");
                 if (!okv) fails++;
             }
+
+            /* shell.cp_big：8KB 大文件 —— 验多块 read/write 循环和 EOF 边界。
+             * 内容用 i&0xFF 递增模式，逐字节可校验，位置错位立刻能看出来。 */
+            {
+                static uint8_t big[8192];
+                /* 8193：ide_ext2_read_file 是"文本读"，内部按 max-1 裁剪留 \0 */
+                static uint8_t got[8193];
+                for (int i = 0; i < 8192; i++) big[i] = (uint8_t)(i & 0xFF);
+
+                int wfd = vfs_open("/bigsrc.bin", VFS_O_WRONLY | VFS_O_CREAT | VFS_O_TRUNC);
+                int off = 0;
+                if (wfd >= 0) {
+                    for (int guard = 0; guard < 64 && off < 8192; guard++) {
+                        int w = vfs_write(wfd, big + off, (uint32_t)(8192 - off));
+                        if (w <= 0) break;
+                        off += w;
+                    }
+                    vfs_close(wfd);
+                    vfs_sync();
+                }
+                int oksrc = (off == 8192);
+                if (!oksrc) {
+                    serial_puts(port, "[VFS-TEST] bigsrc write only ");
+                    vs_put_dec(port, off);
+                    serial_puts(port, " bytes\n");
+                }
+
+                { char c[] = "cp /bigsrc.bin /bigdst.bin"; int i;
+                  for (i = 0; c[i]; i++) cmdbuf[i] = c[i]; cmdbuf[i] = 0; }
+                cmd_fs(cmdbuf);
+
+                /* 落盘证据走 fm 路径直读，不经过 VFS 缓存 */
+                int rd3 = ide_ext2_read_file("/", "bigdst.bin", (char *)got, 8193);
+                int okb = (rd3 == 8192);
+                int badat = -1;
+                if (okb) {
+                    for (int i = 0; i < 8192; i++) {
+                        if (got[i] != (uint8_t)(i & 0xFF)) { badat = i; okb = 0; break; }
+                    }
+                }
+                if (!okb) {
+                    serial_puts(port, "[VFS-TEST] cp_big dbg rd=");
+                    vs_put_dec(port, rd3);
+                    serial_puts(port, " badat=");
+                    vs_put_dec(port, badat);
+                    serial_puts(port, "\n");
+                }
+                vs_line(port, "shell.cp_big", 13, okb,
+                        okb ? "8KB(多块)内容逐字节一致" : "大小或内容不对");
+                if (!okb) fails++;
+            }
         }
 
         serial_puts(port, "[VFS-TEST] write phase done, fails=");
@@ -293,6 +344,16 @@ int fs_vfs_selftest(char phase)
             serial_puts(port, ok7 ? "  懒加载找到（重启后可按路径访问）" : "  NULL（懒加载未生效）");
             serial_puts(port, "  lazy_rc=");
             vs_put_dec(port, vfs_lazy_rc);
+            {
+                extern int ext2_mounted;
+                vfs_node_t *rr = vfs_find("/");
+                serial_puts(port, " root=");
+                vs_put_dec(port, rr ? rr->type : -1);
+                serial_puts(port, " rino=");
+                vs_put_dec(port, rr ? (int)rr->inode_num : -1);
+                serial_puts(port, " em=");
+                vs_put_dec(port, ext2_mounted);
+            }
             serial_puts(port, "\n");
             if (!ok7) fails++;
         }
