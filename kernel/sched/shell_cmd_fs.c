@@ -1,7 +1,7 @@
 /* ============================================================================
  * 赫普OS - Shell：文件系统/磁盘/图形命令
  * 从 shell.c 拆分（V6.46 代码重构，大文件拆分目标<500行）
- * 包含：show_partitions/fs_cp_recursive/fs_rm_recursive/cmd_fs/
+ * 包含：show_partitions/cmd_fs（P4 之后 cp/rm 全部走 VFS，直调旧路径已删）
  *       sys_reboot_after_gfx/cmd_gfxtest/cmd_disk/cmd_gfx
  * ========================================================================== */
 
@@ -105,164 +105,6 @@ static void fs_abs_path(const char *in, char *out, int max)
     while (*in && n < max - 1) out[n++] = *in++;
     out[n] = 0;
 }
-
-static int fs_cp_recursive(const char *dirpath, const char *name,
-                           const char *dstbase, int depth)
-{
-    extern int ide_ext2_read_file(const char *, const char *, char *, int);
-    extern int ide_ext2_write_raw(const char *, const char *, const char *, int);
-    extern int ide_ext2_list_entries(const char *, fm_entry_t *, int);
-    extern int ide_ext2_mkdir(const char *);
-    if (depth > 4) return -1;
-
-    /* 找源条目 (列目录匹配) */
-    fm_entry_t ents[FM_MAX_ENTRIES];
-    int cnt = ide_ext2_list_entries(dirpath, ents, FM_MAX_ENTRIES);
-    if (cnt <= 0) return -1;
-    int idx = -1;
-    for (int i = 0; i < cnt; i++) {
-        if (strcmp(ents[i].name, name) == 0) { idx = i; break; }
-    }
-    if (idx < 0) { vga_printf(" cp: %s not found in %s\n", name, dirpath); return -1; }
-
-    /* V4.44-E89 语义: dstbase 即完整目标路径——
-     * 文件: dstbase=目标文件; 目录: dstbase=目标目录(副本根, 内容直接放其下) */
-    const char *dstpath = dstbase;
-
-    if (ents[idx].is_dir) {
-        /* 目录: 建目标目录(副本根) + 递归复制其内容 */
-        extern int ide_ext2_mkdir(const char *);
-        if (ide_ext2_mkdir(dstpath) != 0) { /* 已存在则忽略 */ }
-        /* 源子目录路径 = dirpath + "/" + name */
-        static char srcdir[160];
-        int sn = 0;
-        const char *sd = dirpath;
-        while (*sd && sn < 150) srcdir[sn++] = *sd++;
-        if (sn > 0 && srcdir[sn - 1] != '/') srcdir[sn++] = '/';
-        for (int i = 0; ents[idx].name[i] && sn < 150; i++) srcdir[sn++] = ents[idx].name[i];
-        srcdir[sn] = 0;
-        fm_entry_t sub[FM_MAX_ENTRIES];
-        int sc = ide_ext2_list_entries(srcdir, sub, FM_MAX_ENTRIES);
-        if (sc <= 0) return 0;
-        int ok = 0;
-        for (int i = 0; i < sc; i++) {
-            if (strcmp(sub[i].name, ".") == 0 || strcmp(sub[i].name, "..") == 0)
-                continue;
-            /* 子项目标 = 目标目录 + "/" + 子项名 (保留原名) */
-            static char subdst[160];
-            int tn = 0;
-            const char *td = dstpath;
-            while (*td && tn < 140) subdst[tn++] = *td++;
-            if (tn > 0 && subdst[tn - 1] != '/') subdst[tn++] = '/';
-            for (int j = 0; sub[i].name[j] && tn < 150; j++) subdst[tn++] = sub[i].name[j];
-            subdst[tn] = 0;
-            if (fs_cp_recursive(srcdir, sub[i].name, subdst, depth + 1) == 0)
-                ok++;
-        }
-        vga_printf(" cp: dir %s -> %s (%d items)\n", name, dstpath, ok);
-        return 0;
-    }
-
-    /* 文件: 读全量 (按 size 分配) + 写 */
-    uint32_t sz = ents[idx].size;
-    if (sz == 0) sz = 1;
-    /* V4.47-E92: +16 余量, 防 ext2 读路径异常多写 (KHEAP bad magic 防御) */
-    char *buf = (char *)kmalloc(sz + 16);
-    if (!buf) { vga_puts(" cp: OOM\n"); return -1; }
-    int rd = ide_ext2_read_file(dirpath, name, buf, (int)sz + 1);
-    if (rd < 0) { kfree(buf); vga_printf(" cp: read %s FAIL\n", name); return -1; }
-    /* 拆分目标完整路径为 目录 + 文件名 (write_raw 按 dirpath/name 拼接) */
-    static char ddir[160], dname[128];
-    strncpy(ddir, dstpath, 159);
-    ddir[159] = 0;
-    char *slash = NULL;
-    for (char *q = ddir; *q; q++) if (*q == '/') slash = q;
-    if (!slash) {
-        /* V4.44-E89: 目标无目录分隔 → 根目录下的文件 (fs cp abc abccopy2) */
-        ddir[0] = '/'; ddir[1] = 0;
-        strncpy(dname, dstpath, 127);
-        dname[127] = 0;
-    } else {
-        *slash = 0;
-        strncpy(dname, slash + 1, 127);
-        dname[127] = 0;
-    }
-    int w = ide_ext2_write_raw(ddir, dname, buf, rd);
-    if (w >= 0) {
-        vga_printf(" cp: %s -> %s (%d bytes)\n", name, dstpath, rd);
-        kfree(buf);
-        return 0;
-    }
-    kfree(buf);
-    vga_printf(" cp: write %s FAIL\n", dstpath);
-    return -1;
-}
-
-/* V4.45-E90: 递归删除 helper——目录先删子项再删自身 */
-static int fs_rm_recursive(const char *dirpath, const char *name)
-{
-    extern int ide_ext2_list_entries(const char *, fm_entry_t *, int);
-    extern int ext2_path_unlink_v2(const char *);
-    fm_entry_t ents[FM_MAX_ENTRIES];
-    int cnt = ide_ext2_list_entries(dirpath, ents, FM_MAX_ENTRIES);
-    if (cnt <= 0) return -1;
-    int idx = -1;
-    for (int i = 0; i < cnt; i++) {
-        if (strcmp(ents[i].name, name) == 0) { idx = i; break; }
-    }
-    if (idx < 0) { vga_printf(" rm: %s not found in %s\n", name, dirpath); return -1; }
-
-    /* 完整路径 = dirpath + "/" + name (兼容无前导斜杠) */
-    static char full[160];
-    int n = 0;
-    if (dirpath[0] != '/') full[n++] = '/';
-    const char *d = dirpath;
-    while (*d && n < 150) full[n++] = *d++;
-    if (n > 0 && full[n - 1] != '/') full[n++] = '/';
-    for (int i = 0; ents[idx].name[i] && n < 150; i++) full[n++] = ents[idx].name[i];
-    full[n] = 0;
-
-    if (ents[idx].is_dir) {
-        /* 递归删子项 */
-        fm_entry_t sub[FM_MAX_ENTRIES];
-        int sc = ide_ext2_list_entries(full, sub, FM_MAX_ENTRIES);
-        if (sc > 0) {
-            for (int i = 0; i < sc; i++) {
-                if (strcmp(sub[i].name, ".") == 0 || strcmp(sub[i].name, "..") == 0)
-                    continue;
-                fs_rm_recursive(full, sub[i].name);
-            }
-        }
-        /* V4.46-E91: 修复——static full 被递归子调用覆盖(unlink 用了子项路径)。
-         * unlink 前用 dirpath/name 重建父目录完整路径。 */
-        extern int ide_ext2_sync(void);
-        ide_ext2_sync();
-        n = 0;
-        if (dirpath[0] != '/') full[n++] = '/';
-        d = dirpath;
-        while (*d && n < 150) full[n++] = *d++;
-        if (n > 0 && full[n - 1] != '/') full[n++] = '/';
-        for (int i = 0; ents[idx].name[i] && n < 150; i++) full[n++] = ents[idx].name[i];
-        full[n] = 0;
-        if (ext2_path_unlink_v2(full) == 0) {
-            vga_printf(" rm: dir %s removed\n", name);
-            return 0;
-        }
-        if (ext2_path_unlink_v2(full) == 0) {
-            vga_printf(" rm: dir %s removed (retry)\n", name);
-            return 0;
-        }
-        vga_printf(" rm: dir %s FAIL\n", name);
-        return -1;
-    }
-    if (ext2_path_unlink_v2(full) == 0) {
-        vga_printf(" rm: %s removed\n", name);
-        return 0;
-    }
-    vga_printf(" rm: %s FAIL\n", name);
-    return -1;
-}
-
 
 /* ===== P4: VFS 版复制 =====
  * 原来的 fs_cp_recursive 全是 ide_ext2_* 直调（fm_entry_t、write_raw 那一套），
@@ -405,6 +247,10 @@ void cmd_fs(char *args)
                        n->size, n->inode_num);
         }
     } else if (strcmp(args, "df") == 0) {
+        /* P5: 故意保留直调。
+         * df 读的是超级块里的全局块/inode 计数, 不涉及路径解析, 也不改内存树;
+         * 走 VFS 反而要额外维护"每个挂载点的用量"这一层抽象, 当前只有一个
+         * ext2 挂载点, 没有必要。等出现第二个文件系统时再统一。 */
         extern int ide_ext2_df(void);
         if (ide_ext2_df() != 0) vga_puts(" df FAIL\n");
     } else if (strcmp(args, "sync") == 0) {
@@ -532,6 +378,10 @@ void cmd_fs(char *args)
         dname[k] = 0;
         ide_ext2_ls_dir(dname);
     } else if (strncmp(args, "fsck", 4) == 0) {
+        /* P5: 故意保留直调。
+         * fsck 必须在 VFS 之上工作 —— 它要修的就是 VFS 依赖的底层结构
+         * (inode 位图/块位图/目录项/链接计数)。此时内存树可能已被损坏的
+         * 磁盘内容污染, 经 VFS 读取等于用坏数据校验坏数据。 */
         extern int ide_ext2_fsck(void);
         extern int ide_ext2_fsck_fix(void);
         /* V3.89-E24: fs fsck -f (或 fix) 进入修复模式(清理孤儿块/inode) */

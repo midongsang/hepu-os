@@ -366,3 +366,53 @@ RX 缓冲尾部、TX 描述符页、TX 缓冲完全重叠。释放后 `0x0915500
 （buddy、DMA 缓冲池、将来的 slab 大页）在交付前都必须查这本账，
 释放时只释放自己确实标记过的页。两套账并行，短期看不出问题，
 一旦有人释放了“别人的页”，故障会以完全不相干的形式出现在文件系统里。
+
+## 15. P4/P5 收尾 + term.cat：新测试抓出旧测试的 off-by-one
+
+### P4 最后一步：直调旧路径已删
+
+`fs_cp_recursive`（读文件 + `ide_ext2_write_raw` + `fm_entry_t` 那套）和
+`fs_rm_recursive` 在 `shell_cmd_fs.c` 里已经是死代码（只被自己递归引用）。
+整段删除，文件头注释同步更新。现在 `fs` 的复制/删除只有 VFS 一条实现路径。
+
+### P5：保留直调，但写明为什么
+
+- `df`：读的是超级块全局计数，不涉及路径解析；只有一个 ext2 挂载点，
+  为它引入"每挂载点用量"抽象没有收益。
+- `fsck`：必须在 VFS **之下**工作。它修的就是 VFS 依赖的 inode/块位图/
+  目录项/链接计数；此时内存树可能已被坏盘污染，经 VFS 读等于用坏数据校验坏数据。
+
+两处都在代码里写了上述理由，满足 P5 的"保留但注明"要求。
+
+### 新增读阶段第 7 项：`term.cat`
+
+`term.ls` 只证明目录项能拿到，读文件是另一条路径。新钩子
+`term_selftest_cat()` 调用真实 `term_cmd_cat()`，断言：
+追加字节数 > 0，且终端缓冲里出现完整 `HEPU_P2_OK`。
+
+第一版直接失败，hex dump 得到：
+
+```
+48 45 50 55 5F 50 32 5F 4F 0A   -> "HEPU_P2_O" + '\n'
+```
+
+正是这个失败暴露了**旧测试自己的 off-by-one**：`VS_LEN` 手写成 9，
+而 `"HEPU_P2_OK"` 是 10 个字符。写阶段 `vfs_write(fd, VS_TEXT, 9)`
+只写了 9 字节，后续所有"内容正确"断言也只用前 9 字节比较——
+**写少一字节、比少一字节，两边自洽，一直 PASS**。
+
+修法：`VS_LEN` 改为 `sizeof(VS_TEXT) - 1`，不再手写数字。
+修后写阶段真的写满 10 字节，读阶段 `disk.p2_content` 与 `term.cat`
+都用完整串比较。
+
+另有一处测试环境问题：终端 buffer 在启动中已积累 banner 等文本，
+不重置会写满，`term_puts` 静默丢弃，自测会误判成"cat 没读到内容"。
+加了测试专用 `term_selftest_reset()`。
+
+### 最终实测
+
+- `tools/verify_p1p3.sh`：**连续 3 次 RC=0**；写阶段 16/16、读阶段 7/7
+  （含 `disk.p2_content PASS HEPU_P2_OK`、`term.cat PASS`）。
+- `tools/regress32.sh`：PASS（`serial=1 initrd=1 net=1 desk=1 fault=0 bound=1`，
+  `lines=909`）。
+- `-Wall -Wextra` 构建 0 告警。

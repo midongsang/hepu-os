@@ -59,7 +59,7 @@ extern int ext2_path_create(const char *path, uint16_t mode);
 #define VS_FILE   "/p2test.txt"
 #define VS_DIR    "/p3test"
 #define VS_TEXT   "HEPU_P2_OK"
-#define VS_LEN    9
+#define VS_LEN    ((int)(sizeof(VS_TEXT) - 1))   /* 别再手写数字: 曾写成 9, 把 10 字节的串只写进 9 字节 */
 
 /* 返回 0 = 全过，>0 = 失败项数 */
 int fs_vfs_selftest(char phase)
@@ -359,6 +359,7 @@ int fs_vfs_selftest(char phase)
 
         extern int ide_ext2_read_file(const char *, const char *, char *, int);
         extern int ext2_readdir_ino(uint32_t, vfs_dirent_t *, int);
+        vs_total = 7;   /* 读阶段：原 6 项 + term.cat */
         char buf[32];
 
         int rd = ide_ext2_read_file("/", "p2test.txt", buf, 16);
@@ -439,6 +440,28 @@ int fs_vfs_selftest(char phase)
             }
             vs_line(port, "disk.rmdir_gone", 6, !still, still ? "删完还在" : "已消失");
             if (still) fails++;
+        }
+
+        /* 终端 cat：走 term_exec 之外的同一实现, 验证"终端这一层能读出内容"。
+         * 只验 ls 不够 —— ls 可能只证明目录项拿到了, 读文件是另一条路径。 */
+        {
+            extern int term_selftest_cat(const char *);
+            extern const char *term_selftest_buf(void);
+            extern void term_selftest_reset(void);
+            term_selftest_reset();
+            int cb = term_selftest_cat(VS_FILE);
+            const char *tb = term_selftest_buf();
+            int okc = 0;
+            if (cb > 0) {
+                for (int i = 0; tb[i]; i++) {
+                    int j = 0;
+                    while (VS_TEXT[j] && tb[i + j] == VS_TEXT[j]) j++;
+                    if (VS_TEXT[j] == 0) { okc = 1; break; }
+                }
+            }
+            vs_line(port, "term.cat", 7, okc,
+                    okc ? "终端 cat 读出 HEPU_P2_OK" : "终端 cat 没读到内容");
+            if (!okc) fails++;
         }
 
         serial_puts(port, "[VFS-TEST] read phase done, fails=");

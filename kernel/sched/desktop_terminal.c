@@ -85,6 +85,17 @@ static void term_cmd_cat(const char *name)
 /* 测试钩子：让内核自测验证"终端这一层真的读到了盘"，而不是写死字符串 */
 int term_selftest_ls(void) { return term_cmd_ls(); }
 const char *term_selftest_buf(void) { return term_buf; }
+/* 清空输出缓冲：终端 buffer 在启动过程中已积累 banner 等文本，
+ * 不重置会写满, term_puts 静默丢弃, 自测就会误判成 "cat 没读到内容" */
+void term_selftest_reset(void) { term_buf_len = 0; term_buf[0] = 0; }
+
+/* 返回本次 cat 追加到输出缓冲的字节数, 便于自测断言"真有内容" */
+int term_selftest_cat(const char *name)
+{
+    int before = term_buf_len;
+    term_cmd_cat(name);
+    return term_buf_len - before;
+}
 
 static void term_exec(const char *cmd)
 {
