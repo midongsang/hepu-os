@@ -81,7 +81,7 @@ int fs_vfs_selftest(char phase)
     serial_puts(port, "\n");
 
     if (phase == 'w') {
-        vs_total = 14;
+        vs_total = 15;
         /* ---- 诊断：先把挂载状态和底层返回码打出来，别靠猜 ---- */
         {
             extern int ext2_mounted;
@@ -310,6 +310,24 @@ int fs_vfs_selftest(char phase)
                         oks ? "4 个 128B 块全数复用（cache 归属正确）"
                             : "有块未复用，cache 归属错");
                 if (!oks) fails++;
+            }
+
+            /* shell.cpall：遍历根目录逐项递归复制。这条代码改走 VFS 后一直没进自测，
+             * 因为它会复制整个根目录 —— 但造盘后根目录只有自测自己建的那几项，
+             * 成本很低，可以验。 */
+            {
+                char c[] = "cpall /cpall_dst"; int i;
+                for (i = 0; c[i]; i++) cmdbuf[i] = c[i]; cmdbuf[i] = 0;
+                cmd_fs(cmdbuf);
+                int rdc = ide_ext2_read_file("/cpall_dst", "p2test.txt", rb, 16);
+                int okc = (rdc >= VS_LEN);
+                if (okc) {
+                    for (int k = 0; k < VS_LEN; k++)
+                        if (rb[k] != VS_TEXT[k]) { okc = 0; break; }
+                }
+                vs_line(port, "shell.cpall", 15, okc,
+                        okc ? "根目录递归复制，子文件内容正确" : "cpall 没复制出来");
+                if (!okc) fails++;
             }
         }
 

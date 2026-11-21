@@ -95,12 +95,35 @@ int kunit_run_suite(const kunit_suite_t *suite)
 
 int kunit_run_all(void)
 {
-    if (!kunit_initialized) return -1;
+    extern void serial_puts(uint16_t, const char *);
+    extern void serial_puthex(uint16_t, uint32_t);
+    if (!kunit_initialized) {
+        serial_puts(0x3F8, "[KTEST] NOT initialized -> -1\n");
+        return -1;
+    }
     vga_puts("\n=== Hepu OS kernel unit tests ===\n");
     u32 total_failed = 0;
     for (u32 i = 0; i < suite_count; i++) {
+        int r;
+        if (!suites[i]) {
+            serial_puts(0x3F8, "[KTEST] suite[");
+            serial_puthex(0x3F8, i);
+            serial_puts(0x3F8, "] is NULL\n");
+            total_failed += 1;
+            continue;
+        }
         vga_printf(">>> running suite[%u] %s\n", i, suites[i]->name);
-        total_failed += kunit_run_suite(suites[i]);
+        r = kunit_run_suite(suites[i]);
+        if (r != 0) {
+            serial_puts(0x3F8, "[KTEST] suite[");
+            serial_puthex(0x3F8, i);
+            serial_puts(0x3F8, "] ");
+            serial_puts(0x3F8, suites[i]->name);
+            serial_puts(0x3F8, " returned 0x");
+            serial_puthex(0x3F8, (uint32_t)r);
+            serial_puts(0x3F8, "\n");
+        }
+        total_failed += (u32)r;
     }
     kunit_print_report();
     return total_failed;
