@@ -17,6 +17,13 @@
 /* Slab头 */
 typedef struct slab {
     uint32_t       magic;
+    /* 2026-11-21: 这块 slab 是哪个 cache 的产物，必须在头里记下来。
+     * 旧实现 free 时靠 "offset 整除 + obj_size >= offset" 去猜 cache，
+     * 该条件只匹配每个 slab 的第 0 个对象(offset==0)，且遍历从 32 字节
+     * cache 开始 —— 于是任何 slab 的第 0 个对象被 free 时都被算成 32 字节
+     * cache 的对象：真 cache 的位图没清(对象泄漏)，32 字节 cache 的 bit0
+     * 被反复清(那块内存反复分配给不同使用者，互相覆盖)。 */
+    uint32_t       obj_size;
     struct slab   *next;
     struct slab   *prev;
     uint32_t       free_count;
@@ -60,6 +67,7 @@ static slab_t *slab_create(slab_cache_t *cache)
 
     slab_t *slab = (slab_t *)phys;
     slab->magic = SLAB_MAGIC;
+    slab->obj_size = cache->obj_size;
     slab->next = NULL;
     slab->prev = NULL;
     slab->free_count = cache->objs_per_slab;
@@ -200,20 +208,21 @@ int slab_free(void *ptr)
     slab_t *slab = (slab_t *)page;
     if (slab->magic != SLAB_MAGIC) return -1;
 
-    /* 找到对应的缓存 */
+    /* 找到对应的缓存：用 slab 头里记的 obj_size 直接对，不再靠 offset 猜 */
     slab_cache_t *cache = NULL;
     for (int i = 0; i < SLAB_CACHE_COUNT; i++) {
-        if (slab_caches[i].obj_size >= (uint32_t)((uint8_t *)ptr - slab->objects) &&
-            (uint32_t)((uint8_t *)ptr - slab->objects) % slab_caches[i].obj_size == 0) {
-            /* 验证对象在范围内 */
-            uint32_t offset = (uint8_t *)ptr - slab->objects;
-            if (offset < slab_caches[i].objs_per_slab * slab_caches[i].obj_size) {
-                cache = &slab_caches[i];
-                break;
-            }
+        if (slab_caches[i].obj_size == slab->obj_size) {
+            cache = &slab_caches[i];
+            break;
         }
     }
     if (!cache) return -1;
+    /* 再校验这个指针确实是本 slab 的对象（整数倍 + 在对象区内） */
+    {
+        uint32_t offset = (uint8_t *)ptr - slab->objects;
+        if (offset % cache->obj_size != 0 ||
+            offset >= cache->objs_per_slab * cache->obj_size) return -1;
+    }
 
     /* 确定slab在哪个链表 */
     slab_t **list = NULL;

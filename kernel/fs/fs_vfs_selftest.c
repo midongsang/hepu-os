@@ -81,7 +81,7 @@ int fs_vfs_selftest(char phase)
     serial_puts(port, "\n");
 
     if (phase == 'w') {
-        vs_total = 13;
+        vs_total = 14;
         /* ---- 诊断：先把挂载状态和底层返回码打出来，别靠猜 ---- */
         {
             extern int ext2_mounted;
@@ -285,6 +285,32 @@ int fs_vfs_selftest(char phase)
                         okb ? "8KB(多块)内容逐字节一致" : "大小或内容不对");
                 if (!okb) fails++;
             }
+
+            /* slab 缓存归属：free 掉 4 个 128B 对象，再分配 4 个，必须全数复用回原地。
+             * 旧 slab_free 靠 offset 猜 cache，128B 对象 free 时清的是 32B cache
+             * 的 bit0 —— 真 cache 位图没清，再分配只能拿新块。 */
+            {
+                extern void *kmalloc(size_t);
+                extern void kfree(void *);
+                void *pb[4], *pc[4];
+                int oks = 1;
+                for (int i = 0; i < 4; i++) pb[i] = kmalloc(120);
+                for (int i = 0; i < 4; i++) if (!pb[i]) oks = 0;
+                for (int i = 0; i < 4; i++)
+                    for (int j = i + 1; j < 4; j++)
+                        if (pb[i] == pb[j]) oks = 0;
+                for (int i = 0; i < 4; i++) kfree(pb[i]);
+                for (int i = 0; i < 4; i++) pc[i] = kmalloc(120);
+                for (int i = 0; i < 4 && oks; i++) {
+                    int hit = 0;
+                    for (int j = 0; j < 4; j++) if (pc[i] == pb[j]) { hit = 1; break; }
+                    if (!hit) oks = 0;
+                }
+                vs_line(port, "slab.reuse", 14, oks,
+                        oks ? "4 个 128B 块全数复用（cache 归属正确）"
+                            : "有块未复用，cache 归属错");
+                if (!oks) fails++;
+            }
         }
 
         serial_puts(port, "[VFS-TEST] write phase done, fails=");
@@ -353,6 +379,11 @@ int fs_vfs_selftest(char phase)
                 vs_put_dec(port, rr ? (int)rr->inode_num : -1);
                 serial_puts(port, " em=");
                 vs_put_dec(port, ext2_mounted);
+                serial_puts(port, " magic=0x");
+                { extern void serial_puthex(uint16_t, uint32_t);
+                  serial_puthex(port, rr ? rr->magic : 0); }
+                serial_puts(port, " sz=");
+                vs_put_dec(port, rr ? (int)rr->size : -1);
             }
             serial_puts(port, "\n");
             if (!ok7) fails++;

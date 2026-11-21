@@ -12,6 +12,11 @@
 #include "ext2.h"   /* 懒加载要用 ext2_inode_t / ext2_lookup */
 
 static vfs_node_t *vfs_root = NULL;
+/* 2026-11-21: 根节点不再从堆上分配。
+ * 抓到过 vfs_root == NULL（整个 VFS 不可用，写阶段 13 项全红）和
+ * vfs_root->type 偶发变 0（应是 VFS_DIRECTORY=1）两种现象，都与堆有关。
+ * 根节点是 VFS 的地基，不该依赖任何分配器 —— 放静态区。 */
+static vfs_node_t vfs_root_storage;
 
 /* OBS-08: vnode 自证魔数。'VNOD' 这四位是随便挑的常量，只要稳定即可。 */
 #define VFS_NODE_MAGIC 0x564E4F44u
@@ -32,9 +37,17 @@ static const char *path_first_component(const char *path, char *buf, int buflen)
 
 void vfs_init(void)
 {
-    /* 创建根目录 */
-    vfs_root = vfs_create_node("/", VFS_DIRECTORY);
-    vfs_root->inode_num = 0;
+    if (vfs_root) return;   /* 幂等：可能被 vfs_find 的兜底重入 */
+
+    /* 根目录用静态结构，不走 kmalloc —— 早期堆不可用、堆被踩都不影响地基 */
+    memset(&vfs_root_storage, 0, sizeof(vfs_root_storage));
+    vfs_root_storage.magic = VFS_NODE_MAGIC;
+    strncpy(vfs_root_storage.name, "/", VFS_MAX_NAME - 1);
+    vfs_root_storage.type = VFS_DIRECTORY;
+    vfs_root_storage.inode_num = 0;
+    vfs_root_storage.permissions = 0755;
+    vfs_root_storage.links = 1;
+    vfs_root = &vfs_root_storage;
 
     /* 初始化文件描述符表 */
     for (int i = 0; i < VFS_MAX_FDS; i++) {
@@ -84,6 +97,10 @@ static int vfs_node_sane(const vfs_node_t *n)
     uintptr_t a = (uintptr_t)n;
     int i;
 
+    /* 2026-11-21: 根节点已改为静态结构，位于 BSS(32 位内核约 0x00100000)，
+     * 低于下面的堆地址下限。它是地基，恒有效，直接放行 —— 否则
+     * vfs_add_child 里对 parent 的这一关会把 root 挡掉，子节点一个都挂不上。 */
+    if ((vfs_node_t *)n == vfs_root) return 1;
     if (a < 0x04000000u || a > 0x0FFFFFFFu) return 0;   /* 内核直接用到的地址区间 */
     if (a & 3u) return 0;                              /* 结构指针至少 4 字节对齐 */
     for (i = 0; i < VFS_MAX_NAME; i++) {
@@ -208,7 +225,41 @@ static vfs_node_t *vfs_lazy_lookup(vfs_node_t *parent, const char *name)
 
 vfs_node_t *vfs_find(const char *path)
 {
-    if (!path || !vfs_root) return NULL;
+    if (!path) return NULL;
+    if (!vfs_root) {
+        /* vfs_init 没跑到 / 根节点没建起来 —— 这里补一次并留证据 */
+        extern void serial_puts(uint16_t, const char *);
+        static int late_warned;
+        if (!late_warned) {
+            late_warned = 1;
+            serial_puts(0x3F8, "[VFS] ROOT NULL -> late init\n");
+        }
+        vfs_init();
+        if (!vfs_root) return NULL;
+    }
+    /* OBS-08: 根节点以前没人查 —— 子节点遍历有 verify，根节点却是裸的。
+     * 2026-11-21 抓到的现象：偶发 vfs_root->type 变成 0（应是 VFS_DIRECTORY=1），
+     * 而 inode_num 仍是 0、ext2 正常挂着。这里补一道自证。 */
+    if (vfs_root->magic != VFS_NODE_MAGIC || vfs_root->type != VFS_DIRECTORY) {
+        extern void serial_puts(uint16_t, const char *);
+        extern void serial_puthex(uint16_t, uint32_t);
+        static int root_warned;
+        if (!root_warned) {
+            root_warned = 1;
+            serial_puts(0x3F8, "[VFS] ROOT CORRUPT magic=");
+            serial_puthex(0x3F8, vfs_root->magic);
+            serial_puts(0x3F8, " type=");
+            serial_puthex(0x3F8, (uint32_t)vfs_root->type);
+            serial_puts(0x3F8, " ino=");
+            serial_puthex(0x3F8, vfs_root->inode_num);
+            serial_puts(0x3F8, " name0=");
+            serial_puthex(0x3F8, (uint32_t)vfs_root->name[0]);
+            serial_puts(0x3F8, " size=");
+            serial_puthex(0x3F8, (uint32_t)vfs_root->size);
+            serial_puts(0x3F8, "\n");
+        }
+        return NULL;
+    }
     if (strcmp(path, "/") == 0) return vfs_root;
 
     vfs_node_t *current = vfs_root;

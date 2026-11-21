@@ -172,3 +172,90 @@ buf[rd] = 0;
 诊断码已留在自测里：`tree.p2` 一行会带 `lazy_rc=0 root=1 rino=0 em=1`，
 `root` 是 `vfs_find("/")->type`（1 = `VFS_DIRECTORY`），`rino` 是根节点 `inode_num`（正常为 0），
 `em` 是 `ext2_mounted`。下次一旦复现，这三个值能直接区分"树坏了""盘没挂""根为 NULL"。
+
+## 10. 偶发不稳定的根因：slab 缓存归属错乱（已修）
+
+第 9 节记的两次异常，根因不在 VFS，在堆分配器。
+
+### 怎么收窄到堆
+
+`vfs_node_t` 约 120 字节，`vfs_create_node` 走 `kmalloc` → `slab_alloc`（≤1024 走 slab）。
+根节点是启动早期 slab 页的**第一个对象（offset 0）**。两次异常都恰好是根节点坏，
+而同一次运行里盘上读全部正常 —— 指向"这块内存被反复覆盖"，不是逻辑错。
+
+### 根因
+
+`slab_free` 反查"这个对象属于哪个 cache"用的是猜：
+
+```c
+if (slab_caches[i].obj_size >= offset && offset % slab_caches[i].obj_size == 0)
+```
+
+`obj_size >= offset` 的含义是「只有 offset 小于 obj_size 才可能匹配」，也就是
+**只匹配每个 slab 的第 0 个对象**。而遍历从 `obj_size=32` 开始，所以 offset==0 时
+永远命中 32 字节 cache。
+
+后果是一对：
+
+- 真 cache（比如 128）的位图**没清** → 这个对象永远不回收
+- 32 字节 cache 的 **bit 0 被反复清** → 那块 32 字节内存被反复分配给不同使用者，互相覆盖
+
+根节点恰好是 offset 0，于是被反复覆盖。这解释了全部三个特征：偶发、与磁盘无关、
+永远坏在根节点。
+
+### 修复
+
+`slab_t` 加 `uint32_t obj_size`（这块 slab 是哪个 cache 的产物），`slab_create` 填
+`cache->obj_size`，`slab_free` 直接按 `slab->obj_size` 对 cache，再校验 offset 是
+整数倍且落在对象区内。
+
+### A/B 证据
+
+新增第 14 项 `slab.reuse`：分配 4 个 120 字节（走 128 cache）→ 全部 free → 再分配 4 个，
+必须全数复用回原地。
+
+| 版本 | 结果 |
+|---|---|
+| 回退 `slab_free` 到旧实现 | `FAIL 有块未复用，cache 归属错` |
+| 修复后 | `PASS 4 个 128B 块全数复用（cache 归属正确）` |
+
+同一份自测、同一张盘，只改 `slab_free`。
+
+### 影响范围
+
+32 位内核所有 ≤1024 字节的 `kmalloc` 都走 slab —— 这个 bug 从 slab 引入起就在影响全局，
+不止 VFS。任何**早期分配、且恰好落在某个 slab 第 0 个对象**的结构，都有被反复覆盖的风险。
+
+## 11. 根节点改为静态结构（两个现象的修法）
+
+修完 slab 后仍偶发（1/5 ~ 1/8），症状变成两种：
+
+| 现象 | 位置 | 证据 |
+|---|---|---|
+| `vfs_root == NULL` | 写阶段 1/14 起全红 | `vfs_find("/")` 返回 NULL，且 `ROOT CORRUPT` 不打印（走的是更前面的 `!vfs_root` 分支） |
+| `vfs_root->type == 0` | 读阶段 `tree.p2` | `root=0 rino=0 em=1`，`em=1` 说明 ext2 正常挂着 |
+
+两种都指向"根节点这个指针/这块内存不可靠"。根节点是 VFS 的地基，不该依赖任何
+分配器 —— 改成静态结构（BSS），并在 `vfs_find` 里补一次惰性初始化。
+
+三处改动：
+
+- `static vfs_node_t vfs_root_storage;`，`vfs_init` 直接初始化它，不再走 `kmalloc`
+- `vfs_init` 幂等（`if (vfs_root) return;`），允许 `vfs_find` 兜底重入
+- `vfs_find` 开头 `if (!vfs_root) { 打印 "ROOT NULL -> late init"; vfs_init(); }`
+
+### 顺带踩到的回归（已修）
+
+`vfs_node_sane` 有个地址下限 `0x04000000`（原本用来挡野指针/未初始化指针）。而 32 位
+内核的 BSS 在 `0x00100000` 附近 —— 根节点搬进 BSS 后被这个下限直接挡掉，于是
+`vfs_add_child` 里对 parent 的那道检查失败，**子节点一个都挂不上**。
+
+现象是 `P1.readdir 2/14 FAIL vfs_readdir 返回 0`（root 存在但 children 空）。
+修法是给根节点一条豁免：`if ((vfs_node_t *)n == vfs_root) return 1;`。
+
+### 另一个发现（未修，非本轮引入）
+
+串口日志里有 `[KTEST] RESULT: FAIL`，但每个 kunit 套件都打印
+`0x00000000 failed`。`kunit_run_all` 返回的是各套件 `failed` 的累加，全 0 却报 FAIL，
+说明返回值不来自这个累加（怀疑 `suite_count` 与实际注册数不一致、或
+`kunit_initialized` 判定路径）。这一条与 slab / VFS 改动无关，单独记一笔待查。
