@@ -69,6 +69,8 @@ int ext2_path_mkdir_v2(const char *path, uint16_t mode)
     if (block == 0) { ext2_free_inode(inode_num); return -1; }
     inode.i_block[0] = block;
     inode.i_size = ext2_block_size;
+    /* P1: 目录首块也是数据块，i_blocks 必须同步(否则 e2fsck 报 i_blocks=0)。 */
+    inode.i_blocks = ext2_block_size / 512;
 
     /* V3.89-E22: 修复——原代码直接写 ext2_disk 内存指针(IDE 模式无效),
      * 目录 . 与 .. 条目丢失。改用块缓存写回。 */
@@ -93,6 +95,12 @@ int ext2_path_mkdir_v2(const char *path, uint16_t mode)
 
     ext2_write_inode(inode_num, &inode);
     ext2_add_dir_entry(&parent_inode, inode_num, dirname, EXT2_FT_DIR);
+    /* P1: 新建子目录后父目录链接数 +1（".." 指向父目录），否则 e2fsck 报 ref count。 */
+    parent_inode.i_links_count++;
+    {
+        uint32_t g = (inode_num - 1) / ext2_sb->s_inodes_per_group;
+        ext2_gdt[g].bg_used_dirs_count++;
+    }
     ext2_write_inode(parent_inode_num, &parent_inode);
 
     vga_printf("[EXT2] create dir: %s(inode=%d)\n", path, inode_num);
@@ -117,6 +125,7 @@ int ext2_path_unlink_v2(const char *path)
     ext2_inode_t inode;
     if (ext2_read_inode(inode_num, &inode) != 0) return -1;
 
+    int was_dir = (inode.i_mode & 0x4000) != 0;
     /* V3.89-E21: 完整释放全部数据块(含间接/双级间接), 修复块泄漏 */
     ext2_free_file_blocks(&inode);
     ext2_free_inode(inode_num);
@@ -135,6 +144,12 @@ int ext2_path_unlink_v2(const char *path)
             if (entry->inode == inode_num) {
                 entry->inode = 0;
                 ext2_write_data(&dir_inode, offset + pos, entry, entry->rec_len);
+                /* P1: 删除子目录后父目录链接数 -1（".." 不再指向父目录）。 */
+                if (was_dir) {
+                    if (dir_inode.i_links_count > 1) dir_inode.i_links_count--;
+                    uint32_t g = (inode_num - 1) / ext2_sb->s_inodes_per_group;
+                    if (ext2_gdt[g].bg_used_dirs_count > 0) ext2_gdt[g].bg_used_dirs_count--;
+                }
                 ext2_write_inode(dir_inode_num, &dir_inode);
                 vga_printf("[EXT2] delete: %s(inode=%d)\n", path, inode_num);
                 return 0;
@@ -167,12 +182,10 @@ int ext2_path_rename(const char *old_path, const char *new_path)
     /* 如果目标已存在，先删除 */
     uint32_t existing;
     if (ext2_lookup(&new_dir, new_name, &existing) == 0) {
-        ext2_inode_t ex_inode;
-        ext2_read_inode(existing, &ex_inode);
-        for (int i = 0; i < 12; i++) {
-            if (ex_inode.i_block[i]) ext2_free_block(ex_inode.i_block[i]);
-        }
-        ext2_free_inode(existing);
+        /* P1: 目标已存在时必须连目录项一起删；原先只释放 inode/块，
+         * 旧目录项仍指向已释放 inode，e2fsck 报 deleted/unused inode。 */
+        if (ext2_path_unlink_v2(new_path) != 0) return -1;
+        if (ext2_read_inode(new_dir_num, &new_dir) != 0) return -1;
     }
 
     /* 在新目录添加条目 */

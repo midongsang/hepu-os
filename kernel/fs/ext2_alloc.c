@@ -16,6 +16,40 @@ extern uint32_t ext2_block_size;
 extern int ext2_mounted;
 extern ext2_superblock_t *ext2_sb;
 
+/* 判断 block 是否属于 ext2 元数据区（超级块/GDT/块位图/inode 位图/inode 表）。
+ * 这些块即使位图位被清零，也绝不能被数据块分配器拿走；否则会静默覆盖
+ * 文件系统自身结构。sparse_super 下 backup 超级块/GDT 可能只存在于部分组，
+ * 这里按每组组首统一保留 1 个超级块 + GDT 块数，宁可少用一个数据块。 */
+static int ext2_is_metadata_block(uint32_t block)
+{
+    if (!ext2_mounted || !ext2_sb || !ext2_gdt) return 1;
+    uint32_t bpg = ext2_sb->s_blocks_per_group;
+    uint32_t first = ext2_sb->s_first_data_block;
+    if (bpg == 0) return 1;
+    if (block < first) return 1;
+
+    uint32_t groups = (ext2_sb->s_blocks_count + bpg - 1) / bpg;
+    uint32_t g = (block - first) / bpg;
+    if (g >= groups) return 1;
+
+    uint32_t block_size = ext2_block_size ? ext2_block_size : 1024;
+    uint32_t gdt_blocks = (groups * sizeof(ext2_group_desc_t) + block_size - 1) / block_size;
+    if (gdt_blocks == 0) gdt_blocks = 1;
+    uint32_t group_first = first + g * bpg;
+    /* 组首的超级块（含 backup）与紧随其后的 GDT（含 backup） */
+    if (block < group_first + 1 + gdt_blocks) return 1;
+
+    if (block == ext2_gdt[g].bg_block_bitmap ||
+        block == ext2_gdt[g].bg_inode_bitmap) return 1;
+
+    uint32_t it_blocks = (ext2_sb->s_inodes_per_group * ext2_inode_size +
+                          block_size - 1) / block_size;
+    uint32_t it_start = ext2_gdt[g].bg_inode_table;
+    if (block >= it_start && block < it_start + it_blocks) return 1;
+
+    return 0;
+}
+
 uint32_t ext2_alloc_block(void)
 {
     if (!ext2_mounted) return 0;
@@ -40,6 +74,8 @@ uint32_t ext2_alloc_block(void)
                 ext2_gdt[g].bg_free_blocks_count--;
                 ext2_sb->s_free_blocks_count--;
                 uint32_t block_num = g * ext2_sb->s_blocks_per_group + b + ext2_sb->s_first_data_block;
+                /* P1 防线: 元数据块即使位图位被踩掉也不分配。 */
+                if (ext2_is_metadata_block(block_num)) continue;
                 /* V3.87-D6: 新分配数据块在 IDE 上清零(不再依赖整盘内存镜像) */
                 {
                     static uint8_t zero_blk[4096];
@@ -158,6 +194,7 @@ void ext2_free_inode(uint32_t inode_num)
 int ext2_write_inode(uint32_t inode_num, ext2_inode_t *inode)
 {
     if (!ext2_mounted || inode_num == 0 || !inode) return -1;
+
     uint32_t group = (inode_num - 1) / ext2_sb->s_inodes_per_group;
     uint32_t index = (inode_num - 1) % ext2_sb->s_inodes_per_group;
     uint32_t inode_table = ext2_gdt[group].bg_inode_table;

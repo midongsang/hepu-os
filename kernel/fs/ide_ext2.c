@@ -449,6 +449,16 @@ int ide_ext2_writefile(const char *name, const char *data)
     if (ext2_resolve_path(path, &dir_ino, filename, 256) != 0) return -1;
     if (ext2_read_inode(dir_ino, &dir) != 0) return -1;
     have = (ext2_lookup(&dir, filename, &ino) == 0);
+    if (have) {
+        /* P1: 目录项指向已释放/零 inode 时不能再当普通“已存在文件”覆盖写，
+         * 否则 i_mode/i_links_count 永远为 0，e2fsck 报 deleted/unused inode。
+         * 先删掉僵尸目录项，再走正常创建流程。 */
+        ext2_inode_t probe_inode;
+        if (ext2_read_inode(ino, &probe_inode) != 0 || probe_inode.i_mode == 0 ||
+            probe_inode.i_links_count == 0) {
+            if (ext2_path_unlink_v2(path) == 0) have = 0;
+        }
+    }
     if (!have) {
         int pc = ext2_path_create(path, 0x81A4);
         if (pc <= 0) return -1;

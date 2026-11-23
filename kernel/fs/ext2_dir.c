@@ -90,6 +90,8 @@ int ext2_add_dir_entry(ext2_inode_t *dir, uint32_t inode_num,
         dir->i_block[block_idx] = new_block;
     }
     dir->i_size += ext2_block_size;
+    /* P1: 目录扩块同样计入 i_blocks(512B 单位)。 */
+    dir->i_blocks += ext2_block_size / 512;
     return 0;
 }
 

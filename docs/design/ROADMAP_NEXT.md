@@ -47,6 +47,24 @@ P0 已完成，`tools/gate.sh` 一条命令给出 `GATE: PASS`。实测 32 位�
 门禁判定：32/64 位构建 0 error + VFS 跨启动 PASS + 32 位 kunit 连续 3 次 ALL PASS，
 才输出 `GATE: PASS`；任一不满足即 `GATE: FAIL` 且退出码 1。
 
+## 0.3 执行记录（2026-11-23，P1-1 元数据区保护）
+
+P1 第一项落地，核心防线与目录一致性修复均通过门禁：
+
+- `ext2_alloc.c` 增加 `ext2_is_metadata_block()`，分配前统一挡住超级块/GDT/
+  块位图/inode 位图/inode 表（含 backup），组 0 `bit0` 旧防线保留。
+- `tools/ext2_meta_guard.sh` 对抗测试：清掉组 0/1 共 32 个元数据块位后启动
+  VFS 写阶段，`VFS-TEST: PASS`，`e2fsck` 未报 inode 表/GDT/超级块结构损坏，
+  输出 `META-GUARD: PASS`。
+- 由 `e2fsck` 暴露并修复：目录 `i_blocks` 漏记、父目录链接计数、`bg_used_dirs_count`、
+  `rename` 目标已存在时残留目录项。
+- 门禁复跑：`GATE: PASS`，32/64 构建 0 error，VFS 写读 PASS，kunit 连续 3 次 ALL PASS。
+
+仍未关闭：`/data/clock/alarms.txt` 的 inode 32 在磁盘上为全 0，`e2fsck` 仍报
+deleted/unused inode、filetype 与位图差异。已排除数据块覆盖 inode 表；根因在
+`ide_ext2_writefile`/inode 表脏页落盘路径，待单独定位。详见
+`docs/design/EXT2_METADATA_GUARD.md`。
+
 ## 1. “有生产力”的验收场景（先定义，再排期）
 
 不用百分比描述进度，用五个可复现场景：
