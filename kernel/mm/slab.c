@@ -51,7 +51,7 @@ static int slab_initialized = 0;
 static uint32_t calc_objs_per_slab(uint32_t obj_size)
 {
     /* 一个slab占一页(4KB)，减去slab头和位图 */
-    uint32_t overhead = sizeof(slab_t) + 32;  /* 32字节位图足够 */
+    uint32_t overhead = (sizeof(slab_t) + 32 + 15) & ~15u;  /* 对象区 16 字节对齐 */
     uint32_t available = PAGE_SIZE - overhead;
     return available / (obj_size + 1);  /* +1 for bitmap bit */
 }
@@ -72,7 +72,7 @@ static slab_t *slab_create(slab_cache_t *cache)
     slab->prev = NULL;
     slab->free_count = cache->objs_per_slab;
     slab->free_map = (uint32_t *)((uint8_t *)slab + sizeof(slab_t));
-    slab->objects = (uint8_t *)slab + sizeof(slab_t) + 32;
+    slab->objects = (uint8_t *)slab + ((sizeof(slab_t) + 32 + 15) & ~15u);
 
     /* 初始化位图：全部空闲(0) */
     memset(slab->free_map, 0, 32);

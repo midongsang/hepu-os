@@ -375,7 +375,10 @@ void hepu_mem_init(uint32_t mem_kb)
     if (mem_kb > 0) {
         mm_init(mem_kb, 0x00200000);
     }
-    syscall_dbg_check("after-mm-init");
+    /* 关键顺序：内核映像/BSS 必须在任何可能分配物理页的调用之前占位。
+     * 原顺序是 mm_init → syscall_dbg_check → 保留内核区，中间这段窗口里
+     * pmm 会把内核 BSS 当空闲页发出去；一旦这页被当成页表页写入，
+     * BSS 里的全局变量（实测 kheap 的 heap_total/heap_end）会被页表项覆盖。 */
     extern char __bss_end[];
     (void)__bss_end;
     {
@@ -385,6 +388,7 @@ void hepu_mem_init(uint32_t mem_kb)
         vga_printf("[MM] reserved kernel+bss+stack region: 0x0 - 0x%x (%d MB)\n",
                    kern_reserve_end, kern_reserve_end / (1024 * 1024));
     }
+    syscall_dbg_check("after-mm-init");
     extern uint8_t __kernel_end[];
     uint32_t heap_base = ((uint32_t)__kernel_end + 0xFFF) & ~0xFFF;
     /* V6.60: 动态内核堆大小, 避免小内存机器上堆覆盖所有可用内存
@@ -489,9 +493,7 @@ void hepu_mem_init(uint32_t mem_kb)
                        fb.addr, fb_size / 1024);
         }
     }
-    {
-        kheap_init(heap_base, heap_size);
-    }
+    kheap_init(heap_base, heap_size);
     /* V6.81: PAE切换测试（独立分支，默认不自动切换）
      * 已验证：pae_safe_switch可成功切换到PAE模式
      * PAE模式下页错误处理已修复（详细诊断+全地址按需分配）
@@ -556,11 +558,11 @@ void hepu_mem_init(uint32_t mem_kb)
     /* V6.50: 大页自测 */
     extern void hugetlb_selftest(void);
     hugetlb_selftest();
-    /* V6.77: PAE物理地址扩展自测 */
-    extern void pae_init(void);
-    pae_init();  /* V6.80: 先初始化PAE框架 */
-    extern void pae_selftest(void);
-    pae_selftest();
+    /* V6.77: PAE 仅在探测阶段；完整页表结构由 shell 手动触发，不进入生产启动路径 */
+    extern void pae_detect(void);
+    pae_detect();
+    /* PAE 未启用时不在启动路径构造 PDPT/PD/PT：实验性页表写操作曾把
+     * kheap 统计所在的 BSS 页写成 0 / 0x0024C007。需要时由 shell 手动触发。 */
     extern void mempool_init(void);
     mempool_init();
     extern void acpi_init(void);

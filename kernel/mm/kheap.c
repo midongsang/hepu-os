@@ -16,6 +16,7 @@ typedef struct block_header {
     uint32_t magic;           /* HEADER_MAGIC 防误判 */
     uint32_t size;            /* 数据区大小（不含头部） */
     uint8_t  used;            /* 1=已分配, 0=空闲 */
+    uint32_t reserved;        /* 显式填充：头部 24 字节，保证返回指针 8 字节对齐 */
     struct block_header *next;
     struct block_header *prev;
 } block_header_t;
@@ -258,7 +259,9 @@ void *kmalloc(size_t size)
 {
     void *ret = NULL;
     if (size == 0) return NULL;
-    size = ALIGN(size, 4);
+    /* 32 位 ALIGN 回绕：0xFFFFFFFF+7 会截断成小数，曾把超大请求变成 0 字节分配成功 */
+    if (size > 0xFFFFFFF8u) { kmalloc_fail++; return NULL; }
+    size = ALIGN(size, 8);
 
     /* V3.87-E3: 中断安全全局堆锁——保护 slab 缓存与堆链表 */
     uint32_t flags;
@@ -381,6 +384,7 @@ void *kmalloc_aligned(size_t size, size_t alignment)
     if (alignment <= 1) return kmalloc(size);
     if (alignment > 4096) alignment = 4096;  /* 合理上限 */
 
+    if (size > 0xFFFFFFF8u - alignment - 8) return NULL;  /* 总长回绕 */
     size_t total = size + alignment + 8;
     void *raw = kmalloc(total);
     if (!raw) return NULL;

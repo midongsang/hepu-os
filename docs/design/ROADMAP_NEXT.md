@@ -24,6 +24,29 @@ P0 门禁仍是下一阶段第一优先：
   0 处修不回；journal 暂缓，先做有序写 + ATA FLUSH + 脏标志，见
   `docs/design/POWERLOSS_BASELINE.md`。
 
+## 0.2 执行记录（2026-11-23，P0 门禁可信）
+
+P0 已完成，`tools/gate.sh` 一条命令给出 `GATE: PASS`。实测 32 位连续启动 3 次，
+每次 kunit 都是 `[KTEST] RESULT: ALL PASS`；VFS 写/读两阶段同时 PASS。
+
+本轮定位并修复的真实缺陷：
+
+- **kunit 跑在错误环境**：原来在 IF=0、PIT ticks=0 的窗口运行，`boot complete`、
+  `interrupts active`、`datetime`、`sys_time` 类断言必然失败。现在运行前临时开中断，
+  等 PIT 走满 1 秒，跑完恢复原 IF。
+- **`kmalloc(0xFFFFFFFF)` 回绕**：32 位 `ALIGN(size,4)` 把 `0xFFFFFFFF+7` 截断成 0，
+  超大请求被当成 0 字节成功。现在拒绝 `> 0xFFFFFFF8`，并按 8 字节对齐。
+- **堆返回指针只有 4 字节对齐**：块头 20 字节改为 24 字节（显式 `reserved` 填充），
+  返回数据区自然 8 字节对齐；`kmalloc_aligned` 增加总长回绕检查。
+- **slab 对象区未 16 字节对齐**：位图后对象区偏移按 16 字节向上取整。
+- **PAE 启动期建表写坏 BSS**：`pae_init` 在 legacy 分页下构造 PDPT/PD/PT，分配到的
+  页与 kheap 统计变量所在 BSS 页重叠，`heap_total/heap_end` 被写成 `0 / 0x0024C007`。
+  启动路径改为只做 `pae_detect()`（探测 CPU 与物理地址宽度，不建表），完整结构留给
+  shell 手动触发。
+
+门禁判定：32/64 位构建 0 error + VFS 跨启动 PASS + 32 位 kunit 连续 3 次 ALL PASS，
+才输出 `GATE: PASS`；任一不满足即 `GATE: FAIL` 且退出码 1。
+
 ## 1. “有生产力”的验收场景（先定义，再排期）
 
 不用百分比描述进度，用五个可复现场景：

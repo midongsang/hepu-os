@@ -647,7 +647,23 @@ void hepu_kernel_main(uint32_t magic, multiboot_info_t *mb_info)
     extern int kunit_run_all(void);
     extern void serial_puts(uint16_t, const char *);
     serial_puts(0x3F8, "[KTEST] === Auto-run all kunit suites ===\n");
+    /* 测试环境归一：kunit 原来跑在 IF=0、pit_ticks=0 的窗口里，
+     * 于是 boot complete / interrupts active / datetime / sys_time 类用例
+     * 必然失败，且结果随初始化早晚漂移。这里临时开中断并等 PIT 走满 1 秒，
+     * 让“时间/中断”类断言拿到真实环境；跑完恢复原来的 IF。 */
+    uint32_t kflags;
+    __asm__ volatile("pushf; pop %0" : "=r"(kflags));
+    int ktest_irq_was_on = (kflags & 0x200) != 0;
+    if (!ktest_irq_was_on) __asm__ volatile("sti");
+    {
+        extern uint32_t pit_get_ticks(void);
+        uint32_t kt0 = pit_get_ticks();
+        while ((uint32_t)(pit_get_ticks() - kt0) < 100) {
+            __asm__ volatile("pause");
+        }
+    }
     int ktest_fail = kunit_run_all();
+    if (!ktest_irq_was_on) __asm__ volatile("cli");
     serial_puts(0x3F8, ktest_fail ? "[KTEST] RESULT: FAIL\n" : "[KTEST] RESULT: ALL PASS\n");
     
     /* ---- V3.78: 诊断日志落盘 (ext2 已就绪, 写入 /hepu_boot.log) ---- */

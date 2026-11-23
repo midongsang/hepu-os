@@ -316,6 +316,25 @@ void pae_selftest(void)
 static pae_pdpt_t *kernel_pdpt = 0;
 static int pae_initialized = 0;
 
+/* 仅探测 CPU 是否支持 PAE 与物理地址宽度，不创建 PDPT/PD/PT。
+ * 启动路径只调用本函数：PAE 未启用时创建页表结构没有收益，反而会
+ * 把实验性代码的写操作带进生产启动路径。完整结构由 shell 手动触发。 */
+void pae_detect(void)
+{
+    extern void serial_puts(uint16_t, const char *);
+    if (!pae_cpu_supported()) {
+        pae_supported = 0;
+        pae_initialized = 0;
+        serial_puts(0x3F8, "[PAE] detect: CPU does not support PAE\n");
+        return;
+    }
+    uint32_t phys_bits = pae_get_max_phys_bits();
+    max_phys_addr = (1ULL << phys_bits) - 1;
+    pae_supported = 1;
+    pae_initialized = 0;
+    serial_puts(0x3F8, "[PAE] detect: supported, tables not built\n");
+}
+
 void pae_init(void)
 {
     extern void serial_puts(uint16_t, const char *);

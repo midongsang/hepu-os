@@ -47,6 +47,7 @@ void pae_selftest(void);
 
 /* V6.80: PAE初始化框架 */
 void pae_init(void);
+void pae_detect(void);
 int pae_is_initialized(void);
 uint32_t pae_get_kernel_pdpt_phys(void);
 
