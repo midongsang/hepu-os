@@ -67,6 +67,106 @@ int fs_vfs_selftest(char phase)
     uint16_t port = 0x3F8;
     int fails = 0;
 
+    /* === D3：掉电基线的写入负载（故意不收敛，等外部 kill） === */
+    if (phase == 'p') {
+        static char pb[1024];
+        for (int i = 0; i < (int)sizeof(pb); i++) pb[i] = (char)0xA5;
+        int fd = vfs_open("/pl.dat", VFS_O_WRONLY | VFS_O_CREAT | VFS_O_TRUNC);
+        serial_puts(port, "[POWERLOSS] start fd=");
+        vs_put_dec(port, fd);
+        serial_puts(port, "\n");
+        if (fd < 0) return 1;
+        for (int n = 1; n <= 8192; n++) {          /* 8MB 上限，正常会被外部提前 kill */
+            int w = vfs_write(fd, pb, sizeof(pb));
+            if (w != (int)sizeof(pb)) {
+                serial_puts(port, "[POWERLOSS] write fail at ");
+                vs_put_dec(port, n);
+                serial_puts(port, "\n");
+                vfs_close(fd);
+                return 1;
+            }
+            if ((n % 8) == 0) vfs_sync();
+            if ((n % 64) == 0) {
+                serial_puts(port, "[POWERLOSS] chunk=");
+                vs_put_dec(port, n);
+                serial_puts(port, "\n");
+            }
+        }
+        vfs_close(fd);
+        vfs_sync();
+        serial_puts(port, "[POWERLOSS] done (workload finished, no power cut)\n");
+        return 0;
+    }
+
+    /* === D1：全量扫描调试模式必须幂等 === */
+    if (phase == 'f') {
+        extern int ext2_mount(const char *);
+        vfs_node_t *root = vfs_find("/");
+        int b0 = 0, b1 = 0, b2 = 0, r1, r2, ok;
+        vfs_node_t *ch;
+        if (root) for (ch = root->children; ch; ch = ch->next) b0++;
+        r1 = ext2_mount("/");
+        if (root) for (ch = root->children; ch; ch = ch->next) b1++;
+        r2 = ext2_mount("/");
+        if (root) for (ch = root->children; ch; ch = ch->next) b2++;
+        ok = (r1 == 0 && r2 == 0 && b1 >= b0 && b2 == b1);
+        serial_puts(port, "[MOUNTFULL] rc1=");
+        vs_put_dec(port, r1);
+        serial_puts(port, " rc2=");
+        vs_put_dec(port, r2);
+        serial_puts(port, " children=");
+        vs_put_dec(port, b0); serial_puts(port, "/");
+        vs_put_dec(port, b1); serial_puts(port, "/");
+        vs_put_dec(port, b2);
+        serial_puts(port, " RESULT: ");
+        serial_puts(port, ok ? "PASS\n" : "FAIL\n");
+        return ok ? 0 : 1;
+    }
+
+    /* === 跨架构 ext2 契约（D2）：32 位写、64 位读；64 位写、32 位读 === */
+    if (phase == 'c') {
+        const char *txt = "FROM_32BIT";
+        int len = 0; while (txt[len]) len++;
+        char rb2[32];
+        int fd = vfs_open("/c32.txt", VFS_O_WRONLY | VFS_O_CREAT | VFS_O_TRUNC);
+        int wlen = -1, ok = 0, rd2 = -1;
+        if (fd >= 0) {
+            wlen = vfs_write(fd, txt, (uint32_t)len);
+            vfs_close(fd);
+            vfs_sync();
+        }
+        serial_puts(port, "[CONFORM32] write_c32 len=");
+        vs_put_dec(port, wlen);
+        serial_puts(port, "\n");
+        fd = vfs_open("/c32.txt", VFS_O_RDONLY);
+        if (fd >= 0) { rd2 = vfs_read(fd, rb2, 16); vfs_close(fd); }
+        if (rd2 == len) {
+            ok = 1;
+            for (int i = 0; i < len; i++) if (rb2[i] != txt[i]) { ok = 0; break; }
+        }
+        serial_puts(port, "[CONFORM32] PHASE_C RESULT: ");
+        serial_puts(port, ok ? "PASS\n" : "FAIL\n");
+        return ok ? 0 : 1;
+    }
+    if (phase == 'd') {
+        const char *want = "FROM_64BIT";
+        int len = 0; while (want[len]) len++;
+        char rb3[32];
+        int fd = vfs_open("/c64.txt", VFS_O_RDONLY);
+        int rd3 = -1, ok = 0;
+        if (fd >= 0) { rd3 = vfs_read(fd, rb3, 16); vfs_close(fd); }
+        if (rd3 >= len) {
+            ok = 1;
+            for (int i = 0; i < len; i++) if (rb3[i] != want[i]) { ok = 0; break; }
+        }
+        serial_puts(port, "[CONFORM32] read_c64=");
+        if (rd3 > 0) { rb3[rd3] = 0; serial_puts(port, rb3); }
+        else serial_puts(port, "(none)");
+        serial_puts(port, "\n[CONFORM32] PHASE_D RESULT: ");
+        serial_puts(port, ok ? "PASS\n" : "FAIL\n");
+        return ok ? 0 : 1;
+    }
+
     serial_puts(port, "[VFS-TEST] phase=");
     { char c[2]; c[0] = phase; c[1] = 0; serial_puts(port, c); }
     serial_puts(port, "\n");

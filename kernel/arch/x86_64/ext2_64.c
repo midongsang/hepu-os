@@ -699,6 +699,33 @@ int ext2_64_init(void)
         vga_puts("[EXT2_64] Write test failed (note: file not added to dir yet)\n");
     }
 
+    /* D2 跨架构契约：读 32 位写的 /c32.txt，并写 /c64.txt 回读 */
+    {
+        uint8_t cbuf[128];
+        int cn = ext2_64_read_file("/c32.txt", cbuf, sizeof(cbuf) - 1);
+        if (cn > 0) {
+            cbuf[cn] = '\0';
+            vga_puts("[CONFORM64] read_c32=");
+            vga_puts((const char *)cbuf);
+            vga_puts("\n");
+        } else {
+            vga_puts("[CONFORM64] read_c32=MISSING\n");
+        }
+        const char *c64 = "FROM_64BIT";
+        int cw = ext2_64_write_file("/c64.txt", (const uint8_t *)c64, (uint32_t)strlen(c64));
+        if (cw > 0) {
+            int cr = ext2_64_read_file("/c64.txt", cbuf, sizeof(cbuf) - 1);
+            if (cr > 0) {
+                cbuf[cr] = '\0';
+                vga_puts("[CONFORM64] verify_c64=");
+                vga_puts((const char *)cbuf);
+                vga_puts("\n");
+            }
+        } else {
+            vga_puts("[CONFORM64] write_c64 FAIL\n");
+        }
+    }
+
     /* V0.13.57: 登记根分区到挂载槽0 (resolve 根路径切回用) */
     ext2_mount_offsets[0] = ext2_partition_offset;
     ext2_mount_valid[0] = 1;

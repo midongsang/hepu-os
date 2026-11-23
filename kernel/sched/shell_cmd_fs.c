@@ -157,13 +157,23 @@ static int fs_cp_dir_vfs(const char *src, const char *dst, int depth)
 void cmd_fs(char *args)
 {
     if (!args || args[0] == 0) {
-        vga_puts(" fs usage: fs mount | ls | cat <name> | write <name> <text> | stat <name> | df | sync | mkdir | rm | cp <src> <dst> | cpall <dst> | mv | fsck\n");
+        vga_puts(" fs usage: fs mount [-f] | ls | cat <name> | write <name> <text> | stat <name> | df | sync | mkdir | rm | cp <src> <dst> | cpall <dst> | mv | fsck\n");
         return;
     }
     if (strncmp(args, "mount", 5) == 0) {
         extern int ide_ext2_mount(void);
-        if (ide_ext2_mount() == 0) vga_puts(" ext2 fs mounted (IDE disk)\n");
-        else vga_puts(" mount FAIL\n");
+        int full = (args[5] == ' ' && args[6] == '-' && args[7] == 'f');
+        if (ide_ext2_mount() == 0) {
+            vga_puts(" ext2 fs mounted (IDE disk)\n");
+            if (full) {
+                /* D1：全量扫描只是调试模式。正式路径是懒加载，启动流程不调用。 */
+                extern int ext2_mount(const char *);
+                if (ext2_mount("/") == 0) vga_puts(" full scan done (debug mode)\n");
+                else vga_puts(" full scan FAIL\n");
+            }
+        } else {
+            vga_puts(" mount FAIL\n");
+        }
     } else if (strncmp(args, "ls", 2) == 0) {
         /* P1: 改走 VFS（支持带目录参数，子目录经 ext2_readdir_ino 读真实条目） */
         const char *path = args + 2;

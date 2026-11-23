@@ -302,6 +302,10 @@ int ext2_readdir_ino(uint32_t ino, vfs_dirent_t *buf, int max_entries)
     return count;
 }
 
+/* D1 挂载策略：正式路径是懒加载（vfs_find 按路径回盘解析）。
+ * 本函数只作为调试/校验模式（shell: fs mount -f），**不要接进启动流程**：
+ * 它会把根目录一层全量建进内存树，盘上内容变化后无法感知。
+ * 重复调用必须幂等 —— 已存在的子节点按名字跳过，避免 children 链表出现重复项。 */
 int ext2_mount(const char *mountpoint)
 {
     if (!ext2_mounted) return -1;
@@ -348,6 +352,12 @@ int ext2_mount(const char *mountpoint)
                 if (entry->file_type == EXT2_FT_DIR) t = VFS_DIRECTORY;
                 else if (entry->file_type == EXT2_FT_SYMLINK) t = VFS_SYMLINK;
 
+                /* 幂等：同名子节点已存在则跳过（fs mount -f 可能被多次调用） */
+                int dup = 0;
+                for (vfs_node_t *ch = mnt->children; ch; ch = ch->next) {
+                    if (strcmp(ch->name, nm) == 0) { dup = 1; break; }
+                }
+                if (dup) { pos += entry->rec_len; continue; }
                 vfs_node_t *node = vfs_create_node(nm, t);
                 if (node) {
                     ext2_inode_t finode;

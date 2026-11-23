@@ -9,27 +9,6 @@
 #include "compat_detect.h"
 #include "paging.h"   /* D-7: LFB 映射需要 PAGE_PRESENT / PAGE_WRITE */
 
-/* V0.10.5: 安全初始化调用 - 防止单个函数卡住导致整个启动失败 */
-static int init_call_count = 0;
-static int init_fail_count = 0;
-#define MAX_INIT_FAILURES 20
-
-static void safe_init_call(const char *name, void (*func)(void)) {
-    init_call_count++;
-
-    /* 如果失败次数过多，进入安全模式跳过后续非关键初始化 */
-    if (init_fail_count >= MAX_INIT_FAILURES) {
-        extern void serial_puts(uint16_t, const char *);
-        serial_puts(0x3F8, "[INIT-SAFE] skipping: ");
-        serial_puts(0x3F8, name);
-        serial_puts(0x3F8, "\n");
-        return;
-    }
-
-    /* 调用函数 - 注意：由于没有异常处理，这里只能依赖函数自身的健壮性 */
-    func();
-}
-
 /* V0.10.5: 统一使用串口输出，避免VGA操作在BIOS环境下卡住 */
 static void init_serial_puts(const char *s) {
     extern void serial_puts(uint16_t, const char *);
@@ -586,6 +565,29 @@ int hepu_init_phase(init_phase_t phase)
                 if (ide_ext2_read_file("/", "vfs_selftest", tag, 4) > 0 && (tag[0] == 'w' || tag[0] == 'r')) {
                     serial_puts(0x3F8, "[VFS-TEST] /vfs_selftest found\n");
                     fs_vfs_selftest(tag[0]);
+                }
+            }
+            /* 2026-11-23: 跨架构 ext2 契约——32 位写/读各一段，与 64 位共享同一张盘 */
+            {
+                extern void serial_puts(uint16_t, const char *);
+                extern int ide_ext2_read_file(const char *, const char *, char *, int);
+                extern int fs_vfs_selftest(char);
+                char tagc[8];
+                if (ide_ext2_read_file("/", "powerloss_test", tagc, 4) > 0 && tagc[0] == 'p') {
+                    serial_puts(0x3F8, "[POWERLOSS] /powerloss_test found\n");
+                    fs_vfs_selftest('p');
+                }
+                if (ide_ext2_read_file("/", "mountfull_test", tagc, 4) > 0 && tagc[0] == 'f') {
+                    serial_puts(0x3F8, "[MOUNTFULL] /mountfull_test found\n");
+                    fs_vfs_selftest('f');
+                }
+                if (ide_ext2_read_file("/", "conform32_a", tagc, 4) > 0 && tagc[0] == 'c') {
+                    serial_puts(0x3F8, "[CONFORM32] /conform32_a found\n");
+                    fs_vfs_selftest('c');
+                }
+                if (ide_ext2_read_file("/", "conform32_b", tagc, 4) > 0 && tagc[0] == 'd') {
+                    serial_puts(0x3F8, "[CONFORM32] /conform32_b found\n");
+                    fs_vfs_selftest('d');
                 }
             }
             if (!protect_gfx) {
