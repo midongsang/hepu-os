@@ -173,8 +173,135 @@ static void t_out_multi_tap(const char *s)
     t_out_multi(s);
 }
 
+/* === S1: 图形终端内最小行编辑器 ===
+ * 真实键盘输入路径：F12 打开 Terminal -> `edit /path` -> 逐行输入 ->
+ * `.save` 保存 -> 重启后 `cat /path` 还在。落盘走 ext2_64_write_file。 */
+#define T_EDIT_MAX 2048
+static int  t_ed_active = 0;
+static int  t_ed_len = 0;
+static char t_ed_path[160];
+static char t_ed_buf[T_EDIT_MAX];
+
+static void t_abs_path(const char *arg, char *out, int cap)
+{
+    if (!arg || !*arg) { out[0] = 0; return; }
+    if (arg[0] == '/') { hs_strcpyn(out, arg, cap - 1); return; }
+    hs_strcpyn(out, t_cwd, cap / 2);
+    int fl = hs_strlen(out);
+    if (fl > 0 && out[fl - 1] != '/') { out[fl++] = '/'; out[fl] = 0; }
+    hs_strcpyn(out + fl, arg, cap - fl - 1);
+}
+
+static int t_ed_load(const char *path)
+{
+    extern int ext2_64_read_file(const char *path, uint8_t *buffer, uint32_t max_size);
+    int n = ext2_64_read_file(path, (uint8_t *)t_ed_buf, T_EDIT_MAX - 1);
+    t_ed_len = (n > 0) ? n : 0;
+    return t_ed_len;
+}
+
+static int t_ed_save(void)
+{
+    extern int ext2_64_write_file(const char *path, const uint8_t *data, uint32_t size);
+    extern void serial_puts_raw(const char *);
+    extern void serial_puts(uint16_t, const char *);
+    extern void serial_puthex(uint16_t, uint32_t);
+    int rc = ext2_64_write_file(t_ed_path, (const uint8_t *)t_ed_buf, (uint32_t)t_ed_len);
+    serial_puts(0x3F8, "[HSED] save path="); serial_puts(0x3F8, t_ed_path);
+    serial_puts(0x3F8, " len="); serial_puthex(0x3F8, (uint32_t)t_ed_len);
+    serial_puts(0x3F8, " rc="); serial_puthex(0x3F8, (uint32_t)rc);
+    serial_puts(0x3F8, "\n");
+    return (rc >= 0) ? 0 : -1;
+}
+
+static void t_ed_begin(const char *arg)
+{
+    if (!arg || !*arg) { t_put("edit: usage edit <file>"); return; }
+    t_abs_path(arg, t_ed_path, (int)sizeof(t_ed_path));
+    t_ed_load(t_ed_path);
+    t_ed_active = 1;
+    char b[80];
+    strcpy(b, "edit: "); hs_strcpyn(b + hs_strlen(b), t_ed_path, 40);
+    strcpy(b + hs_strlen(b), t_ed_len ? " (loaded)" : " (new)");
+    t_put(b);
+    t_put("lines append; .save | .quit | .list");
+}
+
+static void t_ed_line(const char *line)
+{
+    if (strcmp(line, ".save") == 0) {
+        if (t_ed_save() == 0) t_put("edit: saved");
+        else t_put("edit: SAVE FAIL");
+        return;
+    }
+    if (strcmp(line, ".quit") == 0) { t_ed_active = 0; t_put("edit: quit"); return; }
+    if (strcmp(line, ".list") == 0) {
+        if (!t_ed_len) { t_put("(empty)"); return; }
+        int start = 0;
+        for (int i = 0; i <= t_ed_len; i++) {
+            if (i == t_ed_len || t_ed_buf[i] == '\n') {
+                char b[TERM_MAX_LEN + 1];
+                int n = i - start; if (n > TERM_MAX_LEN) n = TERM_MAX_LEN;
+                for (int j = 0; j < n; j++) b[j] = t_ed_buf[start + j];
+                b[n] = 0; t_put(b);
+                start = i + 1;
+            }
+        }
+        return;
+    }
+    if (!line[0]) return;
+    int n = hs_strlen(line);
+    if (t_ed_len + n + 1 >= T_EDIT_MAX) { t_put("edit: buffer full"); return; }
+    for (int i = 0; i < n; i++) t_ed_buf[t_ed_len++] = line[i];
+    t_ed_buf[t_ed_len++] = '\n';
+    t_put("edit: +");
+}
+
+static void t_cmd_cat(const char *arg)
+{
+    extern int ext2_64_read_file(const char *path, uint8_t *buffer, uint32_t max_size);
+    static char b[2048];
+    char full[256];
+    if (!arg[0]) { t_put("cat: usage cat <file>"); return; }
+    t_abs_path(arg, full, sizeof(full));
+    int n = ext2_64_read_file(full, (uint8_t *)b, sizeof(b) - 1);
+    if (n < 0) { t_put("cat: not found"); return; }
+    if (n == 0) { t_put("(empty)"); return; }
+    int start = 0;
+    for (int i = 0; i <= n; i++) {
+        if (i == n || b[i] == '\n') {
+            char line[TERM_MAX_LEN + 1];
+            int m = i - start; if (m > TERM_MAX_LEN) m = TERM_MAX_LEN;
+            for (int j = 0; j < m; j++) line[j] = b[start + j];
+            line[m] = 0; t_put(line);
+            start = i + 1;
+        }
+    }
+}
+
+static void t_cmd_cp(const char *arg)
+{
+    extern int ext2_64_read_file(const char *path, uint8_t *buffer, uint32_t max_size);
+    extern int ext2_64_write_file(const char *path, const uint8_t *data, uint32_t size);
+    char src[200], dst[200], fulls[256], fulld[256];
+    int j = 0;
+    while (arg[j] && arg[j] != ' ' && j < 190) { src[j] = arg[j]; j++; }
+    src[j] = 0;
+    while (arg[j] == ' ') j++;
+    if (!arg[j]) { t_put("cp: usage cp <src> <dst>"); return; }
+    hs_strcpyn(dst, arg + j, 190);
+    t_abs_path(src, fulls, sizeof(fulls));
+    t_abs_path(dst, fulld, sizeof(fulld));
+    static char b[4096];
+    int n = ext2_64_read_file(fulls, (uint8_t *)b, sizeof(b));
+    if (n < 0) { t_put("cp: source not found"); return; }
+    if (ext2_64_write_file(fulld, (const uint8_t *)b, (uint32_t)n) < 0) { t_put("cp: write FAIL"); return; }
+    t_put("cp: done");
+}
+
 static void t_exec(const char *line)
 {
+    if (t_ed_active) { t_ed_line(line); return; }
     char cmd[64];
     int i = 0;
     while (line[i] && line[i] != ' ' && i < 60) { cmd[i] = line[i]; i++; }
@@ -186,7 +313,7 @@ static void t_exec(const char *line)
 
     if (strcmp(cmd, "help") == 0) {
         t_put("Hepu Terminal commands:");
-        t_put("  help clear ls cd cat echo date mem net ver whoami");
+        t_put("  help clear ls cd cat cp edit echo date mem net ver whoami");
         t_put("  run/exec <elf> - load & run ELF user program from disk");
         t_put("  drv  - driver manager (update/list)");
         t_put("  usb  - usb devices (status/list/hotplug)");
@@ -319,6 +446,9 @@ static void t_exec(const char *line)
         }
         return;
     }
+    if (strcmp(cmd, "cat") == 0) { t_cmd_cat(arg); return; }
+    if (strcmp(cmd, "cp") == 0) { t_cmd_cp(arg); return; }
+    if (strcmp(cmd, "edit") == 0) { t_ed_begin(arg); return; }
     if (strcmp(cmd, "cd") == 0) {
         if (arg[0]) {
             hs_strcpyn(t_cwd, arg, 120);

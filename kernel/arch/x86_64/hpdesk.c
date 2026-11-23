@@ -7452,6 +7452,11 @@ static void hpdesk_render_inner(void)
  * 每 60 帧打印一次(单位: 千周期), 用于定位到底哪一段在吃时间。 */
 void hpdesk_render(void)
 {
+#ifndef __x86_64__
+    /* 32 位 hpdesk 没有 hsinput 统一输入层，键盘由 legacy IRQ1 环形缓冲提供。
+     * 每帧取一次，F12 开终端、普通字符进终端输入行。 */
+    { extern void s1_terminal_poll(void); s1_terminal_poll(); }
+#endif
     /* V0.62: 屏保 —— 空闲超过设定分钟数则整屏黑, 任意输入唤醒 */
     if (g_screensaver_min > 0) {
         extern uint64_t rtc64_get_timestamp(void);
@@ -7743,8 +7748,9 @@ void hpdesk_handle_key(int key)
         return;
     }
 
-    /* V0.13.41: F12(0x58) 快捷键快速打开终端 (无鼠标环境下也可达) */
-    if (key == 0x58) {
+    /* V0.13.41: F12 快捷键快速打开终端 (无鼠标环境下也可达)
+     * 键盘层把 F12 转成 0x94 送入输入缓冲，避免 0x58 在 ASCII 表里是 0。 */
+    if (key == 0x94 || key == 0x58) {
         hs_terminal_create();
         return;
     }

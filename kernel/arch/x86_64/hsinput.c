@@ -180,6 +180,16 @@ int hs_input_get_mod(void)
 /* V0.13.8 P5: 0xE0 扩展键前缀 → 内部码归一化 (USB HID 与 PS/2 统一) */
 static int g_hs_pending_e0 = 0;
 static int hs_normalize_ext(int key);
+/* USB HID 功能键用 0xA0-0xAB 内部码, PS/2 用 Set1 0x3B-0x44/0x57/0x58。
+ * hpdesk 按 Set1 判断 F2-F8/F11/F12, 不归一化会导致 USB 键盘上所有功能键失效。 */
+static int hs_normalize_fn(int key)
+{
+    if (key >= 0xA0 && key <= 0xAB) {
+        if (key <= 0xA9) return 0x3B + (key - 0xA0);  /* F1-F10 */
+        return 0x57 + (key - 0xAA);                    /* F11-F12 */
+    }
+    return key;
+}
 static int hs_normalize_ext(int key)
 {
     if (key == 0xE0) { g_hs_pending_e0 = 1; return 0; }
@@ -213,6 +223,7 @@ void hs_input_poll(void)
         int key = usb64_kbd_getchar();
         int mod = usb64_kbd_get_mod();
         key = hs_normalize_ext(key);
+        key = hs_normalize_fn(key);
         if (key != 0) {  /* V0.13.8 P5: 0=扩展键前缀已消费 */
             if (hs_handle_shortcut(key, mod)) return;
             if (key == 27) {

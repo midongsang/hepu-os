@@ -80,6 +80,34 @@ P1 三项验收证据已齐备：
 详见 `docs/design/P1_STORAGE_RELIABILITY.md`。`/data/clock/alarms.txt` 的 inode 32
 记账问题不在本轮 5 次样本中复现，保留为已知债。
 
+## 0.5 执行记录（2026-11-24，S1 最小生产力）
+
+S1 的图形终端写读闭环已经在 32 位 hpdesk 上跑通并留证：
+
+- **首次启动**：终端里 `edit /s1_gui.txt` → 输入 `HEPU_S1_GUI` / `SECOND LINE`
+  → `.save` → `.quit` → `cat`；截图 `docs/assets/s1/s1-first-boot.png`。
+- **同一张盘重启**：autostart 改成 `cat /s1_gui.txt`，重启后仍显示两行；
+  截图 `docs/assets/s1/s1-restart.png`。
+- **基础文件工具**：`ls/cat/cp/mv/rm/mkdir` 全部走 32 位 VFS；
+  截图 `docs/assets/s1/s1-file-tools.png`。
+- **静态程序**：图形终端里 `run linuxhello`，串口输出
+  `Hello from Linux ELF on HEPU!`，见 `docs/assets/s1/s1-run-linuxhello.log`。
+- **VFS 自测**：写阶段 18/18 PASS（含 `term.edit`）、读阶段 9/9 PASS
+  （含 `disk.s1_edit`）。
+
+本轮同时修复两个真实缺陷：
+
+- `ext2_alloc_block()` 先置位/减计数、后判元数据块，命中元数据时不回滚，
+  会把空闲块计数吃光；改为先判元数据再置位。
+- `cpall` 递归复制 `/proc`、`/dev`、`/sys`、`/tmp` 伪文件系统，产生约
+  5 万次块分配写满 58 MB 盘；改为跳过这四个目录。
+
+详见 `docs/design/S1_MINIMAL_PRODUCTIVITY.md`。
+
+仍未闭环：真实键盘字符已进入终端行缓冲并执行命令，但 32 位 hpdesk
+按需合成对新行的屏幕刷新仍偶发停在上一帧，缺口在“标脏→合成→present”
+链路；autostart 首次绘制与重启 `cat` 显示正常。
+
 ## 1. “有生产力”的验收场景（先定义，再排期）
 
 不用百分比描述进度，用五个可复现场景：

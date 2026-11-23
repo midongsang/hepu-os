@@ -1,0 +1,4 @@
+Hello from Linux ELF on HEPU!
+[RUN] linuxhello -> rc=0x00000003
+Hello from Linux ELF on HEPU!
+[RUN] linuxhello -> rc=0x0000000B

@@ -69,13 +69,16 @@ uint32_t ext2_alloc_block(void)
         }
         for (uint32_t b = 0; b < ext2_sb->s_blocks_per_group; b++) {
             if (!(bitmap[b / 8] & (1 << (b % 8)))) {
+                uint32_t block_num = g * ext2_sb->s_blocks_per_group + b + ext2_sb->s_first_data_block;
+                /* P1 防线: 元数据块即使位图位被踩掉也不分配。
+                 * 关键：必须在置位/减计数之前跳过。原顺序先置位再 continue，
+                 * 每次扫到 inode 表/GDT 都会永久吃掉位图位并扣 free_blocks，
+                 * 一张刚格式化的盘几十次分配后 free_blocks 就掉到 0。 */
+                if (ext2_is_metadata_block(block_num)) continue;
                 bitmap[b / 8] |= (1 << (b % 8));
                 ext2_block_dirty(ext2_gdt[g].bg_block_bitmap);
                 ext2_gdt[g].bg_free_blocks_count--;
                 ext2_sb->s_free_blocks_count--;
-                uint32_t block_num = g * ext2_sb->s_blocks_per_group + b + ext2_sb->s_first_data_block;
-                /* P1 防线: 元数据块即使位图位被踩掉也不分配。 */
-                if (ext2_is_metadata_block(block_num)) continue;
                 /* V3.87-D6: 新分配数据块在 IDE 上清零(不再依赖整盘内存镜像) */
                 {
                     static uint8_t zero_blk[4096];

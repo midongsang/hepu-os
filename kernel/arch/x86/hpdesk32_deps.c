@@ -153,7 +153,9 @@ int  hs_oobe_active(void) { return 0; }
 void hs_oobe_render(void *fb, int w, int h) { (void)fb; (void)w; (void)h; }
 
 /* 终端: 桌面的终端窗口在 32 位先不跑真实命令 */
-void hs_terminal_run_line(const char *line) { (void)line; }
+/* 32 位终端实现在 s1_terminal32.c：这里只转发 autostart 命令。 */
+extern void s1_terminal_run_line_public(const char *line);
+void hs_terminal_run_line(const char *line) { s1_terminal_run_line_public(line); }
 
 /* 光标缩放/种类 */
 void cursor64_set_scale(int pct) { (void)pct; }

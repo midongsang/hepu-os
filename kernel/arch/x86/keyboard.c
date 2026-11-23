@@ -154,6 +154,8 @@ static void softirq_kbd_poll(void)
             case 0x1D: ctrl_pressed = 1; continue;
             case 0x38: alt_pressed = 1; continue;
             case 0x3A: caps_lock = !caps_lock; continue;
+            case 0x3C: buffer_put(0x93); continue;   /* F2: 打开终端(旧WM) */
+            case 0x58: buffer_put(0x94); continue;   /* F12: 打开图形终端 */
             case 0x0E: buffer_put(0x08); continue;
             case 0x53:
                 if (ctrl_pressed && alt_pressed) {
@@ -193,11 +195,19 @@ extern void pm_wakeup(void);
 
 char keyboard_getchar(void)
 {
+    /* 图形终端打开时，先把已经排队的字符交给它；否则一旦按键已进
+     * keyboard_buffer，while 条件为假，poll 根本进不去，字符会被 shell
+     * 的 readline 吃掉——终端看起来“收不到键”。 */
+    { extern void s1_terminal_poll(void); s1_terminal_poll(); }
     while (buffer_count == 0) {
         extern void wd_feed(void);
         wd_feed();  /* V3.87-E6: 等输入=系统活跃, 喂狗防误触发 */
         extern void softirq_run(void);
         softirq_run();  /* V3.87-E8: 等待输入时执行底半部 */
+        /* 图形终端打开时，键盘先把字符交给它；否则 shell 的 readline
+         * 会把字符全部吃掉，终端只显示 autostart 的假输入。 */
+        extern void s1_terminal_poll(void);
+        s1_terminal_poll();
 
         /* 桌面在"等键盘"这段时间里驱动。这一处是**补充**路径, 不是主路径 ——
          * 只有键盘缓冲区恰好为空、真的在等输入时才走到; 缓冲区有残留时
@@ -229,6 +239,11 @@ char keyboard_getchar(void)
     char c = keyboard_buffer[buffer_tail];
     buffer_tail = (buffer_tail + 1) % KEYBOARD_BUFFER_SIZE;
     buffer_count--;
+    if ((unsigned char)c == 0x94) {   /* F12: 图形终端（32 位 hpdesk） */
+        extern void s1_terminal_create(void);
+        s1_terminal_create();
+        return keyboard_getchar();
+    }
     pm_reset_idle_timer();
     pm_wakeup();
     return c;

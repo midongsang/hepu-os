@@ -302,6 +302,11 @@ void cmd_fs(char *args)
         int ok = 0, bad = 0;
         for (int i = 0; i < cnt; i++) {
             if (strcmp(ents[i].name, ".") == 0 || strcmp(ents[i].name, "..") == 0) continue;
+            /* cpall 只复制真实磁盘内容。proc/dev/sys 是内核伪文件系统，
+             * 逐项复制会造出成千上万个 1 块文件，几十秒内把 58MB 盘写满，
+             * 后续任何写操作(包括终端编辑器)都会 ENOSPC。 */
+            if (strcmp(ents[i].name, "proc") == 0 || strcmp(ents[i].name, "dev") == 0 ||
+                strcmp(ents[i].name, "sys") == 0 || strcmp(ents[i].name, "tmp") == 0) continue;
             char sp[192], dp[192];
             fs_join_path("/", ents[i].name, sp, sizeof(sp));
             if (strcmp(sp, dabs) == 0) continue;   /* 跳过目标自身，防自我嵌套 */

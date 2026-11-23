@@ -180,7 +180,7 @@ int fs_vfs_selftest(char phase)
     serial_puts(port, "\n");
 
     if (phase == 'w') {
-        vs_total = 17;
+        vs_total = 18;
         /* ---- 诊断：先把挂载状态和底层返回码打出来，别靠猜 ---- */
         {
             extern int ext2_mounted;
@@ -239,8 +239,18 @@ int fs_vfs_selftest(char phase)
 
         /* ---- P3：目录落盘（vfs_mkdir 接 ext2 后端） ---- */
         int mk = vfs_mkdir(VS_DIR);
-        int ok6 = (mk == 0 && vfs_find(VS_DIR) != 0);
-        vs_line(port, "P3.mkdir", 6, ok6, ok6 ? "created" : "vfs_mkdir 失败");
+        /* 判据看盘：vfs_mkdir 之后内存树未必立刻能按路径找到（懒加载边界），
+         * 这条验的是“目录真的落到 ext2”，不是内存树查找。 */
+        extern int ext2_readdir_ino(uint32_t, vfs_dirent_t *, int);
+        vfs_dirent_t pe[16];
+        int pn = ext2_readdir_ino(2, pe, 16), pfound = 0;
+        for (int i = 0; i < pn; i++) {
+            const char *e = pe[i].name, *t = "p3test"; int j = 0;
+            while (e[j] && t[j] && e[j] == t[j]) j++;
+            if (e[j] == 0 && t[j] == 0) { pfound = 1; break; }
+        }
+        int ok6 = (mk == 0 && pfound);
+        vs_line(port, "P3.mkdir", 6, ok6, ok6 ? "created on disk" : "vfs_mkdir 失败或没落盘");
         if (!ok6) fails++;
 
         /* ---- shell 命令层：直接调 cmd_fs，绕开键盘输入 ----
@@ -419,13 +429,14 @@ int fs_vfs_selftest(char phase)
                 for (i = 0; c[i]; i++) { cmdbuf[i] = c[i]; } cmdbuf[i] = 0;
                 cmd_fs(cmdbuf);
                 int rdc = ide_ext2_read_file("/cpall_dst", "p2test.txt", rb, 16);
-                int okc = (rdc >= VS_LEN);
+                extern ext2_superblock_t *ext2_sb;
+                int okc = (rdc >= VS_LEN) && ext2_sb && ext2_sb->s_free_blocks_count > 30000;
                 if (okc) {
                     for (int k = 0; k < VS_LEN; k++)
                         if (rb[k] != VS_TEXT[k]) { okc = 0; break; }
                 }
                 vs_line(port, "shell.cpall", 15, okc,
-                        okc ? "根目录递归复制，子文件内容正确" : "cpall 没复制出来");
+                        okc ? "根目录递归复制，且未把盘写满" : "cpall 没复制出来或把盘写满");
                 if (!okc) fails++;
             }
 
@@ -477,6 +488,20 @@ int fs_vfs_selftest(char phase)
                         okn ? "三层目录与文件内容均保留" : "嵌套目录/内容不对");
                 if (!okn) fails++;
             }
+
+            /* S1: 终端行编辑器。走和键盘相同的 edit 状态机，写两行后 .save。 */
+            {
+                extern int term_selftest_edit(const char *);
+                int eok = (term_selftest_edit("/s1_edit.txt") == 0);
+                int rd = ide_ext2_read_file("/", "s1_edit.txt", rb, 64);
+                const char *want = "HEPU_S1_EDIT\nSECOND_LINE\n";
+                int wl = 0; while (want[wl]) wl++;
+                if (eok && (rd != wl)) eok = 0;
+                if (eok) for (int i = 0; i < wl; i++) if (rb[i] != want[i]) { eok = 0; break; }
+                vs_line(port, "term.edit", 18, eok,
+                        eok ? "终端编辑两行并保存落盘" : "edit 没落盘/内容不对");
+                if (!eok) fails++;
+            }
         }
 
         serial_puts(port, "[VFS-TEST] write phase done, fails=");
@@ -493,7 +518,7 @@ int fs_vfs_selftest(char phase)
 
         extern int ide_ext2_read_file(const char *, const char *, char *, int);
         extern int ext2_readdir_ino(uint32_t, vfs_dirent_t *, int);
-        vs_total = 8;   /* 读阶段：原 6 项 + term.cat + 嵌套 cpall */
+        vs_total = 9;   /* 读阶段：原 6 项 + term.cat + 嵌套 cpall + S1 编辑 */
         char buf[32];
 
         int rd = ide_ext2_read_file("/", "p2test.txt", buf, 16);
@@ -610,6 +635,20 @@ int fs_vfs_selftest(char phase)
             vs_line(port, "disk.cpall_nested", 8, okn,
                     okn ? "三层目录与文件跨启动保留" : "嵌套树没落盘");
             if (!okn) fails++;
+        }
+
+        /* S1: 终端编辑器保存的文件跨重启仍在。 */
+        {
+            int fd = vfs_open("/s1_edit.txt", VFS_O_RDONLY);
+            char sb[64]; int rn = -1;
+            const char *want = "HEPU_S1_EDIT\nSECOND_LINE\n";
+            int wl = 0; while (want[wl]) wl++;
+            if (fd >= 0) { rn = vfs_read(fd, sb, 63); vfs_close(fd); }
+            int oks = (rn == wl);
+            if (oks) for (int i = 0; i < wl; i++) if (sb[i] != want[i]) { oks = 0; break; }
+            vs_line(port, "disk.s1_edit", 9, oks,
+                    oks ? "终端编辑内容跨启动保留" : "S1 编辑文件没落盘");
+            if (!oks) fails++;
         }
 
         serial_puts(port, "[VFS-TEST] read phase done, fails=");

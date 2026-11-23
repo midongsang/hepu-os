@@ -346,6 +346,9 @@ void wm_main_loop(void)
                         wm_event_t evt = { WM_EVENT_KEY_DOWN, 0, 0, 0, kc, 0 };
                         fw->event_cb(fw, &evt);
                     } else wm_activate_focus();
+                } else if (kc == (char)0x93) {   /* F2: 打开终端 */
+                    extern void on_launch_terminal(wm_window_t *, wm_widget_t *);
+                    on_launch_terminal(NULL, NULL);
                 } else if (kc == 'x' || kc == 'X') {
                     wm_window_t *top = NULL;
                     for (int i = 0; i < WM_MAX_WINDOWS; i++) {
