@@ -65,6 +65,21 @@ deleted/unused inode、filetype 与位图差异。已排除数据块覆盖 inode
 `ide_ext2_writefile`/inode 表脏页落盘路径，待单独定位。详见
 `docs/design/EXT2_METADATA_GUARD.md`。
 
+## 0.4 执行记录（2026-11-23，P1 收口）
+
+P1 三项验收证据已齐备：
+
+- **掉电 5 次**：`tools/powerloss_5x.sh` 连续 5 次 `cache=unsafe` 写入中 `kill -9`；
+  5/5 `fsck` 可修、0 处修不回，`pl.dat` 全部保留；第 2–5 次只剩块位图/空闲计数差异。
+- **`fs mount -f`**：phase `f` 改走真实 `cmd_fs("mount -f")` 两次，
+  `tools/mount_full_test.sh` 实测 `children=1/8/8`、`MOUNT-FULL: PASS`。
+- **cpall 嵌套**：写阶段 17/17、读阶段 8/8 PASS；
+  新增 `shell.cpall_nested` 与 `disk.cpall_nested`，覆盖三层目录跨启动。
+- **门禁**：`GATE: PASS`，32/64 构建 0 error，VFS 写 17/17、读 8/8，kunit 连续 3 次 ALL PASS。
+
+详见 `docs/design/P1_STORAGE_RELIABILITY.md`。`/data/clock/alarms.txt` 的 inode 32
+记账问题不在本轮 5 次样本中复现，保留为已知债。
+
 ## 1. “有生产力”的验收场景（先定义，再排期）
 
 不用百分比描述进度，用五个可复现场景：

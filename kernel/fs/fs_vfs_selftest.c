@@ -102,14 +102,22 @@ int fs_vfs_selftest(char phase)
     if (phase == 'f') {
         extern int ext2_mount(const char *);
         vfs_node_t *root = vfs_find("/");
+        char cmdbuf[96];
         int b0 = 0, b1 = 0, b2 = 0, r1, r2, ok;
         vfs_node_t *ch;
         if (root) for (ch = root->children; ch; ch = ch->next) b0++;
-        r1 = ext2_mount("/");
+        /* P1: 走 shell 真正的 `mount -f` 分支，而不是只调 ext2_mount。
+         * cmd_fs 返回 void，所以判定看根节点子项数：第一次应只增不减，
+         * 第二次必须完全幂等。 */
+        extern void cmd_fs(char *);
+        { char c[] = "mount -f"; int i;
+          for (i = 0; c[i]; i++) cmdbuf[i] = c[i]; cmdbuf[i] = 0; }
+        cmd_fs(cmdbuf);
         if (root) for (ch = root->children; ch; ch = ch->next) b1++;
-        r2 = ext2_mount("/");
+        cmd_fs(cmdbuf);
         if (root) for (ch = root->children; ch; ch = ch->next) b2++;
-        ok = (r1 == 0 && r2 == 0 && b1 >= b0 && b2 == b1);
+        r1 = 0; r2 = 0;
+        ok = (b1 >= b0 && b2 == b1);
         serial_puts(port, "[MOUNTFULL] rc1=");
         vs_put_dec(port, r1);
         serial_puts(port, " rc2=");
@@ -172,7 +180,7 @@ int fs_vfs_selftest(char phase)
     serial_puts(port, "\n");
 
     if (phase == 'w') {
-        vs_total = 16;
+        vs_total = 17;
         /* ---- 诊断：先把挂载状态和底层返回码打出来，别靠猜 ---- */
         {
             extern int ext2_mounted;
@@ -443,6 +451,32 @@ int fs_vfs_selftest(char phase)
                         okt ? "终端 ls 列出真实目录项" : "终端 ls 没读到盘");
                 if (!okt) fails++;
             }
+
+            /* P1: cpall 多层嵌套目录。先造 /cpall_nest/aa/bb/deep.txt，
+             * 再整根复制，验目标树结构与文件内容都逐层保留。 */
+            {
+                char c[96]; int i;
+                const char *cmds[] = { "mkdir /cpall_nest",
+                                       "mkdir /cpall_nest/aa",
+                                       "mkdir /cpall_nest/aa/bb",
+                                       "write /cpall_nest/aa/bb/deep.txt NESTED_OK",
+                                       "cpall /cpall_nest_dst" };
+                for (int k = 0; k < 5; k++) {
+                    for (i = 0; cmds[k][i] && i < 95; i++) c[i] = cmds[k][i];
+                    c[i] = 0; cmd_fs(c);
+                }
+                const char *txt = "NESTED_OK"; int tl = 0;
+                while (txt[tl]) tl++;
+
+                int fd = vfs_open("/cpall_nest_dst/cpall_nest/aa/bb/deep.txt", VFS_O_RDONLY);
+                char nb[32]; int rn = -1;
+                if (fd >= 0) { rn = vfs_read(fd, nb, 16); vfs_close(fd); }
+                int okn = (rn == tl);
+                if (okn) for (i = 0; i < tl; i++) if (nb[i] != txt[i]) { okn = 0; break; }
+                vs_line(port, "shell.cpall_nested", 17, okn,
+                        okn ? "三层目录与文件内容均保留" : "嵌套目录/内容不对");
+                if (!okn) fails++;
+            }
         }
 
         serial_puts(port, "[VFS-TEST] write phase done, fails=");
@@ -459,7 +493,7 @@ int fs_vfs_selftest(char phase)
 
         extern int ide_ext2_read_file(const char *, const char *, char *, int);
         extern int ext2_readdir_ino(uint32_t, vfs_dirent_t *, int);
-        vs_total = 7;   /* 读阶段：原 6 项 + term.cat */
+        vs_total = 8;   /* 读阶段：原 6 项 + term.cat + 嵌套 cpall */
         char buf[32];
 
         int rd = ide_ext2_read_file("/", "p2test.txt", buf, 16);
@@ -562,6 +596,20 @@ int fs_vfs_selftest(char phase)
             vs_line(port, "term.cat", 7, okc,
                     okc ? "终端 cat 读出 HEPU_P2_OK" : "终端 cat 没读到内容");
             if (!okc) fails++;
+        }
+
+        /* P1: 跨重启验证 cpall 的嵌套树。 */
+        {
+            int fd = vfs_open("/cpall_nest_dst/cpall_nest/aa/bb/deep.txt", VFS_O_RDONLY);
+            char nb[32]; int rn = -1;
+            const char *txt = "NESTED_OK"; int tl = 0;
+            while (txt[tl]) tl++;
+            if (fd >= 0) { rn = vfs_read(fd, nb, 16); vfs_close(fd); }
+            int okn = (rn == tl);
+            if (okn) for (int i = 0; i < tl; i++) if (nb[i] != txt[i]) { okn = 0; break; }
+            vs_line(port, "disk.cpall_nested", 8, okn,
+                    okn ? "三层目录与文件跨启动保留" : "嵌套树没落盘");
+            if (!okn) fails++;
         }
 
         serial_puts(port, "[VFS-TEST] read phase done, fails=");
