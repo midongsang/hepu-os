@@ -18,6 +18,7 @@ extern void  gfx64_fill_rect(int x, int y, int w, int h, uint32_t color);
 extern void  font64_draw_string(void *fb, int sw, int sh, int x, int y,
                                 const char *s, uint32_t color, int size);
 extern void  hpdesk_mark_dirty(void);
+extern void  gfx64_clip_set(int x, int y, int w, int h);
 
 #define S1_LINES 18
 #define S1_LINE_MAX 72
@@ -53,14 +54,24 @@ static void s1_put(const char *s)
     hpdesk_mark_dirty();
 }
 
+static void s1_fill(uint32_t *fb, int sw, int sh, int x, int y, int w, int h, uint32_t c)
+{
+    int x0 = x < 0 ? 0 : x, y0 = y < 0 ? 0 : y;
+    int x1 = x + w > sw ? sw : x + w, y1 = y + h > sh ? sh : y + h;
+    for (int yy = y0; yy < y1; yy++)
+        for (int xx = x0; xx < x1; xx++)
+            fb[(size_t)yy * sw + xx] = c | 0xFF000000u;
+}
+
 static void s1_render(hs_window_t *w)
 {
     void *fb = gfx64_get_framebuffer();
     int sw = g_shell.screen_width, sh = g_shell.screen_height;
+    gfx64_clip_set(w->x, w->y, w->width, w->height);
     int x = w->x + 8, y = w->y + 28, rh = 15;
     int rows = (w->height - 28 - 28) / rh;
     if (rows > S1_LINES) rows = S1_LINES;
-    gfx64_fill_rect(w->x + 3, w->y + 22, w->width - 6, w->height - 26, 0x000000);
+    s1_fill((uint32_t *)fb, sw, sh, w->x + 3, w->y + 22, w->width - 6, w->height - 26, 0x000000);
     int start = s1_line_count - rows;
     if (start < 0) start = 0;
     for (int r = 0; r < rows; r++) {
@@ -74,7 +85,7 @@ static void s1_render(hs_window_t *w)
     while (s1_input[n] && n < S1_INPUT_MAX) { prompt[n + 2] = s1_input[n]; n++; }
     prompt[n + 2] = 0;
     int iy = w->y + w->height - 24;
-    gfx64_fill_rect(w->x + 3, iy - 2, w->width - 6, 24, 0x0A0F0A);
+    s1_fill((uint32_t *)fb, sw, sh, w->x + 3, iy - 2, w->width - 6, 24, 0x0A0F0A);
     font64_draw_string(fb, sw, sh, x, iy, prompt, 0x66FF66, 12);
 }
 
@@ -309,9 +320,22 @@ static void s1_run_line(const char *line)
     b[2 + n] = 0; s1_put(b);
 }
 
+static int s1_pending_open = 0;
+extern int hpdesk_owner_guard(const char *what);
+
 void s1_terminal_create(void)
 {
-    if (s1_win && s1_win->visible) { s1_win->focus = 1; return; }
+    /* hs_window_create() 只允许桌面 owner 线程调用。F12 是在 shell 的
+     * keyboard_getchar 里先被看到的，那里直接建窗会被 owner guard 拒绝，
+     * 窗口永远不出现。shell 侧只登记请求，等 hpdesk_render 的 owner 帧
+     * 调 s1_terminal_poll 时再真正创建。 */
+    if (!hpdesk_owner_guard("s1-terminal")) {
+        s1_pending_open = 1;
+        hpdesk_mark_dirty();
+        return;
+    }
+    s1_pending_open = 0;
+    if (s1_win && s1_win->id >= 0 && s1_win->visible) { s1_win->focus = 1; return; }
     s1_win = hs_window_create(HS_WINDOW_FLOATING, "Terminal", -1, -1, 520, 340);
     if (s1_win) {
         s1_win->render = s1_render;
@@ -334,6 +358,7 @@ int s1_terminal_is_open(void)
 
 void s1_terminal_poll(void)
 {
+    if (s1_pending_open && hpdesk_owner_guard("s1-poll")) s1_terminal_create();
     /* V3.87-E8: IRQ1 顶半部只把扫描码塞进 raw_buf，扫描码→ASCII 在 softirq。
      * hpdesk 的渲染循环不经过 shell 的 keyboard_getchar，必须在这里主动跑
      * 底半部，否则 VNC/真键盘的按键永远停在 raw_buf 里，界面像“没收到键”。 */

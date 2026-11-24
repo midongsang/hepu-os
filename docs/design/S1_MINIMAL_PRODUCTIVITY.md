@@ -1,7 +1,7 @@
 # S1 最小生产力：32 位图形终端写读闭环
 
 日期：2026-11-24
-状态：S1 端到端场景通过，留证；动态键盘行的屏幕刷新仍有一个独立渲染缺口。
+状态：S1 端到端场景通过；真实键盘输入、动态上屏、重启后读回均已闭环并存证。
 
 ## 1. 结论
 
@@ -117,6 +117,21 @@ Hello from Linux ELF on HEPU!
 `cmd_run_auto` → `hepu_exec` 路径；程序确实打印了自己的欢迎串，不是
 shell 内置命令的假输出。
 
+### 2.5 真实键盘输入与动态上屏（闭环）
+
+在 F12 打开的终端里用真实键盘依次输入 `help`、`edit /s1dyn.txt`、
+`HEPU_DYNAMIC_OK`、`.save`、`.quit`、`cat /s1dyn.txt`，屏幕逐行刷新，
+不需要 autostart，也不是预渲染。
+
+截图：`docs/assets/s1/s1-terminal-dynamic.png`
+
+重启同一张盘后，F12 打开终端输入 `cat /s1dyn.txt`，内容仍在：
+
+截图：`docs/assets/s1/s1-terminal-reboot.png`
+
+这一步同时验证了三件事：键盘事件进入终端状态机、每次命令后屏幕按需
+重绘、`.save` 落盘的内容跨启动保留。
+
 ## 3. VFS 自测
 
 ```text
@@ -129,7 +144,7 @@ shell 内置命令的假输出。
 测试盘 `debugfs` 显示 `Free blocks: 52901`，没有出现 S1 排查阶段的
 “空闲块被吃光”。
 
-## 4. 本轮同时修掉的两个真实缺陷
+## 4. 本轮同时修掉的三个真实缺陷
 
 ### 4.1 `ext2_alloc_block()` 元数据保护记账顺序
 
@@ -148,25 +163,37 @@ shell 内置命令的假输出。
 `vfs_write` 全部 ENOSPC。修复：`shell_cmd_fs.c` 的 `cpall` 跳过这四个
 非磁盘目录。
 
-这两项修复后，S1 编辑器才从“创建成功、写入 0 字节”变成真正落盘。
+### 4.3 32 位图形终端动态内容被绘制全局裁掉
+
+32 位 hpdesk 启动后，`gfx_width/gfx_height/gfx_bpp/gfx_pitch` 仍是 VGA
+文本模式的 `320x200@8bpp`，而桌面实际跑在 `1920x1080@32bpp`。
+`gfx64_compat` 的 `fill_rect` / `put_pixel` 都按这组旧全局做边界检查，
+于是终端窗口的整块黑底和后续新行全部落在 320x200 之外，被静默裁掉；
+窗口对象、z-order、render 回调、裁剪矩形本身都正常，所以看起来像
+“渲染了但屏幕没变化”。
+
+修复：`hpdesk_render()` 每帧把绘制全局校准到 `g_shell.screen_width/
+screen_height`，并置 `gfx_bpp=32`、`gfx_pitch=width*4`。校准后同一份
+`fill_rect` 与文字绘制才开始真正落在 1920x1080 的后台缓冲里。
+
+这三项修复后，S1 编辑器才从“创建成功、写入 0 字节”变成真正落盘，
+图形终端也才从“只有 autostart 首帧”变成真实键盘逐行上屏。
 
 ## 5. 代码位置
 
 - `kernel/arch/x86/s1_terminal32.c`：32 位 hpdesk 终端、行编辑器、文件工具
 - `kernel/arch/x86/hpdesk32_deps.c`：`/etc/hepushell/autostart.cmd` 转发到终端
 - `kernel/arch/x86/keyboard.c`：键盘优先交给图形终端；F12 打开终端
-- `kernel/arch/x86_64/hpdesk.c`：32 位渲染循环内驱动 `s1_terminal_poll`
+- `kernel/arch/x86_64/hpdesk.c`：32 位渲染循环内驱动 `s1_terminal_poll`；
+  每帧校准 `gfx_width/height/bpp/pitch` 到桌面真实分辨率
 - `kernel/fs/ext2_alloc.c`：元数据块保护顺序修复
 - `kernel/sched/shell_cmd_fs.c`：`cpall` 跳过伪文件系统
 - `kernel/fs/fs_vfs_selftest.c`：`term.edit`、`disk.s1_edit` 与 cpall 空闲块断言
 
 ## 6. 已知限制
 
-- **动态键盘行的屏幕刷新未闭环**：真实键盘字符已经进入终端行缓冲并
-  执行命令（串口能看到 `[RUN]` 和程序输出），但 32 位 hpdesk 的按需
-  合成仍偶发停留在上一帧，终端里新行不一定立刻画出来。autostart
-  首次绘制与重启后的 `cat` 都能正确显示，说明终端绘制和 VFS 路径本身
-  没问题，缺口在“输入后请求重绘 → 窗口合成 → present”的链路。
+- 动态键盘行的屏幕刷新已闭环，根因与修复见 4.3；`s1-terminal-dynamic.png`
+  与 `s1-terminal-reboot.png` 是本次修复后的真实键盘取证。
 - 32 位终端 `run` 的用户程序输出走串口/VGA，不回显到终端窗口；这是
   现有用户态程序的输出通道决定的。
 - `/data/clock/alarms.txt` inode 32 的 deleted/unused 记账问题仍未定位，

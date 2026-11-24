@@ -3060,6 +3060,12 @@ extern uint64_t gfx64_prof_present;
 
 static void *hs_window_surface_ensure(hs_window_t *w)
 {
+#if defined(__i386__)
+    /* 32 位 gfx64_target_begin 是空实现: 窗口 surface 里的内容其实画到了
+     * 主 framebuffer, 随后 hs_blend_image 又把空 surface 贴回去, 终端窗口
+     * 因此永远不可见。32 位没有离屏目标, 终端直接画主缓冲。 */
+    if (strcmp(w->title, "Terminal") == 0) return 0;
+#endif
     int ww = w->width, hh = w->height;
     if (ww <= 0 || hh <= 0) return 0;
     if (w->surface && w->surface_w == ww && w->surface_h == hh) return w->surface;
@@ -7453,9 +7459,24 @@ static void hpdesk_render_inner(void)
 void hpdesk_render(void)
 {
 #ifndef __x86_64__
+    /* 32 位曾出现 gfx_width/height/bpp 还停在 320x200@8bpp, 而桌面实际
+     * 是 1920x1080@32bpp 的情况。gfx64_compat 的 fill/pixel 都按这组旧
+     * 全局做边界检查, 结果窗口内容(尤其图形终端的整块背景)全被裁掉,
+     * 屏幕只剩启动首帧。每帧把绘制全局校准到桌面真实尺寸。 */
+    { extern int gfx_width, gfx_height, gfx_bpp, gfx_pitch;
+      if (gfx_width != g_shell.screen_width || gfx_height != g_shell.screen_height) {
+          gfx_width = g_shell.screen_width;
+          gfx_height = g_shell.screen_height;
+          gfx_bpp = 32;
+          gfx_pitch = gfx_width * 4;
+      } }
     /* 32 位 hpdesk 没有 hsinput 统一输入层，键盘由 legacy IRQ1 环形缓冲提供。
      * 每帧取一次，F12 开终端、普通字符进终端输入行。 */
     { extern void s1_terminal_poll(void); s1_terminal_poll(); }
+    /* 32 位没有 desktop64 主循环替我们消费跨线程标脏请求: shell 里建窗/输入
+     * 调 hpdesk_mark_dirty() 只会置 g_desk_req_dirty(request), 不落到
+     * g_content_dirty; 不在这里 drain, 新窗口要等 300 帧兜底才可能上屏。 */
+    hpdesk_deskstate_drain();
 #endif
     /* V0.62: 屏保 —— 空闲超过设定分钟数则整屏黑, 任意输入唤醒 */
     if (g_screensaver_min > 0) {

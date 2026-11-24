@@ -90,23 +90,30 @@ S1 的图形终端写读闭环已经在 32 位 hpdesk 上跑通并留证：
   截图 `docs/assets/s1/s1-restart.png`。
 - **基础文件工具**：`ls/cat/cp/mv/rm/mkdir` 全部走 32 位 VFS；
   截图 `docs/assets/s1/s1-file-tools.png`。
+- **真实键盘输入**：F12 打开终端后逐行输入 `help`、`edit /s1dyn.txt`、
+  `HEPU_DYNAMIC_OK`、`.save`、`.quit`、`cat`，屏幕逐行刷新；
+  截图 `docs/assets/s1/s1-terminal-dynamic.png`。
+- **真实键盘写入后重启**：同一张盘重启，F12 + `cat /s1dyn.txt` 仍显示
+  `HEPU_DYNAMIC_OK`；截图 `docs/assets/s1/s1-terminal-reboot.png`。
 - **静态程序**：图形终端里 `run linuxhello`，串口输出
   `Hello from Linux ELF on HEPU!`，见 `docs/assets/s1/s1-run-linuxhello.log`。
 - **VFS 自测**：写阶段 18/18 PASS（含 `term.edit`）、读阶段 9/9 PASS
   （含 `disk.s1_edit`）。
 
-本轮同时修复两个真实缺陷：
+本轮同时修复三个真实缺陷：
 
 - `ext2_alloc_block()` 先置位/减计数、后判元数据块，命中元数据时不回滚，
   会把空闲块计数吃光；改为先判元数据再置位。
 - `cpall` 递归复制 `/proc`、`/dev`、`/sys`、`/tmp` 伪文件系统，产生约
   5 万次块分配写满 58 MB 盘；改为跳过这四个目录。
+- 32 位 hpdesk 的 `gfx_width/height/bpp/pitch` 仍停在 320x200@8bpp，
+  `gfx64_compat` 的填充/像素接口按旧全局裁剪，终端动态内容全部落在
+  屏幕外；改为每帧校准到桌面真实分辨率。
 
 详见 `docs/design/S1_MINIMAL_PRODUCTIVITY.md`。
 
-仍未闭环：真实键盘字符已进入终端行缓冲并执行命令，但 32 位 hpdesk
-按需合成对新行的屏幕刷新仍偶发停在上一帧，缺口在“标脏→合成→present”
-链路；autostart 首次绘制与重启 `cat` 显示正常。
+S1 已闭环：真实键盘输入、动态逐行上屏、`.save` 落盘与重启后读回均
+通过；autostart 首帧、文件工具与静态程序证据保持有效。
 
 ## 1. “有生产力”的验收场景（先定义，再排期）
 
