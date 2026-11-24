@@ -772,6 +772,16 @@ void x86_64_kernel_main(void)
 
 
 
+    /* P4/S4: 64 位文件系统一致性自检（非根目录 getdents / 写回读）。
+     * 失败只打印 FAIL，不阻断启动；回归脚本以串口断言判定。 */
+    {
+        extern int fs_s4_selftest(void);
+        int s4rc = fs_s4_selftest();
+        vga_puts("[S4] result=");
+        vga_put_hex((uint64_t)(s4rc == 0 ? 1 : 0));
+        vga_puts("\n");
+    }
+
     /* V0.13.51: 内存压力管理初始化 + 启动内存状态 */
     {
         extern void mem_pressure_collect(void *st);
@@ -900,6 +910,19 @@ void x86_64_kernel_main(void)
     /* 初始化用户态进程 */
     vga_puts("[INIT] Initializing 64-bit user process support...\n");
     user_process_init();
+
+#if defined(HEPU_S4_SELFTEST) && HEPU_S4_SELFTEST
+    /* P4/S4: 用户态 getdents 非根目录（open("/s4dir") -> getdents64）。
+     * 只在回归构建打开；发布内核不拉起任何用户自检程序。 */
+    {
+        extern int user_process_exec(const char *path);
+        vga_puts("[S4U] Running /bin/s4getdents.elf...\n");
+        if (user_process_exec("/bin/s4getdents.elf") < 0) {
+            vga_puts("[S4U] s4getdents.elf not available (optional)\n");
+        }
+        vga_puts("[S4U] returned\n");
+    }
+#endif
     /* 内置 hello 自测以内核函数为入口、需旧模式映射栈到 0x6ff00000；在隔离模式下会把
      * PDPT[1] 泄漏进内核 PDPT，导致后续 ELF 进程的隔离判定误判为"与 RAM 恒等映射冲突"。
      * 故隔离模式下不创建内置 hello（它本就不适用隔离模型）。 */

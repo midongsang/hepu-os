@@ -13,6 +13,8 @@
 #include "../../shared/fs/ext2_shared.h"
 /* 共享ext2算法（统一源码树P0-2） */
 #include "../../shared/fs/ext2_algo.h"
+/* P4: 目录项遍历与 32 位共用 */
+#include "../../shared/fs/ext2_dir_algo.h"
 
 /* 外部函数 */
 extern void vga_puts(const char *str);
@@ -2070,6 +2072,48 @@ int ext2_64_list_dir_entries(const char *path, char names[][256], uint8_t *types
 }
 
 /* 带大小的列目录接口 (文件管理器): sizes 可为 NULL, 等价于旧接口 */
+typedef struct {
+    ext2_inode_t *dir;
+    char (*names)[256];
+    uint8_t *types;
+    uint32_t *sizes;
+    int n;
+    int max;
+} ext2_64_list_ctx_t;
+
+static int ext2_64_list_read_block(void *vctx, uint32_t block_index, uint8_t *buf)
+{
+    ext2_64_list_ctx_t *ctx = (ext2_64_list_ctx_t *)vctx;
+    return ext2_read_data_block(ctx->dir, block_index, buf);
+}
+
+static int ext2_64_list_emit(void *vctx, const ext2_dir_entry_t *entry, uint32_t abs_off)
+{
+    ext2_64_list_ctx_t *ctx = (ext2_64_list_ctx_t *)vctx;
+    int nlen = entry->name_len;
+
+    (void)abs_off;
+    if (ctx->n >= ctx->max) return 1;
+    if (nlen > 255) nlen = 255;
+    for (int i = 0; i < nlen; i++) ctx->names[ctx->n][i] = entry->name[i];
+    ctx->names[ctx->n][nlen] = '\0';
+
+    if (ctx->sizes) {
+        ext2_inode_t fi;
+        if (ext2_read_inode(entry->inode, &fi) == 0) {
+            ctx->types[ctx->n] = ((fi.i_mode & 0xF000) == 0x4000) ? 1 : 0;
+            ctx->sizes[ctx->n] = ctx->types[ctx->n] ? 0 : fi.i_size;
+        } else {
+            ctx->types[ctx->n] = (entry->file_type == 2) ? 1 : 0;
+            ctx->sizes[ctx->n] = 0;
+        }
+    } else {
+        ctx->types[ctx->n] = (entry->file_type == 2) ? 1 : 0;
+    }
+    ctx->n++;
+    return 0;
+}
+
 int ext2_64_list_dir_entries_ex(const char *path, char names[][256], uint8_t *types,
                                 uint32_t *sizes, int max_entries)
 {
@@ -2082,45 +2126,19 @@ int ext2_64_list_dir_entries_ex(const char *path, char names[][256], uint8_t *ty
     if (!(inode.i_mode & 0x4000)) return -1;  /* S_IFDIR */
 
     uint8_t dir_buf[EXT2_MAX_BLOCK_SIZE];
-    uint32_t blocks = (inode.i_size + ext2_block_size - 1) / ext2_block_size;
-    int n = 0;
-    for (uint32_t b = 0; b < blocks && n < max_entries; b++) {
-        /* 直接块可直接查 i_block; 间接块由 ext2_read_data_block 解析 */
-        if (b < 12 && inode.i_block[b] == 0) continue;
-        if (ext2_read_data_block(&inode, b, dir_buf) != 0) continue;
-        uint32_t offset = 0;
-        uint32_t guard = 0;
-        while (offset < ext2_block_size && n < max_entries && guard++ < 512) {
-            ext2_dir_entry_t *entry = (ext2_dir_entry_t *)(dir_buf + offset);
-            uint32_t rec = entry->rec_len;
-            if (rec < 8 || (rec & 3) || rec > ext2_block_size - offset) break;
-            if ((uint32_t)entry->name_len + 8 > rec) break;
-            if (entry->inode != 0 && entry->name_len > 0) {
-                int nlen = entry->name_len;
-                if (nlen > 255) nlen = 255;
-                if (!(nlen == 1 && entry->name[0] == '.') &&
-                    !(nlen == 2 && entry->name[0] == '.' && entry->name[1] == '.')) {
-                    for (int i = 0; i < nlen; i++) names[n][i] = entry->name[i];
-                    names[n][nlen] = '\0';
-                    if (sizes) {
-                        ext2_inode_t fi;
-                        if (ext2_read_inode(entry->inode, &fi) == 0) {
-                            types[n] = ((fi.i_mode & 0xF000) == 0x4000) ? 1 : 0;
-                            sizes[n] = types[n] ? 0 : fi.i_size;
-                        } else {
-                            types[n] = (entry->file_type == 2) ? 1 : 0;
-                            sizes[n] = 0;
-                        }
-                    } else {
-                        types[n] = (entry->file_type == 2) ? 1 : 0;
-                    }
-                    n++;
-                }
-            }
-            offset += rec;
-        }
-    }
-    return n;
+    ext2_64_list_ctx_t ctx;
+    ctx.dir = &inode;
+    ctx.names = names;
+    ctx.types = types;
+    ctx.sizes = sizes;
+    ctx.n = 0;
+    ctx.max = max_entries;
+
+    int r = ext2_dir_walk(&inode, ext2_block_size, dir_buf,
+                          ext2_64_list_read_block, &ctx,
+                          ext2_64_list_emit, &ctx);
+    if (r < 0) return -1;
+    return ctx.n;
 }
 
 /* 创建文件（公开接口） */

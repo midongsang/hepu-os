@@ -165,6 +165,29 @@ P3 的代码项已落地，`tools/gate.sh` 为 `GATE: PASS`：
 详见 `docs/design/P3_SECURITY_CLOSURE.md`。P3 仍是“最小闭环”：账户不落盘、
 无登录界面、chmod/chown 未写回 ext2 inode，作为后续 P4/账户持久化的输入。
 
+## 0.8 执行记录（2026-11-24，P4 64 位对齐）
+
+P4 按方案 A 落地：抽取 32/64 共享的文件系统契约与底层算法，不物理合并
+两套 VFS/ext2 实现。
+
+- **共享层**：新增 `kernel/shared/fs/` 下的 `fs_errno.h`、`fs_path.h/.c`、
+  `ext2_dir_algo.h/.c`。`VFS_*` 改为共享 `FS_*` 别名；32/64 的路径拆分、
+  挂载点前缀匹配、ext2 目录遍历、ext2 盘上结构都走同一份定义。
+- **64 位 `getdents`**：从固定根目录改为 `fd -> 路径快照 -> vfs64_lookup ->
+  vfs64_iterate -> dirent64`，支持任意目录 fd；syscall 层只保留用户指针校验。
+- **64 位 S4 自检**：挂载后创建 `/s4dir`、写读文件、用目录 fd 枚举并断言
+  目录项存在；用户态 `/bin/s4getdents.elf` 真实走 `SYS_LNX64_GETDENTS`。
+- **64 位镜像级回归**：新增 `tools/regress64.sh`，构建 `S4_SELFTEST=1` 内核、
+  生成单镜像、QEMU 启动并做串口断言，通过输出 `REGRESS64: PASS`。
+
+实测：`tools/gate.sh` → `GATE: PASS`（32/64 构建 0 error、VFS 写读两阶段
+PASS、kunit 连续 3 次 ALL PASS）；`tools/regress64.sh` → `REGRESS64: PASS`
+（`[S4] result=0x1`、`[S4U] getdents-nonroot PASS`）。
+
+过程中修掉两个真实缺陷：根挂载点 `/` 的前缀匹配漏掉子路径；共享目录 walker
+把读块回调和条目回调的上下文当成同一个指针，导致 32 位根目录枚举误判。
+详见 `docs/design/P4_SHARED_FS.md`。
+
 ## 1. “有生产力”的验收场景（先定义，再排期）
 
 不用百分比描述进度，用五个可复现场景：
@@ -220,14 +243,14 @@ S1+S2+S5 达成之前，不把系统称为“可日常使用”。
 
 验收：S3 场景通过；错误码用例表全过。
 
-### P4 64 位对齐（需要先拍板，见 D2）
+### P4 64 位对齐（已完成，2026-11-24）
 
 任务：
-1. 二选一：抽取 32/64 共享的 VFS/ext2 层（推荐），或明确“双实现”并各自维护
-2. 64 位镜像级回归脚本（`make_single_img64.sh` + 串口断言）
-3. 64 位 `getdents` 支持非根目录
+1. ✅ 抽取 32/64 共享的 VFS/ext2 契约与基础算法（方案 A；不合并锁/缓存/挂载表）
+2. ✅ 64 位镜像级回归脚本 `tools/regress64.sh`（`make_single_img64.sh` + 串口断言）
+3. ✅ 64 位 `getdents` 支持非根目录
 
-验收：S4 场景通过。
+验收：✅ S4 场景通过；详见 `docs/design/P4_SHARED_FS.md`。
 
 ### P5 生产力闭环
 

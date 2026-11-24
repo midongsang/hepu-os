@@ -40,6 +40,7 @@ TARGETS := $(BUILD_DIR)/hello.elf $(BUILD_DIR)/shell.elf $(BUILD_DIR)/forktest.e
            $(BUILD_DIR)/rwprobe.elf \
            $(BUILD_DIR)/epolltest.elf \
            $(BUILD_DIR)/vfsprobe.elf \
+           $(BUILD_DIR)/s4getdents.elf \
            $(BUILD_DIR)/fbsyn.elf \
            $(BUILD_DIR)/install64.elf
 
@@ -212,6 +213,13 @@ $(BUILD_DIR)/epolltest.elf: $(BUILD_DIR)/epolltest.o $(LDSCRIPT)
 $(BUILD_DIR)/vfsprobe.o: $(USER_DIR)apps/vfsprobe.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 $(BUILD_DIR)/vfsprobe.elf: $(BUILD_DIR)/vfsprobe.o $(LDSCRIPT)
+	$(LD) $(LDFLAGS) -T $(LDSCRIPT) -o $@ $<
+	@echo "Built user ELF: $@"
+
+# s4getdents：P4/S4 非根目录 getdents 用户态探针
+$(BUILD_DIR)/s4getdents.o: $(USER_DIR)apps/s4getdents.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD_DIR)/s4getdents.elf: $(BUILD_DIR)/s4getdents.o $(LDSCRIPT)
 	$(LD) $(LDFLAGS) -T $(LDSCRIPT) -o $@ $<
 	@echo "Built user ELF: $@"
 

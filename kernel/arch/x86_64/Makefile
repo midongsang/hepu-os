@@ -31,6 +31,7 @@ C_SOURCES = \
     $(ARCH_DIR)/syscall64_full.c \
     $(ARCH_DIR)/compat_gate.c \
     $(ARCH_DIR)/fs_dir_sys.c \
+    $(ARCH_DIR)/fs_s4_selftest.c \
     $(ARCH_DIR)/fs_stat_sys.c \
     $(ARCH_DIR)/fs_open_sys.c \
     $(ARCH_DIR)/fs_mm_sys.c \
@@ -101,6 +102,8 @@ C_SOURCES = \
     $(KERNEL_DIR)/shared/drivers/driver_framework.c \
     $(KERNEL_DIR)/shared/gfx/gfx_algo.c \
     $(KERNEL_DIR)/shared/fs/ext2_algo.c \
+    $(KERNEL_DIR)/shared/fs/ext2_dir_algo.c \
+    $(KERNEL_DIR)/shared/fs/fs_path.c \
     $(KERNEL_DIR)/shared/lib/lib_shared.c \
     $(KERNEL_DIR)/shared/debug/debug_shared.c \
     $(KERNEL_DIR)/shared/desktop/desk_registry.c \
@@ -239,6 +242,12 @@ CFLAGS = \
 # PIEPROBE/FBSYN/FBDESC/STATP 等电池输出。
 ifeq ($(BOOT_SELFTEST),1)
 CFLAGS += -DHEPU_BOOT_SELFTEST
+endif
+
+# P4/S4：只运行用户态 getdents 非根目录探针（不拉起整套启动自检电池）。
+# 64 位镜像级回归 tools/regress64.sh 用 S4_SELFTEST=1 构建。
+ifeq ($(S4_SELFTEST),1)
+CFLAGS += -DHEPU_S4_SELFTEST
 endif
 
 # ATA 高 LBA 写读回环自检（desktop64.c 内 #ifdef HEPU_ATA_HILBA_TEST）。

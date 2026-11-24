@@ -10,6 +10,7 @@
 #include "string.h"
 #include "kheap.h"
 #include "ext2.h"   /* 懒加载要用 ext2_inode_t / ext2_lookup */
+#include "../shared/fs/fs_path.h"
 
 static vfs_node_t *vfs_root = NULL;
 /* 2026-11-21: 根节点不再从堆上分配。
@@ -658,19 +659,8 @@ int vfs_readdir(const char *path, vfs_dirent_t *buf, int max_entries)
 
 static void split_path(const char *path, char *parent, char *name)
 {
-    const char *last_slash = NULL;
-    for (const char *p = path; *p; p++) {
-        if (*p == '/') last_slash = p;
-    }
-    if (!last_slash) {
-        strcpy(parent, "/");
-        strcpy(name, path);
-        return;
-    }
-    int plen = last_slash - path;
-    if (plen == 0) strcpy(parent, "/");
-    else { strncpy(parent, path, plen); parent[plen] = '\0'; }
-    strcpy(name, last_slash + 1);
+    /* P4: 路径拆分规则与 64 位共用，避免两边各写一套边界处理。 */
+    fs_path_split(path, parent, VFS_MAX_PATH, name, VFS_MAX_NAME);
 }
 
 static int remove_child(vfs_node_t *parent, vfs_node_t *child)

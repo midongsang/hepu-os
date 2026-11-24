@@ -99,6 +99,13 @@ int64_t sys_unlink(const char *path);
 int64_t sys_mkdir(const char *path, int mode);
 int64_t sys_rmdir(const char *path);
 
+/* P4: getdents64 语义实现迁到 fs_dir_sys.c。
+ * fd → 路径由 fs_fd_get_path 取快照，枚举走 vfs64_iterate，因而支持任意目录，
+ * 不再固定根目录。fs_do_getdents_kernel 供内核自检直接写内核缓冲；
+ * fs_do_getdents 负责用户指针边界与 copy_to_user。 */
+int64_t fs_do_getdents(int fd, uint64_t dirp, int count);
+int fs_do_getdents_kernel(int fd, uint8_t *kbuf, int count);
+
 /* ---- 第 5 批: 文件读写的语义实现 (fs_rw_sys.c) ----
  *
  * 只处理"真文件"。两类东西故意不在这里:

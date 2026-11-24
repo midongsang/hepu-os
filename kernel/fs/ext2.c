@@ -11,6 +11,7 @@
 #include "mac.h"
 #include "process.h"
 #include "kheap.h"
+#include "../shared/fs/ext2_dir_algo.h"
 
 uint8_t *ext2_disk = NULL;
 uint32_t ext2_disk_size = 0;
@@ -262,44 +263,62 @@ vfs_file_ops_t ext2_file_ops = {   /* 非 static：vfs_open 建新节点时也�
 
 /* 2026-11-19: 真正的 readdir —— 挂载时只填充了根目录一层，子目录的
  * children 是空的，所以 ls /bin 这类看不到内容。这里按 inode 号直接读
- * 目录块，跳过 . 和 ..，填跨后端统一的 vfs_dirent_t。 */
+ * 目录块，跳过 . 和 ..，填跨后端统一的 vfs_dirent_t。
+ * P4: 目录项边界/对齐/'.'/'..' 过滤统一走 shared/fs/ext2_dir_algo.c。 */
+typedef struct {
+    vfs_dirent_t *buf;
+    int count;
+    int max;
+} ext2_readdir_ctx_t;
+
+static int ext2_readdir_block(void *vctx, uint32_t block_index, uint8_t *out)
+{
+    ext2_inode_t *inode = (ext2_inode_t *)vctx;
+    uint32_t off = block_index * ext2_block_size;
+    uint32_t left;
+
+    if (off >= inode->i_size) return -1;
+    left = inode->i_size - off;
+    if (left > ext2_block_size) left = ext2_block_size;
+
+    memset(out, 0, ext2_block_size);
+    if (ext2_read_data(inode, off, out, left) <= 0) return -1;
+    return 0;
+}
+
+static int ext2_readdir_emit(void *vctx, const ext2_dir_entry_t *entry, uint32_t abs_off)
+{
+    ext2_readdir_ctx_t *ctx = (ext2_readdir_ctx_t *)vctx;
+    uint32_t k;
+
+    (void)abs_off;
+    if (ctx->count >= ctx->max) return 1;
+    for (k = 0; k < entry->name_len && k < VFS_MAX_NAME - 1; k++)
+        ctx->buf[ctx->count].name[k] = entry->name[k];
+    ctx->buf[ctx->count].name[k] = '\0';
+    ctx->buf[ctx->count].type =
+        (entry->file_type == EXT2_FT_DIR) ? VFS_DIRECTORY : VFS_REGULAR;
+    ctx->buf[ctx->count].size = 0;
+    ctx->count++;
+    return 0;
+}
+
 int ext2_readdir_ino(uint32_t ino, vfs_dirent_t *buf, int max_entries)
 {
     ext2_inode_t dir_inode;
     static uint8_t blk[4096];
-    uint32_t offset = 0;
-    int count = 0;
+    ext2_readdir_ctx_t ctx;
 
     if (!buf || max_entries <= 0) return -1;
     if (ext2_read_inode(ino, &dir_inode) != 0) return -1;
-    if ((dir_inode.i_mode & 0xF000) != 0x4000) return -1;
+    if ((dir_inode.i_mode & EXT2_S_IFMT) != EXT2_S_IFDIR) return -1;
 
-    while (offset < dir_inode.i_size && count < max_entries) {
-        uint32_t to_read = dir_inode.i_size - offset;
-        uint32_t n, pos = 0;
-        if (to_read > 4096) to_read = 4096;
-        n = (uint32_t)ext2_read_data(&dir_inode, offset, blk, (int)to_read);
-        if ((int32_t)n <= 0) break;
-        while (pos + 8 <= n && count < max_entries) {
-            ext2_dir_entry_t *e = (ext2_dir_entry_t *)(blk + pos);
-            if (e->rec_len < 8 || e->name_len >= VFS_MAX_NAME) break;
-            if (pos + e->rec_len > n) break;
-            /* inode==0 是被删除的目录项（unlink 只把 inode 清 0），必须跳过，
-             * 否则 ls 会把已经删掉的文件继续列出来。 */
-            if (e->inode != 0 && e->name_len > 0 && e->name[0] != '.') {
-                uint32_t k;
-                for (k = 0; k < e->name_len && k < VFS_MAX_NAME - 1; k++)
-                    buf[count].name[k] = e->name[k];
-                buf[count].name[k] = '\0';
-                buf[count].type = (e->file_type == EXT2_FT_DIR) ? VFS_DIRECTORY : VFS_REGULAR;
-                buf[count].size = 0;
-                count++;
-            }
-            pos += e->rec_len;
-        }
-        offset += n;
-    }
-    return count;
+    ctx.buf = buf;
+    ctx.count = 0;
+    ctx.max = max_entries;
+    return ext2_dir_walk(&dir_inode, ext2_block_size, blk,
+                         ext2_readdir_block, &dir_inode,
+                         ext2_readdir_emit, &ctx);
 }
 
 /* D1 挂载策略：正式路径是懒加载（vfs_find 按路径回盘解析）。

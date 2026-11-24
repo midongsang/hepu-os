@@ -18,6 +18,7 @@
 #include <stddef.h>
 #include <string.h>
 #include "vfs64.h"
+#include "../../shared/fs/fs_path.h"
 
 extern int  copy_from_user(void *kernel_dst, const void *user_src, size_t size);
 extern int  copy_to_user(void *user_dst, const void *kernel_src, size_t size);
@@ -34,14 +35,10 @@ static int  g_vfs64_ready  = 0;
 extern struct vfs_backend vfs64_be_ext2;
 extern struct vfs_backend vfs64_be_dev;
 
-/* prefix 与 path 匹配：前缀相等，且边界是串尾或 '/'。
- * 例："/dev" 匹配 "/dev" 与 "/dev/nullread"，不匹配 "/devx"。 */
+/* P4: 挂载点前缀边界规则与 32 位 VFS 共用 shared/fs/fs_path.c。 */
 static int prefix_match(const char *prefix, const char *path)
 {
-    size_t pl = strlen(prefix);
-    if (strncmp(prefix, path, pl) != 0) return 0;
-    if (path[pl] == '\0') return 1;
-    return path[pl] == '/';
+    return fs_path_prefix_match(prefix, path);
 }
 
 int vfs64_mount(const char *prefix, struct vfs_backend *be)

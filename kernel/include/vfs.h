@@ -10,20 +10,22 @@
 #define VFS_MAX_FDS 256     /* V6.77: 从128扩展到256, 与constants.h MAX_FDS对齐 */
 
 /* P3: VFS 错误码按 POSIX/Linux 数值返回（负值），不再一律 -1。
- * 这些是 VFS 对外契约的一部分；shell 只判 <0，不受影响。 */
-#define VFS_ENOENT     (-2)
-#define VFS_EIO        (-5)
-#define VFS_EBADF      (-9)
-#define VFS_ENOMEM     (-12)
-#define VFS_EBUSY      (-16)
-#define VFS_EACCES     (-13)
-#define VFS_EEXIST     (-17)
-#define VFS_ENOTDIR    (-20)
-#define VFS_EISDIR     (-21)
-#define VFS_EINVAL     (-22)
-#define VFS_EMFILE     (-24)
-#define VFS_ENOSPC     (-28)
-#define VFS_ENOTEMPTY  (-39)
+ * P4: 数值来源移到 shared/fs/fs_errno.h，32/64 共用同一份契约；
+ * 这里的 VFS_* 只是兼容旧调用点的别名。 */
+#include "../shared/fs/fs_errno.h"
+#define VFS_ENOENT     FS_ENOENT
+#define VFS_EIO        FS_EIO
+#define VFS_EBADF      FS_EBADF
+#define VFS_ENOMEM     FS_ENOMEM
+#define VFS_EBUSY      FS_EBUSY
+#define VFS_EACCES     FS_EACCES
+#define VFS_EEXIST     FS_EEXIST
+#define VFS_ENOTDIR    FS_ENOTDIR
+#define VFS_EISDIR     FS_EISDIR
+#define VFS_EINVAL     FS_EINVAL
+#define VFS_EMFILE     FS_EMFILE
+#define VFS_ENOSPC     FS_ENOSPC
+#define VFS_ENOTEMPTY  FS_ENOTEMPTY
 
 /* 文件类型 */
 typedef enum {

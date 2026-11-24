@@ -130,6 +130,12 @@ if [ -n "$LOOPDEV" ]; then
             cp ${PROJECT}/assets/samples/wallpaper.png /tmp/hepu_root_mnt/usr/share/wallpapers/ 2>/dev/null
         fi
         cp ${PROJECT}/kernel/fonts/DejaVuSans.ttf /tmp/hepu_root_mnt/fonts/ 2>/dev/null
+        # P4: S4 用户态 getdents 探针（loop 分支与 debugfs 分支保持一致）
+        mkdir -p /tmp/hepu_root_mnt/bin
+        if [ -f ${PROJECT}/user/build/s4getdents.elf ]; then
+            cp ${PROJECT}/user/build/s4getdents.elf /tmp/hepu_root_mnt/bin/s4getdents.elf 2>/dev/null
+            echo "  S4 用户态探针已复制到 ext2 (/bin/s4getdents.elf)"
+        fi
         # 复制桌面配置文件
         if [ -f ${PROJECT}/rootfs/etc/hepushell/config.hsqml ]; then
             cp ${PROJECT}/rootfs/etc/hepushell/config.hsqml /tmp/hepu_root_mnt/etc/hepushell/ 2>/dev/null
@@ -212,6 +218,9 @@ else
             echo "write $PROJECT/user/build/hello.elf /bin/hello.elf" | debugfs -w $TMPDIR/rootfs.ext2 2>/dev/null
             if [ -f "$PROJECT/user/build/shell.elf" ]; then
                 echo "write $PROJECT/user/build/shell.elf /bin/shell.elf" | debugfs -w $TMPDIR/rootfs.ext2 2>/dev/null
+            fi
+            if [ -f "$PROJECT/user/build/s4getdents.elf" ]; then
+                echo "write $PROJECT/user/build/s4getdents.elf /bin/s4getdents.elf" | debugfs -w $TMPDIR/rootfs.ext2 2>/dev/null
             fi
             if [ -f "$PROJECT/user/build/sec_test.elf" ]; then
                 echo "write $PROJECT/user/build/sec_test.elf /bin/sec_test.elf" | debugfs -w $TMPDIR/rootfs.ext2 2>/dev/null
