@@ -66,6 +66,22 @@ static int block_cache_writeback(page_cache_t *cache, page_cache_entry_t *entry)
     return ide_write_range(buf, data_lba + blk * cache_bs / 512, cache_bs / 512);
 }
 
+/* 常驻区覆盖的块范围: superblock + GDT。共享 ext2 核心和 32 位分配器
+ * 必须看到同一份 GDT/超级块，不能一份在 sb_area、一份在 4 槽块缓存。 */
+static uint32_t resident_block_limit(void)
+{
+    if (!fs_mounted || cache_bs == 0) return 0;
+    uint32_t blocks = *(uint32_t *)(sb_area + 1024 + 4);
+    uint32_t bpg    = *(uint32_t *)(sb_area + 1024 + 32);
+    if (bpg == 0) return 0;
+    uint32_t groups = blocks / bpg + (blocks % bpg != 0);
+    uint32_t gdt_bytes = groups * sizeof(ext2_group_desc_t);
+    uint32_t gdt_block = (cache_bs == 1024) ? 2 : 1;
+    uint32_t limit = gdt_block + (gdt_bytes + cache_bs - 1) / cache_bs;
+    uint32_t max = sizeof(sb_area) / cache_bs;
+    return limit > max ? max : limit;
+}
+
 /* === 块缓存核心: 取块指针(未命中则逐出脏块+IDE读入) ===
  * V6.49: 集成页缓存作为二级缓存
  * - 一级缓存：4槽静态缓冲区（接口兼容，调用方可直接修改）
@@ -74,6 +90,9 @@ static int block_cache_writeback(page_cache_t *cache, page_cache_entry_t *entry)
  * IDE读取后同时写入一级和二级缓存 */
 static uint8_t *meta_get(uint32_t blk)
 {
+    uint32_t resident = resident_block_limit();
+    if (blk < resident) return sb_area + blk * cache_bs;
+
     /* 一级缓存查找（4槽静态缓冲区） */
     for (int i = 0; i < 4; i++)
         if (cache_num[i] == blk) return cache_blk[i];

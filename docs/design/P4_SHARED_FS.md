@@ -173,6 +173,71 @@ VFS 仍 18/18 + 9/9 PASS，但 `e2fsck` 报空闲块计数差 645、块位图与
 | --- | --- |
 | ext2 盘上结构、目录遍历、路径 | 已合（P4） |
 | ext2 inode/数据块只读 | 已合（P4B 第一步） |
-| ext2 写/分配 | 待合，先统一 GDT 与空闲计数账本 |
+| ext2 写/分配 | 已合（P4C），32 位 inode 分配/释放仍保留本地实现 |
 | VFS namespace（32 树 / 64 挂载表） | 不物理合并：调用点遍布桌面/Shell/Settings，风险高、收益低 |
 | 块缓存、锁、fd 表 | 保持各架构实现：与硬件和调度模型绑定 |
+
+
+## 10. P4C：32 位写路径接入共享 ext2 核心（2026-11-24）
+
+P4C 解决 P4B 留下的“两本账”问题，再把 32 位写路径切到共享核心。分三步：
+
+1. **元数据常驻视图统一**（`kernel/fs/ide_ext2.c`）
+   - 32 位的 `superblock/GDT` 常驻在 `sb_area`（32KB，覆盖块 0–31），共享
+     `ext2_algo` 的 `read_block/write_block` 却走 4 槽块缓存；同一份 GDT 可能
+     一份在 `sb_area`、一份在缓存。
+   - 新增 `resident_block_limit()`：从 `sb_area` 里的超级块算块大小、组数、
+     GDT 字节数，得到常驻块上限；`meta_get()` 对 `blk < limit` 直接返回
+     `sb_area + blk * cache_bs`。
+   - 32 位 `ext2_sb`、`ext2_gdt` 和共享 `ctx->read_block/write_block` 因此
+     读写同一份超级块/GDT。**没有**把 `ext2_sb` 指向 `&ctx.sb`：那会再造一份
+     全局指针与 `sb_area` 的账。
+   - 测试盘为 1K 块、58368 块、8192 块/组、8 组，GDT 在块 2，常驻上限 3。
+
+2. **共享核心增加分配策略回调**（`kernel/shared/fs/ext2_algo.h/.c`）
+   - `ext2_context_t` 增加可选的 `alloc_block/free_block/policy_ctx`。
+   - `algo_alloc_block()` / `algo_free_block()` 有回调就交给调用方，没有就走
+     共享默认 `ext2_algo_alloc_block/free_block`。
+   - 直接/单/双/三级间接分配、`algo_new_meta_block()`、`ext2_algo_free_file()`
+     全部改走这两个 helper；64 位不设回调，行为不变。
+
+3. **32 位接入写路径**（`kernel/fs/ext2.c`、`kernel/fs/ext2_alloc.c`）
+   - `ext2_policy_alloc/ext2_policy_free` 包装 32 位 `ext2_alloc_block/free_block`；
+     `ext2_init` 把回调挂到共享上下文；`ext2_shared_context()` 暴露给
+     `ext2_alloc.c`。
+   - `ext2_write_data()` 改用 `ext2_algo_read_data_block/write_data_block`；
+     新块先清零、已有块的部分写先读旧块、整块覆盖不读旧内容。
+   - `i_blocks` 由共享核心按实际分配累加；32 位只用前后差值做配额记账，避免
+     重复累加。`ext2_get_block()` 只用于判断块是否已存在。
+
+**验证结果**
+
+- `tools/gate.sh` → `GATE: PASS`：32/64 构建 0 error；32 位 VFS 写 18/18、
+  读 9/9；kunit 连续 3 次 ALL PASS。
+- `tools/regress64.sh` → `REGRESS64: PASS`：`[S4] result=0x1`、
+  `[S4U] getdents-nonroot PASS`。
+- `e2fsck -fn`：P4B 留下的空闲块计数差 645 已消失；仍报 inode 88 目录未连接、
+  inode 87 零长未连接、块位图 +1345、inode 位图 +(87--88)。用同一份
+  `verify_p1p3.sh` 在 `2dabb52` 基线上复跑，**这些差异逐项相同**，属于 VFS
+  自测删目录/改名后留下的测试盘残留，不是 P4C 引入的回归；P4C 相比基线的
+  增量只有“空闲块计数账本已对齐”。
+
+**测试脚本修正**
+
+排查中发现两个测试环境问题，会让 P4C 看起来“间歇失败”，实际与写路径无关：
+
+- `mke2fs -F` 只重写元数据，不清空旧文件留下的块内容；复用
+  `/tmp/vp32part.img` 时旧根目录项（`p3test`、`p3shell`、`p2shell.moved`）
+  会残留，`vfs_mkdir` 直接返回 `EEXIST`。现在造盘前先删除分区文件，从全零盘
+  开始。
+- 无头 QEMU 在 VFS 自测之后被 watchdog 复位，会自动再启动一次并再次执行写
+  阶段；第二遍看到第一遍留下的 `p3test`，同样报 `EEXIST`。现在 QEMU 加
+  `-no-reboot`，一次测试只保留一次启动。
+
+**未合部分**
+
+- 32 位 inode 分配/释放仍是本地实现；共享核心只统一了块分配/释放。若后续
+  启用 `ext2_algo_alloc_inode/free_inode`，需要补 inode 策略回调，并同步
+  `ctx.sb` 的空闲计数副本。
+- `ctx.sb` 仍是 `sb_area` 超级块的布局副本，当前共享核心只读它的
+  `s_inodes_per_group`、`s_inode_size` 等布局字段，不参与空闲计数。

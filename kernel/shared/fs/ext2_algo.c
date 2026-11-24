@@ -225,13 +225,28 @@ int ext2_algo_read_data_block(ext2_context_t *ctx, const ext2_inode_t *inode, ui
 }
 
 /* 分配一个间接指针块并清零 (内容必须为0, 否则残留数据会被当成块指针) */
+uint32_t ext2_algo_alloc_block(ext2_context_t *ctx);
+int ext2_algo_free_block(ext2_context_t *ctx, uint32_t block_num);
+
+static uint32_t algo_alloc_block(ext2_context_t *ctx)
+{
+    if (ctx->alloc_block) return ctx->alloc_block(ctx->policy_ctx);
+    return ext2_algo_alloc_block(ctx);
+}
+
+static void algo_free_block(ext2_context_t *ctx, uint32_t block)
+{
+    if (ctx->free_block) ctx->free_block(ctx->policy_ctx, block);
+    else ext2_algo_free_block(ctx, block);
+}
+
 static uint32_t algo_new_meta_block(ext2_context_t *ctx, ext2_inode_t *inode)
 {
-    uint32_t b = ext2_algo_alloc_block(ctx);
+    uint32_t b = algo_alloc_block(ctx);
     if (b == 0) return 0;
     memset(ctx->block_buf, 0, ctx->block_size);
     if (ctx->write_block(b, ctx->block_buf) != 0) {
-        ext2_algo_free_block(ctx, b);
+        algo_free_block(ctx, b);
         return 0;
     }
     inode->i_blocks += ctx->block_size / 512;
@@ -269,7 +284,7 @@ static uint32_t algo_map_block(ext2_context_t *ctx, ext2_inode_t *inode, uint32_
     if (idx < 12) {
         uint32_t b = inode->i_block[idx];
         if (b == 0 && alloc) {
-            b = ext2_algo_alloc_block(ctx);
+            b = algo_alloc_block(ctx);
             if (b == 0) return 0;
             inode->i_block[idx] = b;
             inode->i_blocks += (uint32_t)blocks_per;
@@ -290,7 +305,7 @@ static uint32_t algo_map_block(ext2_context_t *ctx, ext2_inode_t *inode, uint32_
         uint32_t b = 0;
         if (algo_ptr_load(ctx, meta, idx, &b) != 0) return 0;
         if (b == 0 && alloc) {
-            b = ext2_algo_alloc_block(ctx);
+            b = algo_alloc_block(ctx);
             if (b == 0) return 0;
             inode->i_blocks += (uint32_t)blocks_per;
             if (algo_ptr_store(ctx, meta, idx, b) != 0) return 0;
@@ -320,7 +335,7 @@ static uint32_t algo_map_block(ext2_context_t *ctx, ext2_inode_t *inode, uint32_
         uint32_t b = 0;
         if (algo_ptr_load(ctx, m2, i2, &b) != 0) return 0;
         if (b == 0 && alloc) {
-            b = ext2_algo_alloc_block(ctx);
+            b = algo_alloc_block(ctx);
             if (b == 0) return 0;
             inode->i_blocks += (uint32_t)blocks_per;
             if (algo_ptr_store(ctx, m2, i2, b) != 0) return 0;
@@ -363,7 +378,7 @@ static uint32_t algo_map_block(ext2_context_t *ctx, ext2_inode_t *inode, uint32_
         uint32_t b = 0;
         if (algo_ptr_load(ctx, m3, i3, &b) != 0) return 0;
         if (b == 0 && alloc) {
-            b = ext2_algo_alloc_block(ctx);
+            b = algo_alloc_block(ctx);
             if (b == 0) return 0;
             inode->i_blocks += (uint32_t)blocks_per;
             if (algo_ptr_store(ctx, m3, i3, b) != 0) return 0;
@@ -686,7 +701,7 @@ void ext2_algo_free_data_blocks(ext2_context_t *ctx, ext2_inode_t *inode)
     /* 直接块 */
     for (int i = 0; i < 12; i++) {
         if (inode->i_block[i]) {
-            ext2_algo_free_block(ctx, inode->i_block[i]);
+            algo_free_block(ctx, inode->i_block[i]);
             inode->i_block[i] = 0;
         }
     }
@@ -698,9 +713,9 @@ void ext2_algo_free_data_blocks(ext2_context_t *ctx, ext2_inode_t *inode)
         if (algo_read_checked(ctx, ind, buf) == 0) {
             uint32_t *p = (uint32_t *)buf;
             for (uint32_t i = 0; i < ppb; i++)
-                if (p[i]) ext2_algo_free_block(ctx, p[i]);
+                if (p[i]) algo_free_block(ctx, p[i]);
         }
-        ext2_algo_free_block(ctx, ind);
+        algo_free_block(ctx, ind);
         inode->i_block[12] = 0;
     }
 
@@ -716,12 +731,12 @@ void ext2_algo_free_data_blocks(ext2_context_t *ctx, ext2_inode_t *inode)
                 if (algo_read_checked(ctx, p[i], sbuf) == 0) {
                     uint32_t *sp = (uint32_t *)sbuf;
                     for (uint32_t j = 0; j < ppb; j++)
-                        if (sp[j]) ext2_algo_free_block(ctx, sp[j]);
+                        if (sp[j]) algo_free_block(ctx, sp[j]);
                 }
-                ext2_algo_free_block(ctx, p[i]);
+                algo_free_block(ctx, p[i]);
             }
         }
-        ext2_algo_free_block(ctx, dbl);
+        algo_free_block(ctx, dbl);
         inode->i_block[13] = 0;
     }
 
@@ -742,15 +757,15 @@ void ext2_algo_free_data_blocks(ext2_context_t *ctx, ext2_inode_t *inode)
                         if (algo_read_checked(ctx, dp[j], sbuf) == 0) {
                             uint32_t *sp = (uint32_t *)sbuf;
                             for (uint32_t k = 0; k < ppb; k++)
-                                if (sp[k]) ext2_algo_free_block(ctx, sp[k]);
+                                if (sp[k]) algo_free_block(ctx, sp[k]);
                         }
-                        ext2_algo_free_block(ctx, dp[j]);
+                        algo_free_block(ctx, dp[j]);
                     }
                 }
-                ext2_algo_free_block(ctx, p[i]);
+                algo_free_block(ctx, p[i]);
             }
         }
-        ext2_algo_free_block(ctx, tri);
+        algo_free_block(ctx, tri);
         inode->i_block[14] = 0;
     }
 

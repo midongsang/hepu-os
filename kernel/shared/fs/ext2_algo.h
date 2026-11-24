@@ -22,6 +22,11 @@ typedef struct {
     ext2_read_block_fn read_block;
     ext2_write_block_fn write_block;
     uint8_t *block_buf;  /* 临时块缓冲区（至少block_size字节） */
+    /* 分配策略回调（可选）。设置后共享算法不再直接改位图/GDT，而是把
+     * 分配/释放交给调用方，避免 32 位 RAM GDT 与共享上下文两套账。 */
+    uint32_t (*alloc_block)(void *ctx);
+    void (*free_block)(void *ctx, uint32_t block);
+    void *policy_ctx;
 } ext2_context_t;
 
 /* 核心算法函数 */

@@ -191,9 +191,16 @@ PASS、kunit 连续 3 次 ALL PASS）；`tools/regress64.sh` → `REGRESS64: PAS
 P4B 第一步（2026-11-24）：32 位 ext2 只读路径已切到共享 `ext2_algo`
 （inode 读取、数据块映射、目录查找），共享核心去掉 32 位不支持的 64 位
 除法；`tools/gate.sh` → `GATE: PASS`，`tools/regress64.sh` →
-`REGRESS64: PASS`。写路径与分配器实验也能通过 VFS
-写读，但 `e2fsck` 空闲块计数差 645，暂不提交；下一步先统一 32 位 RAM GDT
-与共享上下文的分配账本，再合写路径。详见 `P4_SHARED_FS.md` 第 8、9 节。
+`REGRESS64: PASS`。
+
+P4C（2026-11-24）：32 位写路径、块分配/释放已接入共享 `ext2_algo`。
+`resident_block_limit()` 让 32 位 `sb_area` 里的超级块/GDT 与共享上下文读写
+同一份账；共享核心新增可选分配回调，32 位挂 `ext2_alloc_block/free_block`，
+64 位仍走默认。`ext2_write_data` 改走共享读写，`i_blocks` 由共享核心按实际
+分配累加。`tools/gate.sh` → `GATE: PASS`，`tools/regress64.sh` →
+`REGRESS64: PASS`；`e2fsck` 的 645 空闲块差额消失，剩余 inode 87/88 与
+块 1345 的差异在 `2dabb52` 基线同盘复跑中逐项相同，属于测试残留。32 位
+inode 分配/释放仍保留本地实现。详见 `P4_SHARED_FS.md` 第 10 节。
 
 ## 1. “有生产力”的验收场景（先定义，再排期）
 

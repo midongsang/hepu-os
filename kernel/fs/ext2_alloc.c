@@ -5,6 +5,7 @@
 
 #include <stdint.h>
 #include "ext2.h"
+#include "../shared/fs/ext2_algo.h"
 #include "ide_ext2.h"
 #include "vga.h"
 #include "string.h"
@@ -215,6 +216,7 @@ int ext2_write_inode(uint32_t inode_num, ext2_inode_t *inode)
 
 int ext2_write_data(ext2_inode_t *inode, uint32_t offset, const void *buf, uint32_t size)
 {
+    static uint8_t data_blk[4096];
     if (!ext2_mounted || !inode || !buf) return -1;
     /* V4.17-E62: 磁盘配额——写前预检新增块数上界(数据+间接), 超限拒绝(EDQUOT).
      * uid 暂用 current->pid 演示; root(uid=0) 无限制(quota_init 已设 0xFFFFFFFF). */
@@ -226,90 +228,45 @@ int ext2_write_data(ext2_inode_t *inode, uint32_t offset, const void *buf, uint3
             return -2;   /* EDQUOT 语义: 配额超限 */
         }
     }
+
+    extern ext2_context_t *ext2_shared_context(void);
+    ext2_context_t *ctx = ext2_shared_context();
+    if (!ctx) return -1;
+
     uint32_t block_idx = offset / ext2_block_size;
     uint32_t block_off = offset % ext2_block_size;
     const uint8_t *src = (const uint8_t *)buf;
     uint32_t remaining = size;
-    uint32_t per = ext2_block_size / 4;   /* 每间接块指针数 */
-    uint32_t new_blocks = 0;              /* E-48: 本次实际新分配块数(数据+间接) */
+    uint32_t blocks_before = inode->i_blocks;
+
     while (remaining > 0) {
-        /* V3.87-D3: 双级间接上限 12+per+per*per (1024B块: 65804 块≈64MB), 超出停止 */
-        if (block_idx >= 12 + per + per * per) break;
-        uint32_t phys_block = ext2_get_block(inode, block_idx);
-        if (phys_block == 0) {
-            phys_block = ext2_alloc_block();
-            if (phys_block == 0) break;
-            new_blocks++;
-            if (block_idx < 12) {
-                inode->i_block[block_idx] = phys_block;
-            } else if (block_idx < 12 + per) {
-                /* V3.17修复: 间接块分配失败(返回0)时必须停止——
-                 * 原代码未判空, i_block[12]=0 时 indirect 指向磁盘起始区,
-                 * 写 indirect[block_idx-12] 会覆盖超级块 → 文件系统损坏 */
-                if (inode->i_block[12] == 0) {
-                    uint32_t ind = ext2_alloc_block();
-                    if (ind == 0) break;  /* 分配失败，停止写入 */
-                    inode->i_block[12] = ind;
-                    new_blocks++;
-                }
-                /* V3.87-D6: 间接表按需读-改-写回 */
-                static uint8_t ind_blk[4096];
-                if (ext2_read_block(inode->i_block[12], ind_blk) != 0) break;
-                uint32_t *indirect = (uint32_t *)ind_blk;
-                indirect[block_idx - 12] = phys_block;
-                if (ext2_write_block(inode->i_block[12], ind_blk) != 0) break;
-            } else {
-                /* V3.87-D3: 双级间接分配——i_block[13] → 一级表 → 二级表 */
-                uint32_t d_idx = block_idx - 12 - per;
-                uint32_t l1 = d_idx / per;
-                uint32_t l0 = d_idx % per;
-                if (inode->i_block[13] == 0) {
-                    uint32_t dind_blk = ext2_alloc_block();
-                    if (dind_blk == 0) break;
-                    inode->i_block[13] = dind_blk;
-                    new_blocks++;
-                }
-                /* V3.87-D6: 双级表按需读-改-写回 (单缓冲顺序操作) */
-                static uint8_t dblk[4096];
-                if (ext2_read_block(inode->i_block[13], dblk) != 0) break;
-                uint32_t *dind = (uint32_t *)dblk;
-                uint32_t l1blk = dind[l1];
-                if (l1blk == 0) {
-                    uint32_t ind_blk2 = ext2_alloc_block();
-                    if (ind_blk2 == 0) break;
-                    dind[l1] = ind_blk2;
-                    l1blk = ind_blk2;
-                    new_blocks++;
-                    if (ext2_write_block(inode->i_block[13], dblk) != 0) break;
-                }
-                if (ext2_read_block(l1blk, dblk) != 0) break;
-                uint32_t *indirect = (uint32_t *)dblk;
-                indirect[l0] = phys_block;
-                if (ext2_write_block(l1blk, dblk) != 0) break;
-            }
-        }
         uint32_t chunk = ext2_block_size - block_off;
         if (chunk > remaining) chunk = remaining;
-        /* V3.87-D6: 数据块读-改-写回 (保留块内未写部分) */
-        {
-            static uint8_t data_blk[4096];
-            if (ext2_read_block(phys_block, data_blk) != 0) break;
-            memcpy(data_blk + block_off, src, chunk);
-            if (ext2_write_block(phys_block, data_blk) != 0) break;
+
+        uint32_t phys = ext2_get_block(inode, block_idx);
+        if (phys == 0) {
+            memset(data_blk, 0, ext2_block_size);
+        } else if (block_off != 0 || chunk != ext2_block_size) {
+            if (ext2_algo_read_data_block(ctx, inode, block_idx, data_blk) != 0) break;
         }
+
+        memcpy(data_blk + block_off, src, chunk);
+        if (ext2_algo_write_data_block(ctx, inode, block_idx, data_blk) != 0) break;
+
         src += chunk;
         remaining -= chunk;
         block_idx++;
         block_off = 0;
     }
+
     uint32_t written = size - remaining;
     if (offset + written > inode->i_size) inode->i_size = offset + written;
-    /* E-48: i_blocks 按实际分配块数(512B 单位), 而非按 size 推算——
-     * 旧式 (size+511)/512 对 4B 文件得 1(实际占 1KB 块=2), 与磁盘真实
-     * 分配不符(debugfs/fsck 可见). */
-    inode->i_blocks += new_blocks * (ext2_block_size / 512);
+
+    /* 共享核心已按分配次数累加 i_blocks；这里只做配额记账与实际新增块统计。 */
+    uint32_t new_blocks = 0;
+    if (inode->i_blocks > blocks_before)
+        new_blocks = (inode->i_blocks - blocks_before) / (ext2_block_size / 512);
     inode->i_mtime = ext2_get_time();
-    /* V4.17-E62: 实际分配记账 */
     if (new_blocks > 0) {
         extern process_t *current;
         extern int quota_alloc_block(uint32_t, uint32_t);

@@ -28,6 +28,18 @@ static ext2_context_t ext2_shared_ctx;
 static uint8_t ext2_shared_buf[4096];
 static int ext2_shared_ready = 0;
 
+static uint32_t ext2_policy_alloc(void *opaque)
+{
+    (void)opaque;
+    return ext2_alloc_block();
+}
+
+static void ext2_policy_free(void *opaque, uint32_t block)
+{
+    (void)opaque;
+    ext2_free_block(block);
+}
+
 int ext2_init(void *disk_image, uint32_t size)
 {
     ext2_disk = (uint8_t *)disk_image;
@@ -104,6 +116,9 @@ int ext2_init(void *disk_image, uint32_t size)
     ext2_shared_ctx.write_block = ext2_write_block;
     ext2_shared_ctx.block_buf = ext2_shared_buf;
     ext2_shared_ctx.sb = *ext2_sb;
+    ext2_shared_ctx.alloc_block = ext2_policy_alloc;
+    ext2_shared_ctx.free_block = ext2_policy_free;
+    ext2_shared_ctx.policy_ctx = (void *)0;
     ext2_shared_ctx.block_size = ext2_block_size;
     ext2_shared_ctx.group_count =
         (ext2_sb->s_blocks_count + ext2_sb->s_blocks_per_group - 1) /
@@ -113,6 +128,11 @@ int ext2_init(void *disk_image, uint32_t size)
     ext2_mounted = 1;
     vga_puts("[EXT2] fs init done \n");
     return 0;
+}
+
+ext2_context_t *ext2_shared_context(void)
+{
+    return ext2_shared_ready ? &ext2_shared_ctx : (ext2_context_t *)0;
 }
 
 int ext2_read_inode(uint32_t inode_num, ext2_inode_t *inode)
