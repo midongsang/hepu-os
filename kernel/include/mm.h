@@ -16,6 +16,9 @@ void     mm_init(uint32_t mem_kb, uint32_t bitmap_addr);
 
 /* 单页分配/释放 */
 uint32_t mm_alloc_page(void);
+
+/* P2: buddy_init 调用后把 mm_alloc_page/mm_alloc_pages 切到 buddy 单后端 */
+void     mm_enable_buddy_backend(void);
 void     mm_free_page(uint32_t phys_addr);
 
 /* V6.85: 标记物理页为已占用（用于页表页等特殊页） */
@@ -51,10 +54,11 @@ int      mm_is_page_reserved(uint32_t page);
  * 适用于大页映射、DMA缓冲区、大块内核分配等需要物理连续内存的场景
  * ========================================================================== */
 
-#define BUDDY_MAX_ORDER 10  /* 最大分配2^10=1024页=4MB */
+#define BUDDY_MAX_ORDER 20  /* 最大 2^20=1M页=4GB */
 
 /* 初始化伙伴算法（在mm_init之后、内存分配之前调用） */
 void     buddy_init(uint32_t total_pages);
+int      buddy_is_initialized(void);
 
 /* 分配连续count页（向上取整到2^order），返回起始物理地址，失败返回0 */
 uint32_t buddy_alloc_pages(uint32_t count);

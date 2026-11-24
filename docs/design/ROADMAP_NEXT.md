@@ -119,6 +119,28 @@ S1 的图形终端写读闭环已经在 32 位 hpdesk 上跑通并留证：
 S1 已闭环：真实键盘输入、动态逐行上屏、`.save` 落盘与重启后读回均
 通过；autostart 首帧、文件工具与静态程序证据保持有效。
 
+## 0.6 执行记录（2026-11-24，P2 内存单一后端）
+
+P2 的代码项已落地，`tools/gate.sh` 连续 `GATE: PASS`：
+
+- **buddy 成为 pmm 唯一后端**：`kernel/mm/buddy.c` 删除 `buddy_free_bitmap`，
+  只保留总页数/扫描提示/初始化标志；分配按 `2^order` 块对齐，先用
+  `mm_page_used()` 整块预检，再逐页 `mm_alloc_page_at()` 记账；释放只逐页
+  `mm_free_page()`。`mm_alloc_page()` / `mm_alloc_pages()` 在 `buddy_init()`
+  后统一转给 buddy，早期引导阶段仍走 pmm 线性位图。
+- **二次分配断言**：`HEPU_BOOT_DEBUG` 下 `mm_alloc_page_at()` 发现目标页位已置位
+  即打印物理地址并 `assert_fail()`。临时探针实测输出
+  `[MM] FATAL: double alloc page ...` + `[ASSERT] FAILED`，探针已撤回。
+- **新增 3 个 kunit 压力用例**：buddy 连续页 1/2/4/8/16 页五轮、slab 六档
+  32–1024B 六轮、页缓存 4096 页触顶 + 第 4097 页 LRU 回收。stress 套件
+  从 6 个用例变为 9 个，门禁 3 次启动均为 9/9 pass。
+- **非 2 的幂释放修正**：`buddy_free_pages()` 现在按分配时的 `2^order` 块大小
+  释放，避免 DMA 等 3 页请求漏掉尾部页；最大 order 提到 20，覆盖 swap
+  2048 页和 GPU 帧缓冲。
+
+详见 `docs/design/P2_MEMORY_BACKEND.md`。30 分钟长稳压测尚未跑，作为 P2 的
+剩余验收项保留。
+
 ## 1. “有生产力”的验收场景（先定义，再排期）
 
 不用百分比描述进度，用五个可复现场景：

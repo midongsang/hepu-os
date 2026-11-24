@@ -6,6 +6,7 @@
 #include <stddef.h>
 #include "mm.h"
 #include "vga.h"
+#include "assert.h"
 
 #define PAGE_SIZE   4096
 #define PAGE_ALIGN(addr) (((addr) + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1))
@@ -29,6 +30,7 @@ static uint32_t  total_pages = 0;
 static uint32_t  used_pages = 0;
 static uint32_t  memory_size_kb = 0;
 static uint32_t  last_alloc_hint = 0;  /* 上次分配位置，加速搜索 */
+static int       buddy_backend_enabled = 0;  /* P2: buddy_init 后置1 */
 
 /* V6.85: 页表页记录——paging_init登记所有页表物理页，mm_alloc_page必须跳过，
  * 否则slab/页表自身会被分配器返回并覆盖，导致页表项损坏、系统挂起。 */
@@ -160,9 +162,23 @@ int mm_add_region(uint32_t start_addr, uint32_t size, uint8_t type)
     return 0;
 }
 
+/* P2: buddy_init 完成后调用。之后 mm_alloc_page/mm_alloc_pages 不再走
+ * 本文件的线性位图扫描，而是统一交给 buddy_alloc_pages()，让 pmm 位图
+ * 成为唯一账本。初始化前的早期启动仍走 legacy 路径。 */
+void mm_enable_buddy_backend(void)
+{
+    buddy_backend_enabled = 1;
+    last_alloc_hint = 0;
+}
+
 /* 分配一个物理页，返回物理地址 */
 uint32_t mm_alloc_page(void)
 {
+    if (buddy_backend_enabled) {
+        extern uint32_t buddy_alloc_pages(uint32_t);
+        return buddy_alloc_pages(1);
+    }
+
     /* 从上次位置开始搜索，加速分配 */
     for (uint32_t i = 0; i < total_pages; i++) {
         uint32_t page = (last_alloc_hint + i) % total_pages;
@@ -206,6 +222,10 @@ void mm_mark_page_used(uint32_t phys)
 uint32_t mm_alloc_pages(uint32_t count)
 {
     if (count == 0) return 0;
+    if (buddy_backend_enabled) {
+        extern uint32_t buddy_alloc_pages(uint32_t);
+        return buddy_alloc_pages(count);
+    }
     if (count == 1) return mm_alloc_page();
 
     for (uint32_t start = 0; start <= total_pages - count; start++) {
@@ -247,10 +267,29 @@ int mm_alloc_page_at(uint32_t phys_addr)
 {
     uint32_t page = phys_addr / PAGE_SIZE;
     if (page >= total_pages) return -1;
+    if (mm_is_page_reserved(page) || is_page_table_page(page)) return -1;
+
     uint32_t idx = page / 32;
     uint32_t bit = page % 32;
-    if (memory_bitmap[idx] & (1 << bit)) return -1;  /* 已占用 */
-    memory_bitmap[idx] |= (1 << bit);
+
+#ifdef HEPU_BOOT_DEBUG
+    /* P2 断言：同一物理页被二次分配立即停机。
+     * buddy 分配前已用 mm_page_used() 预检，正常路径不会触发；这里兜住
+     * 任何绕过预检/并发记账错误，避免同一页被两个 owner 同时写。 */
+    if (memory_bitmap[idx] & (1u << bit)) {
+        extern void serial_puts(uint16_t, const char *);
+        extern void serial_puthex(uint16_t, uint32_t);
+        serial_puts(0x3F8, "[MM] FATAL: double alloc page phys=0x");
+        serial_puthex(0x3F8, phys_addr);
+        serial_puts(0x3F8, " page=");
+        serial_puthex(0x3F8, page);
+        serial_puts(0x3F8, "\n");
+        assert_fail(__FILE__, __LINE__, "double physical page allocation");
+    }
+#endif
+
+    if (memory_bitmap[idx] & (1u << bit)) return -1;  /* 已占用 */
+    memory_bitmap[idx] |= (1u << bit);
     used_pages++;
     return 0;
 }
