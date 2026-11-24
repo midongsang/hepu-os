@@ -49,6 +49,10 @@ import struct
 disk="$DISK"; part="$PART"
 # ext2 分区 58MB
 import subprocess, os
+# 关键：mke2fs -F 只会重写元数据，不会清空旧文件留下的块内容；
+# 复用 $PART 时旧根目录项（p3test/p3shell/p2shell.moved 等）会残留，
+# 让 mkdir/mv 误判“已存在”。先删掉分区文件，保证从全零盘开始。
+if os.path.exists(part): os.remove(part)
 subprocess.run(["mke2fs","-q","-t","ext2","-b","1024","-F",part,"58368"],check=True)
 with open(disk,"wb") as f: f.truncate(64*1024*1024)
 mbr=bytearray(512)
@@ -75,7 +79,7 @@ dd if="$PART" of="$DISK" bs=512 seek=2048 conv=notrunc status=none
 echo "[3/5] 第一次启动（写阶段）"
 pkill -9 -f qemu-system-i386 2>/dev/null; sleep 2
 rm -f "$LOGW"
-timeout 70 qemu-system-i386 -L "$DD" -kernel "$ELF" -m 256 -display none \
+timeout 70 qemu-system-i386 -L "$DD" -kernel "$ELF" -m 256 -display none -no-reboot \
     -drive file="$DISK",format=raw,if=ide -serial file:"$LOGW" >/dev/null 2>&1
 W_RC=$?
 [ -f "$LOGW" ] || { echo "  ✗ 写阶段没产出日志（QEMU 被杀/起不来，rc=$W_RC）"; exit 2; }
@@ -96,7 +100,7 @@ dd if="$PART" of="$DISK" bs=512 seek=2048 conv=notrunc status=none
 echo "[4/5] 第二次启动（读阶段，同一张盘）"
 pkill -9 -f qemu-system-i386 2>/dev/null; sleep 2
 rm -f "$LOGR"
-timeout 70 qemu-system-i386 -L "$DD" -kernel "$ELF" -m 256 -display none \
+timeout 70 qemu-system-i386 -L "$DD" -kernel "$ELF" -m 256 -display none -no-reboot \
     -drive file="$DISK",format=raw,if=ide -serial file:"$LOGR" >/dev/null 2>&1
 R_RC=$?
 [ -f "$LOGR" ] || { echo "  ✗ 读阶段没产出日志（rc=$R_RC）"; exit 2; }
