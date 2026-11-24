@@ -144,7 +144,7 @@ shell 内置命令的假输出。
 测试盘 `debugfs` 显示 `Free blocks: 52901`，没有出现 S1 排查阶段的
 “空闲块被吃光”。
 
-## 4. 本轮同时修掉的三个真实缺陷
+## 4. 本轮同时修掉的四个真实缺陷
 
 ### 4.1 `ext2_alloc_block()` 元数据保护记账顺序
 
@@ -176,8 +176,23 @@ shell 内置命令的假输出。
 screen_height`，并置 `gfx_bpp=32`、`gfx_pitch=width*4`。校准后同一份
 `fill_rect` 与文字绘制才开始真正落在 1920x1080 的后台缓冲里。
 
-这三项修复后，S1 编辑器才从“创建成功、写入 0 字节”变成真正落盘，
-图形终端也才从“只有 autostart 首帧”变成真实键盘逐行上屏。
+### 4.4 32 位窗口 surface 是空目标，整窗被贴成透明
+
+32 位 `gfx64_target_begin/end` 是空实现，也没有真正的离屏绘制目标。
+窗口内容实际画到主 framebuffer，随后 `hs_blend_image` 又把全零的窗口
+surface 贴回去，结果是整窗透明：只剩标题栏、边框和桌面背景。Settings
+因此“打开但里面什么都没有”，时间胶囊展开层也只剩文字/边框。
+
+修复：32 位一律不再为窗口分配表面（`hs_window_surface_ensure` 直接返回
+0），所有窗口和浮层都直接画主缓冲，由桌面帧统一提交。Settings 与时间
+胶囊随后完整显示：
+
+- `docs/assets/s1/s1-settings-visible.png`
+- `docs/assets/s1/s1-time-capsule.png`
+
+这四项修复后，S1 编辑器才从“创建成功、写入 0 字节”变成真正落盘，
+图形终端也才从“只有 autostart 首帧”变成真实键盘逐行上屏，桌面窗口
+和浮层也恢复为不透明可读。
 
 ## 5. 代码位置
 
@@ -185,7 +200,7 @@ screen_height`，并置 `gfx_bpp=32`、`gfx_pitch=width*4`。校准后同一份
 - `kernel/arch/x86/hpdesk32_deps.c`：`/etc/hepushell/autostart.cmd` 转发到终端
 - `kernel/arch/x86/keyboard.c`：键盘优先交给图形终端；F12 打开终端
 - `kernel/arch/x86_64/hpdesk.c`：32 位渲染循环内驱动 `s1_terminal_poll`；
-  每帧校准 `gfx_width/height/bpp/pitch` 到桌面真实分辨率
+  每帧校准 `gfx_width/height/bpp/pitch`；32 位窗口禁用空 surface 直绘主缓冲
 - `kernel/fs/ext2_alloc.c`：元数据块保护顺序修复
 - `kernel/sched/shell_cmd_fs.c`：`cpall` 跳过伪文件系统
 - `kernel/fs/fs_vfs_selftest.c`：`term.edit`、`disk.s1_edit` 与 cpall 空闲块断言

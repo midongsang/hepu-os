@@ -3061,10 +3061,13 @@ extern uint64_t gfx64_prof_present;
 static void *hs_window_surface_ensure(hs_window_t *w)
 {
 #if defined(__i386__)
-    /* 32 位 gfx64_target_begin 是空实现: 窗口 surface 里的内容其实画到了
-     * 主 framebuffer, 随后 hs_blend_image 又把空 surface 贴回去, 终端窗口
-     * 因此永远不可见。32 位没有离屏目标, 终端直接画主缓冲。 */
-    if (strcmp(w->title, "Terminal") == 0) return 0;
+    /* 32 位 gfx64_target_begin/end 是空实现, 也没有真正的离屏绘制目标:
+     * 窗口内容实际落在主 framebuffer, 随后 hs_blend_image 再把全零的
+     * surface 贴回去 —— 结果是整窗“透明”, 只剩标题栏和桌面背景。
+     * 32 位一律不用窗口 surface, 所有窗口直接画主缓冲, 由桌面帧统一
+     * present; Settings、时间胶囊等浮层才不会变成透明。 */
+    (void)w;
+    return 0;
 #endif
     int ww = w->width, hh = w->height;
     if (ww <= 0 || hh <= 0) return 0;

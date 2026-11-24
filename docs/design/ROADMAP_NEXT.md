@@ -100,7 +100,7 @@ S1 的图形终端写读闭环已经在 32 位 hpdesk 上跑通并留证：
 - **VFS 自测**：写阶段 18/18 PASS（含 `term.edit`）、读阶段 9/9 PASS
   （含 `disk.s1_edit`）。
 
-本轮同时修复三个真实缺陷：
+本轮同时修复四个真实缺陷：
 
 - `ext2_alloc_block()` 先置位/减计数、后判元数据块，命中元数据时不回滚，
   会把空闲块计数吃光；改为先判元数据再置位。
@@ -109,6 +109,10 @@ S1 的图形终端写读闭环已经在 32 位 hpdesk 上跑通并留证：
 - 32 位 hpdesk 的 `gfx_width/height/bpp/pitch` 仍停在 320x200@8bpp，
   `gfx64_compat` 的填充/像素接口按旧全局裁剪，终端动态内容全部落在
   屏幕外；改为每帧校准到桌面真实分辨率。
+- 32 位窗口 surface 没有真实离屏目标，内容画到主缓冲后又被全零 surface
+  贴回，Settings 与时间胶囊整窗透明；改为 32 位窗口一律直绘主缓冲。
+  截图 `docs/assets/s1/s1-settings-visible.png`、
+  `docs/assets/s1/s1-time-capsule.png`。
 
 详见 `docs/design/S1_MINIMAL_PRODUCTIVITY.md`。
 
