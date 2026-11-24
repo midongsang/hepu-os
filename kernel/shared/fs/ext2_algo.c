@@ -55,8 +55,10 @@ int ext2_algo_validate_sb(const ext2_superblock_t *sb)
     if (sb->s_first_data_block >= sb->s_blocks_count) return -6;
     uint32_t isz = algo_inode_size(sb);
     if (isz < 128 || isz > bs || (isz & (isz - 1))) return -7;
-    uint64_t groups  = ((uint64_t)sb->s_blocks_count + sb->s_blocks_per_group - 1) / sb->s_blocks_per_group;
-    uint64_t igroups = ((uint64_t)sb->s_inodes_count + sb->s_inodes_per_group - 1) / sb->s_inodes_per_group;
+    uint32_t groups  = sb->s_blocks_count / sb->s_blocks_per_group +
+                       (sb->s_blocks_count % sb->s_blocks_per_group != 0);
+    uint32_t igroups = sb->s_inodes_count / sb->s_inodes_per_group +
+                       (sb->s_inodes_count % sb->s_inodes_per_group != 0);
     if (igroups > groups) return -8;
     /* 块号→LBA 的换算在驱动层是 32 位，必须保证不回绕 */
     if ((uint64_t)sb->s_blocks_count * (bs / 512u) > 0xFFFFFFFFULL) return -9;
@@ -88,7 +90,8 @@ int ext2_algo_init(ext2_context_t *ctx, ext2_read_block_fn read_fn, ext2_write_b
     if (ext2_algo_validate_sb(&ctx->sb) != 0) return -3;
 
     ctx->block_size = 1024u << ctx->sb.s_log_block_size;
-    ctx->group_count = (uint32_t)(((uint64_t)ctx->sb.s_blocks_count + ctx->sb.s_blocks_per_group - 1) / ctx->sb.s_blocks_per_group);
+    ctx->group_count = ctx->sb.s_blocks_count / ctx->sb.s_blocks_per_group +
+                       (ctx->sb.s_blocks_count % ctx->sb.s_blocks_per_group != 0);
 
     return 0;
 }
@@ -112,10 +115,11 @@ int ext2_algo_read_inode(ext2_context_t *ctx, uint32_t ino, ext2_inode_t *inode)
     /* 读取inode表块 */
     /* 安全修复：64位运算避免 index*inode_size 回绕；inode 表块号必须在文件系统内 */
     uint64_t inode_byte = (uint64_t)index * inode_size;
-    uint64_t itb64 = (uint64_t)gd->bg_inode_table + inode_byte / ctx->block_size;
+    uint32_t bs_shift = 10 + ctx->sb.s_log_block_size;
+    uint64_t itb64 = (uint64_t)gd->bg_inode_table + (inode_byte >> bs_shift);
     if (itb64 >= ctx->sb.s_blocks_count) return -3;
     uint32_t inode_table_block = (uint32_t)itb64;
-    uint32_t inode_offset = (uint32_t)(inode_byte % ctx->block_size);
+    uint32_t inode_offset = (uint32_t)(inode_byte & ((uint64_t)ctx->block_size - 1));
     if (inode_offset + sizeof(ext2_inode_t) > ctx->block_size) return -3;
 
     if (ctx->read_block(inode_table_block, ctx->block_buf) != 0) return -3;
@@ -141,10 +145,11 @@ int ext2_algo_write_inode(ext2_context_t *ctx, uint32_t ino, const ext2_inode_t 
 
     /* 安全修复：64位运算避免 index*inode_size 回绕；inode 表块号必须在文件系统内 */
     uint64_t inode_byte = (uint64_t)index * inode_size;
-    uint64_t itb64 = (uint64_t)gd->bg_inode_table + inode_byte / ctx->block_size;
+    uint32_t bs_shift = 10 + ctx->sb.s_log_block_size;
+    uint64_t itb64 = (uint64_t)gd->bg_inode_table + (inode_byte >> bs_shift);
     if (itb64 >= ctx->sb.s_blocks_count) return -3;
     uint32_t inode_table_block = (uint32_t)itb64;
-    uint32_t inode_offset = (uint32_t)(inode_byte % ctx->block_size);
+    uint32_t inode_offset = (uint32_t)(inode_byte & ((uint64_t)ctx->block_size - 1));
     if (inode_offset + sizeof(ext2_inode_t) > ctx->block_size) return -3;
 
     if (ctx->read_block(inode_table_block, ctx->block_buf) != 0) return -3;
@@ -622,9 +627,10 @@ int ext2_algo_free_inode(ext2_context_t *ctx, uint32_t ino)
         uint64_t inode_byte = (uint64_t)index * inode_size;
         /* V0.54.12(R4 FS-04): inode 表块号用 64 位计算并先校验再截断，
            与 alloc/read/write_inode 口径一致，避免大盘越界块号被截断。 */
-        uint64_t itb64 = (uint64_t)itb + inode_byte / ctx->block_size;
+        uint32_t bs_shift = 10 + ctx->sb.s_log_block_size;
+        uint64_t itb64 = (uint64_t)itb + (inode_byte >> bs_shift);
         uint32_t it_block = (uint32_t)itb64;
-        uint32_t it_off = (uint32_t)(inode_byte % ctx->block_size);
+        uint32_t it_off = (uint32_t)(inode_byte & ((uint64_t)ctx->block_size - 1));
         uint8_t it_buf[EXT2_ALGO_MAX_BLOCK];
         if (itb64 < ctx->sb.s_blocks_count && ctx->read_block(it_block, it_buf) == 0) {
             ext2_inode_t *ino_p = (ext2_inode_t *)(it_buf + it_off);
@@ -644,9 +650,10 @@ int ext2_algo_free_inode(ext2_context_t *ctx, uint32_t ino)
     {
         uint32_t inode_size = algo_inode_size(&ctx->sb);
         uint64_t inode_byte = (uint64_t)index * inode_size;
-        uint64_t itb64 = (uint64_t)itb + inode_byte / ctx->block_size;
+        uint32_t bs_shift = 10 + ctx->sb.s_log_block_size;
+        uint64_t itb64 = (uint64_t)itb + (inode_byte >> bs_shift);
         uint32_t it_block = (uint32_t)itb64;
-        uint32_t it_off = (uint32_t)(inode_byte % ctx->block_size);
+        uint32_t it_off = (uint32_t)(inode_byte & ((uint64_t)ctx->block_size - 1));
         if (itb64 < ctx->sb.s_blocks_count) {
             uint8_t it_buf[EXT2_ALGO_MAX_BLOCK];
             if (ctx->read_block(it_block, it_buf) == 0) {

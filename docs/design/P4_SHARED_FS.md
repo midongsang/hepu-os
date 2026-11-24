@@ -140,3 +140,39 @@ REGRESS64: PASS
   写入 `/bin/s4getdents.elf`，但 loop 分支对其它用户态程序的复制仍不完整。
 - S4 只覆盖“创建目录、写读文件、枚举非根目录”这一组最小用例，不等于
   32/64 所有文件操作语义完全一致。
+
+## 8. P4B：32 位读路径接入共享 ext2 核心（2026-11-24）
+
+P4 的共享层只覆盖契约、路径、目录遍历；32 位 ext2 仍保留自己的 inode
+解析、间接块映射和目录查找。P4B 第一步把 32 位只读路径真正切到
+`kernel/shared/fs/ext2_algo.c`：
+
+- `ext2_init` 建立静态 `ext2_context_t`，读块/写块回调指向 32 位
+  `ext2_read_block`/`ext2_write_block`，配 4KB 共享暂存块。
+- `ext2_read_inode`、`ext2_read_data`、`ext2_lookup` 改为调用
+  `ext2_algo_read_inode`、`ext2_algo_read_data_block`、
+  `ext2_algo_find_in_dir`；32 位不再维护第二套 inode 解析、间接块映射和
+  目录线性查找。
+- 共享核心去掉 64 位除法/取模（32 位无 libgcc 的 `__udivmoddi4`），
+  块号换算改为 `10 + s_log_block_size` 移位，块内偏移改为
+  `block_size - 1` 掩码；语义不变，64 位同样适用。
+
+实测 `tools/gate.sh` → `GATE: PASS`：32/64 构建 0 error，32 位 VFS 写
+18/18、读 9/9，kunit 3 次 ALL PASS；`tools/regress64.sh` →
+`REGRESS64: PASS`（`[S4] result=0x1`、`[S4U] getdents-nonroot PASS`）。
+
+写路径没有并入：实验把 `ext2_write_data` 和分配/释放也接到共享核心后，
+VFS 仍 18/18 + 9/9 PASS，但 `e2fsck` 报空闲块计数差 645、块位图与 inode
+位图差异。基线 P4 同一测试盘本身有 multiply-claimed block 和目录损坏，
+不能单独作为回归判据；但 645 的差额说明 32 位 RAM GDT 与共享上下文仍是
+两本账。写路径合并的前提是先统一分配账本，不能直接提交。
+
+## 9. 结论：哪些能合，哪些不该硬合
+
+| 层 | 结论 |
+| --- | --- |
+| ext2 盘上结构、目录遍历、路径 | 已合（P4） |
+| ext2 inode/数据块只读 | 已合（P4B 第一步） |
+| ext2 写/分配 | 待合，先统一 GDT 与空闲计数账本 |
+| VFS namespace（32 树 / 64 挂载表） | 不物理合并：调用点遍布桌面/Shell/Settings，风险高、收益低 |
+| 块缓存、锁、fd 表 | 保持各架构实现：与硬件和调度模型绑定 |

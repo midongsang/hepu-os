@@ -188,6 +188,13 @@ PASS、kunit 连续 3 次 ALL PASS）；`tools/regress64.sh` → `REGRESS64: PAS
 把读块回调和条目回调的上下文当成同一个指针，导致 32 位根目录枚举误判。
 详见 `docs/design/P4_SHARED_FS.md`。
 
+P4B 第一步（2026-11-24）：32 位 ext2 只读路径已切到共享 `ext2_algo`
+（inode 读取、数据块映射、目录查找），共享核心去掉 32 位不支持的 64 位
+除法；`tools/gate.sh` → `GATE: PASS`，`tools/regress64.sh` →
+`REGRESS64: PASS`。写路径与分配器实验也能通过 VFS
+写读，但 `e2fsck` 空闲块计数差 645，暂不提交；下一步先统一 32 位 RAM GDT
+与共享上下文的分配账本，再合写路径。详见 `P4_SHARED_FS.md` 第 8、9 节。
+
 ## 1. “有生产力”的验收场景（先定义，再排期）
 
 不用百分比描述进度，用五个可复现场景：

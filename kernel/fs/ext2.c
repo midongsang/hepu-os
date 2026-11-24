@@ -12,6 +12,7 @@
 #include "process.h"
 #include "kheap.h"
 #include "../shared/fs/ext2_dir_algo.h"
+#include "../shared/fs/ext2_algo.h"
 
 uint8_t *ext2_disk = NULL;
 uint32_t ext2_disk_size = 0;
@@ -21,6 +22,11 @@ ext2_group_desc_t *ext2_gdt = NULL;
 int ext2_mounted = 0;
 /* V2.26: inode 大小(字节)——mke2fs 默认 256, 用 s_inode_size 而非 sizeof */
 uint32_t ext2_inode_size = 128;
+
+/* P4B: 32 位 ext2 读路径统一到共享 ext2_algo */
+static ext2_context_t ext2_shared_ctx;
+static uint8_t ext2_shared_buf[4096];
+static int ext2_shared_ready = 0;
 
 int ext2_init(void *disk_image, uint32_t size)
 {
@@ -94,6 +100,16 @@ int ext2_init(void *disk_image, uint32_t size)
     }
     ext2_gdt = (ext2_group_desc_t *)(ext2_disk + gdt_block * ext2_block_size);
 
+    ext2_shared_ctx.read_block = ext2_read_block;
+    ext2_shared_ctx.write_block = ext2_write_block;
+    ext2_shared_ctx.block_buf = ext2_shared_buf;
+    ext2_shared_ctx.sb = *ext2_sb;
+    ext2_shared_ctx.block_size = ext2_block_size;
+    ext2_shared_ctx.group_count =
+        (ext2_sb->s_blocks_count + ext2_sb->s_blocks_per_group - 1) /
+        ext2_sb->s_blocks_per_group;
+    ext2_shared_ready = 1;
+
     ext2_mounted = 1;
     vga_puts("[EXT2] fs init done \n");
     return 0;
@@ -101,35 +117,8 @@ int ext2_init(void *disk_image, uint32_t size)
 
 int ext2_read_inode(uint32_t inode_num, ext2_inode_t *inode)
 {
-    if (!ext2_mounted || inode_num == 0) return -1;
-
-    /* V7.68安全修复: 校验inode号范围 */
-    if (inode_num > ext2_sb->s_inodes_count) {
-        vga_printf("[EXT2] inode %d > max %d\n", inode_num, ext2_sb->s_inodes_count);
-        return -1;
-    }
-
-    uint32_t group = (inode_num - 1) / ext2_sb->s_inodes_per_group;
-    uint32_t index = (inode_num - 1) % ext2_sb->s_inodes_per_group;
-
-    /* V7.68安全修复: 校验group上限，防止ext2_gdt越界 */
-    uint32_t max_groups = (ext2_sb->s_blocks_count + ext2_sb->s_blocks_per_group - 1) /
-                           ext2_sb->s_blocks_per_group;
-    if (group >= max_groups) {
-        vga_printf("[EXT2] group %d >= max %d\n", group, max_groups);
-        return -1;
-    }
-
-    uint32_t inode_table = ext2_gdt[group].bg_inode_table;
-    /* V3.87-D6: inode 表按需块访问(不再假定整盘镜像) */
-    uint32_t abs_off = index * ext2_inode_size;
-    uint32_t b_idx = inode_table + abs_off / ext2_block_size;
-    uint32_t b_off = abs_off % ext2_block_size;
-    uint8_t *p = ext2_block_access(b_idx);
-    if (!p) return -1;
-    memcpy(inode, p + b_off, ext2_inode_size > sizeof(ext2_inode_t)
-               ? sizeof(ext2_inode_t) : ext2_inode_size);
-    return 0;
+    if (!ext2_shared_ready || !inode) return -1;
+    return ext2_algo_read_inode(&ext2_shared_ctx, inode_num, inode);
 }
 
 uint32_t ext2_get_block(ext2_inode_t *inode, uint32_t block_idx)
@@ -169,7 +158,8 @@ uint32_t ext2_get_block(ext2_inode_t *inode, uint32_t block_idx)
 
 int ext2_read_data(ext2_inode_t *inode, uint32_t offset, void *buf, uint32_t size)
 {
-    if (!ext2_mounted || !inode) return -1;
+    static uint8_t data_buf[4096];
+    if (!ext2_shared_ready || !inode) return -1;
     if (offset >= inode->i_size) return 0;
 
     uint32_t available = inode->i_size - offset;
@@ -182,57 +172,24 @@ int ext2_read_data(ext2_inode_t *inode, uint32_t offset, void *buf, uint32_t siz
     uint32_t remaining = size;
 
     while (remaining > 0) {
-        uint32_t phys_block = ext2_get_block(inode, block_idx);
-        if (phys_block == 0) break;
-
         uint32_t chunk = ext2_block_size - block_off;
         if (chunk > remaining) chunk = remaining;
-
-        /* V3.87-D6: 数据块按需 IDE 读 */
-        static uint8_t databuf[4096];
-        if (ext2_read_block(phys_block, databuf) != 0) break;
-        memcpy(dst, databuf + block_off, chunk);
+        if (ext2_algo_read_data_block(&ext2_shared_ctx, inode, block_idx,
+                                      data_buf) != 0) break;
+        memcpy(dst, data_buf + block_off, chunk);
         dst += chunk;
         remaining -= chunk;
         block_idx++;
         block_off = 0;
     }
-
     return size - remaining;
 }
 
 int ext2_lookup(ext2_inode_t *dir, const char *name, uint32_t *inode_num)
 {
-    if (!dir || !name || !inode_num) return -1;
-    if (!(dir->i_mode & 0x4000)) return -1;  /* 不是目录 */
-
-    uint32_t offset = 0;
-    static uint8_t block[4096];
-    int name_len = strlen(name);
-
-    while (offset < dir->i_size) {
-        uint32_t to_read = dir->i_size - offset;
-        if (to_read > ext2_block_size) to_read = ext2_block_size;
-        uint32_t n = ext2_read_data(dir, offset, block, to_read);
-        if (n <= 0) break;
-
-        uint32_t pos = 0;
-        while (pos + 8 <= n) {  /* 最小目录项8字节 */
-            ext2_dir_entry_t *entry = (ext2_dir_entry_t *)(block + pos);
-            if (entry->rec_len < 8 || entry->name_len >= 255) break;
-            if (pos + entry->rec_len > n) break;
-
-            if (entry->inode != 0 &&
-                entry->name_len == name_len &&
-                memcmp(entry->name, name, name_len) == 0) {
-                *inode_num = entry->inode;
-                return 0;
-            }
-            pos += entry->rec_len;
-        }
-        offset += to_read;
-    }
-    return -1;
+    if (!ext2_shared_ready || !dir || !name || !inode_num) return -1;
+    if (!(dir->i_mode & 0x4000)) return -1;
+    return ext2_algo_find_in_dir(&ext2_shared_ctx, dir, name, inode_num);
 }
 
 /* ext2 VFS读操作 */
