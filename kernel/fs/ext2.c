@@ -364,6 +364,8 @@ int ext2_mount(const char *mountpoint)
                     if (ext2_read_inode(entry->inode, &finode) == 0) {
                         node->size = finode.i_size;
                         node->permissions = finode.i_mode & 0x0FFF;
+                        node->uid = finode.i_uid;
+                        node->gid = finode.i_gid;
                     }
                     node->inode_num = entry->inode;
                     node->private_data = (void *)(uintptr_t)entry->inode;

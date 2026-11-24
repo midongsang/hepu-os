@@ -141,6 +141,30 @@ P2 的代码项已落地，`tools/gate.sh` 连续 `GATE: PASS`：
 详见 `docs/design/P2_MEMORY_BACKEND.md`。30 分钟长稳压测尚未跑，作为 P2 的
 剩余验收项保留。
 
+## 0.7 执行记录（2026-11-24，P3 安全最小闭环）
+
+P3 的代码项已落地，`tools/gate.sh` 为 `GATE: PASS`：
+
+- **VFS 统一权限检查**：`vfs_open/write/mkdir/unlink/rmdir/rename/chmod/chown`
+  先过 VFS 能力剖面（root 全放行；普通用户写/建/删仅限 `/data` `/tmp`
+  `/app` `/home`），再叠加 inode 的 POSIX 权限位。父目录不存在时普通用户
+  写 `/system/...` 优先返回 `EACCES`。
+- **POSIX 错误码**：`vfs.h` 新增 `VFS_ENOENT/EACCES/EEXIST/EISDIR/ENOTEMPTY/
+  ENOSPC` 等；ext2 inode/块分配失败返回 `-28`，VFS 原样上抛。
+- **fd→路径**：`vfs_fd_t` 增加 `path`，新增 `vfs_fd_get_path()`；读写对
+  fd>=3 再复查一次权限。
+- **32 位账户**：`auth64_compat32.c` 从空桩改为 multi_user 适配层，
+  root(uid 0/role 2) + 普通用户(uid 1/role 1)；`sys_user` 暴露按 uid
+  设置/校验密码的入口。
+- **64 位 open**：`fs_do_open` 先 lookup，未命中且无 `O_CREAT` 返回 `ENOENT`，
+  不再先分配 fd；`O_CREAT` 已存在按成功打开处理。
+- **新增 `p3-security` kunit 套件（2 个用例）**：S3 普通用户写系统目录被拒
+  `EACCES`、自己的可写根下可建/写/删；错误码表覆盖 EEXIST/ENOENT/EISDIR/
+  ENOTEMPTY/ENOSPC。
+
+详见 `docs/design/P3_SECURITY_CLOSURE.md`。P3 仍是“最小闭环”：账户不落盘、
+无登录界面、chmod/chown 未写回 ext2 inode，作为后续 P4/账户持久化的输入。
+
 ## 1. “有生产力”的验收场景（先定义，再排期）
 
 不用百分比描述进度，用五个可复现场景：

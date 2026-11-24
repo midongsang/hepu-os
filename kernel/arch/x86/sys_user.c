@@ -40,6 +40,36 @@ static int get_current_uid(void)
     return 0;  /* 默认root */
 }
 
+/* P3: VFS/账户层统一取当前 uid。0=root，1=普通用户。 */
+int hepu_current_uid(void)
+{
+    return get_current_uid();
+}
+
+/* P3: auth64_compat32 适配层使用的密码设置/校验入口（与 sys_set_password
+ * 共用同一张哈希表，避免两套密码状态）。 */
+int auth32_set_password_for_uid(int uid, const char *password)
+{
+    if (uid < 0 || uid >= 16) return -1;
+    if (!password || !password[0]) {
+        password_set[uid] = 0;
+        memset(password_hashes[uid], 0, 32);
+        return 0;
+    }
+    hash_password(password, password_hashes[uid]);
+    password_set[uid] = 1;
+    return 0;
+}
+
+int auth32_verify_password_for_uid(int uid, const char *password)
+{
+    if (uid < 0 || uid >= 16) return 0;
+    if (!password_set[uid]) return 1;  /* 未设密码：与 sys_verify_password 语义一致 */
+    uint8_t hash[32];
+    hash_password(password, hash);
+    return memcmp(hash, password_hashes[uid], 32) == 0 ? 1 : 0;
+}
+
 u32 sys_getuid(u32 arg1, u32 arg2, u32 arg3, u32 arg4)
 {
     (void)arg1; (void)arg2; (void)arg3; (void)arg4;

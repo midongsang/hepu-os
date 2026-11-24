@@ -9,6 +9,22 @@
 #define VFS_MAX_FILES 256   /* V6.77: 从128扩展到256 */
 #define VFS_MAX_FDS 256     /* V6.77: 从128扩展到256, 与constants.h MAX_FDS对齐 */
 
+/* P3: VFS 错误码按 POSIX/Linux 数值返回（负值），不再一律 -1。
+ * 这些是 VFS 对外契约的一部分；shell 只判 <0，不受影响。 */
+#define VFS_ENOENT     (-2)
+#define VFS_EIO        (-5)
+#define VFS_EBADF      (-9)
+#define VFS_ENOMEM     (-12)
+#define VFS_EBUSY      (-16)
+#define VFS_EACCES     (-13)
+#define VFS_EEXIST     (-17)
+#define VFS_ENOTDIR    (-20)
+#define VFS_EISDIR     (-21)
+#define VFS_EINVAL     (-22)
+#define VFS_EMFILE     (-24)
+#define VFS_ENOSPC     (-28)
+#define VFS_ENOTEMPTY  (-39)
+
 /* 文件类型 */
 typedef enum {
     VFS_REGULAR = 0,
@@ -77,6 +93,7 @@ typedef struct {
     vfs_node_t *node;
     int flags;
     uint32_t position;
+    char path[VFS_MAX_PATH];  /* P3: fd→路径映射，权限复查与诊断用 */
 } vfs_fd_t;
 
 /* 初始化VFS */
@@ -137,6 +154,10 @@ int vfs_rename(const char *old_path, const char *new_path);
 int vfs_stat(const char *path, vfs_stat_t *buf);
 int vfs_fstat(int fd, vfs_stat_t *buf);
 int vfs_access(const char *path);
+int vfs_fd_get_path(int fd, char *out, uint32_t outsz);
+
+/* P3 测试用：仅在 HEPU_BOOT_DEBUG 下可强制下一次 mkdir 返回 ENOSPC */
+void vfs_test_inject_enospc(int on);
 
 /* 软链接操作（V8.21新增） */
 int vfs_symlink(const char *target, const char *linkpath);

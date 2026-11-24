@@ -46,33 +46,29 @@ int64_t fs_do_open(const char *path, int flags, int mode)
     (void)mode;
     if (!path) return -1;
 
-    /* 路径拷入属 syscall 层的边界动作, 实现留在 syscall64_full.c。
-     * 用栈上缓冲区: 旧实现的静态缓冲会被并发 open 互相覆盖。 */
     char kpath[256];
     if (copy_user_path(kpath, sizeof(kpath), path) < 0) return -1;
 
-    /* 找空槽 + 写字段整段在锁内（由 fs_fd_alloc 保证），
-     * 所以两核同时 open 不会拿到同一个号。 */
+    /* P3-3: 先查存在性。未命中且无 O_CREAT 返回 -ENOENT(-2)，不再先分配
+     * fd 再失败；O_CREAT 且文件已存在时视为成功打开已有文件，不把 create
+     * 的 EEXIST 误报成 open 失败。 */
+    struct vfs_node probe;
+    int exists = (vfs64_lookup(kpath, &probe) == 0);
+    if (!exists && !(flags & FS_O_CREAT)) return -2;
+
     int fd = fs_fd_alloc(kpath, flags & 3);
     if (fd < 0) return -1;
 
-    /* O_CREAT 的 ext2 调用放在锁外: 文件系统层自己串行化, 而把一次可能睡
-     * 的 IO 塞进自旋锁里会拖长临界区。**这是原有行为, 不是这批改的** ——
-     * 也就是说"open(O_CREAT) 先占 fd 再建文件"的顺序保留了: 建文件失败时
-     * fd 仍然被占着。这一点在 fdstress 里测不到(它不建文件), 属于已知缺口。
-     *
-     * S4: 新建先走 VFS 后端分派（vfs64_create）；未挂载/后端无 create 时
-     * 回退 ext2 直调（旧路径），对外返回值与 fd 分配不变。 */
-    if (flags & FS_O_CREAT) {
+    /* O_CREAT 的 ext2 调用放在锁外：create 先走 VFS 后端分派，未挂载/
+     * 后端无 create 时回退 ext2 直调。 */
+    if (!exists && (flags & FS_O_CREAT)) {
         if (vfs64_create(kpath, (uint32_t)flags) != 0) {
             extern int ext2_64_create_file(const char *path);
-            ext2_64_create_file(kpath);
+            if (ext2_64_create_file(kpath) != 0) {
+                fs_fd_release(fd);
+                return -5;  /* EIO */
+            }
         }
-    } else {
-        /* 已存在节点走后端 open 钩子；lookup 未命中不报错 —— 与旧实现一致：
-         * open 不做存在性检查，未命中路径仍分配 fd（旧行为，待后续补 ENOENT）。 */
-        struct vfs_file f;
-        (void)vfs64_open(kpath, (uint32_t)flags, &f);
     }
     return fd;
 }

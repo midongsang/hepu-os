@@ -25,7 +25,7 @@ int ext2_path_create_v2(const char *path, uint16_t mode)
 
     /* 分配新inode */
     uint32_t inode_num = ext2_alloc_inode();
-    if (inode_num == 0) return -1;
+    if (inode_num == 0) return -28;  /* ENOSPC: inode 表耗尽 */
 
     ext2_inode_t inode;
     memset(&inode, 0, sizeof(inode));
@@ -57,7 +57,7 @@ int ext2_path_mkdir_v2(const char *path, uint16_t mode)
     if (ext2_lookup(&parent_inode, dirname, &existing) == 0) return -1;
 
     uint32_t inode_num = ext2_alloc_inode();
-    if (inode_num == 0) return -1;
+    if (inode_num == 0) return -28;  /* ENOSPC: inode 表耗尽 */
 
     ext2_inode_t inode;
     memset(&inode, 0, sizeof(inode));
@@ -66,7 +66,7 @@ int ext2_path_mkdir_v2(const char *path, uint16_t mode)
     inode.i_atime = inode.i_ctime = inode.i_mtime = ext2_get_time();
 
     uint32_t block = ext2_alloc_block();
-    if (block == 0) { ext2_free_inode(inode_num); return -1; }
+    if (block == 0) { ext2_free_inode(inode_num); return -28; }
     inode.i_block[0] = block;
     inode.i_size = ext2_block_size;
     /* P1: 目录首块也是数据块，i_blocks 必须同步(否则 e2fsck 报 i_blocks=0)。 */

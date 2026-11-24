@@ -23,6 +23,99 @@ static vfs_node_t vfs_root_storage;
 static vfs_fd_t fd_table[VFS_MAX_FDS];
 static uint32_t next_inode = 1;
 
+/* P3: VFS 访问能力位。
+ * 与 shared/capability 的“资源句柄”不同，文件路径不是固定资源 ID，无法为每个
+ * 路径 mint 一个能力对象；这里用 uid + 可写根集合作为 VFS 层的能力剖面：
+ *   root(uid 0)      : 全部权限
+ *   普通用户(uid>0) : 读放行；写/建/删仅限自己的可写根（/data /tmp /app /home）
+ * 再叠加 inode 的 POSIX 权限位。两层都过才允许。
+ */
+#define VFS_REQ_READ   0x1
+#define VFS_REQ_WRITE  0x2
+#define VFS_REQ_EXEC   0x4
+#define VFS_REQ_CREATE (VFS_REQ_WRITE | VFS_REQ_EXEC)
+#define VFS_REQ_DELETE (VFS_REQ_WRITE | VFS_REQ_EXEC)
+
+static void split_path(const char *path, char *parent, char *name);  /* 定义在本文件后部 */
+
+static int vfs_current_uid(void)
+{
+    extern int hepu_current_uid(void);
+    int uid = hepu_current_uid();
+    return uid < 0 ? 0 : uid;
+}
+
+static int vfs_user_writable_path(const char *path)
+{
+    if (!path) return 0;
+    if (strcmp(path, "/data") == 0 || strncmp(path, "/data/", 6) == 0) return 1;
+    if (strcmp(path, "/tmp") == 0 || strncmp(path, "/tmp/", 5) == 0) return 1;
+    if (strcmp(path, "/app") == 0 || strncmp(path, "/app/", 5) == 0) return 1;
+    if (strcmp(path, "/home") == 0 || strncmp(path, "/home/", 6) == 0) return 1;
+    return 0;
+}
+
+static int vfs_cap_check(const char *path, int req)
+{
+    if (vfs_current_uid() == 0) return 1;  /* root */
+    if (req == VFS_REQ_READ) return 1;
+    return vfs_user_writable_path(path);
+}
+
+static int vfs_mode_check(vfs_node_t *node, int req)
+{
+    if (!node) return 0;
+    int uid = vfs_current_uid();
+    if (uid == 0) return 1;
+
+    uint32_t bits = node->permissions & 0777;
+    if (node->uid == (uint32_t)uid) bits >>= 6;
+    else if (node->gid == (uint32_t)uid) bits >>= 3;  /* 简化：gid=uid */
+    if ((req & VFS_REQ_READ) && !(bits & 4)) return 0;
+    if ((req & VFS_REQ_WRITE) && !(bits & 2)) return 0;
+    if ((req & VFS_REQ_EXEC) && !(bits & 1)) return 0;
+    return 1;
+}
+
+/* 对“最终对象”检查：能力剖面 + inode 权限位 */
+static int vfs_permission_check(const char *path, vfs_node_t *node, int req)
+{
+    if (!vfs_cap_check(path, req)) return VFS_EACCES;
+    if (!node) return VFS_ENOENT;
+    if (!vfs_mode_check(node, req)) return VFS_EACCES;
+    return 0;
+}
+
+/* 对“父目录”检查：建/删/改名需要父目录的写+执行位 */
+static int vfs_parent_check(const char *path)
+{
+    char pp[VFS_MAX_PATH], nm[VFS_MAX_NAME];
+    if (!path || !path[0]) return VFS_EINVAL;
+    /* 能力剖面先判：普通用户对 /system 的写请求即使父目录不存在，
+     * 也应返回 EACCES（S3 的验收语义），不能先暴露 ENOENT。 */
+    if (!vfs_cap_check(path, VFS_REQ_CREATE)) return VFS_EACCES;
+    split_path(path, pp, nm);
+    if (!nm[0]) return VFS_EINVAL;
+    vfs_node_t *parent = vfs_find(pp);
+    if (!parent) return VFS_ENOENT;
+    if (parent->type != VFS_DIRECTORY) return VFS_ENOTDIR;
+    return vfs_permission_check(pp, parent, VFS_REQ_CREATE);
+}
+
+/* ext2 后端错误码 → VFS 对外错误码。ext2 的 -1 无法细分，按 EIO；
+ * 分配失败已改为明确返回 -28(ENOSPC)。 */
+static int vfs_backend_error(int rc)
+{
+    if (rc == VFS_ENOSPC || rc == -28) return VFS_ENOSPC;
+    if (rc == -3) return VFS_EACCES;
+    if (rc == VFS_ENOENT || rc == -2) return VFS_ENOENT;
+    if (rc == VFS_EEXIST || rc == -17) return VFS_EEXIST;
+    return VFS_EIO;
+}
+
+static int vfs_enospc_inject = 0;
+void vfs_test_inject_enospc(int on) { vfs_enospc_inject = on ? 1 : 0; }
+
 /* 路径分割辅助: 获取路径的第一部分 */
 static const char *path_first_component(const char *path, char *buf, int buflen)
 {
@@ -67,6 +160,7 @@ int vfs_bind_stdio(vfs_node_t *node)
         fd_table[i].node = node;
         fd_table[i].flags = 0;
         fd_table[i].position = 0;
+        fd_table[i].path[0] = '\0';
     }
     return 0;
 }
@@ -82,6 +176,8 @@ vfs_node_t *vfs_create_node(const char *name, vfs_node_type_t type)
     node->type = type;
     node->inode_num = next_inode++;
     node->permissions = 0755;
+    node->uid = (uint32_t)vfs_current_uid();
+    node->gid = node->uid;
     node->links = 1;
 
     return node;
@@ -371,45 +467,58 @@ static void split_path(const char *path, char *parent, char *name);
 
 int vfs_open(const char *path, int flags)
 {
+    if (!path || !path[0]) return VFS_EINVAL;
+
     vfs_node_t *node = vfs_find(path);
     if (!node) {
-        /* 2026-11-20: 32 位原先完全不认 VFS_O_CREAT —— 只 vfs_find，不存在就 -1。
-         * 结果是"盘上建出来了（ext2_path_create）、VFS 里却找不到"，shell 的 write
-         * 永远开不了新文件。这里补齐：先落 ext2，再在内存树里补节点并记 inode 号。 */
-        if (!(flags & VFS_O_CREAT)) return -1;
+        if (!(flags & VFS_O_CREAT)) return VFS_ENOENT;
+
+        /* O_CREAT：先检查父目录的写+执行权限（能力剖面 + POSIX 位），
+         * 再落 ext2。这样普通用户即使路径不存在也会先拿到 EACCES，
+         * 而不是先让 ext2 返回一个含义模糊的 -1。 */
+        int prc = vfs_parent_check(path);
+        if (prc != 0) return prc;
+
         {
             extern int ext2_mounted;
             extern int ext2_path_create(const char *, uint16_t);
-            if (!ext2_mounted) return -1;
+            if (!ext2_mounted) return VFS_EIO;
             int ino = ext2_path_create(path, 0x81A4);
-            if (ino < 0) {
-                vga_puts("[VFS] open: ext2 create failed\n");
-                return -1;
-            }
+            if (ino < 0) return vfs_backend_error(ino);
             char pp[VFS_MAX_PATH], nm[VFS_MAX_NAME];
             split_path(path, pp, nm);
             vfs_node_t *parent = vfs_find(pp);
-            if (!parent || parent->type != VFS_DIRECTORY) return -1;
+            if (!parent || parent->type != VFS_DIRECTORY) return VFS_ENOENT;
             node = vfs_create_node(nm, VFS_REGULAR);
-            if (!node) return -1;
+            if (!node) return VFS_ENOMEM;
             node->inode_num = (uint32_t)ino;
-            /* 关键：vfs_write/vfs_read 都要求 node->ops 非空。vfs_create_node 不设 ops，
-             * 漏了这一步就会"打开了但写不进去"（返回 -1）。 */
+            node->permissions = 0644;
+            node->uid = (uint32_t)vfs_current_uid();
+            node->gid = node->uid;
             {
                 extern vfs_file_ops_t ext2_file_ops;
                 node->ops = &ext2_file_ops;
             }
             vfs_add_child(parent, node);
         }
+    } else {
+        int acc = flags & 3;
+        int req = (acc == VFS_O_WRONLY || acc == VFS_O_RDWR ||
+                   (flags & VFS_O_TRUNC)) ? VFS_REQ_WRITE : VFS_REQ_READ;
+        int rc = vfs_permission_check(path, node, req);
+        if (rc != 0) return rc;
+        if (node->type == VFS_DIRECTORY && req != VFS_REQ_READ)
+            return VFS_EISDIR;
     }
 
-    /* 找空闲文件描述符 */
     for (int i = 0; i < VFS_MAX_FDS; i++) {
         if (!fd_table[i].used) {
             fd_table[i].used = 1;
             fd_table[i].node = node;
             fd_table[i].flags = flags;
             fd_table[i].position = (flags & VFS_O_APPEND) ? node->size : 0;
+            strncpy(fd_table[i].path, path, VFS_MAX_PATH - 1);
+            fd_table[i].path[VFS_MAX_PATH - 1] = '\0';
 
             if (node->ops && node->ops->open) {
                 node->ops->open(node, flags);
@@ -417,7 +526,7 @@ int vfs_open(const char *path, int flags)
             return i;
         }
     }
-    return -1;
+    return VFS_EMFILE;
 }
 
 int vfs_close(int fd)
@@ -431,6 +540,7 @@ int vfs_close(int fd)
 
     fd_table[fd].used = 0;
     fd_table[fd].node = NULL;
+    fd_table[fd].path[0] = '\0';
     return 0;
 }
 
@@ -442,6 +552,12 @@ int vfs_read(int fd, void *buf, uint32_t size)
     vfs_node_t *node = f->node;
 
     if (!node || !node->ops || !node->ops->read) return -1;
+    /* 0/1/2 是控制台/标准流，不按路径能力检查；其余 fd 复查一次，
+     * 防止“打开后切换用户”绕过 open 时的检查。 */
+    if (fd >= 3) {
+        if (!vfs_cap_check(f->path, VFS_REQ_READ)) return VFS_EACCES;
+        if (!vfs_mode_check(node, VFS_REQ_READ)) return VFS_EACCES;
+    }
 
     int ret = node->ops->read(node, f->position, buf, size);
     if (ret > 0) f->position += ret;
@@ -456,6 +572,10 @@ int vfs_write(int fd, const void *buf, uint32_t size)
     vfs_node_t *node = f->node;
 
     if (!node || !node->ops || !node->ops->write) return -1;
+    if (fd >= 3) {
+        if (!vfs_cap_check(f->path, VFS_REQ_WRITE)) return VFS_EACCES;
+        if (!vfs_mode_check(node, VFS_REQ_WRITE)) return VFS_EACCES;
+    }
 
     int ret = node->ops->write(node, f->position, buf, size);
     if (ret > 0) {
@@ -567,11 +687,14 @@ static int remove_child(vfs_node_t *parent, vfs_node_t *child)
 
 int vfs_mkdir(const char *path)
 {
-    if (!path || !*path || vfs_find(path)) return -1;
-    /* 2026-11-20: 目录操作必须落 ext2 —— 之前只改内存树，重启就消失。
-     * 顺序是先落盘再建节点：落盘失败就整体失败，不留"看起来成功"的假状态。
-     * 注意返回语义：ext2_path_mkdir/create 成功返回 inode 号(>0)，unlink 成功返回 0，
-     * 失败统一 -1 —— 所以判失败必须用 < 0，写成 != 0 会把成功当失败（踩过）。 */
+    if (!path || !*path) return VFS_EINVAL;
+    if (vfs_find(path)) return VFS_EEXIST;
+
+    int prc = vfs_parent_check(path);
+    if (prc != 0) return prc;
+    if (vfs_enospc_inject) return VFS_ENOSPC;
+
+    /* 先落 ext2 再建节点：落盘失败就整体失败，不留“看起来成功”的假状态。 */
     int ino = 0;
     {
         extern int ext2_mounted;
@@ -580,17 +703,19 @@ int vfs_mkdir(const char *path)
             ino = ext2_path_mkdir(path, 0x41ED);
             if (ino < 0) {
                 vga_puts("[VFS] mkdir: ext2 backend failed\n");
-                return -1;
+                return vfs_backend_error(ino);
             }
         }
     }
     char pp[VFS_MAX_PATH], name[VFS_MAX_NAME];
     split_path(path, pp, name);
     vfs_node_t *parent = vfs_find(pp);
-    if (!parent || parent->type != VFS_DIRECTORY) return -1;
+    if (!parent || parent->type != VFS_DIRECTORY) return VFS_ENOENT;
     vfs_node_t *dir = vfs_create_node(name, VFS_DIRECTORY);
-    if (!dir) return -1;
-    /* 记下 inode 号：vfs_readdir 靠它判断能不能走 ext2_readdir_ino 读子目录 */
+    if (!dir) return VFS_ENOMEM;
+    dir->permissions = 0755;
+    dir->uid = (uint32_t)vfs_current_uid();
+    dir->gid = dir->uid;
     if (ino > 0) dir->inode_num = (uint32_t)ino;
     vfs_add_child(parent, dir);
     return 0;
@@ -599,15 +724,23 @@ int vfs_mkdir(const char *path)
 int vfs_rmdir(const char *path)
 {
     vfs_node_t *node = vfs_find(path);
-    if (!node || node->type != VFS_DIRECTORY || node->children || node == vfs_root) return -1;
-    /* 2026-11-20: 空目录才删；先落 ext2，成功再摘内存节点 */
+    if (!node) return VFS_ENOENT;
+    if (node->type != VFS_DIRECTORY) return VFS_ENOTDIR;
+    if (node == vfs_root) return VFS_EBUSY;
+    if (node->children) return VFS_ENOTEMPTY;
+
+    int prc = vfs_parent_check(path);
+    if (prc != 0) return prc;
+
+    /* 空目录才删；先落 ext2，成功再摘内存节点 */
     {
         extern int ext2_mounted;
         extern int ext2_path_unlink_v2(const char *);
         if (ext2_mounted) {
-            if (ext2_path_unlink_v2(path) < 0) {
+            int rc = ext2_path_unlink_v2(path);
+            if (rc < 0) {
                 vga_puts("[VFS] rmdir: ext2 backend failed\n");
-                return -1;
+                return vfs_backend_error(rc);
             }
         }
     }
@@ -619,15 +752,21 @@ int vfs_rmdir(const char *path)
 int vfs_unlink(const char *path)
 {
     vfs_node_t *node = vfs_find(path);
-    if (!node || node->type == VFS_DIRECTORY) return -1;
-    /* 2026-11-20: 先落 ext2 删除，成功再摘内存节点 */
+    if (!node) return VFS_ENOENT;
+    if (node->type == VFS_DIRECTORY) return VFS_EISDIR;
+
+    int prc = vfs_parent_check(path);
+    if (prc != 0) return prc;
+
+    /* 先落 ext2 删除，成功再摘内存节点 */
     {
         extern int ext2_mounted;
         extern int ext2_path_unlink_v2(const char *);
         if (ext2_mounted) {
-            if (ext2_path_unlink_v2(path) < 0) {
+            int rc = ext2_path_unlink_v2(path);
+            if (rc < 0) {
                 vga_puts("[VFS] unlink: ext2 backend failed\n");
-                return -1;
+                return vfs_backend_error(rc);
             }
         }
     }
@@ -638,20 +777,33 @@ int vfs_unlink(const char *path)
 
 int vfs_rename(const char *old_path, const char *new_path)
 {
+    if (!old_path || !new_path) return VFS_EINVAL;
+    if (strcmp(old_path, new_path) == 0) return 0;
+
     vfs_node_t *node = vfs_find(old_path);
-    if (!node || vfs_find(new_path)) return -1;
+    if (!node) return VFS_ENOENT;
+    if (vfs_find(new_path)) return VFS_EEXIST;
+
+    int prc = vfs_parent_check(old_path);
+    if (prc != 0) return prc;
+    prc = vfs_parent_check(new_path);
+    if (prc != 0) return prc;
+
     char np[VFS_MAX_PATH], name[VFS_MAX_NAME];
     split_path(new_path, np, name);
     vfs_node_t *parent = vfs_find(np);
-    if (!parent || parent->type != VFS_DIRECTORY) return -1;
-    /* 2026-11-21: 先落盘，成功再改内存树。原实现反着来、且不看返回值，
-     * 盘上 rename 失败时内存树已经改了 —— 又一个"看着成功"的假状态。 */
+    if (!parent || parent->type != VFS_DIRECTORY) return VFS_ENOENT;
+
+    /* 先落盘，成功再改内存树——盘上 rename 失败时不允许内存树先变。 */
     {
         extern int ext2_mounted;
-        extern int ext2_path_rename(const char *old_path, const char *new_path);
-        if (ext2_mounted && ext2_path_rename(old_path, new_path) < 0) {
-            vga_puts("[VFS] rename: ext2 backend failed\n");
-            return -1;
+        extern int ext2_path_rename(const char *, const char *);
+        if (ext2_mounted) {
+            int rc = ext2_path_rename(old_path, new_path);
+            if (rc < 0) {
+                vga_puts("[VFS] rename: ext2 backend failed\n");
+                return vfs_backend_error(rc);
+            }
         }
     }
     remove_child(node->parent, node);
@@ -660,6 +812,7 @@ int vfs_rename(const char *old_path, const char *new_path)
     vfs_add_child(parent, node);
     return 0;
 }
+
 
 int vfs_stat(const char *path, vfs_stat_t *buf)
 {
@@ -681,7 +834,21 @@ int vfs_fstat(int fd, vfs_stat_t *buf)
     return 0;
 }
 
-int vfs_access(const char *path) { return vfs_find(path) ? 0 : -1; }
+int vfs_access(const char *path)
+{
+    if (!path || !path[0]) return VFS_EINVAL;
+    return vfs_find(path) ? 0 : VFS_ENOENT;
+}
+
+/* P3: fd→路径映射。失败返回 VFS_EBADF；成功 0。 */
+int vfs_fd_get_path(int fd, char *out, uint32_t outsz)
+{
+    if (fd < 0 || fd >= VFS_MAX_FDS || !fd_table[fd].used) return VFS_EBADF;
+    if (!out || outsz == 0) return VFS_EINVAL;
+    strncpy(out, fd_table[fd].path, outsz - 1);
+    out[outsz - 1] = '\0';
+    return 0;
+}
 
 int vfs_dup(int oldfd)
 {
@@ -858,10 +1025,12 @@ int vfs_link(const char *oldpath, const char *newpath)
 /* 修改文件权限 */
 int vfs_chmod(const char *path, uint32_t mode)
 {
-    if (!path) return -1;
+    if (!path) return VFS_EINVAL;
 
     vfs_node_t *node = vfs_find(path);
-    if (!node) return -1;
+    if (!node) return VFS_ENOENT;
+    if (vfs_current_uid() != 0 && node->uid != (uint32_t)vfs_current_uid())
+        return VFS_EACCES;
 
     node->permissions = mode & 07777;  /* 只保留权限位 */
 
@@ -871,10 +1040,12 @@ int vfs_chmod(const char *path, uint32_t mode)
 /* 修改文件描述符的权限 */
 int vfs_fchmod(int fd, uint32_t mode)
 {
-    if (fd < 0 || fd >= VFS_MAX_FDS || !fd_table[fd].used) return -1;
+    if (fd < 0 || fd >= VFS_MAX_FDS || !fd_table[fd].used) return VFS_EBADF;
 
     vfs_node_t *node = fd_table[fd].node;
-    if (!node) return -1;
+    if (!node) return VFS_EBADF;
+    if (vfs_current_uid() != 0 && node->uid != (uint32_t)vfs_current_uid())
+        return VFS_EACCES;
 
     node->permissions = mode & 07777;
 
@@ -884,10 +1055,11 @@ int vfs_fchmod(int fd, uint32_t mode)
 /* 修改文件所有者 */
 int vfs_chown(const char *path, uint32_t uid, uint32_t gid)
 {
-    if (!path) return -1;
+    if (!path) return VFS_EINVAL;
 
     vfs_node_t *node = vfs_find(path);
-    if (!node) return -1;
+    if (!node) return VFS_ENOENT;
+    if (vfs_current_uid() != 0) return VFS_EACCES;
 
     if (uid != (uint32_t)-1) node->uid = uid;
     if (gid != (uint32_t)-1) node->gid = gid;
@@ -898,10 +1070,11 @@ int vfs_chown(const char *path, uint32_t uid, uint32_t gid)
 /* 修改文件描述符的所有者 */
 int vfs_fchown(int fd, uint32_t uid, uint32_t gid)
 {
-    if (fd < 0 || fd >= VFS_MAX_FDS || !fd_table[fd].used) return -1;
+    if (fd < 0 || fd >= VFS_MAX_FDS || !fd_table[fd].used) return VFS_EBADF;
 
     vfs_node_t *node = fd_table[fd].node;
-    if (!node) return -1;
+    if (!node) return VFS_EBADF;
+    if (vfs_current_uid() != 0) return VFS_EACCES;
 
     if (uid != (uint32_t)-1) node->uid = uid;
     if (gid != (uint32_t)-1) node->gid = gid;

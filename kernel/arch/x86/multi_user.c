@@ -28,7 +28,22 @@ void multi_user_init(void)
     mu.users[0].can_use_location = 1;
     mu.users[0].can_access_storage = 1;
     mu.users[0].can_change_settings = 1;
-    mu.user_count = 1;
+    /* P3 账户最小闭环：机主(root, uid 0) + 1 个普通用户(uid 1)。
+     * 普通用户不具备装应用/改设置权限，写文件只能落在自己的可写根下。 */
+    mu.users[1].used = 1;
+    mu.users[1].id = 1;
+    strncpy(mu.users[1].name, " user ", 127);
+    mu.users[1].type = MU_USER_SECONDARY;
+    mu.users[1].state = MU_USER_STATE_ACTIVE;
+    mu.users[1].can_install_apps = 0;
+    mu.users[1].can_uninstall_apps = 0;
+    mu.users[1].can_make_calls = 1;
+    mu.users[1].can_send_sms = 1;
+    mu.users[1].can_use_camera = 1;
+    mu.users[1].can_use_location = 1;
+    mu.users[1].can_access_storage = 1;
+    mu.users[1].can_change_settings = 0;
+    mu.user_count = 2;
     mu.current_user = 0;
     /* 隐私空间默认关闭 */
     mu.private_config.hidden = 1;
