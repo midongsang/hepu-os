@@ -188,7 +188,8 @@ surface 贴回去，结果是整窗透明：只剩标题栏、边框和桌面背
 胶囊随后完整显示：
 
 - `docs/assets/s1/s1-settings-visible.png`
-- `docs/assets/s1/s1-time-capsule.png`
+- `docs/assets/s1/s1-time-capsule.png`（展开态按行顶排版并保留 12px 底边距，
+  状态条不再越过圆角面板下沿）
 
 这四项修复后，S1 编辑器才从“创建成功、写入 0 字节”变成真正落盘，
 图形终端也才从“只有 autostart 首帧”变成真实键盘逐行上屏，桌面窗口

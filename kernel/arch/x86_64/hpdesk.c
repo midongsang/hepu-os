@@ -4311,15 +4311,22 @@ static void hs_dynamic_island_render(void)
          * 改为整块在岛内垂直居中: 旧实现固定 +hs_sy(12) 偏移,
          * 放大后文字块比岛还高, 上半被裁。 */
         int f_time = hs_s(28), f_date = hs_s(14), f_stat = hs_s(12);
-        int blk = f_time + hs_sy(8) + f_date + hs_sy(8) + f_stat;
-        /* font64_draw_string 的 y 是基线(y+font_size 才是块底), 居中排版必须把
-         * 首行基线放在"块顶 + 字高"处, 否则整块会向上顶出岛外、时间上半被裁。 */
-        int cy = island_y + (island_h - blk) / 2 + f_time;
-        if (cy - f_time < island_y + hs_sy(4)) cy = island_y + hs_sy(4) + f_time;
+        int gap1 = hs_sy(6), gap2 = hs_sy(6);
+        int blk = f_time + gap1 + f_date + gap2 + f_stat;
+        /* font64_draw_string 的 y 是行顶(32 位 f32_put_ttf 内部再加 ascent),
+         * 不是基线。整块按行顶排版并垂直居中, 底部至少留 hs_sy(12),
+         * 否则状态条会越过圆角面板下沿, 看起来"面板没框住字"。 */
+        int pad_y = hs_sy(12);
+        int top = island_y + (island_h - blk) / 2;
+        if (top < island_y + pad_y) top = island_y + pad_y;
+        if (top + blk > island_y + island_h - pad_y)
+            top = island_y + island_h - pad_y - blk;
+        if (top < island_y + 4) top = island_y + 4;
+        int cy = top;
         /* 时间（大字号） */
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            island_x + hs_sx(20), cy, time, g_shell.colors.panel_fg, f_time);
-        cy += f_time + hs_sy(8);
+        cy += f_time + gap1;
         /* 日期 */
         char dlab[40];
         hs_date_label(dlab, (int)sizeof(dlab));
@@ -4328,7 +4335,7 @@ static void hs_dynamic_island_render(void)
         /* 右侧天气 */
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            island_x + island_w - hs_sx(100), cy, "26C Cloudy", g_shell.colors.text_secondary, f_date);
-        cy += f_date + hs_sy(8);
+        cy += f_date + gap2;
         /* 系统状态条 (V0.56.2: 原来是写死的 "CPU 35%  MEM 60%", 与任务管理器/Info 页
          * 的真实数据对不上; 改读同一套统计源, 避免同屏两套数值) */
         {
