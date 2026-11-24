@@ -30,6 +30,11 @@ CFLAGS  = -m32 \
 ifneq ($(AUTO_CRASH_SVC),)
 CFLAGS += -DHEPU_AUTO_CRASH_SVC=$(AUTO_CRASH_SVC)
 endif
+# P2 长稳压测：指定秒数后，普通 kunit 跑完再进入内存分配/释放循环。
+# 仅测试构建使用，默认不定义。
+ifneq ($(P2_LONG_STRESS),)
+CFLAGS += -DHEPU_P2_LONG_STRESS=$(P2_LONG_STRESS)
+endif
 
 LDFLAGS = -m elf_i386 -T kernel/linker.ld --gc-sections
 # GAS 汇编文件用 gcc 预处理编译

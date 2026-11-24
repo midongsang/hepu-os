@@ -84,6 +84,9 @@ void kunit_register_suite(const kunit_suite_t *suite);
 void kunit_get_stats(kunit_stats_t *stats);
 void kunit_print_report(void);
 
+/* P2 长稳：仅在 HEPU_P2_LONG_STRESS 构建中调用；返回 0 表示通过。 */
+int kunit_stress_long_run(uint32_t seconds);
+
 /* 内置测试套件 */
 extern const kunit_suite_t kunit_string_suite;
 extern const kunit_suite_t kunit_math_suite;

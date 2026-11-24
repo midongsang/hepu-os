@@ -110,11 +110,34 @@ buddy 启动日志：
 [BUDDY] selftest: done (pass=0x00000005, fail=0x00000000)
 ```
 
+### 4.1 30 分钟长稳
+
+`tools/stress_long.sh 1800` 在 32 位 debug 构建（`HEPU_BOOT_DEBUG`）上跑满
+1800 秒，普通 kunit 全部通过后进入长稳循环：
+
+```text
+[KTEST] RESULT: ALL PASS
+[P2STRESS] PASS seconds=0x00000708 rounds=0x000EE160 skips=0x00000000
+           free_start=0x0000627D free_warm=0x0000627D free_end=0x0000627D free_min=0x0000627D
+[P2STRESS] RESULT: PASS
+```
+
+- `seconds=0x00000708` 即 1800 秒；共 975,200 轮，0 skip。
+- 空闲页从预热后的 `0x627D` 到结束仍是 `0x627D`，`free_min` 全程没有下降，
+  未发现 buddy/slab/kmalloc/页缓存泄漏。
+- 全程 0 个 `[KUNIT-ASSERT]` / `[ASSERT] FAILED` / `[PANIC]` / `[EXCEPTION]`，
+  也没有 watchdog 复位标记。
+
+脚本在长稳循环自行打印 `PASS` 后由 QEMU timeout 收尾（本机 32 位 ACPI
+关机路径只 `hlt` 不退出），因此总耗时 2157 秒；`rc=124` 是预期收尾，
+判定以串口日志为准。
+
 ## 5. 已知边界
 
 - buddy 仍是调用方串行化，没有内部锁；当前 32 位运行路径没有 SMP 并发分配，
   后续引入 SMP 时需要把预检 + 标记做成原子区间，或加分配器锁。
 - `buddy_alloc_pages()` 扫描是 O(总块数 × 块大小)，目前靠 `buddy_hint_page`
   把常规单页分配压到近似 O(1)；内存碎片极端时最坏情况仍可能变慢。
-- 30 分钟长时间分配/释放压力尚未跑；本轮证据是门禁 3 次启动 + 新增压力用例。
+- 长稳压测只在 32 位 debug 构建、QEMU 256MB 内存下跑过；64 位和真机长时间
+  压力仍未覆盖。长稳循环本身是单核串行，不能替代 SMP 并发分配测试。
 - 32 位窗口直绘替代离屏合成、inode 32 记账等 S1/P1 尾巴不在 P2 范围。

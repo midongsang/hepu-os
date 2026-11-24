@@ -234,3 +234,113 @@ void kunit_stress_register(void)
     kunit_register_suite(&kunit_stress_suite);
     vga_puts("[KUNIT] stress suite registered\n");
 }
+
+/* === P2 验收：长时间反复分配/释放 ===
+ *
+ * 不是"跑一次测试就算长稳"：按 PIT 计时循环跑满 seconds，每轮覆盖
+ * kmalloc 混合尺寸、buddy 连续页、slab 六档复用，周期性跑页缓存触顶+
+ * LRU 回收。任何用例返回 FAIL 立即停止并打印失败用例；每 60 秒输出一次
+ * 进度。结束后比较预热后的空闲页，明显泄漏则 FAIL。
+ *
+ * 仅由 HEPU_P2_LONG_STRESS 构建调用，不进入普通启动路径。
+ */
+int kunit_stress_long_run(uint32_t seconds)
+{
+    extern uint32_t pit_get_ticks(void);
+    extern void serial_puts(uint16_t, const char *);
+    extern void serial_puthex(uint16_t, uint32_t);
+
+    if (seconds == 0) seconds = 1800;
+    uint32_t total_ticks = seconds * 100u;      /* PIT 100Hz */
+    uint32_t start = pit_get_ticks();
+    uint32_t last_report = start;
+    uint32_t rounds = 0, fails = 0, skips = 0;
+    uint32_t free_start = 0, free_warm = 0, free_end = 0, free_min = 0xFFFFFFFFu;
+
+    mm_stats(NULL, NULL, &free_start);
+    free_min = free_start;
+
+    serial_puts(0x3F8, "[P2STRESS] start seconds=");
+    serial_puthex(0x3F8, seconds);
+    serial_puts(0x3F8, " free_pages=");
+    serial_puthex(0x3F8, free_start);
+    serial_puts(0x3F8, "\n");
+
+    while ((uint32_t)(pit_get_ticks() - start) < total_ticks) {
+        kunit_result_t r;
+
+        r = test_kmalloc_stress();
+        if (r == KUNIT_FAIL) {
+            serial_puts(0x3F8, "[P2STRESS] FAIL test=kmalloc_stress\n");
+            fails++; break;
+        }
+        if (r == KUNIT_SKIP) skips++;
+
+        r = test_buddy_single_backend();
+        if (r == KUNIT_FAIL) {
+            serial_puts(0x3F8, "[P2STRESS] FAIL test=buddy_single_backend\n");
+            fails++; break;
+        }
+        if (r == KUNIT_SKIP) skips++;
+
+        r = test_slab_all_sizes_reuse();
+        if (r == KUNIT_FAIL) {
+            serial_puts(0x3F8, "[P2STRESS] FAIL test=slab_all_sizes_reuse\n");
+            fails++; break;
+        }
+        if (r == KUNIT_SKIP) skips++;
+
+        /* 页缓存触顶 + LRU 回收较重，按轮次间隔跑，避免只测页缓存。 */
+        if ((rounds & 15u) == 0) {
+            r = test_page_cache_pressure();
+            if (r == KUNIT_FAIL) {
+                serial_puts(0x3F8, "[P2STRESS] FAIL test=page_cache_pressure\n");
+                fails++; break;
+            }
+            if (r == KUNIT_SKIP) skips++;
+        }
+
+        rounds++;
+        mm_stats(NULL, NULL, &free_end);
+        if (free_end < free_min) free_min = free_end;
+        if (rounds == 8) free_warm = free_end;
+
+        uint32_t now = pit_get_ticks();
+        if ((uint32_t)(now - last_report) >= 6000u) {   /* 60s */
+            last_report = now;
+            serial_puts(0x3F8, "[P2STRESS] elapsed=");
+            serial_puthex(0x3F8, (uint32_t)(now - start) / 100u);
+            serial_puts(0x3F8, "s rounds=");
+            serial_puthex(0x3F8, rounds);
+            serial_puts(0x3F8, " free_pages=");
+            serial_puthex(0x3F8, free_end);
+            serial_puts(0x3F8, " min=");
+            serial_puthex(0x3F8, free_min);
+            serial_puts(0x3F8, "\n");
+        }
+    }
+
+    mm_stats(NULL, NULL, &free_end);
+    if (free_warm == 0) free_warm = free_start;
+
+    int ok = (fails == 0) && (rounds > 0) &&
+             (free_end + 128u >= free_warm) && (free_min > 256u);
+
+    serial_puts(0x3F8, ok ? "[P2STRESS] PASS seconds=" : "[P2STRESS] FAIL seconds=");
+    serial_puthex(0x3F8, seconds);
+    serial_puts(0x3F8, " rounds=");
+    serial_puthex(0x3F8, rounds);
+    serial_puts(0x3F8, " skips=");
+    serial_puthex(0x3F8, skips);
+    serial_puts(0x3F8, " free_start=");
+    serial_puthex(0x3F8, free_start);
+    serial_puts(0x3F8, " free_warm=");
+    serial_puthex(0x3F8, free_warm);
+    serial_puts(0x3F8, " free_end=");
+    serial_puthex(0x3F8, free_end);
+    serial_puts(0x3F8, " free_min=");
+    serial_puthex(0x3F8, free_min);
+    serial_puts(0x3F8, "\n");
+
+    return ok ? 0 : -1;
+}

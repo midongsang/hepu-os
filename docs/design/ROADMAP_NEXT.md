@@ -137,9 +137,11 @@ P2 的代码项已落地，`tools/gate.sh` 连续 `GATE: PASS`：
 - **非 2 的幂释放修正**：`buddy_free_pages()` 现在按分配时的 `2^order` 块大小
   释放，避免 DMA 等 3 页请求漏掉尾部页；最大 order 提到 20，覆盖 swap
   2048 页和 GPU 帧缓冲。
+- **30 分钟长稳已通过**：`tools/stress_long.sh 1800` 在 32 位 debug 构建上
+  跑满 1800 秒、975,200 轮，`free_pages` 从预热到结束均为 `0x627D`，
+  `free_min` 未下降；普通 kunit `ALL PASS`，无断言/panic/异常标记。
 
-详见 `docs/design/P2_MEMORY_BACKEND.md`。30 分钟长稳压测尚未跑，作为 P2 的
-剩余验收项保留。
+详见 `docs/design/P2_MEMORY_BACKEND.md`。P2 的代码项与 30 分钟验收均已闭环。
 
 ## 0.7 执行记录（2026-11-24，P3 安全最小闭环）
 

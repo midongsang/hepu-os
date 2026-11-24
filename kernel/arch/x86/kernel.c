@@ -663,6 +663,21 @@ void hepu_kernel_main(uint32_t magic, multiboot_info_t *mb_info)
         }
     }
     int ktest_fail = kunit_run_all();
+#ifdef HEPU_P2_LONG_STRESS
+    {
+        /* 长稳路径在 arch_poweroff 前不会走到下面的统一结果输出，
+         * 这里先落 KTEST 结论，保证长稳日志仍带普通 kunit 的总判定。 */
+        serial_puts(0x3F8, ktest_fail ? "[KTEST] RESULT: FAIL\n"
+                                      : "[KTEST] RESULT: ALL PASS\n");
+        extern int kunit_stress_long_run(uint32_t seconds);
+        extern void arch_poweroff(void) __attribute__((noreturn));
+        extern void serial_puts(uint16_t port, const char *s);
+        int lr = kunit_stress_long_run((uint32_t)HEPU_P2_LONG_STRESS);
+        serial_puts(0x3F8, lr == 0 ? "[P2STRESS] RESULT: PASS\n"
+                                   : "[P2STRESS] RESULT: FAIL\n");
+        arch_poweroff();
+    }
+#endif
     if (!ktest_irq_was_on) __asm__ volatile("cli");
     serial_puts(0x3F8, ktest_fail ? "[KTEST] RESULT: FAIL\n" : "[KTEST] RESULT: ALL PASS\n");
     
