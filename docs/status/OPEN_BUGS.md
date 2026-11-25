@@ -94,7 +94,7 @@ source_of_truth: kernel/arch/x86_64/
 | — | hepu_elf_vaddr_to_fileoff 无边界检查 | 加 elf_size 参数，phnum/offset/filesz 校验（`elf64.c`） | 已关闭（随 3375fbe 快照入仓） |
 | — | hepu_user_ptr 写用户页未查 NX(W^X) | 新增 `hepu_user_write_ptr`（`user_process.c:431`，GOT 写 `:596`），写用户页走它 | 已关闭（随 3375fbe 快照入仓） |
 | — | syscall64_compat.c 曾是未接入的兼容层 | 已从构建与源码移除（死代码；64 位树内无该文件） | 已关闭（3375fbe） |
-| BLD-15 | 构建/启动脚本硬编码绝对路径。源码核实（HEAD ef3c7cc）仍有 **4** 个脚本未相对定位：`tools/build_hybrid_iso.py:12`、`tools/build_iso.py:10`、`tools/build_uefi_dual.py:15` 写死 `/home/user/Doubao/chats/38448056008342018/...`；`tools/start_qemu.sh:3` 写死 `/home/user/.super_doubao/.../workspace/hepu-os`。旧条目称「v0.33.5 已改 `$(dirname $0)` 相对定位」与源码不符，予以更正 | 待改为 `$(dirname $0)`/脚本自定位 | 部分（build_hybrid_iso.py / build_iso.py / build_uefi_dual.py 已改为脚本自定位；仅 tools/start_qemu.sh 仍硬编码绝对路径） |
+| BLD-15 | 构建/启动脚本硬编码绝对路径。源码核实（HEAD ef3c7cc）仍有 **4** 个脚本未相对定位：`tools/build_hybrid_iso.py:12`、`tools/build_iso.py:10`、`tools/build_uefi_dual.py:15` 写死 `/home/user/Doubao/chats/38448056008342018/...`；`tools/start_qemu.sh:3` 写死 `/home/user/.super_doubao/.../workspace/hepu-os`。旧条目称「v0.33.5 已改 `$(dirname $0)` 相对定位」与源码不符，予以更正 | 待改为 `$(dirname $0)`/脚本自定位 | 已闭环（build_hybrid_iso.py / build_iso.py / build_uefi_dual.py / start_qemu.sh 均脚本自定位） |
 
 ## v0.34.0+ 开发记录
 

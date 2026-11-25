@@ -1,6 +1,7 @@
 #!/bin/bash
 # HEPU QEMU 稳定启动脚本
-cd /home/user/.super_doubao/super-doubao-runtime/workspace/hepu-os || exit 1
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+cd "$ROOT" || exit 1
 rm -f /tmp/hmon.sock /tmp/hserial.log /tmp/qemu_out.log
 export LD_LIBRARY_PATH=$PWD/tools/qemu/x/usr/lib/x86_64-linux-gnu:$PWD/tools/qemu/x/usr/lib:$PWD/tools/qemu/x/lib/x86_64-linux-gnu
 setsid $PWD/tools/qemu/x/usr/bin/qemu-system-x86_64 \
