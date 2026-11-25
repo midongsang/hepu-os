@@ -11,10 +11,10 @@
  * 任一阶段失败都会把状态标记为失败并记录阶段与原因，不会置为"已加密"。
  *
  * 支持范围（本次交付）：
- *   - TLS 1.2，AES-128-GCM-SHA256（ECDHE-RSA 为主，RSA 密钥交换兜底）
+ *   - TLS 1.2，RSA 密钥交换套件 TLS_RSA_WITH_AES_128_GCM_SHA256 (0x009C)
  *   - 证书链校验：签名验签 / 有效期 / SAN(优先)+CN(兜底) 主机名 / 信任锚
  *   - 真实 transcript 哈希，双向 Finished verify_data 比对
- * 未做：TLS 1.3、ECDSA 套件、ChaCha20、PSK、会话恢复、压缩、ALPN 协商。
+ * 未做：TLS 1.3、ECDHE-* / ECDSA 套件、ChaCha20、PSK、会话恢复、压缩、ALPN 协商。
  * ========================================================================== */
 
 #define TLS12_OK            0
@@ -39,5 +39,9 @@ int tls12_client_run(const char *hostname, uint16_t port,
                       const char *http_path,
                       uint8_t *resp, uint32_t resp_max, uint32_t *resp_len,
                       tls12_result_t *result);
+
+/* 编译期门控开机自检（HEPU_TLS_E2E_SELFTEST）：DHCP 就绪后自动跑一次真实
+ * 握手 + 加密 GET，结果与响应片段打串口。仅联调测试构建调用，默认构建不进。 */
+void tls12_e2e_selftest(void);
 
 #endif /* TLS12_CLIENT_H */
