@@ -19,7 +19,6 @@
 
 /* 目录枚举上限：readdir 打包 staging 与 getdents 共用。 */
 #define READDIR_MAX_ENTRIES 64
-#define READDIR_STAGE_MAX   2048
 #include "epoll64.h"   /* epoll/eventfd2/pselect6 v1 最小实现（仅 LT） */
 #include "display_backend.h"  /* §5-4: fb_desc_t（前台所有权按真实 pitch 算映射长度） */
 #include "user_cred.h"
@@ -278,10 +277,9 @@ static inline int fd_table_index(void)
  * 的 open/close 一起堵住，且 copy_to_user 缺页会带着锁进异常路径）。 */
 static spinlock_t g_fd_lock;
 static spinlock_t g_pipe_lock;
-/* R3-3 / R3-7: 这两条路径原来靠"syscall 不会重入"的单核假设，缓冲是文件级 static。
- * 多核下两个 CPU 同时进来会互相覆盖（readdir 会拿到别人目录的内容，
- * 裸盘读写会往错盘位写）。都是低频路径，直接串行化，代价可忽略。 */
-static spinlock_t g_readdir_lock;
+/* R3-7: 裸盘读写原来靠"syscall 不会重入"的单核假设，缓冲是文件级 static。
+ * 多核下两个 CPU 同时进来会互相覆盖，直接串行化，代价可忽略。
+ * readdir 的 static 表已撤，枚举缓冲改为调用期 kmalloc，不再需要全局锁。 */
 static spinlock_t g_disk_lock;
 static volatile int g_fd_lock_holder = -1;   /* 诊断：持锁时的 fd 表下标 */
 
@@ -1541,15 +1539,12 @@ extern int64_t sys_fstat(int fd, void *statbuf);
 /* sys_readdir: 列目录，写入用户缓冲 outbuf（每项 "name\0type\0"），返回字节数。
  *
  * SEC-05: 旧实现把 names[64][256] / types[64] 放在函数内 static（16 KB 常驻 BSS，
- * 靠全局 g_readdir_lock 串行防止多核互相覆盖），并在栈上开 2048 字节 staging
- * 缓冲；叠加 kernel_path[256]，栈帧约 2.3 KB，逼近 4 KB 内核栈上限，其下还要进
- * ext2_64_list_dir_entries 再叠加中断 trap frame。现在：
- *  - names/types 改为调用期 kmalloc，函数返回前 kfree，不再常驻 BSS；
- *  - 栈上不再开 staging：先在内核数组上算好总长度，确认装得下用户缓冲后，
- *    逐项 copy_to_user 写进用户缓冲；
- *  - 分配失败 / 路径非法 / 用户缓冲过小一律返回 -1，不向用户缓冲写半截。
- * 语义保持不变：每项 "name\0type\0"，内部打包上限仍为 2048 字节；装不下用户缓冲
- * 直接失败，不静默截断。 */
+ * 靠全局锁串行防止多核互相覆盖），并在栈上开 2048 字节 staging 缓冲。现在：
+ *  - names/types 与 VFS dirent 改为调用期 kmalloc，函数返回前 kfree；
+ *  - 不再设 2048B 内部打包上限：先按真实长度确认装得下用户缓冲，再逐项
+ *    copy_to_user；用户缓冲不足直接 -1，不静默截断；
+ *  - 枚举的中间缓冲全部在调用方私有内存，不再需要全局锁；
+ *  - 分配失败 / 路径非法 / 用户缓冲过小一律返回 -1，不写半截。 */
 extern int ext2_64_list_dir_entries(const char *path, char names[][256], uint8_t *types, int max);
 static int64_t sys_readdir(const char *path, char *outbuf, int outsz)
 {
@@ -1566,10 +1561,7 @@ static int64_t sys_readdir(const char *path, char *outbuf, int outsz)
         READDIR_MAX_ENTRIES * sizeof(struct vfs_dirent));
     if (!de) return -1;
 
-    int n;
-    uint64_t rdf = spinlock_lock_irqsave(&g_readdir_lock);
-    n = vfs64_iterate(kernel_path, de, READDIR_MAX_ENTRIES);
-    spinlock_unlock_irqrestore(&g_readdir_lock, rdf);
+    int n = vfs64_iterate(kernel_path, de, READDIR_MAX_ENTRIES);
 
     if (n >= 0) {
         /* 先按真实长度估算总占用，装不下用户缓冲直接失败（与旧实现 R3-2 同口径）。 */
@@ -1577,7 +1569,6 @@ static int64_t sys_readdir(const char *path, char *outbuf, int outsz)
         for (int i = 0; i < n; i++) {
             int l = 0; while (de[i].d_name[l]) l++;
             int need = l + 3;
-            if (used + need > READDIR_STAGE_MAX) break;
             used += need;
         }
         if (used > outsz) { kfree(de); return -1; }
@@ -1586,7 +1577,6 @@ static int64_t sys_readdir(const char *path, char *outbuf, int outsz)
         for (int i = 0; i < n; i++) {
             int l = 0; while (de[i].d_name[l]) l++;
             int need = l + 3;
-            if (off + need > READDIR_STAGE_MAX) break;
             char t = de[i].d_type == VFS_DT_DIR ? 'd' : 'f';
             if (copy_to_user(outbuf + off, de[i].d_name, (size_t)l) != 0) goto vfs_fail;
             if (copy_to_user(outbuf + off + l, "", 1) != 0) goto vfs_fail;
@@ -1604,32 +1594,19 @@ static int64_t sys_readdir(const char *path, char *outbuf, int outsz)
     uint8_t *types = (uint8_t *)kmalloc(READDIR_MAX_ENTRIES);
     if (!names || !types) { kfree(names); kfree(types); return -1; }
 
-    rdf = spinlock_lock_irqsave(&g_readdir_lock);
     n = ext2_64_list_dir_entries(kernel_path, names, types, READDIR_MAX_ENTRIES);
-    if (n < 0) {
-        spinlock_unlock_irqrestore(&g_readdir_lock, rdf);
-        kfree(names); kfree(types);
-        return -1;
-    }
+    if (n < 0) { kfree(names); kfree(types); return -1; }
     int used = 0;
     for (int i = 0; i < n; i++) {
         int l = 0; while (names[i][l]) l++;
-        int need = l + 3;
-        if (used + need > READDIR_STAGE_MAX) break;
-        used += need;
+        used += l + 3;
     }
-    if (used > outsz) {
-        spinlock_unlock_irqrestore(&g_readdir_lock, rdf);
-        kfree(names); kfree(types);
-        return -1;
-    }
-    spinlock_unlock_irqrestore(&g_readdir_lock, rdf);
+    if (used > outsz) { kfree(names); kfree(types); return -1; }
 
     int off = 0;
     for (int i = 0; i < n; i++) {
         int l = 0; while (names[i][l]) l++;
         int need = l + 3;
-        if (off + need > READDIR_STAGE_MAX) break;
         char t = types[i] ? 'd' : 'f';
         if (copy_to_user(outbuf + off, names[i], (size_t)l) != 0) goto fail;
         if (copy_to_user(outbuf + off + l, "", 1) != 0) goto fail;
