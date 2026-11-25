@@ -2,7 +2,7 @@
 title: 赫普OS 开发路线图（唯一优先级来源）
 status: active
 sys_version: 0.62.1
-updated: 2026-11-18
+updated: 2026-11-26
 owner: planning
 source_of_truth: kernel/arch/x86_64/Makefile
 supersedes: DEVELOPMENT_ROADMAP.md, PRIORITY_ROADMAP.md, X86_64_DEVELOPMENT_PLAN.md
@@ -41,7 +41,7 @@ supersedes: DEVELOPMENT_ROADMAP.md, PRIORITY_ROADMAP.md, X86_64_DEVELOPMENT_PLAN
 |---|------|---------|------|
 | P1-1 | syscall 集完善（fork/execve/waitpid/pv/sigaction/kill/mmap/munmap/mprotect/pipe/ioctl/stat/readdir/lseek/chdir/dup/umask/gettimeofday/socket 全套/epoll/futex/clock_gettime/...） | `syscall64_full.c`（dispatch 表 100+ 项，号表见 `specs/SYSCALL_ABI.md` 源码生成） | ⚠️ **主体完成，非全部**（2026-11-18 复核）：pipe/waitpid/ioctl/sigaction/kill/futex/clock_gettime 已有实现；**`epoll_create`/`epoll_ctl`/`epoll_wait`/`eventfd2`/`pselect6` 已由静默桩改为 v1 最小 LT 真实现**（`kernel/arch/x86_64/epoll64.c`/`epoll64.h`，薄壳 `syscall64_full.c:1280-1296`；探针 `user/apps/epolltest.c`，真实 QEMU 串口 23 项断言 `[EPOLL] RESULT: PASS`）：仅水平触发，EPOLLET/EFD_SEMAPHORE→EINVAL，eventfd 读空 EAGAIN，pselect 仅判读位图；限制与后续接入点见 `specs/SYSCALL_ABI.md` 末尾手写小节；`sys_sleep` 为忙等（`syscall64_full.c:2122`，计数空转非 hlt 让出） |
 | P1-2 | ELF64 装载 + Linux 兼容层 | `elf64.c` + `syscall64_full.c linux_map[350]` | ✅ **基本完成**：PIE/ET_DYN 装载已跑通（装载偏置 + RELATIVE + SysV 初始栈 + auxv AT_PHDR/AT_ENTRY/AT_PHENT）；**PT_INTERP 交由 P1-7 处理**（内核加载解释器、ET_DYN 的 RELATIVE 交给用户态 ld.so）；IRELATIVE 由内核调用 resolver 写回 GOT；**glibc static-PIE 已端到端跑通并正常 exit_group 退出**（入口 GPR 按 Linux ABI 清零，SEC-10/SEC-13）；ABI 判定按进程 `env_type`（ENV_NATIVE / ENV_LINUX_COMPAT），`.note.ABI-tag` 通道已修复 |
-| P1-3 | TLS/HTTPS 网络加密 | `kernel/net/tls_*.c` + `kernel/crypto/` | ⚠️ **部分落地**：crypto 11 个文件（XTEA/XTS + AES-128/256-GCM/CBC、SHA-256/512、HMAC、HKDF、ECDHE、RSA、X.509）已编入 Makefile:85-95；TLS 5 个文件（`tls.c`/`tls_record.c`/`tls_crypto.c`/`tls_handshake.c`/`tls_client.c`，2327 行）已编入 Makefile:96-100 并在启动期 `hepu_tls_init()`（`kernel_main_64.c:1107`）初始化；但 HTTP 客户端 `net64_http.c` 无 https/443 路由，顶层会话为模拟握手桩，端到端 HTTPS 未打通 |
+| P1-3 | TLS/HTTPS 网络加密 | `kernel/net/tls12_client.c` + `kernel/crypto/` | ⚠️ **真实 TLS1.2 客户端已打通，HTTPS 路由未接线**：新增 `tls12_client.c`（真实 ClientHello/ServerHello、证书链/SAN/信任锚校验、RSA PKCS#1 v1.5 密钥交换、双向 Finished、AES-128-GCM 记录层），仅支持 `TLS_RSA_WITH_AES_128_GCM_SHA256 (0x009C)`；64 位测试构建 `TLS_E2E_SELFTEST=1` 在 QEMU 内对 `openssl s_server` 完成真实握手并收 3847 字节 `HTTP/1.0 200`（`main_tls_e2e.log`，merge `cab351d`）；`net64_http.c` 仍无 https/443 路由，TLS1.3/ECDSA/ChaCha20/会话恢复/ALPN 未做 |
 | P1-4 | swap / 内存压力闭环（进程级换出） | `swap64.c` + `memory_pressure.c` | ⚠️ **框架已有但未闭环**：`vmm64_swap_out`/`swap_in` 原语 + 槽位图管理 + swap.hepu 懒扩展（ext2 文件后端）+ 缺页自动换入路径均已实现；但 `memory_pressure.c` 只回收 ext2 块缓存，未在压力等级 1/2 触发进程页换出（无调用者） |
 | P1-5 | /cfg /data 挂载策略与文件级读写实机验证 | `ext2_64.c`（mount slot 1/2） | 验证中 |
 | P1-6 | 桌面 P1 增强（令牌化、图标字体、壁纸 Crossfade、主题取色） | `hepushell.c` + `gfx64.c` | ❌ **未开始**：hepushell Dock 目前渲染字母/位图，无图标字体；gfx64 有 `gfx64_blur_region()` 可复用但 Crossfade 无接线；设计令牌（Design Tokens）体系未建立 |
@@ -77,7 +77,7 @@ supersedes: DEVELOPMENT_ROADMAP.md, PRIORITY_ROADMAP.md, X86_64_DEVELOPMENT_PLAN
 | P3-2 | GPS 定位 + 天气联网显示 | `gps64.c`（已编入 Makefile）；天气取数路径在 `hpdesk.c` | ⚠️ **部分**：gps64.c 存在但无任何网络调用（源码 grep 无 tcp/http/recv/send）；**天气取数已打通**（BUG-59，commit `308e72b`，换国内源 + 解析适配 + 失败重试），但仍走明文 HTTP、无 TLS（P1-3） |
 | P3-3 | 驱动在线下载（联网后自动匹配安装） | `kmod64.c`（已编入 Makefile） | ❌ **规划中**：kmod64.c 存在但无 HTTP 下载路径；依赖 P1-3 TLS 签名校验 |
 | P3-4 | Rust 用户态服务 | `user/rust/` 目录 | ❌ **未接入构建**：15+ crate 存在但 `user/Makefile` 无 cargo 目标、`make_single_img64.sh` 不打包 Rust 产物；`hello-rust.elf` 是历史产物 |
-| P3-5 | 安全审计闭环（crypto/security 模块扩到 AES/SHA/RSA/TLS） | `kernel/crypto/` + `kernel/net/tls_*.c` | ⚠️ **部分**：AES-GCM/SHA-256/RSA/X.509 等套件代码已编入（Makefile:85-95），TLS 协议代码已编入但未接入 HTTP 调用链；证书链校验、端到端 HTTPS 仍待闭环 |
+| P3-5 | 安全审计闭环（crypto/security 模块扩到 AES/SHA/RSA/TLS） | `kernel/crypto/` + `kernel/net/tls12_client.c` | ⚠️ **部分**：AES-GCM/SHA-256/RSA/X.509 已编入并经 TLS1.2 E2E 实测；证书链校验与双向 Finished 已闭环，但 TLS 仅单一 RSA-GCM 套件、未接 HTTP 调用链，安全审计仍需覆盖新 TLS 路径 |
 | P3-6 | VFS 抽象层 | 64 位：`kernel/arch/x86_64/vfs64.*`；32 位遗留 `kernel/fs/vfs.c` | 🚧 **进行中（常规文件/目录路径已走 VFS，ioctl/mmap 与多 FS 后端待续）**：vfs64 node/ops/mount/路径解析 + ext2 后端 + 只读伪设备后端已落地；read/write/pread/stat/open/readdir/getdents/unlink/mkdir/rmdir 经 VFS 路由（未命中回退 ext2 直调）；ioctl/mmap/页缓存、getdents fd→路径映射、ext4/exFAT/NTFS 后端为 deferred；详见 `docs/design/VFS64.md` |
 | P3-7 | NVMe / virtio-gpu 驱动 | NVMe：`kernel/drivers/nvme.c`（32 位遗留）；virtio-gpu 无源码 | ❌ **不在 64 位 Makefile**：64 位树无 `nvme64.c`/virtio-gpu 驱动 |
 | P3-8 | Secure Boot 签名验证 | 引导器待建 | ❌ **源码不存在** |
