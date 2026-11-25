@@ -1,0 +1,7 @@
+[EXT2] selftest: no disk, skip
+[VVRAM] auto-mount: checking MBR...
+[VVRAM] auto-mount: failed to read MBR (IDE not ready)
+[KUNIT] suite: p3-security (0x00000002 tests)
+[KUNIT-SKIP] p3-security/s3_normal_user_denied (ext2 backend unavailable)
+[KUNIT-SKIP] p3-security/posix_error_table (ext2 backend unavailable)
+[KTEST] RESULT: ALL PASS

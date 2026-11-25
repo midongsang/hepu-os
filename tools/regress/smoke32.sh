@@ -43,20 +43,26 @@ grep -qF '[DESKTOP] elastic free desktop init done' "$OUT/ser32.txt" && have_des
 KTEST=$(grep -E '\[KTEST\] RESULT:' "$OUT/ser32.txt" | tail -1 | awk '{print $NF}')
 FAIL_SUITES=$(grep -c 'KUNIT-FAIL-SUITE' "$OUT/ser32.txt")
 FAIL_CASES=$(grep -c 'KUNIT-FAIL]' "$OUT/ser32.txt")
+SKIP_CASES=$(grep -c 'KUNIT-SKIP]' "$OUT/ser32.txt")
+have_ktest=0
+[ "${KTEST:-NONE}" = "PASS" ] && have_ktest=1
 lines=$(wc -l < "$OUT/ser32.txt")
 
 {
   echo "serial=$have_serial initrd=$have_initrd net=$have_net desk=$have_desk fault=$have_fault lines=$lines"
-  echo "ktest_result=${KTEST:-NONE} fail_suites=$FAIL_SUITES fail_cases=$FAIL_CASES"
+  echo "ktest_result=${KTEST:-NONE} ktest=$have_ktest fail_suites=$FAIL_SUITES fail_cases=$FAIL_CASES skip_cases=$SKIP_CASES"
   echo "--- failed suites ---"
   grep 'KUNIT-FAIL-SUITE' "$OUT/ser32.txt" || echo "(none)"
   echo "--- failed cases ---"
   grep 'KUNIT-FAIL]' "$OUT/ser32.txt" || echo "(none)"
+  echo "--- skipped cases ---"
+  grep 'KUNIT-SKIP]' "$OUT/ser32.txt" || echo "(none)"
 } | tee "$OUT/smoke32.txt"
 
-# 六项全过且无 fault 才算冒烟 PASS
+# 六项全过、无 fault 且 KTEST 为 PASS 才算冒烟 PASS
 if [ "$have_serial" -eq 1 ] && [ "$have_initrd" -eq 1 ] && [ "$have_net" -eq 1 ] \
-   && [ "$have_desk" -eq 1 ] && [ "$have_fault" -eq 0 ]; then
+   && [ "$have_desk" -eq 1 ] && [ "$have_fault" -eq 0 ] \
+   && [ "$have_ktest" -eq 1 ]; then
   exit 0
 else
   exit 1

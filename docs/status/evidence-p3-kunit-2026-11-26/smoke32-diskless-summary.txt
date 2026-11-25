@@ -1,0 +1,9 @@
+serial=1 initrd=1 net=1 desk=1 fault=0 lines=110969
+ktest_result=PASS ktest=1 fail_suites=0 fail_cases=0 skip_cases=2
+--- failed suites ---
+(none)
+--- failed cases ---
+(none)
+--- skipped cases ---
+[KUNIT-SKIP] p3-security/s3_normal_user_denied (ext2 backend unavailable)
+[KUNIT-SKIP] p3-security/posix_error_table (ext2 backend unavailable)

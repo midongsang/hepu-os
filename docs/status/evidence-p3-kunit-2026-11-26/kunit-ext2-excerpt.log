@@ -1,0 +1,7 @@
+[EXT2] selftest: mounted (ext2 fs on IDE disk)
+[EXT2] selftest: synced back to IDE disk
+[EXT2] selftest done
+p3-securityp3-security[KUNIT] suite: p3-security (0x00000002 tests)
+s3_normal_user_denied/data/p3sec/data/p3sec/own.txt/data/p3sec/dir/data/p3sec/own.txt/data/p3sec/dir/data/p3secPASS
+posix_error_table/data/p3sec/data/p3sec/keep/data/p3sec/keep/data/p3secPASS
+[KTEST] RESULT: ALL PASS

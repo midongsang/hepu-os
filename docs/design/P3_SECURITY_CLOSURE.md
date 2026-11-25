@@ -101,7 +101,10 @@ ext2 建文件/建目录在 inode 表或块分配失败时返回 `-28`，VFS 原
 
 ## 7. 测试与证据
 
-新增 `kernel/kunit/kunit_p3_security.c`，注册 `p3-security` 套件（2 个用例）：
+新增 `kernel/kunit/kunit_p3_security.c`，注册 `p3-security` 套件（2 个用例）。
+套件前置条件：`ext2_mounted != 0`。两个用例都要用 `vfs_open(O_CREAT)` 真实落盘建文件，
+无 ext2 后端的启动冒烟会显式返回 `KUNIT_SKIP` 并输出 `[KUNIT-SKIP] p3-security/...`，
+不以 PASS 冒充通过；带 ext2 盘的运行中两项均 2/2 PASS。
 
 - `s3_normal_user_denied`：
   - 校验 root uid=0/role=2、普通用户 uid=1/role=1；
@@ -125,8 +128,15 @@ ext2 建文件/建目录在 inode 表或块分配失败时返回 `-28`，VFS 原
 [5/5] GATE: PASS
 ```
 
-`p3-security` 套件每次启动均注册并全过；VFS 写阶段首启 18/18 PASS
-（含 `P3.mkdir`、`shell.mv`、`term.edit`）。
+`p3-security` 套件每次启动均注册；有 ext2 盘时 2/2 PASS，无盘时 2 项 SKIP。
+VFS 写阶段首启 18/18 PASS（含 `P3.mkdir`、`shell.mv`、`term.edit`）。
+
+2026-11-26 修复：32 位无盘冒烟曾出现 `s3_normal_user_denied` 与
+`posix_error_table` 两项失败，失败点都在测试内 `vfs_open(O_CREAT)`；根因是
+`kernel/fs/vfs.c` 在 `ext2_mounted == 0` 时返回 `VFS_EIO`。两条权限/错误码断言本身
+没有失效。修复方式是给套件加真实后端前置检查并返回 SKIP；另用带 ext2 分区的
+32 位 QEMU 复核两项均 PASS。同时 `tools/regress/smoke32.sh` 把 `[KTEST] RESULT`
+纳入冒烟 PASS 判定（原脚本只打印不拦截），避免 KUnit 失败被“六项通过”掩盖。
 
 ## 8. 已知边界
 

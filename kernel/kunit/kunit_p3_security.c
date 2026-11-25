@@ -10,6 +10,20 @@
 
 static void p3_log(const char *s) { vga_puts(s); }
 
+static int p3_ext2_ready(void)
+{
+    extern int ext2_mounted;
+    return ext2_mounted != 0;
+}
+
+static void p3_skip_no_ext2(const char *case_name)
+{
+    extern void serial_puts(uint16_t, const char *);
+    serial_puts(0x3F8, "[KUNIT-SKIP] p3-security/");
+    serial_puts(0x3F8, case_name);
+    serial_puts(0x3F8, " (ext2 backend unavailable)\n");
+}
+
 static void p3_cleanup(void)
 {
     /* 先恢复 root，避免上一轮测试失败时残留普通用户身份 */
@@ -37,6 +51,10 @@ static kunit_result_t test_s3_normal_user_denied(void)
     extern int auth64_current_role(void);
 
     p3_cleanup();
+    if (!p3_ext2_ready()) {
+        p3_skip_no_ext2("s3_normal_user_denied");
+        return KUNIT_SKIP;
+    }
 
     /* 账户最小实现：root + 普通用户都在，root 角色=2 */
     KUNIT_ASSERT(auth64_is_configured() == 1, " account configured ");
@@ -91,6 +109,10 @@ static kunit_result_t test_posix_error_table(void)
 {
     extern int mu_user_switch(int);
     p3_cleanup();
+    if (!p3_ext2_ready()) {
+        p3_skip_no_ext2("posix_error_table");
+        return KUNIT_SKIP;
+    }
 
     if (!vfs_find("/data")) {
         KUNIT_ASSERT(vfs_mkdir("/data") == 0, " create /data ");
