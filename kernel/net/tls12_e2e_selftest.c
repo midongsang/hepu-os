@@ -14,6 +14,7 @@
 #include <string.h>
 #include "tls12_client.h"
 #include "vga.h"
+#include "kstdio.h"
 
 #if defined(HEPU_TLS_E2E_SELFTEST) && HEPU_TLS_E2E_SELFTEST
 
@@ -36,18 +37,30 @@ void tls12_e2e_selftest(void)
     }
     uint32_t lip = dhcp64_get_ip();
     uint32_t gw  = eth64_get_gateway();
-    vga_printf("[TLS-E2E] 本机 IP=0x%08x 网关=0x%08x\n", lip, gw);
+    {
+        char ipbuf[40];
+        snprintf(ipbuf, sizeof(ipbuf),
+                 "[TLS-E2E] 本机 IP=%d.%d.%d.%d 网关=%d.%d.%d.%d\n",
+                 (int)((lip >> 24) & 0xff), (int)((lip >> 16) & 0xff),
+                 (int)((lip >> 8) & 0xff),  (int)(lip & 0xff),
+                 (int)((gw >> 24) & 0xff),  (int)((gw >> 16) & 0xff),
+                 (int)((gw >> 8) & 0xff),  (int)(gw & 0xff));
+        vga_puts(ipbuf);
+    }
 
     tls12_result_t res;
-    uint8_t resp[1024];
+    uint8_t resp[4096];
     uint32_t rlen = 0;
 
     vga_puts("[TLS-E2E] 连接 10.0.2.2:4433，跑真实 TLS1.2 握手 + 加密 GET\n");
     int rc = tls12_client_run("10.0.2.2", 4433, "/",
                               resp, sizeof(resp), &rlen, &res);
 
-    if (rc == 0 && res.complete) {
-        vga_printf("[TLS-E2E] 结果: 握手完成 cipher=0x%04x 证书链=%d 张\n",
+    if (rc == 0 && res.complete && rlen == 0) {
+        vga_puts("[TLS-E2E] 结果: 握手完成但加密响应为空\n");
+        vga_puts("[TLS-E2E] TLS1.2 端到端未通过\n");
+    } else if (rc == 0 && res.complete) {
+        vga_printf("[TLS-E2E] 结果: 握手完成 cipher=0x%x 证书链=%d 张\n",
                    res.cipher_suite, res.cert_count);
         vga_printf("[TLS-E2E] 解密响应正文 %u 字节，片段: ", rlen);
         {
