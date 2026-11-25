@@ -1,10 +1,16 @@
 /* ============================================================================
  * 赫普OS 64 位 —— 真实 TLS 1.2 客户端握手（kernel/net 接入层）
  *
- * 本文件替代 kernel/net/tls.c 中 hepu_tls_handshake() 的"伪完成"路径：
  * 真实 TCP 连接 → ClientHello → ServerHello 协商校验 → 证书链校验 →
- * ECDHE/RSA 密钥交换 → 双向 Finished 校验 → AES-128-GCM 记录层。
+ * RSA 密钥交换 → 双向 Finished 校验 → AES-128-GCM 记录层 → 加密 GET。
  * 任一阶段失败即关闭连接并记录阶段/原因，绝不置为"已加密"。
+ *
+ * 本次支持：
+ *   - 套件 TLS_RSA_WITH_AES_128_GCM_SHA256 (0x009C)
+ *   - 证书链：签名验签 / 有效期 / SAN(优先)+CN(兜底) / 信任锚
+ *   - 真实 transcript(SHA-256)，双向 verify_data 比对
+ * 未支持（边界）：TLS 1.3、ECDHE-* 套件、ECDSA 套件、ChaCha20、PSK、
+ *   会话恢复、ALPN、压缩。
  *
  * 传输层复用 64 位 TCP API：tcp64_connect/send/recv/close/get_state +
  * net64_poll；DNS 走 dns64_resolve，点分十进制字面量直接解析。
@@ -16,11 +22,15 @@
 #include "tls.h"
 #include "csprng.h"
 #include "sha.h"
+#include "hmac.h"
+#include "aes.h"
+#include "rsa.h"
 #include "x509.h"
 #include "tls12_trusted_ca.h"
+#include "kstdio.h"
 #include "vga.h"
 
-/* ---- 64 位 TCP / DNS 接口（定义于 arch/x86_64） ---- */
+/* ---- 64 位 TCP / DNS / 时钟接口（定义于 arch/x86_64） ---- */
 extern uint32_t dns64_resolve(const char *hostname);
 extern int  tcp64_connect(uint32_t remote_ip, uint16_t remote_port, uint16_t local_port);
 extern int  tcp64_send(int sock, const uint8_t *data, int length);
@@ -39,12 +49,9 @@ extern uint8_t  rtc64_get_seconds(void);
 #define TCP_ESTABLISHED 4
 
 /* 密码套件 */
-#define SUITE_ECDHE_RSA_AES128_GCM_SHA256 0xC02F
-#define SUITE_ECDHE_ECDSA_AES128_GCM_SHA256 0xC02B
 #define SUITE_RSA_AES128_GCM_SHA256       0x009C
-#define SUITE_ECDHE_RSA_AES256_GCM_SHA384 0xC030
 
-/* 记录类型（与 tls.h 对齐） */
+/* 记录类型 */
 #define RT_CHANGE_CIPHER_SPEC 20
 #define RT_ALERT              21
 #define RT_HANDSHAKE          22
@@ -73,6 +80,12 @@ typedef struct {
     x509_cert_t chain[X509_MAX_CHAIN_LEN];
     int      chain_len;
 
+    /* 派生密钥 */
+    uint8_t  master_secret[48];
+    uint8_t  cw_key[16], sw_key[16];
+    uint8_t  c_iv[4], s_iv[4];
+    uint64_t c_seq, s_seq;
+
     /* 握手消息重组缓冲 */
     uint8_t  hs_accum[16384];
     uint32_t hs_accum_len;
@@ -97,7 +110,6 @@ static void tls12_fail(tls12_sess_t *s, const char *stage, const char *reason)
     vga_printf("[TLS12][FAIL] 阶段=%s 原因=%s\n", stage, reason);
 }
 
-/* 解析点分十进制字面量 IP；成功返回 1，输出大端序 uint32（同 dns64_resolve） */
 static int parse_literal_ip(const char *hostname, uint32_t *out)
 {
     uint32_t parts[4] = {0};
@@ -117,7 +129,6 @@ static int parse_literal_ip(const char *hostname, uint32_t *out)
     return 1;
 }
 
-/* 从 TCP 流精确读满 n 字节（墙钟超时，秒） */
 static int sess_recv(tls12_sess_t *s, uint8_t *buf, uint32_t n, uint32_t timeout_s)
 {
     uint32_t got = 0;
@@ -133,7 +144,6 @@ static int sess_recv(tls12_sess_t *s, uint8_t *buf, uint32_t n, uint32_t timeout
     return 0;
 }
 
-/* 读一条 TLS 记录（5 字节头 + 分片） */
 static int read_record(tls12_sess_t *s, uint8_t *rec, uint32_t max,
                        uint32_t *rec_len, uint32_t timeout_s)
 {
@@ -147,8 +157,6 @@ static int read_record(tls12_sess_t *s, uint8_t *rec, uint32_t max,
     return 0;
 }
 
-/* 取下一条完整握手消息（处理跨记录分片与单记录多消息）。
- * CCS 记录置 got_ccs；Alert 记录直接失败。 */
 static int next_handshake_message(tls12_sess_t *s, uint8_t *msg, uint32_t msg_max,
                                   uint32_t *msg_len, uint32_t timeout_s)
 {
@@ -188,23 +196,49 @@ static int next_handshake_message(tls12_sess_t *s, uint8_t *msg, uint32_t msg_ma
 }
 
 /* ----------------------------------------------------------------------------
- * ClientHello 构造
+ * 握手 transcript（SHA-256，覆盖双向握手消息字节）
  * -------------------------------------------------------------------------- */
 
-static const uint16_t offered_suites[] = {
-    SUITE_ECDHE_RSA_AES128_GCM_SHA256,
-    SUITE_ECDHE_ECDSA_AES128_GCM_SHA256,
-    SUITE_RSA_AES128_GCM_SHA256,
-    SUITE_ECDHE_RSA_AES256_GCM_SHA384,
-};
-#define N_SUITES (sizeof(offered_suites)/sizeof(offered_suites[0]))
+static sha256_ctx_t g_transcript;
 
-static int suite_offered(uint16_t suite)
+static void transcript_reset(void) { sha256_init(&g_transcript); }
+static void transcript_add(const uint8_t *msg, uint32_t len)
 {
-    for (uint32_t i = 0; i < N_SUITES; i++)
-        if (offered_suites[i] == suite) return 1;
-    return 0;
+    sha256_update(&g_transcript, msg, len);
 }
+static void transcript_digest(uint8_t out[32]) { sha256_final(&g_transcript, out); }
+
+/* ----------------------------------------------------------------------------
+ * PRF (TLS 1.2, HMAC-SHA256 P_hash)
+ * -------------------------------------------------------------------------- */
+
+static void prf_sha256(const uint8_t *secret, uint32_t secret_len,
+                        const char *label, const uint8_t *seed, uint32_t seed_len,
+                        uint8_t *out, uint32_t out_len)
+{
+    uint8_t a0[256], a[32], h[32];
+    uint32_t a0_len = 0, mlen = 0;
+    uint32_t ll = (uint32_t)strlen(label);
+    memcpy(a0, label, ll); a0_len = ll;
+    memcpy(a0 + a0_len, seed, seed_len); a0_len += seed_len;
+
+    hmac_compute(SHA_ALG_SHA256, secret, secret_len, a0, a0_len, a, &mlen);
+
+    uint32_t off = 0;
+    while (off < out_len) {
+        uint8_t in[288]; uint32_t il = 0;
+        memcpy(in, a, 32); il = 32;
+        memcpy(in + il, a0, a0_len); il += a0_len;
+        hmac_compute(SHA_ALG_SHA256, secret, secret_len, in, il, h, &mlen);
+        uint32_t cp = out_len - off; if (cp > 32) cp = 32;
+        memcpy(out + off, h, cp); off += cp;
+        hmac_compute(SHA_ALG_SHA256, secret, secret_len, a, 32, a, &mlen);
+    }
+}
+
+/* ----------------------------------------------------------------------------
+ * ClientHello 构造
+ * -------------------------------------------------------------------------- */
 
 static uint16_t build_client_hello(tls12_sess_t *s, uint8_t *out, uint32_t out_max)
 {
@@ -214,34 +248,25 @@ static uint16_t build_client_hello(tls12_sess_t *s, uint8_t *out, uint32_t out_m
     uint32_t host_len = (uint32_t)strlen(hostname);
 
     uint8_t *p = out;
-    /* 记录头：type=22, version=0x0303, length 后填 */
     *p++ = RT_HANDSHAKE; *p++ = 0x03; *p++ = 0x03;
     uint8_t *rec_len = p; p += 2;
 
-    /* 握手头：ClientHello(1) + 3 字节长度 */
     uint8_t *hs = p;
     *p++ = HS_CLIENT_HELLO;
     uint8_t *hs_len = p; p += 3;
 
-    /* 客户端版本 TLS 1.2 */
     *p++ = 0x03; *p++ = 0x03;
     memcpy(p, s->client_random, 32); p += 32;
 
-    /* session_id 空 */
-    *p++ = 0x00;
+    *p++ = 0x00;                              /* session_id 空 */
 
-    /* cipher_suites */
-    uint16_t cs_len = (uint16_t)(N_SUITES * 2);
-    *p++ = (uint8_t)(cs_len >> 8); *p++ = (uint8_t)cs_len;
-    for (uint32_t i = 0; i < N_SUITES; i++) {
-        *p++ = (uint8_t)(offered_suites[i] >> 8);
-        *p++ = (uint8_t)offered_suites[i];
-    }
+    /* cipher suite: RSA_WITH_AES128_GCM_SHA256 */
+    *p++ = 0x00; *p++ = 0x01;
+    *p++ = (uint8_t)(SUITE_RSA_AES128_GCM_SHA256 >> 8);
+    *p++ = (uint8_t)SUITE_RSA_AES128_GCM_SHA256;
 
-    /* compression_methods: null */
-    *p++ = 0x01; *p++ = 0x00;
+    *p++ = 0x01; *p++ = 0x00;                /* compression null */
 
-    /* 扩展总长（占位） */
     uint8_t *ext_len = p; p += 2;
     uint8_t *ext_start = p;
 
@@ -252,11 +277,10 @@ static uint16_t build_client_hello(tls12_sess_t *s, uint8_t *out, uint32_t out_m
         *p++ = (uint8_t)(sni_len >> 8); *p++ = (uint8_t)sni_len;
         uint16_t list_len = (uint16_t)(host_len + 3);
         *p++ = (uint8_t)(list_len >> 8); *p++ = (uint8_t)list_len;
-        *p++ = 0x00; /* host_name */
+        *p++ = 0x00;
         *p++ = (uint8_t)(host_len >> 8); *p++ = (uint8_t)host_len;
         memcpy(p, hostname, host_len); p += host_len;
     }
-
     /* supported_groups (type 10): secp256r1(0x17), x25519(0x1D) */
     {
         *p++ = 0x00; *p++ = 0x0A;
@@ -265,16 +289,14 @@ static uint16_t build_client_hello(tls12_sess_t *s, uint8_t *out, uint32_t out_m
         *p++ = 0x00; *p++ = 0x17;
         *p++ = 0x00; *p++ = 0x1D;
     }
-
     /* ec_point_formats (type 11): uncompressed */
     {
         *p++ = 0x00; *p++ = 0x0B;
         *p++ = 0x00; *p++ = 0x02;
         *p++ = 0x01; *p++ = 0x00;
     }
-
-    /* signature_algorithms (type 13):
-     * rsa_pkcs1_sha256(0x0401), ecdsa_secp256r1_sha256(0x0403) */
+    /* signature_algorithms (type 13): rsa_pkcs1_sha256(0x0401),
+     * ecdsa_secp256r1_sha256(0x0403) */
     {
         *p++ = 0x00; *p++ = 0x0D;
         *p++ = 0x00; *p++ = 0x06;
@@ -307,10 +329,7 @@ static uint16_t build_client_hello(tls12_sess_t *s, uint8_t *out, uint32_t out_m
 static const char *cipher_name(uint16_t suite)
 {
     switch (suite) {
-        case SUITE_ECDHE_RSA_AES128_GCM_SHA256: return "ECDHE-RSA-AES128-GCM-SHA256";
-        case SUITE_ECDHE_ECDSA_AES128_GCM_SHA256: return "ECDHE-ECDSA-AES128-GCM-SHA256";
         case SUITE_RSA_AES128_GCM_SHA256: return "RSA-AES128-GCM-SHA256";
-        case SUITE_ECDHE_RSA_AES256_GCM_SHA384: return "ECDHE-RSA-AES256-GCM-SHA384";
         default: return "UNKNOWN";
     }
 }
@@ -344,8 +363,8 @@ static int parse_server_hello(tls12_sess_t *s, const uint8_t *msg, uint32_t msg_
     uint16_t cipher = ((uint16_t)msg[off] << 8) | msg[off + 1]; off += 2;
     uint8_t comp = msg[off];
 
-    if (!suite_offered(cipher)) {
-        vga_printf("[TLS12] 套件 0x%04x 不在客户端声明范围内\n", cipher);
+    if (cipher != SUITE_RSA_AES128_GCM_SHA256) {
+        vga_printf("[TLS12] 套件 0x%04x 不被本客户端支持\n", cipher);
         tls12_fail(s, "ServerHello", "协商套件不在客户端声明范围内");
         return -1;
     }
@@ -355,7 +374,7 @@ static int parse_server_hello(tls12_sess_t *s, const uint8_t *msg, uint32_t msg_
     }
 
     s->cipher = cipher;
-    vga_printf("[TLS12] ServerHello 协商成功: cipher=0x%04x (%s)\n",
+    vga_printf("[TLS12] ServerHello: version=0x0303 协商成功 cipher=0x%04x (%s)\n",
                cipher, cipher_name(cipher));
     return 0;
 }
@@ -419,7 +438,6 @@ static int validate_certificate_chain(tls12_sess_t *s)
                                          rtc64_get_day(), rtc64_get_hours(),
                                          rtc64_get_minutes(), rtc64_get_seconds());
 
-    /* 有效期：逐张检查 notBefore / notAfter */
     for (int i = 0; i < s->chain_len; i++) {
         int r = x509_check_date_sort(&s->chain[i], now);
         if (r != X509_VALID) {
@@ -429,14 +447,12 @@ static int validate_certificate_chain(tls12_sess_t *s)
         }
     }
 
-    /* 主机名：叶子证书 SAN 优先，无 SAN 时 CN 兜底 */
     if (x509_check_hostname(&s->chain[0], s->host) != 0) {
         tls12_fail(s, "Certificate", "主机名与 SAN/CN 不匹配");
         return -1;
     }
     vga_puts("[TLS12] 主机名校验通过（SAN 优先 / CN 兜底）\n");
 
-    /* 信任锚：编译期编入的测试 CA */
     if (tls12_trusted_ca_der_len == 0) {
         tls12_fail(s, "Certificate", "内核未编入信任锚 CA");
         return -1;
@@ -460,16 +476,318 @@ static int validate_certificate_chain(tls12_sess_t *s)
 }
 
 /* ----------------------------------------------------------------------------
+ * 记录层：TLS 1.2 AES-128-GCM
+ * -------------------------------------------------------------------------- */
+
+static int tls12_write_record(tls12_sess_t *s, uint8_t type,
+                              const uint8_t *pt, uint32_t pt_len)
+{
+    uint8_t rec[1600];
+    uint32_t body_len = 8 + pt_len + 16;
+    if (5 + body_len > sizeof(rec)) return -1;
+
+    uint8_t nonce[12];
+    memcpy(nonce, s->c_iv, 4);
+    nonce[4] = (uint8_t)(s->c_seq >> 56);
+    nonce[5] = (uint8_t)(s->c_seq >> 48);
+    nonce[6] = (uint8_t)(s->c_seq >> 40);
+    nonce[7] = (uint8_t)(s->c_seq >> 32);
+    nonce[8] = (uint8_t)(s->c_seq >> 24);
+    nonce[9] = (uint8_t)(s->c_seq >> 16);
+    nonce[10]= (uint8_t)(s->c_seq >> 8);
+    nonce[11]= (uint8_t)(s->c_seq);
+
+    uint8_t aad[13];
+    for (int i = 0; i < 6; i++) aad[i] = (uint8_t)(s->c_seq >> (40 - 8*i));
+    aad[6] = type;
+    aad[7] = 0x03; aad[8] = 0x03;
+    uint16_t ct_len = (uint16_t)(pt_len + 16);
+    aad[9]  = (uint8_t)(ct_len >> 8);
+    aad[10] = (uint8_t)ct_len;
+
+    uint8_t ct[1500], tag[16];
+    if (aes_gcm_encrypt(s->cw_key, 128, nonce, 12, aad, 13, pt, ct, pt_len, tag, 16) != 0) {
+        tls12_fail(s, "Record", "GCM 加密失败");
+        return -1;
+    }
+
+    rec[0] = type; rec[1] = 0x03; rec[2] = 0x03;
+    rec[3] = (uint8_t)(body_len >> 8); rec[4] = (uint8_t)body_len;
+    memcpy(rec + 5, nonce + 4, 8);
+    memcpy(rec + 13, ct, pt_len);
+    memcpy(rec + 13 + pt_len, tag, 16);
+
+    if (tcp64_send(s->sock, rec, 5 + body_len) < 0) {
+        tls12_fail(s, "Record", "记录发送失败");
+        return -1;
+    }
+    s->c_seq++;
+    return 0;
+}
+
+/* 读一条加密记录并解密；输出明文与内层记录类型。跳过对端 CCS 记录。 */
+static int tls12_read_decrypted(tls12_sess_t *s, uint8_t *pt, uint32_t pt_max,
+                                 uint32_t *pt_len, uint8_t *inner_type, uint32_t timeout_s)
+{
+    uint8_t rec[1600];
+    uint32_t rlen = 0;
+    for (;;) {
+        if (read_record(s, rec, sizeof(rec), &rlen, timeout_s) != 0) return -1;
+        if (rec[0] == RT_CHANGE_CIPHER_SPEC) { s->got_ccs = 1; continue; }
+        break;
+    }
+
+    if (rec[0] == RT_ALERT) {
+        vga_printf("[TLS12][FAIL] 对端 alert level=%d desc=%d\n",
+                   rec[5], rlen > 6 ? rec[6] : 0);
+        tls12_fail(s, "Alert", "对端告警关闭");
+        return -1;
+    }
+    if (rec[0] != RT_APPLICATION_DATA && rec[0] != RT_HANDSHAKE) return -1;
+
+    uint16_t body_len = ((uint16_t)rec[3] << 8) | rec[4];
+    if (body_len < 8 + 16) return -1;
+    uint32_t ct_len = body_len - 8 - 16;
+
+    uint8_t nonce[12];
+    memcpy(nonce, s->s_iv, 4);
+    memcpy(nonce + 4, rec + 5, 8);
+
+    uint8_t aad[13];
+    for (int i = 0; i < 6; i++) aad[i] = (uint8_t)(s->s_seq >> (40 - 8*i));
+    aad[6] = rec[0];
+    aad[7] = 0x03; aad[8] = 0x03;
+    uint16_t ct_field = (uint16_t)(ct_len + 16);
+    aad[9]  = (uint8_t)(ct_field >> 8);
+    aad[10] = (uint8_t)ct_field;
+
+    uint8_t tag[16];
+    memcpy(tag, rec + 5 + 8 + ct_len, 16);
+    if (ct_len > pt_max) return -1;
+    if (aes_gcm_decrypt(s->sw_key, 128, nonce, 12, aad, 13,
+                        rec + 13, pt, ct_len, tag, 16) != 0) {
+        tls12_fail(s, "Record", "GCM 解密/标签校验失败");
+        return -1;
+    }
+    *pt_len = ct_len;
+    *inner_type = rec[0];
+    s->s_seq++;
+    return 0;
+}
+
+/* ----------------------------------------------------------------------------
+ * 密钥交换 / Finished
+ * -------------------------------------------------------------------------- */
+
+static int do_client_key_exchange(tls12_sess_t *s)
+{
+    /* RSA 密钥交换：PMS = 0x0303 + 46 字节随机，用叶子公钥加密。 */
+    uint8_t pms[48];
+    pms[0] = 0x03; pms[1] = 0x03;
+    csprng_get_bytes(pms + 2, 46);
+
+    rsa_public_key_t pk;
+    if (rsa_parse_public_key(&pk, s->chain[0].public_key,
+                             s->chain[0].public_key_len) != 0) {
+        tls12_fail(s, "ClientKeyExchange", "叶子证书公钥解析失败");
+        return -1;
+    }
+
+    uint8_t ct[256]; uint32_t ct_len = 0;
+    if (rsa_encrypt(&pk, pms, 48, ct, &ct_len) != 0) {
+        tls12_fail(s, "ClientKeyExchange", "PMS RSA 加密失败");
+        return -1;
+    }
+
+    /* 握手消息：type=16, len=2+ct_len */
+    uint8_t msg[300];
+    uint32_t m = 0;
+    msg[m++] = HS_CLIENT_KEY_EXCH;
+    msg[m++] = (uint8_t)((2 + ct_len) >> 16);
+    msg[m++] = (uint8_t)((2 + ct_len) >> 8);
+    msg[m++] = (uint8_t)(2 + ct_len);
+    msg[m++] = (uint8_t)(ct_len >> 8);
+    msg[m++] = (uint8_t)ct_len;
+    memcpy(msg + m, ct, ct_len); m += ct_len;
+
+    transcript_add(msg, m);
+
+    if (tcp64_send(s->sock, msg, (int)m) < 0) {
+        tls12_fail(s, "ClientKeyExchange", "发送失败");
+        return -1;
+    }
+    vga_puts("[TLS12] ClientKeyExchange 已发送（RSA 加密 PMS）\n");
+
+    /* PMS -> master_secret -> key_block */
+    uint8_t seed[64];
+    memcpy(seed, s->client_random, 32);
+    memcpy(seed + 32, s->server_random, 32);
+    prf_sha256(pms, 48, "master secret", seed, 64, s->master_secret, 48);
+
+    uint8_t kb[40];
+    uint8_t seed2[64];
+    memcpy(seed2, s->server_random, 32);
+    memcpy(seed2 + 32, s->client_random, 32);
+    prf_sha256(s->master_secret, 48, "key expansion", seed2, 64, kb, 40);
+    memcpy(s->cw_key, kb, 16);
+    memcpy(s->sw_key, kb + 16, 16);
+    memcpy(s->c_iv, kb + 32, 4);
+    memcpy(s->s_iv, kb + 36, 4);
+    vga_puts("[TLS12] 密钥派生完成（MS + client/server write key/IV）\n");
+    return 0;
+}
+
+static int send_finished(tls12_sess_t *s)
+{
+    uint8_t h[32];
+    transcript_digest(h);
+    uint8_t vd[12];
+    prf_sha256(s->master_secret, 48, "client finished", h, 32, vd, 12);
+
+    uint8_t msg[16];
+    msg[0] = HS_FINISHED;
+    msg[1] = 0; msg[2] = 0; msg[3] = 12;
+    memcpy(msg + 4, vd, 12);
+    transcript_add(msg, 16);
+
+    if (tls12_write_record(s, RT_HANDSHAKE, msg, 16) != 0) return -1;
+    vga_puts("[TLS12] 客户端 Finished 已发送\n");
+    return 0;
+}
+
+static int verify_server_finished(tls12_sess_t *s)
+{
+    uint8_t pt[256]; uint32_t pt_len = 0; uint8_t inner = 0;
+    if (tls12_read_decrypted(s, pt, sizeof(pt), &pt_len, &inner, 5) != 0) {
+        tls12_fail(s, "Finished", "未收到服务端 Finished");
+        return -1;
+    }
+    if (pt_len != 16 || pt[0] != HS_FINISHED) {
+        tls12_fail(s, "Finished", "服务端 Finished 格式非法");
+        return -1;
+    }
+
+    uint8_t h[32];
+    transcript_digest(h);
+    uint8_t expect[12];
+    prf_sha256(s->master_secret, 48, "server finished", h, 32, expect, 12);
+
+    if (memcmp(expect, pt + 4, 12) != 0) {
+        tls12_fail(s, "Finished", "服务端 verify_data 校验失败");
+        return -1;
+    }
+    vga_puts("[TLS12] 服务端 Finished verify_data 校验通过\n");
+    return 0;
+}
+
+/* ----------------------------------------------------------------------------
  * 主流程
  * -------------------------------------------------------------------------- */
+
+static int handshake_run(tls12_sess_t *s)
+{
+    /* 1. 地址解析 */
+    uint32_t ip = dns64_resolve(s->host);
+    if (ip == 0) {
+        if (!parse_literal_ip(s->host, &ip)) {
+            tls12_fail(s, "DNS", "主机名解析失败");
+            return -1;
+        }
+        vga_puts("[TLS12] 使用字面量 IP\n");
+    }
+
+    /* 2. TCP 连接 */
+    s->sock = tcp64_connect(ip, s->port, 12345);
+    if (s->sock < 0) {
+        tls12_fail(s, "TCP", "connect 失败");
+        return -1;
+    }
+    uint64_t t0 = rtc64_get_timestamp();
+    while (rtc64_get_timestamp() - t0 < 3) {
+        net64_poll();
+        if (tcp64_get_state(s->sock) == TCP_ESTABLISHED) break;
+        for (volatile int dw = 0; dw < 10000; dw++) { }
+    }
+    if (tcp64_get_state(s->sock) != TCP_ESTABLISHED) {
+        tls12_fail(s, "TCP", "连接未在超时内建立");
+        return -1;
+    }
+    vga_puts("[TLS12] TCP 已建立\n");
+
+    transcript_reset();
+
+    /* 3. ClientHello */
+    uint8_t ch[512];
+    uint16_t ch_len = build_client_hello(s, ch, sizeof(ch));
+    if (ch_len == 0) {
+        tls12_fail(s, "ClientHello", "构造失败");
+        return -1;
+    }
+    if (tcp64_send(s->sock, ch, ch_len) < 0) {
+        tls12_fail(s, "ClientHello", "发送失败");
+        return -1;
+    }
+    transcript_add(ch + 5, ch_len - 5);
+    vga_printf("[TLS12] sent ClientHello 已发送 (%d 字节)\n", (int)ch_len);
+
+    /* 4. ServerHello */
+    uint8_t msg[4096];
+    uint32_t msg_len = 0;
+    if (next_handshake_message(s, msg, sizeof(msg), &msg_len, 5) != 0) {
+        tls12_fail(s, "ServerHello", "未收到合法 ServerHello");
+        return -1;
+    }
+    transcript_add(msg, msg_len);
+    if (parse_server_hello(s, msg, msg_len) != 0) return -1;
+
+    /* 5. Certificate */
+    if (next_handshake_message(s, msg, sizeof(msg), &msg_len, 5) != 0) {
+        tls12_fail(s, "Certificate", "未收到 Certificate 消息");
+        return -1;
+    }
+    transcript_add(msg, msg_len);
+    if (parse_certificate(s, msg, msg_len) != 0) return -1;
+    if (validate_certificate_chain(s) != 0) return -1;
+    if (s->result) s->result->cert_count = s->chain_len;
+
+    /* 6. ServerHelloDone（RSA 密钥交换无 ServerKeyExchange） */
+    if (next_handshake_message(s, msg, sizeof(msg), &msg_len, 5) != 0) {
+        tls12_fail(s, "ServerHelloDone", "未收到 ServerHelloDone");
+        return -1;
+    }
+    if (msg[0] != HS_SERVER_HELLO_DONE) {
+        tls12_fail(s, "ServerHelloDone", "握手类型不是 ServerHelloDone");
+        return -1;
+    }
+    transcript_add(msg, msg_len);
+    vga_puts("[TLS12] 收到 ServerHelloDone\n");
+
+    /* 7. ClientKeyExchange + 派生 */
+    if (do_client_key_exchange(s) != 0) return -1;
+
+    /* 8. ChangeCipherSpec -> Finished */
+    uint8_t ccs[1] = { 0x01 };
+    if (tcp64_send(s->sock, ccs, 1) < 0) {
+        tls12_fail(s, "ChangeCipherSpec", "发送失败");
+        return -1;
+    }
+    vga_puts("[TLS12] 已发送 ChangeCipherSpec（客户端）\n");
+
+    if (send_finished(s) != 0) return -1;
+
+    /* 9. 服务端 Finished 校验 */
+    if (verify_server_finished(s) != 0) return -1;
+
+    s->complete = 1;
+    vga_puts("[TLS12] 双向 Finished 校验通过，加密通道建立\n");
+    return 0;
+}
 
 int tls12_client_run(const char *hostname, uint16_t port,
                       const char *http_path,
                       uint8_t *resp, uint32_t resp_max, uint32_t *resp_len,
                       tls12_result_t *result)
 {
-    (void)http_path; (void)resp; (void)resp_max; (void)resp_len;
-
     tls12_sess_t sess;
     memset(&sess, 0, sizeof(sess));
     sess.port = port;
@@ -479,82 +797,38 @@ int tls12_client_run(const char *hostname, uint16_t port,
 
     vga_printf("[TLS12] 开始真实握手: %s:%d\n", sess.host, (int)port);
 
-    /* 1. 解析地址 */
-    uint32_t ip = dns64_resolve(sess.host);
-    if (ip == 0) {
-        if (!parse_literal_ip(sess.host, &ip)) {
-            tls12_fail(&sess, "DNS", "主机名解析失败");
-            return TLS12_FAIL;
+    int rc = handshake_run(&sess);
+
+    /* 10. 握手成功后发送加密 HTTP GET（可选） */
+    if (rc == 0 && sess.complete && http_path && resp && resp_len) {
+        char req[320];
+        int rl = 0;
+        rl += snprintf(req + rl, sizeof(req) - rl, "GET %s HTTP/1.1\r\n", http_path);
+        rl += snprintf(req + rl, sizeof(req) - rl, "Host: %s\r\n", sess.host);
+        rl += snprintf(req + rl, sizeof(req) - rl, "Connection: close\r\n\r\n");
+
+        if (tls12_write_record(&sess, RT_APPLICATION_DATA, (uint8_t *)req, (uint32_t)rl) != 0) {
+            vga_puts("[TLS12][FAIL] 加密 GET 发送失败\n");
+        } else {
+            vga_puts("[TLS12] 加密 HTTP GET 已发送，等待响应...\n");
+            uint32_t total = 0;
+            for (int i = 0; i < 20; i++) {
+                uint8_t pt[1024]; uint32_t pt_len = 0; uint8_t inner = 0;
+                if (tls12_read_decrypted(&sess, pt, sizeof(pt), &pt_len, &inner, 5) != 0) break;
+                if (total + pt_len > resp_max) pt_len = resp_max - total;
+                memcpy(resp + total, pt, pt_len);
+                total += pt_len;
+                if (total >= resp_max) break;
+            }
+            *resp_len = total;
+            vga_printf("[TLS12] 收到解密应用数据 %u 字节\n", total);
         }
-        vga_puts("[TLS12] 使用字面量 IP\n");
     }
-
-    /* 2. TCP 连接 */
-    sess.sock = tcp64_connect(ip, port, 12345);
-    if (sess.sock < 0) {
-        tls12_fail(&sess, "TCP", "connect 失败");
-        return TLS12_FAIL;
-    }
-
-    uint64_t t0 = rtc64_get_timestamp();
-    while (rtc64_get_timestamp() - t0 < 3) {
-        net64_poll();
-        if (tcp64_get_state(sess.sock) == TCP_ESTABLISHED) break;
-        for (volatile int dw = 0; dw < 10000; dw++) { }
-    }
-    if (tcp64_get_state(sess.sock) != TCP_ESTABLISHED) {
-        tls12_fail(&sess, "TCP", "连接未在超时内建立");
-        tcp64_close(sess.sock);
-        return TLS12_FAIL;
-    }
-    vga_puts("[TLS12] TCP 已建立\n");
-
-    /* 3. 发送 ClientHello */
-    uint8_t ch[512];
-    uint16_t ch_len = build_client_hello(&sess, ch, sizeof(ch));
-    if (ch_len == 0) {
-        tls12_fail(&sess, "ClientHello", "构造失败");
-        tcp64_close(sess.sock);
-        return TLS12_FAIL;
-    }
-    if (tcp64_send(sess.sock, ch, ch_len) < 0) {
-        tls12_fail(&sess, "ClientHello", "发送失败");
-        tcp64_close(sess.sock);
-        return TLS12_FAIL;
-    }
-    vga_printf("[TLS12] 已发送 ClientHello (%d 字节)\n", (int)ch_len);
-
-    /* 4. 接收并校验 ServerHello */
-    uint8_t msg[4096];
-    uint32_t msg_len = 0;
-    if (next_handshake_message(&sess, msg, sizeof(msg), &msg_len, 5) != 0) {
-        tls12_fail(&sess, "ServerHello", "未收到合法 ServerHello");
-        tcp64_close(sess.sock);
-        return TLS12_FAIL;
-    }
-    if (parse_server_hello(&sess, msg, msg_len) != 0) {
-        tcp64_close(sess.sock);
-        return TLS12_FAIL;
-    }
-
-    /* 5. Certificate 消息 + 证书链校验 */
-    if (next_handshake_message(&sess, msg, sizeof(msg), &msg_len, 5) != 0) {
-        tls12_fail(&sess, "Certificate", "未收到 Certificate 消息");
-        tcp64_close(sess.sock);
-        return TLS12_FAIL;
-    }
-    if (parse_certificate(&sess, msg, msg_len) != 0 ||
-        validate_certificate_chain(&sess) != 0) {
-        tcp64_close(sess.sock);
-        return TLS12_FAIL;
-    }
-    if (result) result->cert_count = sess.chain_len;
-
-    /* 里程碑②边界：密钥交换 / Finished / 记录层在后续里程碑接入。
-     * 在此之前绝不把会话标记为 complete。 */
-    vga_puts("[TLS12] 阶段②通过：证书链校验 OK（后续阶段未接入）\n");
 
     tcp64_close(sess.sock);
-    if (result) result->complete = 0;
-    return TLS12_OK;
+    if (result) {
+        result->complete = sess.complete;
+        result->cipher_suite = sess.cipher;
+    }
+    return rc == 0 ? TLS12_OK : TLS12_FAIL;
 }
