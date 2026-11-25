@@ -130,7 +130,9 @@ int uhci_control_transfer(usb_controller_t *ctrl,
     int td_count = 0;
 
     /* 阶段1: SETUP TD */
-    tds[0].token = (dev->address << 8) | (0 << 15) | UHCI_TD_TOKEN_PID_SETUP | (8 << 21);
+    /* UHCI TD MaxLength 字段编码为“长度-1”；0x7FF 表示零长度。 */
+    tds[0].token = (dev->address << 8) | (0 << 15) | UHCI_TD_TOKEN_PID_SETUP |
+                   (uint32_t)((8 - 1) << 21);
     tds[0].buffer = virt_to_phys(setup);
     tds[0].status = UHCI_TD_STS_ACTIVE;
     tds[0].link = 0x01;  /* 暂时终止（bit0=1，其余位必须为0） */
@@ -138,9 +140,14 @@ int uhci_control_transfer(usb_controller_t *ctrl,
 
     /* 阶段2: DATA TD（如果有） */
     if (length > 0 && data) {
+        uint16_t data_len = (uint16_t)length;
+        /* 控制传输的 TD MaxLength 是本次 wLength，不是端点单包上限；
+         * 控制器会按 endpoint max packet 拆包。按 max_packet_size0 截断会
+         * 让设备在仍有多字节待发时被提前进入 STATUS 阶段并 STALL。 */
+        if (data_len > 0x7FF) data_len = 0x7FF;
         tds[1].token = (dev->address << 8) | (0 << 15) |
                        (direction ? UHCI_TD_TOKEN_PID_IN : UHCI_TD_TOKEN_PID_OUT) |
-                       (dev->max_packet_size0 << 21);
+                       (uint32_t)((data_len - 1) << 21);
         tds[1].buffer = virt_to_phys(data);
         tds[1].status = UHCI_TD_STS_ACTIVE;
         tds[1].link = 0x01;
@@ -150,9 +157,10 @@ int uhci_control_transfer(usb_controller_t *ctrl,
 
     /* 阶段3: STATUS TD */
     int status_idx = td_count;
+    /* 控制传输状态阶段固定零长度：MaxLength=0x7FF，DataToggle=DATA1。 */
     tds[status_idx].token = (dev->address << 8) | (0 << 15) |
                             (direction ? UHCI_TD_TOKEN_PID_OUT : UHCI_TD_TOKEN_PID_IN) |
-                            (dev->max_packet_size0 << 21);
+                            (1u << 19) | (0x7FFu << 21);
     tds[status_idx].status = UHCI_TD_STS_ACTIVE;
     tds[status_idx].link = 0x01;  /* 终止 */
 
@@ -179,10 +187,17 @@ int uhci_control_transfer(usb_controller_t *ctrl,
     uhci->ctrl_qh->element = virt_to_phys(&tds[0]);
     uhci_wmb();  /* TD/QH 字段落内存后再发布 */
 
-    /* 轮询等待最后一个TD完成 */
-    int timeout = 1000000;  /* 约1秒 */
+    /* 轮询等待最后一个TD完成。每轮读一次 FRNUM，让 QEMU 在 I/O 退出点
+     * 推进帧定时器；纯内存忙等会让 QEMU 只处理极少数帧。 */
     int completed = 0;
-    while (timeout-- > 0) {
+    uint16_t last_fr = uhci_readw(uhci, UHCI_FRNUM);
+    int frame_count = 0;
+    while (frame_count < 2000) {
+        uint16_t fr = uhci_readw(uhci, UHCI_FRNUM);
+        if (fr != last_fr) {
+            last_fr = fr;
+            frame_count++;
+        }
         __asm__ volatile("" ::: "memory");
         if (!(*(volatile uint32_t *)&tds[status_idx].status & UHCI_TD_STS_ACTIVE)) {
             completed = 1;
@@ -196,6 +211,17 @@ int uhci_control_transfer(usb_controller_t *ctrl,
     /* 检查状态 */
     uint32_t status = tds[status_idx].status;
     if (!completed) {
+        for (int i = 0; i < td_count; i++) {
+            serial_puts(0x3F8, "[UHCI-CTRL-TD] idx=");
+            serial_puthex(0x3F8, (uint32_t)i);
+            serial_puts(0x3F8, " link=");
+            serial_puthex(0x3F8, tds[i].link);
+            serial_puts(0x3F8, " status=");
+            serial_puthex(0x3F8, tds[i].status);
+            serial_puts(0x3F8, " token=");
+            serial_puthex(0x3F8, tds[i].token);
+            serial_puts(0x3F8, "\n");
+        }
         uhci_serial_status("[UHCI-CTRL-TIMEOUT]", dev->address,
                            setup->bRequest, tds[status_idx].status);
         vga_printf("[UHCI] Control transfer timeout (dev=%d req=0x%02x)\n",
@@ -213,9 +239,13 @@ int uhci_control_transfer(usb_controller_t *ctrl,
         return -1;
     }
 
-    /* 返回实际传输长度（从TD的token字段的长度位提取） */
-    int actual_len = (tds[status_idx].token >> 21) & 0x7FF;
-    if (actual_len == 0x7FF) actual_len = 0;  /* 0长度数据包 */
+    /* 返回实际传输长度。控制 STATUS TD 固定零长度，其 status 的
+     * ActualLength 恒为 0x7FF；IN 传输应取 DATA TD 的 ActualLength。 */
+    int actual_len = length;
+    if (direction && length > 0 && td_count > 1) {
+        uint32_t data_status = tds[1].status & 0x7FF;
+        actual_len = (data_status == 0x7FF) ? 0 : (int)(data_status + 1);
+    }
 
     uhci_serial_status("[UHCI-CTRL-OK]", dev->address,
                        setup->bRequest, tds[status_idx].status);
@@ -233,35 +263,47 @@ int uhci_bulk_transfer(usb_controller_t *ctrl,
 {
     uhci_controller_t *uhci = (uhci_controller_t *)ctrl;
     if (!uhci || !dev || !data || length <= 0) return -1;
-    if (endpoint < 0 || endpoint > 15) return -1;
+    /* endpoint 可能带 0x80 方向位（如 MSC 的 bulk_in_ep=0x81）。 */
+    if (!(endpoint >= 0 && (endpoint & 0x0F) <= 15)) return -1;
 
-    /* 使用静态TD（避免动态分配），批量传输最多8个TD */
-    static uhci_td_t bulk_tds[8];
-    memset(bulk_tds, 0, sizeof(bulk_tds));
+    /* 批量端点的单包上限通常是 64 字节；max_packet_size0 只适用于
+     * 控制端点 0，不能拿来切分 Bulk-Only 的 CBW/CSW。 */
+    int max_packet = 64;
 
-    int max_packet = dev->max_packet_size0;
-    if (max_packet == 0) max_packet = 64;
+    int need_tds = (length + max_packet - 1) / max_packet;
+    if (need_tds <= 0 || need_tds > 1024) return -1;
+
+    /* TD 必须 16 字节对齐；动态分配，避免静态池把整扇区/多扇区传输截断。 */
+    uint32_t td_bytes = (uint32_t)need_tds * sizeof(uhci_td_t);
+    uint8_t *td_raw = (uint8_t *)kmalloc(td_bytes + 15);
+    if (!td_raw) return -1;
+    uhci_td_t *bulk_tds = (uhci_td_t *)(((uintptr_t)td_raw + 15) & ~(uintptr_t)15);
+    memset(bulk_tds, 0, td_bytes);
 
     int td_count = 0;
     int remaining = length;
     uint8_t *data_ptr = (uint8_t *)data;
 
     /* 创建多个DATA TD（每个最大max_packet字节） */
-    while (remaining > 0 && td_count < 8) {
+    while (remaining > 0 && td_count < need_tds) {
         int this_len = (remaining > max_packet) ? max_packet : remaining;
 
         bulk_tds[td_count].token =
             (dev->address << 8) |
-            (endpoint << 15) |
+            ((endpoint & 0x0F) << 15) |
             (direction ? UHCI_TD_TOKEN_PID_IN : UHCI_TD_TOKEN_PID_OUT) |
-            (this_len << 21);
+            ((uint32_t)(td_count & 1) << 19) |
+            ((uint32_t)(this_len - 1) << 21);
         bulk_tds[td_count].buffer = virt_to_phys(data_ptr);
         bulk_tds[td_count].status = UHCI_TD_STS_ACTIVE;
         bulk_tds[td_count].link = 0x01;
 
         if (td_count > 0) {
+            /* bit2=Depth-First：让 QH 在同一帧内继续走完整条 TD 链，
+             * 否则 QEMU 每个 SOF 只处理一个 TD，512 个 TD 的整扇区写会
+             * 拖到分钟级并触发超时。 */
             bulk_tds[td_count - 1].link =
-                virt_to_phys(&bulk_tds[td_count]);
+                virt_to_phys(&bulk_tds[td_count]) | 0x04;
         }
 
         data_ptr += this_len;
@@ -269,17 +311,30 @@ int uhci_bulk_transfer(usb_controller_t *ctrl,
         td_count++;
     }
 
-    if (td_count == 0) return 0;
+    if (td_count == 0) {
+        kfree(td_raw);
+        return 0;
+    }
 
-    /* 将第一个TD加入帧列表的第0帧 */
+    /* 把 TD 链挂到批量 QH 的 element，再让第 0 帧指向该 QH。
+     * 直接把 TD 链写进帧列表时，QEMU 每帧都从链头重新遍历；超过
+     * FRAME_MAX_LOOPS(256) 个已完成 TD 后，帧内循环额度耗尽，永远到不了
+     * 后面的活动 TD（32KB/64 扇区写会停在 16KB）。QH 会由控制器推进
+     * element，已完成的 TD 不再占用每帧遍历额度。 */
+    uhci->bulk_qh->link = 0x01;
+    uhci->bulk_qh->element = virt_to_phys(&bulk_tds[0]);
     uint32_t old_frame0 = uhci->frame_list[0];
-    uhci_wmb();  /* TD 字段落内存后再发布帧列表指针 */
-    uhci->frame_list[0] = virt_to_phys(&bulk_tds[0]);
+    uhci_wmb();  /* TD/QH 字段落内存后再发布帧列表指针 */
+    uhci->frame_list[0] = virt_to_phys(uhci->bulk_qh) | 0x02;
 
-    /* 轮询等待最后一个TD完成 */
-    int timeout = 5000000;
+    /* 按 FRNUM 推进帧定时器，避免 QEMU 在纯内存忙等中不处理帧。 */
     int completed = 0;
-    while (timeout-- > 0) {
+    uint16_t last_fr = uhci_readw(uhci, UHCI_FRNUM);
+    int frame_count = 0;
+    while (frame_count < 5000) {
+        uint16_t fr = uhci_readw(uhci, UHCI_FRNUM);
+        if (fr != last_fr) { last_fr = fr; frame_count++; }
+        __asm__ volatile("" ::: "memory");
         if (!(bulk_tds[td_count - 1].status & UHCI_TD_STS_ACTIVE)) {
             completed = 1;
             break;
@@ -287,11 +342,14 @@ int uhci_bulk_transfer(usb_controller_t *ctrl,
     }
 
     uhci->frame_list[0] = old_frame0;
+    uhci->bulk_qh->element = 0x01;  /* 防止下一次传输复用前留下活动链 */
 
     uint32_t status = bulk_tds[td_count - 1].status;
     if (!completed) {
         vga_printf("[UHCI] Bulk timeout (dev=%d ep=%d len=%d)\n",
                    dev->address, endpoint, length);
+        /* 超时后 QEMU 可能仍持有 async 队列引用，TD 内存不能立即释放；
+         * 保留这一块，避免控制器异步完成时写已释放内存。 */
         return -1;
     }
 
@@ -300,9 +358,11 @@ int uhci_bulk_transfer(usb_controller_t *ctrl,
                    UHCI_TD_STS_BITSTUFF)) {
         vga_printf("[UHCI] Bulk error: status=0x%08x (dev=%d ep=%d)\n",
                    status, dev->address, endpoint);
+        kfree(td_raw);
         return -1;
     }
 
+    kfree(td_raw);
     return length - remaining;
 }
 
@@ -314,7 +374,8 @@ int uhci_interrupt_transfer(usb_controller_t *ctrl,
 {
     uhci_controller_t *uhci = (uhci_controller_t *)ctrl;
     if (!uhci || !dev || !data || length <= 0) return -1;
-    if (endpoint < 0 || endpoint > 15) return -1;
+    /* endpoint 可能带 0x80 方向位（如 MSC 的 bulk_in_ep=0x81）。 */
+    if (!(endpoint >= 0 && (endpoint & 0x0F) <= 15)) return -1;
 
     static uhci_td_t int_td;
     memset(&int_td, 0, sizeof(int_td));
@@ -457,6 +518,9 @@ int uhci_init(usb_controller_t *ctrl)
         uhci->ctrl_qh->link = 0x01;  /* 终止：只置 bit0，0x7F 会写入保留位 */
         uhci->ctrl_qh->element = 0x01;  /* 无效 */
     }
+    memset(uhci->bulk_qh, 0, sizeof(uhci_qh_t));
+    uhci->bulk_qh->link = 0x01;
+    uhci->bulk_qh->element = 0x01;
 
     /* 5. 设置帧列表指向控制队列 */
     for (int i = 0; i < 1024; i++) {

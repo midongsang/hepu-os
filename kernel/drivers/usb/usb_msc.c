@@ -184,15 +184,29 @@ int usb_msc_read_blocks(msc_device_t *msc, uint32_t lba,
 {
     if (!msc || !buffer || count == 0) return -1;
 
-    scsi_read10_t cb;
-    memset(&cb, 0, sizeof(cb));
-    cb.opcode = SCSI_READ_10;
-    cb.lba = be32(lba);
-    cb.transfer_length = be16(count);
+    if (msc->block_size == 0) return -1;
 
-    int data_len = count * msc->block_size;
-    return usb_msc_command(msc->usb_dev, msc, &cb, sizeof(cb),
-                            buffer, data_len, USB_DIR_IN);
+    /* UHCI 批量 TD 链和 QEMU 帧调度对超长单次 BOT 命令不友好；
+     * 按 8 个扇区（4KB）分块，任何 count 都保持整扇区语义。 */
+    uint8_t *buf = (uint8_t *)buffer;
+    while (count > 0) {
+        uint16_t chunk = (count > 8) ? 8 : count;
+
+        scsi_read10_t cb;
+        memset(&cb, 0, sizeof(cb));
+        cb.opcode = SCSI_READ_10;
+        cb.lba = be32(lba);
+        cb.transfer_length = be16(chunk);
+
+        int ret = usb_msc_command(msc->usb_dev, msc, &cb, sizeof(cb),
+                                   buf, chunk * msc->block_size, USB_DIR_IN);
+        if (ret < 0) return -1;
+
+        lba += chunk;
+        buf += chunk * msc->block_size;
+        count -= chunk;
+    }
+    return 0;
 }
 
 /* SCSI WRITE(10) */
@@ -201,15 +215,27 @@ int usb_msc_write_blocks(msc_device_t *msc, uint32_t lba,
 {
     if (!msc || !buffer || count == 0) return -1;
 
-    scsi_write10_t cb;
-    memset(&cb, 0, sizeof(cb));
-    cb.opcode = SCSI_WRITE_10;
-    cb.lba = be32(lba);
-    cb.transfer_length = be16(count);
+    if (msc->block_size == 0) return -1;
 
-    int data_len = count * msc->block_size;
-    return usb_msc_command(msc->usb_dev, msc, &cb, sizeof(cb),
-                            (void *)buffer, data_len, USB_DIR_OUT);
+    uint8_t *buf = (uint8_t *)buffer;
+    while (count > 0) {
+        uint16_t chunk = (count > 8) ? 8 : count;
+
+        scsi_write10_t cb;
+        memset(&cb, 0, sizeof(cb));
+        cb.opcode = SCSI_WRITE_10;
+        cb.lba = be32(lba);
+        cb.transfer_length = be16(chunk);
+
+        int ret = usb_msc_command(msc->usb_dev, msc, &cb, sizeof(cb),
+                                   buf, chunk * msc->block_size, USB_DIR_OUT);
+        if (ret < 0) return -1;
+
+        lba += chunk;
+        buf += chunk * msc->block_size;
+        count -= chunk;
+    }
+    return 0;
 }
 
 /* SCSI REQUEST SENSE */
