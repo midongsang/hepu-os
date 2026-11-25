@@ -130,7 +130,7 @@ source_of_truth: kernel/arch/x86_64/
 
 | 优先级 | 内容 | 状态 |
 |--------|------|------|
-| P0 安全 | SEC-02 COW（部分：缺页框架已有，fork 已接入，clone 返回 ENOSYS）/ SEC-04 裸盘（PID==0 临时闸已加，capability 模型待落地）/ SEC-05 动态缓冲（已闭环：readdir 去全局锁与 2048B 上限）/ SEC-06 panic栈（部分：SMEP/SMAP 启用与门控已闭环，内核态缺页仍 hlt）/ SEC-07 fd隔离（部分：异常隔离+每进程 fd 表+读写限制已验证；路径长度策略待做）/ SEC-14 撞号（已关闭）/ SEC-18 ext2挂死（部分：遍历 guard 已加，根因未复现） | 🟡 未全部完成（仅 SEC-14 关闭；其余为部分/待解决，详见主表） |
+| P0 安全 | SEC-02 COW（部分：缺页框架已有，fork 已接入，clone 返回 ENOSYS）/ SEC-04 裸盘（per-process 凭据 + RAW_DISK/MKFS/REBOOT 能力位已落地；对象句柄统一/负向测试待补）/ SEC-05 动态缓冲（已闭环：readdir 去全局锁与 2048B 上限）/ SEC-06 panic栈（部分：SMEP/SMAP 启用与门控已闭环，内核态缺页仍 hlt）/ SEC-07 fd隔离（部分：异常隔离+每进程 fd 表+读写限制已验证；路径长度策略待做）/ SEC-14 撞号（已关闭）/ SEC-18 ext2挂死（部分：遍历 guard 已加，根因未复现） | 🟡 未全部完成（仅 SEC-14 关闭；其余为部分/待解决，详见主表） |
 | P1 进程 | fork/waitpid/kill/tgkill/ps/sigaction/抢占调度/信号投递已落地；COW 写时复制见 SEC-02（部分） | 🟡 基本完成（COW 未闭环） |
 | P2 文件 | 基础工具/install/pkg list | ✅ 基本完成 |
 | P3 隔离域 | 优先级调度/nice/domains | ✅ 基本完成 |
