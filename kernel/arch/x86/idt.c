@@ -298,6 +298,7 @@ void idt_handler(uint32_t isr_number, uint32_t error_code,
                                 (uint32_t)isr_number, error_code,
                                 fr2[11], fr2[12], fr2[14]);
             }
+            crash_restart_mark();
             sys_exit(1, 0, 0, 0);
             /* 正常不会到达: sys_exit 首次调用启动Shell(不返回),
              * 已启动则内部 hlt. 保险兜底. */
@@ -405,6 +406,7 @@ void idt_pf_user_reap(uint32_t fault_addr, uint32_t error_code)
                    current->pid, fault_addr, error_code);
     }
     serial_puts(0x3F8, "[UEXC] user page-fault reaped\n");
+    crash_restart_mark();
     sys_exit(1, 0, 0, 0);
     for (;;) { __asm__ volatile ("hlt"); }
 }

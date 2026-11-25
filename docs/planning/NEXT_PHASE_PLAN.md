@@ -30,7 +30,7 @@ related: ROADMAP.md, P3_BLOCKERS.md
 
 | # | 事项 | 现状 | 目标 |
 |---|---|---|---|
-| B-1 | 崩溃自动重启 | `crash_ctx` 已落地（能记录一次 #DE，含 pc/last_syscall），但卡在 `sys_exit` 在崩溃路径丢弃 shell C 帧，一次启动内做不了多次重启。**2026-11-18 补记**：集成树已验证"重启点被走到 3 次、last_crash 是第 3 次入参"（机制证据），但**真实自动重启闭环仍缺**——现场保留住了，进程没被真正拉起 | 崩溃后自动重启并保留现场，同一启动内可连续 3 次 |
+| B-1 | 崩溃自动重启 | **已完成 2026-11-25**：`shell_main` 入口 supervisor + `sys_exit` 崩溃重入主线栈；同一启动内 `crashsvc` 连续崩溃 3 次、PID 3/4/5，`restarts=3`，第 3 次后回到 `hepu@os:~`；见 `docs/design/CRASH_CTX_LANDING.md` 6.4。**边界**：仅 32 位 QEMU AUTO 构建，独立常驻 supervisor 未做 | 崩溃后自动重启并保留现场，同一启动内可连续 3 次 |
 | B-2 | 文件系统断电一致性 | 未验证 | 写操作中途断电/复位后，fsck 可修复且不丢已 fsync 数据 |
 | B-3 | 长时间运行 | 未验证 | 连续 24h 无泄漏（句柄/内存/中断计数稳定） |
 | B-4 | 32 位 ICMP/TCP | **已修复 2026-11-25**：ARP/TCP 收发字节序统一；补 ARP/TCP 等待；`tools/test_net32.sh` 实测 ping 4/4、TCP established、ifconfig UP | 保持 QEMU e1000 回归；真机网络另立 |
@@ -54,7 +54,7 @@ related: ROADMAP.md, P3_BLOCKERS.md
 ## 顺序建议
 
 1. **A-1、A-2**（启动 + 帧率基准）—— 一周内可出数，且立刻能给后续所有优化当锚
-2. **B-1**（崩溃自动重启闭环）—— 已有 80% 基础，补 shell 帧丢弃这一环
+2. ~~**B-1**（崩溃自动重启闭环）~~ **已完成 2026-11-25**；后续可评估独立 supervisor 进程与真机/64 位覆盖。
 3. **A-3、A-4**（syscall + 存储基准）—— 与 epoll 合并后的回归一起做
 4. **C-1、C-2**（绘制基元 + 帧缓冲抽象）—— 等 M2 出界面后立刻做，越晚越难收敛
 5. **B-2、B-3、B-4**（断电/长跑/网络修复）—— 依赖前面基准就位后再排
@@ -72,7 +72,7 @@ related: ROADMAP.md, P3_BLOCKERS.md
 - A-3 sysprof：命令已实现，串口 shell 通路已接通（`shell64.c` 输入源 + `kernel_main_64.c` 桌面旁路），但 `-serial pty` 的往返验证未完成。
 
 **B 线**：
-- B-1 见上表（机制证据已有、闭环缺失）。
+- B-1 已完成 2026-11-25：同一启动内 3 次真实重启闭环，证据见 `docs/design/CRASH_CTX_LANDING.md` 6.4。
 - B-4 已完成：ARP/ICMP/TCP 字节序与等待修复，QEMU e1000 实测 ping 4/4、
   TCP 三次握手成功；见 `docs/design/B4_NET32_ARP.md`。
 - **新增关注**：A-1 里三个 phase 的 15–23 倍离群，本质是"启动不确定性"，应并入 B-3（长时间运行）之外单独跟踪。

@@ -47,6 +47,11 @@ u32 sys_exit(u32 code, u32 arg2,
 {
     (void)arg2; (void)arg3; (void)arg4;
 
+    /* B-1: 本次退出是否由用户态崩溃触发。必须在入口消费掉，避免
+     * “崩溃时还有其他活进程”把标记留到后面某次普通退出误触发重入。 */
+    extern int crash_restart_consume(void);
+    int restart_after_reap = crash_restart_consume();
+
     /* §5-4 附 第 3 条: owner 退出必须自动回收, 不依赖用户态主动 release。
      * 桌面进程崩了如果不回收, 前台就永远停在"被一个已死的进程持有"的状态,
      * 内核 present 一直被暂停 —— 屏幕永久冻结, 而那恰恰是最需要看错误信息的时候。
@@ -296,6 +301,16 @@ u32 sys_exit(u32 code, u32 arg2,
             crash_ctx_release(proc_table[i].pid);
         }
         proc_lock_release();   /* V3.89-E35: 回收完成、longjmp 前释放表锁 */
+        /* B-1: 用户态崩溃触发的退出，shell_main 可能尚未经过 hug_run 的
+         * setjmp 锚点；此时 longjmp 到全 0 缓冲会跳飞。直接切回主线栈
+         * 重新进入 shell_main，静态计数会保留并继续拉起服务。 */
+        {
+            if (restart_after_reap) {
+                extern void shell_main(void);
+                extern void hepu_enter_mainline(void (*)(void));
+                hepu_enter_mainline(shell_main);
+            }
+        }
         /* V4.00-E45: 此处不再 sti——第二循环入口已 cli(IF=0), 保持到
          * hepu_longjmp 内部 sti 才恢复, 彻底消除"已释放栈上中断窗口". */
 

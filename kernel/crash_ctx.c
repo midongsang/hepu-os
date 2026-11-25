@@ -28,6 +28,7 @@ struct crash_slot {
 };
 
 static struct crash_slot slots[CRASH_SLOT_MAX];
+static volatile int crash_restart_pending = 0;
 
 static uint64_t now_ms(void)
 {
@@ -64,8 +65,21 @@ static void ctx_reset(struct crash_ctx *c, uint32_t pid, const char *name)
     (void)name;
 }
 
+void crash_restart_mark(void)
+{
+    crash_restart_pending = 1;
+}
+
+int crash_restart_consume(void)
+{
+    int pending = crash_restart_pending;
+    crash_restart_pending = 0;
+    return pending;
+}
+
 void crash_ctx_init(void)
 {
+    crash_restart_pending = 0;
     memset(slots, 0, sizeof(slots));
     vga_puts("[CRASHCTX] crash_ctx table init (max 32 slots)\n");
 }

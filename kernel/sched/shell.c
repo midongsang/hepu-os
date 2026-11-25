@@ -37,6 +37,12 @@
 
 #define SHELL_BUFFER_SIZE 128
 
+#ifdef HEPU_AUTO_CRASH_SVC
+/* 同一启动内的最小 supervisor 计数。sys_exit 在无其他活进程时会
+ * longjmp 回 shell_main；计数放在 BSS，不随 AUTO 的 C 栈展开丢失。 */
+static int crash_restart_rounds = 0;
+#endif
+
 /* §3 验收用静态用户入口：进入 ring3 后除零触发 #DE。
  * 与 user_init_start 同走 hepu_exec_static 旁路 ABI，代码位于内核 .text
  * 恒等映射区（见 paging.c 注释），不依赖 initrd ELF 装载器。 */
@@ -191,6 +197,28 @@ void shell_main(void)
 {
     extern int keyboard_readline(char *buf, int max_len);
     char buffer[SHELL_BUFFER_SIZE];
+
+#ifdef HEPU_AUTO_CRASH_SVC
+    /* B-1: 把“崩溃 → 重启”放在 shell_main 入口，而不是 AUTO 段末尾。
+     * crashsvc 崩溃后 sys_exit 会回收全部用户进程并重新进入这里，
+     * 静态计数保留；因此每轮重新拉起都能看到上一次的 last_crash。 */
+    if (crash_restart_rounds < 3) {
+        crash_restart_rounds++;
+        serial_puts(0x3F8, "[AUTO] crashsvc restart ");
+        serial_puthex(0x3F8, (uint32_t)crash_restart_rounds);
+        serial_puts(0x3F8, "/3\n");
+        if (crash_restart_rounds > 1) {
+            extern void crash_ctx_dump_all(void);
+            crash_ctx_dump_all();
+        }
+        crashsvc_launch_once();
+    } else if (crash_restart_rounds == 3) {
+        crash_restart_rounds = 4;
+        extern void crash_ctx_dump_all(void);
+        crash_ctx_dump_all();
+    }
+#endif
+
     extern void wd_init(void);
     wd_init();  /* V3.87-E6: 启动软看门狗(5s 超时自动复位) */
 
@@ -321,23 +349,8 @@ void shell_main(void)
          * 旧桌面已下线, 内核桌面统一由 hpdesk 提供, 这一段不再调它 ——
          * 否则自检会拉出一套跟真实桌面不同的界面, 反而误导。 */
         serial_puts(0x3F8, "[AUTO] desktop preview skipped (desktop moved to hpdesk)\n");
-#ifdef HEPU_AUTO_CRASH_SVC
-        /* §3 crash_ctx 验收通道（**默认关闭**，make AUTO_CRASH_SVC=1 才编进来）：
-         * 静态用户入口在 ring3 触发 #DE，异常入口填 pc/sp/regs/msg 并快照
-         * last_crash，restarts 累计。
-         * 放在自检序列最后：崩溃后 sys_exit 回收全部进程并 longjmp 回主线，本块
-         * C 栈被展开，放在中间会把后续自检项整批截断。
-         * 注：当前无法在同一轮内连续拉起多次；多次重启依赖 supervisor 自动
-         * 拉起（尚未实现）。 */
-        {
-            serial_puts(0x3F8, "[AUTO] crashsvc launch\n");
-            crashsvc_launch_once();
-            {
-                extern void crash_ctx_dump_all(void);
-                crash_ctx_dump_all();
-            }
-        }
-#endif
+/* B-1: crashsvc 的重启循环已前移到 shell_main 入口，见顶部注释；
+         * 这里不再重复拉起，避免第 4 次崩溃把后续自检截断。 */
         } else {
             /* 保护模式: 跳过整批用户态自动演示(含 gfxtest 图形测试), 直接进交互 shell */
             serial_puts(0x3F8, "[AUTO] protect mode: autostart demos skipped, text shell only\n");

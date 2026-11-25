@@ -56,6 +56,11 @@ struct svc_query {
 /* 模块初始化（启动早期调用一次） */
 void crash_ctx_init(void);
 
+/* B-1: 标记“这次退出来自用户态崩溃”，sys_exit 据此选择重入 shell_main
+ * 而不是跳回可能未锚定的 longjmp 上下文。 */
+void crash_restart_mark(void);
+int  crash_restart_consume(void);
+
 /* 按 pid 分配/复用一个现场槽位，绑定服务名；返回 ctx 指针（失败返回 NULL）。
  * 槽位是内核静态表项，不走 kheap，不存在逐进程堆泄漏。 */
 struct crash_ctx *crash_ctx_alloc(uint32_t pid, const char *name);

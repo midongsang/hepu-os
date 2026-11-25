@@ -168,16 +168,15 @@ msg / ts），状态置 dead，`restarts++`。
 > last_crash 覆盖"这两段机制本身；**不等于**真实服务被 supervisor 自动重启了
 > 三次。
 
-### 6.3 未达到项与确切卡点
+### 6.3 未达到项、卡点与闭环补记
 
-- **真实重启闭环仍缺 supervisor，属未完成项。** 6.2 的 3 次计数是内核侧探针
-  直接驱动快照路径得到的机制验证；真实"用户服务崩后被自动拉起、再崩"的闭环
-  在本轮没有跑通。卡点：当前 `sys_exit` 在"无其他活进程"时回收全部进程并
-  `longjmp` 回主线 Shell，AUTO 段的 C 调用栈被展开，无法在同一轮 AUTO 内连续
-  拉起同一服务三次；系统里也还没有 supervisor 自动拉起用户服务的闭环
-  （`services_monitor_tick` 只面向内核 def 服务，且本环境未被驱动到该分支）。
-  `restarts` 累计逻辑、同名槽位复用、`last_crash` 覆盖已就位，差一个真正的
-  重启调度闭环。
+- **真实重启闭环：2026-11-25 已补齐，见 6.4。** 6.2 的 3 次计数是内核侧探针
+  直接驱动快照路径得到的机制验证；当时真实"用户服务崩后被自动拉起、再崩"的
+  闭环没有跑通。原卡点：`sys_exit` 在"无其他活进程"时回收全部进程并
+  `longjmp` 回主线 Shell，而 `mainline_jmp_buf` 可能尚未由 `hug_run` 锚定，
+  或指向已经返回的 `mainline_save` 栈帧；AUTO 段的 C 调用栈被展开后无法在同一
+  启动内连续拉起同一服务三次。现改为崩溃退出时由 `sys_exit` 直接切回主线栈、
+  重新进入 `shell_main`，静态计数保留，不再依赖未锚定的 longjmp 上下文。
 - **#PF 用户态隔离**：两个页错误处理器（非 PAE / PAE）在确认 `user &&
   current->privilege==PRIV_USER` 时改走 `idt_pf_user_reap()`（切回内核目录 →
   填现场 → 杀进程），不再整机停机；但本轮验收用的是 `#DE`，#PF 路径未在串口上
@@ -187,6 +186,68 @@ msg / ts），状态置 dead，`restarts++`。
   AUTO 到不了），所以用户态 `hepu_syscall2(SYS_CRASH_QUERY, ...)` 这条 ABI 链路
   没有串口证据；内核侧同构 `svc_query` 填充已验证。
 - `last_arg0` 对 YIELD 为 0；尚未跑一个带非零第 0 参数的调用做对照。
+
+
+### 6.4 真实重启闭环（B-1，2026-11-25）
+
+**实现**：`shell_main` 入口维护静态计数 `crash_restart_rounds`（BSS，不随
+AUTO C 栈展开丢失）。计数 <3 时打印 `[AUTO] crashsvc restart N/3` 并调用
+`crashsvc_launch_once()`；第 2、3 轮进入时先 `crash_ctx_dump_all()`，第 3 次
+崩溃回收后把计数置 4 并做最终 dump，然后继续正常 shell 初始化。
+
+崩溃退出路径不再直接 `longjmp`：异常入口先 `crash_restart_mark()`，`sys_exit`
+在入口 `crash_restart_consume()` 消费标记；若本次是无其他活进程的崩溃退出，
+则在回收进程、重置 `current`/TSS 后调用 `hepu_enter_mainline(shell_main)`，
+把 C 栈重新锚定到链接器保留栈，再由 `shell_main` 入口计数拉起下一轮。这样
+避开了"`mainline_jmp_buf` 未锚定 / 指向已返回 `mainline_save` 帧"导致的
+longjmp 跳飞与 triple fault。
+
+**复现命令**（32 位 AUTO 构建）：
+
+```bash
+make -j2 AUTO_CRASH_SVC=1
+TC=.../.toolchain/pkg/root2
+DD=.../.toolchain/pkg/datadir
+LD_LIBRARY_PATH="$TC/usr/lib/x86_64-linux-gnu:$TC/lib/x86_64-linux-gnu" \
+QEMU_MODULE_DIR="$TC/usr/lib/x86_64-linux-gnu/qemu" \
+timeout 35 "$TC/usr/bin/qemu-system-i386" -L "$DD" \
+  -kernel build_v250/kernel.elf -append "hepu.graphics=0" -m 256 \
+  -display none -serial file:/tmp/b1_final3.log -no-reboot
+```
+
+**实测串口**（`/tmp/b1_final3.log`，35s timeout 后 QEMU 仍活着，rc=124 为
+交互 shell 保持运行的预期收尾）：
+
+```
+[AUTO] crashsvc restart 0x00000001/3
+[UPROC] exec-static name=crashsvc rc=3
+[UEXC] Division By Zero
+[CRASHCTX] query crashsvc state=dead restarts=0x00000001
+[AUTO] crashsvc restart 0x00000002/3
+[UPROC] exec-static name=crashsvc rc=4
+[UEXC] Division By Zero
+[CRASHCTX] query crashsvc state=dead restarts=0x00000002
+[AUTO] crashsvc restart 0x00000003/3
+[UPROC] exec-static name=crashsvc rc=5
+[UEXC] Division By Zero
+[CRASHCTX] query crashsvc state=dead restarts=0x00000003
+[CRASHCTX]   pc=0x0x001ACAAE syscall=0x00000006 ts=0x00000744 msg=user #Division By Zero at 0x1acaae esp=0x4000fff0
+[SHELL] main started
+hepu@os:~$
+```
+
+已验证：
+
+- 同一启动内 `crashsvc` 被真正拉起 3 次，PID 依次 3/4/5；`restarts` 从 1
+  累计到 3，最后一次 `last_crash` 仍是 `#DE` 的 pc/syscall/msg。
+- 第 3 次崩溃后系统回到 `[SHELL] main started`，并出现 `hepu@os:~$` 提示符，
+  没有停在 `[PAGING] dir freed`，也没有 triple fault。
+- 三轮都经异常入口 `[UEXC]`、`[CRASH-FRAME]`、`[CRASHLOG] recorded`，现场
+  保留/查询链路未被重启破坏。
+
+**边界**：该 supervisor 是 `AUTO_CRASH_SVC=1` 的 shell 入口工程实现，不是
+独立常驻 supervisor 进程；只验证 32 位 QEMU 无测试盘场景，未覆盖真机、64 位、
+带磁盘服务和多次并发崩溃。默认构建不编译该计数循环。
 
 ## 7. 涉及文件
 
@@ -200,7 +261,10 @@ msg / ts），状态置 dead，`restarts++`。
   - `kernel/sched/services.c`：两个重启点先快照再自增
   - `kernel/ipc/service.c`：注册绑名 / 注销释放
   - `kernel/sched/sched.c`：`crash_ctx_init()`
-  - `kernel/sched/shell.c`：AUTO 验收载体
+  - `kernel/sched/shell.c`：AUTO 验收载体；B-1 起兼 shell_main 入口 supervisor
+  - `kernel/arch/x86/sys_process.c`：B-1 崩溃退出重入主线栈（不再依赖未锚定 longjmp）
+  - `kernel/crash_ctx.c`、`kernel/include/crash_ctx.h`：B-1 `crash_restart_mark/consume`
+  - `kernel/arch/x86/idt.c`：B-1 用户异常/销毁路径标记崩溃退出
   - `kernel/include/process.h`：PCB 末尾挂 `crash_ctx` 指针
   - `kernel/include/syscall.h`、`kernel/include/constants.h`：号段与 `SYS_MAX`
   - `user/apps/diag/diag.c`：追加结构化查询打印段（未重排原有诊断表）
