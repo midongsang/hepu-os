@@ -90,6 +90,7 @@ for pat in \
     "[S4] write-read PASS" \
     "[S4] getdents-nonroot PASS" \
     "[S4U] getdents-nonroot PASS" \
+    "[CREDTEST] PASS" \
     "[S4] fs selftest PASS" \
     "[S4] result=0x1"
 do

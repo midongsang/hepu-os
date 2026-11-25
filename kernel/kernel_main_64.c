@@ -924,6 +924,12 @@ void x86_64_kernel_main(void)
             vga_puts("[S4U] s4getdents.elf not available (optional)\n");
         }
         vga_puts("[S4U] returned\n");
+
+        /* SEC-04: 真实 ring3 负向探针 —— setuid(1000) 后裸盘读必须被拒。 */
+        vga_puts("[CREDTEST] Running /bin/credtest.elf...\n");
+        if (user_process_exec("/bin/credtest.elf") < 0) {
+            vga_puts("[CREDTEST] credtest.elf not available (optional)\n");
+        }
     }
 #endif
     /* 内置 hello 自测以内核函数为入口、需旧模式映射栈到 0x6ff00000；在隔离模式下会把

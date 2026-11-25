@@ -41,6 +41,7 @@ TARGETS := $(BUILD_DIR)/hello.elf $(BUILD_DIR)/shell.elf $(BUILD_DIR)/forktest.e
            $(BUILD_DIR)/epolltest.elf \
            $(BUILD_DIR)/vfsprobe.elf \
            $(BUILD_DIR)/s4getdents.elf \
+           $(BUILD_DIR)/credtest.elf \
            $(BUILD_DIR)/fbsyn.elf \
            $(BUILD_DIR)/install64.elf
 
@@ -220,6 +221,13 @@ $(BUILD_DIR)/vfsprobe.elf: $(BUILD_DIR)/vfsprobe.o $(LDSCRIPT)
 $(BUILD_DIR)/s4getdents.o: $(USER_DIR)apps/s4getdents.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 $(BUILD_DIR)/s4getdents.elf: $(BUILD_DIR)/s4getdents.o $(LDSCRIPT)
+	$(LD) $(LDFLAGS) -T $(LDSCRIPT) -o $@ $<
+	@echo "Built user ELF: $@"
+
+# credtest：SEC-04 非 root/无能力位用户态裸盘闸负向探针
+$(BUILD_DIR)/credtest.o: $(USER_DIR)apps/credtest.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD_DIR)/credtest.elf: $(BUILD_DIR)/credtest.o $(LDSCRIPT)
 	$(LD) $(LDFLAGS) -T $(LDSCRIPT) -o $@ $<
 	@echo "Built user ELF: $@"
 

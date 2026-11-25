@@ -136,6 +136,10 @@ if [ -n "$LOOPDEV" ]; then
             cp ${PROJECT}/user/build/s4getdents.elf /tmp/hepu_root_mnt/bin/s4getdents.elf 2>/dev/null
             echo "  S4 用户态探针已复制到 ext2 (/bin/s4getdents.elf)"
         fi
+        if [ -f ${PROJECT}/user/build/credtest.elf ]; then
+            cp ${PROJECT}/user/build/credtest.elf /tmp/hepu_root_mnt/bin/credtest.elf 2>/dev/null
+            echo "  SEC-04 用户态凭据探针已复制到 ext2 (/bin/credtest.elf)"
+        fi
         # 复制桌面配置文件
         if [ -f ${PROJECT}/rootfs/etc/hepushell/config.hsqml ]; then
             cp ${PROJECT}/rootfs/etc/hepushell/config.hsqml /tmp/hepu_root_mnt/etc/hepushell/ 2>/dev/null
@@ -221,6 +225,9 @@ else
             fi
             if [ -f "$PROJECT/user/build/s4getdents.elf" ]; then
                 echo "write $PROJECT/user/build/s4getdents.elf /bin/s4getdents.elf" | debugfs -w $TMPDIR/rootfs.ext2 2>/dev/null
+            fi
+            if [ -f "$PROJECT/user/build/credtest.elf" ]; then
+                echo "write $PROJECT/user/build/credtest.elf /bin/credtest.elf" | debugfs -w $TMPDIR/rootfs.ext2 2>/dev/null
             fi
             if [ -f "$PROJECT/user/build/sec_test.elf" ]; then
                 echo "write $PROJECT/user/build/sec_test.elf /bin/sec_test.elf" | debugfs -w $TMPDIR/rootfs.ext2 2>/dev/null
