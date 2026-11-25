@@ -1,0 +1,187 @@
+usb_msd_reset 
+usb_msd_reset 
+usb_msd_reset 
+usb_msd_reset 
+usb_msd_maxlun 0
+usb_msd_cmd_submit lun 0, tag 0x3e7, flags 0x00000080, len 12, data-len 36
+usb_msd_data_in 36/36 (scsi 36)
+usb_msd_cmd_complete status 0, tag 0x3e7
+usb_msd_send_status status 0, tag 0x3e7, len 13
+usb_msd_cmd_submit lun 0, tag 0x3e7, flags 0x00000000, len 12, data-len 0
+usb_msd_cmd_complete status 2, tag 0x3e7
+usb_msd_send_status status 1, tag 0x3e7, len 13
+usb_msd_cmd_submit lun 0, tag 0x3e7, flags 0x00000080, len 12, data-len 18
+usb_msd_data_in 18/18 (scsi 18)
+usb_msd_cmd_complete status 0, tag 0x3e7
+usb_msd_send_status status 0, tag 0x3e7, len 13
+usb_msd_cmd_submit lun 0, tag 0x3e7, flags 0x00000000, len 12, data-len 0
+usb_msd_cmd_complete status 0, tag 0x3e7
+usb_msd_send_status status 0, tag 0x3e7, len 13
+usb_msd_cmd_submit lun 0, tag 0x3e7, flags 0x00000080, len 12, data-len 8
+usb_msd_data_in 8/8 (scsi 8)
+usb_msd_cmd_complete status 0, tag 0x3e7
+usb_msd_send_status status 0, tag 0x3e7, len 13
+usb_msd_cmd_submit lun 0, tag 0x3e7, flags 0x00000080, len 12, data-len 27
+usb_msd_data_in 27/27 (scsi 27)
+usb_msd_cmd_complete status 0, tag 0x3e7
+usb_msd_send_status status 0, tag 0x3e7, len 13
+usb_msd_reset 
+usb_msd_reset 
+usb_msd_reset 
+usb_msd_maxlun 0
+usb_msd_cmd_submit lun 0, tag 0x1, flags 0x00000000, len 6, data-len 0
+usb_msd_cmd_complete status 0, tag 0x1
+usb_msd_send_status status 0, tag 0x1, len 13
+usb_msd_cmd_submit lun 0, tag 0x2, flags 0x00000080, len 6, data-len 36
+usb_msd_data_in 36/36 (scsi 36)
+usb_msd_cmd_complete status 0, tag 0x2
+usb_msd_send_status status 0, tag 0x2, len 13
+usb_msd_cmd_submit lun 0, tag 0x3, flags 0x00000080, len 10, data-len 8
+usb_msd_data_in 8/8 (scsi 8)
+usb_msd_cmd_complete status 0, tag 0x3
+usb_msd_send_status status 0, tag 0x3, len 13
+usb_msd_cmd_submit lun 0, tag 0x4, flags 0x00000080, len 10, data-len 512
+usb_msd_data_in 64/512 (scsi 512)
+usb_msd_data_in 64/448 (scsi 448)
+usb_msd_data_in 64/384 (scsi 384)
+usb_msd_data_in 64/320 (scsi 320)
+usb_msd_data_in 64/256 (scsi 256)
+usb_msd_data_in 64/192 (scsi 192)
+usb_msd_data_in 64/128 (scsi 128)
+usb_msd_data_in 64/64 (scsi 64)
+usb_msd_cmd_complete status 0, tag 0x4
+usb_msd_send_status status 0, tag 0x4, len 13
+usb_msd_cmd_submit lun 0, tag 0x5, flags 0x00000000, len 10, data-len 4096
+usb_msd_data_out 64/4096
+usb_msd_data_out 64/4032
+usb_msd_data_out 64/3968
+usb_msd_data_out 64/3904
+usb_msd_data_out 64/3840
+usb_msd_data_out 64/3776
+usb_msd_data_out 64/3712
+usb_msd_data_out 64/3648
+usb_msd_data_out 64/3584
+usb_msd_data_out 64/3520
+usb_msd_data_out 64/3456
+usb_msd_data_out 64/3392
+usb_msd_data_out 64/3328
+usb_msd_data_out 64/3264
+usb_msd_data_out 64/3200
+usb_msd_data_out 64/3136
+usb_msd_data_out 64/3072
+usb_msd_data_out 64/3008
+usb_msd_data_out 64/2944
+usb_msd_data_out 64/2880
+usb_msd_data_out 64/2816
+usb_msd_data_out 64/2752
+usb_msd_data_out 64/2688
+usb_msd_data_out 64/2624
+usb_msd_data_out 64/2560
+usb_msd_data_out 64/2496
+usb_msd_data_out 64/2432
+usb_msd_data_out 64/2368
+usb_msd_data_out 64/2304
+usb_msd_data_out 64/2240
+usb_msd_data_out 64/2176
+usb_msd_data_out 64/2112
+usb_msd_data_out 64/2048
+usb_msd_data_out 64/1984
+usb_msd_data_out 64/1920
+usb_msd_data_out 64/1856
+usb_msd_data_out 64/1792
+usb_msd_data_out 64/1728
+usb_msd_data_out 64/1664
+usb_msd_data_out 64/1600
+usb_msd_data_out 64/1536
+usb_msd_data_out 64/1472
+usb_msd_data_out 64/1408
+usb_msd_data_out 64/1344
+usb_msd_data_out 64/1280
+usb_msd_data_out 64/1216
+usb_msd_data_out 64/1152
+usb_msd_data_out 64/1088
+usb_msd_data_out 64/1024
+usb_msd_data_out 64/960
+usb_msd_data_out 64/896
+usb_msd_data_out 64/832
+usb_msd_data_out 64/768
+usb_msd_data_out 64/704
+usb_msd_data_out 64/640
+usb_msd_data_out 64/576
+usb_msd_data_out 64/512
+usb_msd_data_out 64/448
+usb_msd_data_out 64/384
+usb_msd_data_out 64/320
+usb_msd_data_out 64/256
+usb_msd_data_out 64/192
+usb_msd_data_out 64/128
+usb_msd_data_out 64/64
+usb_msd_cmd_complete status 0, tag 0x5
+usb_msd_send_status status 0, tag 0x5, len 13
+usb_msd_cmd_submit lun 0, tag 0x6, flags 0x00000080, len 10, data-len 4096
+usb_msd_data_in 64/4096 (scsi 4096)
+usb_msd_data_in 64/4032 (scsi 4032)
+usb_msd_data_in 64/3968 (scsi 3968)
+usb_msd_data_in 64/3904 (scsi 3904)
+usb_msd_data_in 64/3840 (scsi 3840)
+usb_msd_data_in 64/3776 (scsi 3776)
+usb_msd_data_in 64/3712 (scsi 3712)
+usb_msd_data_in 64/3648 (scsi 3648)
+usb_msd_data_in 64/3584 (scsi 3584)
+usb_msd_data_in 64/3520 (scsi 3520)
+usb_msd_data_in 64/3456 (scsi 3456)
+usb_msd_data_in 64/3392 (scsi 3392)
+usb_msd_data_in 64/3328 (scsi 3328)
+usb_msd_data_in 64/3264 (scsi 3264)
+usb_msd_data_in 64/3200 (scsi 3200)
+usb_msd_data_in 64/3136 (scsi 3136)
+usb_msd_data_in 64/3072 (scsi 3072)
+usb_msd_data_in 64/3008 (scsi 3008)
+usb_msd_data_in 64/2944 (scsi 2944)
+usb_msd_data_in 64/2880 (scsi 2880)
+usb_msd_data_in 64/2816 (scsi 2816)
+usb_msd_data_in 64/2752 (scsi 2752)
+usb_msd_data_in 64/2688 (scsi 2688)
+usb_msd_data_in 64/2624 (scsi 2624)
+usb_msd_data_in 64/2560 (scsi 2560)
+usb_msd_data_in 64/2496 (scsi 2496)
+usb_msd_data_in 64/2432 (scsi 2432)
+usb_msd_data_in 64/2368 (scsi 2368)
+usb_msd_data_in 64/2304 (scsi 2304)
+usb_msd_data_in 64/2240 (scsi 2240)
+usb_msd_data_in 64/2176 (scsi 2176)
+usb_msd_data_in 64/2112 (scsi 2112)
+usb_msd_data_in 64/2048 (scsi 2048)
+usb_msd_data_in 64/1984 (scsi 1984)
+usb_msd_data_in 64/1920 (scsi 1920)
+usb_msd_data_in 64/1856 (scsi 1856)
+usb_msd_data_in 64/1792 (scsi 1792)
+usb_msd_data_in 64/1728 (scsi 1728)
+usb_msd_data_in 64/1664 (scsi 1664)
+usb_msd_data_in 64/1600 (scsi 1600)
+usb_msd_data_in 64/1536 (scsi 1536)
+usb_msd_data_in 64/1472 (scsi 1472)
+usb_msd_data_in 64/1408 (scsi 1408)
+usb_msd_data_in 64/1344 (scsi 1344)
+usb_msd_data_in 64/1280 (scsi 1280)
+usb_msd_data_in 64/1216 (scsi 1216)
+usb_msd_data_in 64/1152 (scsi 1152)
+usb_msd_data_in 64/1088 (scsi 1088)
+usb_msd_data_in 64/1024 (scsi 1024)
+usb_msd_data_in 64/960 (scsi 960)
+usb_msd_data_in 64/896 (scsi 896)
+usb_msd_data_in 64/832 (scsi 832)
+usb_msd_data_in 64/768 (scsi 768)
+usb_msd_data_in 64/704 (scsi 704)
+usb_msd_data_in 64/640 (scsi 640)
+usb_msd_data_in 64/576 (scsi 576)
+usb_msd_data_in 64/512 (scsi 512)
+usb_msd_data_in 64/448 (scsi 448)
+usb_msd_data_in 64/384 (scsi 384)
+usb_msd_data_in 64/320 (scsi 320)
+usb_msd_data_in 64/256 (scsi 256)
+usb_msd_data_in 64/192 (scsi 192)
+usb_msd_data_in 64/128 (scsi 128)
+usb_msd_data_in 64/64 (scsi 64)
+usb_msd_cmd_complete status 0, tag 0x6
+usb_msd_send_status status 0, tag 0x6, len 13

@@ -1,0 +1,3 @@
+LBA=131064 (0x1FFF8), 8 sectors, 4096 bytes
+pattern_match=true
+first16=a5a4a7a6a1a0a3a2adacafaea9a8abaa

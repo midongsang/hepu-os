@@ -1,0 +1,1620 @@
+T0=24943933 D0=44890333
+[SERIAL] COM1 16550 UART ready (115200 8N1)
+[EARLY] tbl0=0x24943954 ver=0xFFFFFFBF
+[VGAREG] misc=0x00000067
+[VGAREG] seq:0x000000030x000000000x000000030x000000000x00000002
+[VGAREG] crtc:0x0000005F0x0000004F0x000000500x000000820x000000550x000000810x000000BF0x0000001F0x000000000x0000004F0x0000000D0x0000000E0x000000000x000000000x000000000x000000500x0000009C0x0000008E0x0000008F0x000000280x0000001F0x000000960x000000B90x000000A30x000000FF
+[VGAREG] gc:0x000000000x000000000x000000000x000000000x000000000x000000100x0000000E0x0000000F0x000000FF
+[MB-DBG] magic=0x0x2BADB002 info=0x0x00009500 flags=0x0x0000024F mem_upper=0x0003FB78 mmap_addr=0x0x00009000 mmap_len=0x00000090
+[MB-DBG] mmap_count=0x00000006
+[MB-DBG] region 0x00000000: base=0x0x00000000 len=0x0x0009FC00 type=0x00000001
+[MB-DBG] region 0x00000001: base=0x0x0009FC00 len=0x0x00000400 type=0x00000002
+[MB-DBG] region 0x00000002: base=0x0x000F0000 len=0x0x00010000 type=0x00000002
+[MB-DBG] region 0x00000003: base=0x0x00100000 len=0x0x0FEDE000 type=0x00000001
+[MB-DBG] region 0x00000004: base=0x0x0FFDE000 len=0x0x00022000 type=0x00000002
+[MB-DBG] region 0x00000005: base=0x0xFFFC0000 len=0x0x00040000 type=0x00000002
+[MB-VBE] no framebuffer info, fallback VGA
+qemu[PROTECT] hepu.graphics=0: graphics disabled, text terminal only (arch=i386)
+[PROTECT] hepu.graphics=0: graphics disabled, text terminal only (arch=i386)
+[CPU] 64-bit support: NO
+[CPU] x86_64 not supported (32-bit only)
+[BOOT] compat level low, disabling boot splash
+GenuineIntelafter-cpu[DBG]after-cpu t0=0x0011FB80 t1=0x0011FC50 t3=0x00120120
++==============================================+
+| HEPU HYPER EVOLVE OS Hepu Hyper Evolve OS |
++==============================================+
+
+0.62.1[HEPU] kernel fingerprint verify ...
+HEPU Hyper Evolve OSU Additional Terms=== memory subsystem ===
+after-mm-init[DBG]after-mm-init t0=0x0011FB80 t1=0x0011FC50 t3=0x00120120
+[MEM-DBG] mem_kb=0x0003FDF7 kern_end=0x0x0615C000 heap_base=0x0x0615C000 heap_size=0x03000000 heap_end=0x0x0915C000
+[BUDDY] single-backend total_pages=0x0000FF7D free_pages=0x00006E21
+[MM] buddy allocator initialized
+[BUDDY] selftest: start
+[BUDDY] test1 alloc 1 page: PASS (addr=0x0915C000)
+[BUDDY] test2 alloc 4 pages: PASS (addr=0x09160000)
+[BUDDY] test3 alloc 16 pages: PASS (addr=0x09170000)
+[BUDDY] test4 alloc after free: PASS (addr=0x0915C000)
+[BUDDY] test5 alloc 64 pages: PASS (addr=0x09180000)
+[BUDDY] selftest: done (pass=0x00000005, fail=0x00000000)
+[PAGING] init paging ...
+[PAGING] CPU supports PAE (36-bit addressing, 64GB max)
+[PAGING] CPU supports PAE (64GB max)
+[PAGING] PAE detected, using legacy paging (full PAE switch pending)
+[PAGING] PAE detected, legacy paging active
+[PAGING] starting integrity check...
+[PAGING] integrity check done, fixed=0x00000000
+[PAGING] registered 0x00000041 page table pages
+[PAGING] identity map: 0x00000000 - 0x01000000(16MB)
+[PAGING] memory isolation ENABLED (user cannot access kernel)
+after-paging[DBG]after-paging t0=0x0011FB80 t1=0x0011FC50 t3=0x00120120
+[PAGING] paging enabled 
+[GFX] LFB phys=0x0xFD000000
+[GFX] LFB mapped after paging_enable
+[VMA] selftest: start
+[VMA] test1 create space: PASS
+[VMA] test2 map single: PASS
+[VMA] test3 map non-overlap: PASS
+[VMA] test4 VMA merge: PASS
+[VMA] test5 find VMA: PASS
+[VMA] test6 access check (rw): PASS
+[VMA] test7 access denied: PASS
+[VMA] test8 unmap full: PASS
+[VMA] test9 stats: PASS
+[VMA] test10 destroy space: PASS (no crash)
+[VMA] selftest: done (pass=0x0000000A, fail=0x00000000)
+[ZRAM] selftest: start
+[ZRAM] test1 compress zero page: PASS (size=0x00000016)
+[ZRAM] test2 decompress zero page: PASS
+[ZRAM] test3 random data compress/decompress: PASS (ratio=0x00000037%)
+[ZRAM] test4 pattern compress: PASS (size=0x00000021, ratio=0x00000000%)
+[ZRAM] test5 store/load page: PASS
+[ZRAM] test6 stats: PASS (compressed_pages=0x00000001, original_bytes=0x00001000, compressed_bytes=0x00000021)
+[ZRAM] test7 free page: PASS
+[ZRAM] selftest: done (pass=0x00000007, fail=0x00000000)
+[RTL8139] device not found
+[e1000] found at PCI 0x00000000:0x00000003
+[e1000] mmio=0x0xFEB80000 irq=0x0000000B
+[e1000] MAC: 0x00000052:0x00000054:0x00000000:0x00000012:0x00000034:0x00000056
+[e1000] link up
+[e1000] initialization complete
+[e1000-diag] === after-init ===
+[e1000-diag] PCI_CMD=0x00000107 MASTER=0x00000001 RDBAL=0x091C2000 RDBAH=0x00000000 TDBAL=0x091E0000 TDBAH=0x00000000 RCTL=0x0400831A STATUS=0x80080783 RDH=0x00000000 RDT=0x0000001F RDLEN=0x00000200 rx_cur=0x00000000
+[e1000-diag] MMC PRC=0x00000000 MPTC=0x00000000 MPC=0x00000000 RFC=0x00000000 ROC=0x00000000 RUC=0x00000000 RLEC=0x00000000 CRCERR=0x00000000
+[e1000-diag] desc[0x00000000] status=0x00000000 err=0x00000000 len=0x00000000 addr=0x091D0000
+[e1000-diag] desc[0x00000001] status=0x00000000 err=0x00000000 len=0x00000000 addr=0x091D0800
+[e1000-diag] desc[0x00000002] status=0x00000000 err=0x00000000 len=0x00000000 addr=0x091D1000
+[e1000-diag] desc[0x00000003] status=0x00000000 err=0x00000000 len=0x00000000 addr=0x091D1800
+[e1000-diag] desc[0x00000004] status=0x00000000 err=0x00000000 len=0x00000000 addr=0x091D2000
+[e1000-diag] desc[0x00000005] status=0x00000000 err=0x00000000 len=0x00000000 addr=0x091D2800
+[e1000-diag] desc[0x00000006] status=0x00000000 err=0x00000000 len=0x00000000 addr=0x091D3000
+[e1000-diag] desc[0x00000007] status=0x00000000 err=0x00000000 len=0x00000000 addr=0x091D3800
+[IP] initialized, IP=192.168.1.100
+[UDP] initialized
+after-mm[DBG]after-mm t0=0x0011FB80 t1=0x0011FC50 t3=0x00120120
+[SWAP] init OK (8MB)
+ is(PSE)[HUGETLB] supports: 2MB hugepage(PSE) + 4MB hugepage(PSE-36)
+[HUGETLB] selftest: start
+[HUGETLB] test1 CPU PSE support: PASS
+[HUGETLB] test2 alloc 4MB: PASS (phys=0x0x0A000000)
+[HUGETLB] test3 alloc 2MB after 4MB free: PASS (phys=0x0x0A000000)
+[HUGETLB] test4 stats update: PASS (2m=0x00000001, 4m=0, alloc_4m=1)
+[HUGETLB] test5 free 2MB: PASS
+[HUGETLB] test6 4MB already freed: PASS
+[HUGETLB] test7 realloc 4MB after free: PASS (phys=0x0x0A000000)
+[HUGETLB] selftest: done (pass=0x00000007, fail=0x00000000)
+[PAE] detect: supported, tables not built
+[MPOOL] 3 pools ready (32B/64B/128B)
+BOCHS yesyesno[PAGING] memory isolation ENABLED (user/kernel separated)
+[BINFMT] formats: ELF32, PE32, Mach-O registered
+[BINFMT-SELFTEST] ELF32 probe PASS
+=== process subsystem ===
+[PROC] process mgmt init done 
+[CRASHCTX] crash_ctx table init (max 32 slots)
+after-sched[DBG]after-sched t0=0x0011FB80 t1=0x0011FC50 t3=0x00120120
+[PROC] process mgmt init done 
+after-proc[DBG]after-proc t0=0x0011FB80 t1=0x0011FC50 t3=0x00120120
+[DOMAIN] initialized (kernel/system/gui/linux-compat-0)
+[QoS] initialized
+[IPC] IPC subsystem init done 
+[IPC-SEM] semaphore subsystem init done 
+[IPC-MUTEX] mutex subsystem init done 
+[IPC-COND] condvar subsystem init done 
+[IPC-FIFO] named pipe subsystem init done 
+[IPC-PERM] IPC perm check subsystem init done 
+[SERVICE] service registry initialized (max 16 services)
+after-ipc[DBG]after-ipc t0=0x0011FB80 t1=0x0011FC50 t3=0x00120120
+[DRVMGR] driver manager init done(max 64 driver)
+[HAL] H-HAL HAL init done 
+generic-x86  supports [HHAL] H-HAL enhanced HAL init done 
+ auto detect [UDRV] unified driver framework init 
+[UDRV] main framework: driver_manager(state machine +6 ops)
+[UDRV] compat layer: hal(base HAL) + hhal(enhanced HAL)
+[AHCI] Initializing SATA host adapter...
+[AHCI] No AHCI controller found
+[VRAM] selftest: start
+[VRAM] test1 init: PASS (total=96KB)
+[VRAM] test2 alloc 4KB: PASS (addr=0x0x000A0000)
+[VRAM] test3 alloc 16KB: PASS (addr=0x0x000A1000)
+[VRAM] test4 stats update: PASS (used=20KB, free=76KB)
+[VRAM] test5 free 4KB: PASS (used=16KB)
+[VRAM] test6 realloc after free: PASS (addr=0x0x000A0000)
+[VRAM] test7 alloc 64K-aligned: PASS (addr=0x0x00E00000)
+[VRAM] selftest: done (pass=0x00000007, fail=0x00000000)
+[IOSCHED] selftest: start
+[IOSCHED] test1 init: PASS
+[IOSCHED] test2 submit: PASS
+[IOSCHED] test3 merge adjacent: PASS (merged=0x00000001, count=0x00000002)
+[IOSCHED] test4 LBA sort: PASS
+[IOSCHED] test5 no merge non-adjacent: PASS
+[IOSCHED] test6 no merge diff-type: PASS
+[IOSCHED] selftest: done (pass=0x00000006, fail=0x00000000)
+[JOURNAL] fs journal init(ring buffer region)
+[JOURNAL] selftest: start
+[JOURNAL] fs journal init(ring buffer region)
+[JOURNAL] test1 init: PASS
+[JOURNAL] test2 start transaction: PASS
+[JOURNAL] test3 write entry: PASS (pending=1)
+[JOURNAL] test4 write multiple: PASS (pending=3)
+[JOURNAL] test5 commit: PASS (committed=3)
+[JOURNAL] abort transaction , rolled back 
+[JOURNAL] test6 abort/rollback: PASS
+[JOURNAL] log replay done 
+[JOURNAL] test7 replay/recover: PASS (committed=5)
+[JOURNAL] selftest: done (pass=0x00000007, fail=0x00000000)
+[CRYPTO] selftest: start
+[AES] AES crypto module init 
+[AES] supports AES-128/192/256, ECB/CBC mode 
+[SHA] hash init 
+[SHA] supports: SHA1, SHA256, SHA512
+[RSA] sig verify init 
+[RSA] supports: PKCS#1 v1.5, SHA1/SHA256/SHA384/SHA512
+[HMAC] HMAC init 
+[HMAC] supports: SHA1/SHA256/SHA512
+[HKDF] KDF init 
+[HKDF] RFC 5869, based on HMAC-SHA1/SHA256/SHA512
+[CSPRNG] CSPRNG init (V7.75 multi-source entropy)
+[ECDHE] ECDHE init 
+[ECDHE] supports: secp256r1, secp384r1, secp521r1, X25519
+[X509] cert verify init 
+[X509] supports RSA/ECDSA, SHA1/SHA256/SHA384/SHA512
+[CRYPTO] all modules initialized
+[CRYPTO] test1 XTEA single block: PASS
+[CRYPTO] test2 ECB encrypt/decrypt: PASS
+[CRYPTO] test3 ECB cipher differs: PASS
+[CRYPTO] test4 XTS encrypt/decrypt: PASS
+[CRYPTO] test5 XTS different sector: PASS
+[CRYPTO] test6 page encrypt/decrypt: PASS
+[CRYPTO] test7 key generation deterministic: PASS
+[CRYPTO] selftest: done (pass=0x00000007, fail=0x00000000)
+[KHEAP-BIG] size=0x00100000 caller=0x00153662
+[SNAPSHOT] selftest: start
+[SNAPSHOT] test1 init: PASS
+[SNAPSHOT] test2 create snapshot: PASS (id=0x00000001)
+[SNAPSHOT] test3 COW: PASS (block_count=1)
+[SNAPSHOT] test4 restore block: PASS
+[SNAPSHOT] test5 duplicate COW dedup: PASS
+[SNAPSHOT] test6 freeze: PASS
+[SNAPSHOT] test7 delete: PASS
+[SNAPSHOT] selftest: done (pass=0x00000007, fail=0x00000000)
+[UMEM] selftest: start
+[UMEM] test1 init: PASS
+[UMEM] test2 alloc normal: PASS
+[UMEM] test3 alloc vram: PASS
+[UMEM] test4 migrate normal->vram: PASS
+[UMEM] test5 realloc: PASS (size=2048)
+[UMEM] test6 free: PASS (alloc=0x00000003, free=0x00000003)
+[UMEM] test7 stats: PASS
+[UMEM] selftest: done (pass=0x00000007, fail=0x00000000)
+[TRANSCOMP] selftest: start
+[TRANSCOMP] test1 init: PASS
+[TRANSCOMP] test2 zero block write/read: PASS
+[TRANSCOMP] test3 pattern block write/read: PASS
+[TRANSCOMP] test4 random block write/read: PASS
+[TRANSCOMP] test5 overwrite: PASS
+[TRANSCOMP] test6 discard: PASS
+[TRANSCOMP] test7 stats: PASS (compress=0x00000003, ratio=0x00000000%)
+[TRANSCOMP] selftest: done (pass=0x00000007, fail=0x00000000)
+[KHEAP-BIG] size=0x00400000 caller=0x00144F05
+[VVRAM] selftest: start
+[VVRAM] test1 init: PASS (regions=0x00000003, virtual=0x00001000KB)
+[VVRAM] test2 alloc 4KB: PASS (handle=0x00000000)
+[VVRAM] test3 write/read: PASS
+[VVRAM] test4 partial read: PASS
+[VVRAM] test5 multi alloc: PASS (64KB+256KB)
+[VVRAM] test6 free all: PASS (virtual_used=0)
+[VVRAM] test7 info: PASS (gpu=1, regions=0x00000003, virtual=0x00001000KB)
+[VVRAM] selftest: done (pass=0x00000007, fail=0x00000000)
+[GFX-TEST] legacy gfx_selftest disabled (using pluggable gfx subsystem)
+[BD-VBE] dispi id=0x0x0000B0C5
+[BD-VBE] mode set: 0x00000780x0x00000438@0x00000020bpp
+[BD-VBE] enable readback=0x0x00000041
+[BD-VBE] pci 0:2.0 bar0=0x0xFD000000
+[BD-VBE] linear framebuffer ready
+[BD-VBE] bd_fb_phys=0x0xFD000000
+[GFX] framebuffer -> draw target (double-buffer)
+[GFX] gfx_pitch=0x00001E00
+[GFX] LFB mapped (after dispi init)
+[GFX-VBE] sync: 0x00000780x0x00000438@0x00000020bpp pitch=0x00001E00
+[GFX] true-color mode applied: 0x00000780x0x00000438@32bpp fb=0x0xFD000000
+[GFX] registered backend: VGA Text
+[GFX] registered backend: UEFI GOP
+[GFX] registered backend: virtio-gpu
+[GFX-VIRTIO] backend registered
+[GFX] registered backend: VBE
+[GFX-VBE] backend registered
+[GFX] probing backends...
+[GFX-VIRTIO] initializing virtio-gpu backend...
+[GFX-VIRTIO] probing for virtio-gpu device...
+[GFX-VIRTIO] no virtio-gpu device found
+[GFX] backend virtio-gpu init failed, trying next
+[GFX-GOP] initializing GOP backend...
+[GFX-GOP] no GOP protocol from firmware (BIOS boot), refuse
+[GFX] backend UEFI GOP init failed, trying next
+[GFX-VBE] initializing VBE backend...
+[GFX-VBE] detected from boot params: 0x00000780x0x00000438@0x00000020bpp
+[GFX-VBE] backend initialized (0x00000780x0x00000438@0x00000020bpp, pitch=0x00001E00)
+[GFX] selected backend: VBE
+[GFX-TEST] starting graphics subsystem selftest...
+[GFX-TEST] test1 VGA early text: PASS
+[GFX-TEST] test2 register VGA backend: PASS
+[GFX-TEST] test3 register GOP backend: PASS
+[GFX] probing backends...
+[GFX-VIRTIO] initializing virtio-gpu backend...
+[GFX-VIRTIO] probing for virtio-gpu device...
+[GFX-VIRTIO] no virtio-gpu device found
+[GFX] backend virtio-gpu init failed, trying next
+[GFX-GOP] initializing GOP backend...
+[GFX-GOP] no GOP protocol from firmware (BIOS boot), refuse
+[GFX] backend UEFI GOP init failed, trying next
+[GFX] selected backend: VBE
+[GFX-TEST] test4 probe backend: PASS (type=0x00000002)
+[GFX] vram partition 0x00000000 size=0x00100000
+[GFX] vram partition 0x00000001 size=0x00080000
+[GFX-TEST] test5 set vram partitions: PASS
+[GFX-TEST] test6 vram info: partitions=0x00000002, size[0]=0x00100000
+[GFX] initializing graphics subsystem...
+[GFX] probing backends...
+[GFX-VIRTIO] initializing virtio-gpu backend...
+[GFX-VIRTIO] probing for virtio-gpu device...
+[GFX-VIRTIO] no virtio-gpu device found
+[GFX] backend virtio-gpu init failed, trying next
+[GFX-GOP] initializing GOP backend...
+[GFX-GOP] no GOP protocol from firmware (BIOS boot), refuse
+[GFX] backend UEFI GOP init failed, trying next
+[GFX] selected backend: VBE
+[GFX] vram allocator init: 0x00200000 bytes at 0x0xFD300000
+[GFX] graphics subsystem initialized
+[GFX-TEST] test7 gfx_init: PASS
+[GFX-TEST] test8 unified API drawing: PASS
+[GFX-TEST] test9 advanced drawing: PASS
+[GFX-TEST] test10 mode: 0x00000400x0x00000300@0x00000020bpp
+[GFX-TEST] test10 clear screen: PASS
+[GFX-TEST] selftest done (pass=0x0000000A, fail=0x00000000)
+[GFX-FONT] font manager initialized
+[GFX-FONT] default: antialiased 16px
+[TTF] TrueType font parser initialized
+[TTF] Note: load font data with tt_font_load()
+[TTF64] Font loaded: 0x89 glyphs, 0x800 units/em
+[FONT32] TrueType loaded
+[BLK-MQ] selftest: start
+[BLK-MQ] test1 init: PASS (sw=4, hw=2)
+[BLK-MQ] test2 submit read: PASS (id=0x00000001)
+[BLK-MQ] test3 submit write: PASS (id=0x00000002)
+[BLK-MQ] test4 request merge: PASS (merges=0x00000001)
+[BLK-MQ] test5 dispatch: PASS (dispatched=0x00000002)
+[BLK-MQ] test6 complete: PASS (completed=0x00000002)
+[BLK-MQ] test7 poll: PASS (polled=0x00000002)
+[BLK-MQ] selftest: done (pass=0x00000007, fail=0x00000000)
+[VRAM-VIRT] selftest: start
+[VRAM-VIRT] test1 init: PASS (physical=0x00000040KB)
+[VRAM-VIRT] test2 create ctx: PASS (id=0x00000001)
+[VRAM-VIRT] test3 map 4KB: PASS
+[VRAM-VIRT] test4 virt2phys: PASS (paddr=0x0x000A0064)
+[VRAM-VIRT] test5 switch ctx: PASS
+[VRAM-VIRT] test6 page fault: PASS (faults=0x00000001)
+[VRAM-VIRT] test7 destroy ctx: PASS (contexts=0)
+[VRAM-VIRT] selftest: done (pass=0x00000007, fail=0x00000000)
+[TASKMGR] selftest: start
+[TASKMGR] task manager init done
+[TASKMGR] test1 init: PASS
+[TASKMGR] test2 cpu usage: PASS (cpu=0x00000000 pct)
+[TASKMGR] test3 mem info: PASS (total=0x0000003FKB)
+[TASKMGR] test4 proc stats: PASS (total=0x00000000, running=0x00000000)
+[TASKMGR] test5 state str: PASS
+[TASKMGR] selftest: done (pass=0x00000005, fail=0x00000000)
+[HAL-DEV] device enum subsystem init done 
+[HOTPLUG] hotplug subsystem init done 
+[HAL-IRQ] irq mgr subsystem init done 
+[HAL-GPIO] GPIO subsystem init done 
+[DMA] DMA abstraction layer init done(8 channel)
+[DMA] selftest: start
+[DMA] test1 alloc 4KB buffer: PASS (phys=0x0x0A007000)
+[DMA] test2 alloc 16KB buffer: PASS (phys=0x0x0A008000)
+[DMA] test3 get phys: PASS (phys=0x0x0A007000)
+[DMA] test4 stats update: PASS (buffers=2)
+[DMA] test5 free 4KB buffer: PASS
+[DMA] test6 realloc after free: PASS (phys=0x0x0A007000)
+[DMA] test7 alloc 64KB buffer: PASS (phys=0x0x0A010000)
+[DMA] selftest: done (pass=0x00000007, fail=0x00000000)
+[POWER] power subsystem init done 
+[PM] power mgmt init done 
+  in after-drv[DBG]after-drv t0=0x0011FB80 t1=0x0011FC50 t3=0x00120120
+[SYSCALL] syscall iface init(int 0x80)
+after-syscall-init[DBG]after-syscall-init t0=0x0011FB80 t1=0x0011FC50 t3=0x00120120
+[M1] after newline
+=== syscall test ===
+[M2] after banner
+[M3] after setcolor
+[M4] before handler
+
+>;<5
+	AcJ2QD++DQ2J (5H,'9,J&0f)
+T|\`j4OO7g`\|T
+'g/& H,9',I4( (3J,&9-H &0f)
+T|\`j4OO4j`\|T
+'g/&J,9',H5(""'!$(:UJJU:($!'"" fingerprint has  [SYSCALL] SYS_FREE -> ok=== HW IRQ subsystem ===
+[PIC] 8259 PIC init done 
+[PIC] IRQ mapping: master PIC=32-39, slave PIC=40-47
+[APIC] Initialized successfully
+[IRQ] HW IRQ framework init done 
+[KEYBOARD] PS/2 keyboard driver init done(IRQ1, 8042 reset)
+[TSS] TSS init done(TR=0x28)
+=== initrd fs ===
+
+[INITRD] base=0x0045B2BD size=0x0004A0F0 head=0x55504548 tail=0x00000000
+hello.hughello_c.hugvfs_test.hugipc_test.hugsysinfo.hugcalculator.hugcalendar.hugnotepad.hugclock.hugfilemgr.hugdiag.hugtop.hugspin.huglinuxhello.elflinuxc.elflinuxbrk.elflinuxcrt.elfwinhello.exewinargs.exemacho_demoloop.elfcrashdemo.elfcrashud.elfgfxtest.elf[LIVE] initrd done
+[RTC] irq8 handler registered
+[LIVE] rtc done
+[SERIAL] COM1 16550 UART ready (115200 8N1)
+[OK] serial COM1 16550 UART (debug output)
+[BOOT] recovery/protect mode: splash skipped
+[LIVE] splash done
+[DBG] before VFS init
+=== VFS VFS ===
+[DBG] after vga_puts VFS
+[DBG] before klog_capture_boot
+[DBG] after klog_capture_boot
+[DBG] before compat_init
+[DEGRADE] init: mode=GRAPHICAL
+[DBG] before hepu_init_sequence
+
+=== Hepu OS unified init sequence ===
+
+[INIT] phase:  cores subsystem 
+===  cores subsystem  ===
+[VFS] virtual fs init done 
+[DEVFS] device fs init: null, zero, fb0, mem
+[IPC] IPC subsystem init done 
+[NET] net stack init done 
+[TOUCH] no hardware touchscreen, using software sim
+[TOUCH] touch driver init done 
+[SMP] SMP init done 
+[DYNLD] dynld init done 
+[INIT] phase done:  cores subsystem 
+ init 0x00000007 module
+
+[INIT] phase:  HW driver 
+===  HW driver  ===
+[AUDIO] audio subsystem init done 
+AC97 Audio[CAMERA] camera subsystem init done 
+USB UVC Camera[IOPOLICY] devices: kbd(IRQ) ide0(POLL) mouse(IRQ) serial(POLL)
+[BT] BT subsystem init done 
+HEPU OS[WiFi] WiFi driver init 
+[WiFi] supports 802.11 a/b/g/n/ac/ax, 2.4GHz/5GHz dual-band 
+[KHEAP-BIG] size=0x0001F400 caller=0x00139084
+[GPU] GPU subsystem init done 
+Software GPURGB565[SENSORS] sensor framework init done 
+[GPS] GPS/GNSS location init done 
+[CODEC] codec subsystem init done 
+[KHEAP-BIG] size=0x0001F400 caller=0x00135BF3
+[COMP] fb=0x066894F0 next=0x066A88F0
+[COMPOSITOR] compositor init done 
+[INPUT] input subsystem init done 
+[INIT] phase done:  HW driver 
+ init 0x0000000C module
+
+[INIT] phase:  fs 
+===  fs  ===
+[MOUNT] mount mgr init 
+[QUOTA] disk quota mgr init 
+[FSREG] fs registry init 
+[MAC] mandatory access control init (enforcing=1)
+[I18N] multi-language init (EN/ZH/JA/DE)
+[DTB] start HW autoconfig ...
+[VFAT] FAT32 fs driver init 
+vfat[JOURNAL] fs journal init(ring buffer region)
+[IDE] init IDE controller ...
+[IDE] not found IDE drive (QEMU/ VM env may need config )
+[IDE-DMA] hyper leaf ebx=0x0x54474354 edx=0x0x47435447 ecx=0x0x43544743
+[IDE-DMA] QEMU TCG detected, DMA disabled (PIO only)
+[IDE-DMA] QEMU TCG, DMA disabled, PIO only
+[SWAP] auto-detecting disk swap...
+[SWAP] failed to read MBR
+[IDE] selftest: no drive present, skip
+[EXT2] selftest: no disk, skip
+[SEC32] user_access contract PASS limit=0xBFFFFFFF
+[EXT4] ext4 fs driver init 
+ext4[FSCRYPT] fs encryption init (AES-CBC)
+[PART] partition table parse module init 
+[NVMe] NVMe SSD driver init 
+[NVMe] supports PCIe NVMe 1.0+, max 4 namespaces 
+[EXFAT] exFAT fs driver init 
+[EXFAT] supports SD card /U drive /exFAT format 
+[EXFAT] max file size: 16EB, max volume size: 128PB
+[NTFS] NTFS fs driver init 
+[NTFS] supports Windows NTFS read-only access 
+[NTFS] supports MFT parse , attr parse , run list 
+/dev/rootext2/procprocfs/procsysfssysfs/systmpfstmpfs/tmp[FS2] fs enhanced init done 
+ disabled [FS3] fs deep init done 
+[FS_R] fs real init done 
+[INIT] phase done:  fs 
+ init 0x00000012 module
+
+[INIT] phase:  net proto 
+===  net proto  ===
+[ETH] Ethernet driver init
+[ETH] eth0 MAC: 00:1A:36:5D:A7:C9
+[WiFi] WiFi driver init 
+[WiFi] supports 802.11 a/b/g/n/ac/ax, 2.4GHz/5GHz dual-band 
+[ARP] addr parse proto init 
+[DHCP] client init done
+[DNS] DNS init 
+[ICMP] ICMP proto init 
+[ICMP] supports Echo Request/Reply, Destination Unreachable
+[HTTP] HTTP client init 
+[HTTP] supports GET/POST/PUT/DELETE/HEAD, auto redirect 
+[TLS] TLS/SSL encryption transport init 
+[TLS] supports TLS 1.2/1.3, AES-128/256-GCM
+[TLS-CRYPTO] initialized
+[TLS-HS] TLS handshake module init 
+[TLS-HS] integrated: ECDHE+RSA+HKDF+X.509
+[TLS-CLIENT] initialized (TLS 1.2)
+[TLS-REC] TLS 1.3 record layer initialized
+[TCP] init
+[WS] WebSocket init 
+[WS] supports RFC 6455, text / binary frames, Ping/Pong
+[HTTP2] HTTP/2 proto init 
+[HTTP2] supports: binary frames, multiplex, flow control 
+[TLS-HS] TLS handshake module init 
+[TLS-HS] integrated: ECDHE+RSA+HKDF+X.509
+[QUIC] proto init 
+[QUIC] RFC 9000, based on UDP, multiplex 
+[HTTP3] HTTP/3 proto init 
+[HTTP3] RFC 9114, based on QUIC, QPACK static table(100 entries)
+[DoQ] DNS over QUIC init 
+[DoQ] RFC 9250, default port 853
+[QUIC-0RTT] 0-RTT conn recovery init 
+[QUIC-0RTT] supports session tickets & early data 
+[QUIC-MIG] conn migration init 
+[QUIC-MIG] supports multipath probing & conn ID rotation 
+[MP-QUIC] multipath QUIC init 
+[MP-QUIC] RFC 9308, supports 4 path concurrent 
+[SOCKET] net socket subsystem init(loopback TCP/UDP)
+[NET2] net deep init done 
+[NET3] net complete init done 
+[NET-TEST] === Network Self-Test ===
+[NET-TEST] diag tick=0 if=0(interrupts OFF)
+[NET-TEST] Starting DHCP...
+[IP] packet sent
+[UDP] packet sent
+[DHCP] timeout, using fallback IP
+[IP] config updated
+[NET-TEST] DHCP started
+[NET-TEST] Polling network packets...
+[NET-TEST] Sending ICMP echo to 8.8.8.8...
+[e1000-diag] === after-dhcp-poll ===
+[e1000-diag] PCI_CMD=0x00080107 MASTER=0x00000001 RDBAL=0x091C2000 RDBAH=0x00000000 TDBAL=0x091E0000 TDBAH=0x00000000 RCTL=0x0400831A STATUS=0x80080783 RDH=0x00000000 RDT=0x0000001F RDLEN=0x00000200 rx_cur=0x00000000
+[e1000-diag] MMC PRC=0x00000000 MPTC=0x00000000 MPC=0x00000000 RFC=0x00000000 ROC=0x00000000 RUC=0x00000000 RLEC=0x00000000 CRCERR=0x00000000
+[e1000-diag] desc[0x00000000] status=0x00000000 err=0x00000000 len=0x00000000 addr=0x091D0000
+[e1000-diag] desc[0x00000001] status=0x00000000 err=0x00000000 len=0x00000000 addr=0x091D0800
+[e1000-diag] desc[0x00000002] status=0x00000000 err=0x00000000 len=0x00000000 addr=0x091D1000
+[e1000-diag] desc[0x00000003] status=0x00000000 err=0x00000000 len=0x00000000 addr=0x091D1800
+[e1000-diag] desc[0x00000004] status=0x00000000 err=0x00000000 len=0x00000000 addr=0x091D2000
+[e1000-diag] desc[0x00000005] status=0x00000000 err=0x00000000 len=0x00000000 addr=0x091D2800
+[e1000-diag] desc[0x00000006] status=0x00000000 err=0x00000000 len=0x00000000 addr=0x091D3000
+[e1000-diag] desc[0x00000007] status=0x00000000 err=0x00000000 len=0x00000000 addr=0x091D3800
+[NET-TEST] === Self-Test Complete ===
+[INIT] phase done:  net proto 
+ init 0x00000015 module
+
+[INIT] phase:  security encryption 
+===  security encryption  ===
+[SEC] security module init done(MAC)
+Enforcing[SEC] MAC init done, domains=7 types=9 rules=12
+[SEC] sec_init done
+DENYuntrusted_appapp_data_taccess denied[SEC-AUDIT] DENY s=untrusted_app t=app_data_t: access denied
+DENYuntrusted_appsystem_taccess denied[SEC-AUDIT] DENY s=untrusted_app t=system_t: access denied
+DENYuntrusted_appprivate_taccess denied[SEC-AUDIT] DENY s=untrusted_app t=private_t: access denied
+PermissiveALLOW(permissive)untrusted_appapp_data_twould be denied[SEC-AUDIT] ALLOW(permissive) s=untrusted_app t=app_data_t: would be denied
+EnforcingDENYuntrusted_appsystem_taccess denied[SEC-AUDIT] DENY s=untrusted_app t=system_t: access denied
+PERM-DENYbrowser_appbrowser_data_tstorage[SEC-AUDIT] PERM-DENY s=browser_app t=browser_data_t: storage
+DENYbrowser_appcalc_data_taccess denied[SEC-AUDIT] DENY s=browser_app t=calc_data_t: access denied
+DENYbrowser_appsystem_taccess denied[SEC-AUDIT] DENY s=browser_app t=system_t: access denied
+PERM-DENYbrowser_appcontact_tcontacts[SEC-AUDIT] PERM-DENY s=browser_app t=contact_t: contacts
+[SEC-SELFTEST] MAC: 16/16 PASS
+[SEC] sec_selftest done
+[X509] cert verify init 
+[X509] supports RSA/ECDSA, SHA1/SHA256/SHA384/SHA512
+[SEC] x509_init done
+[CSPRNG] CSPRNG init (V7.75 multi-source entropy)
+[SEC] csprng_init done
+[ECDHE] ECDHE init 
+[ECDHE] supports: secp256r1, secp384r1, secp521r1, X25519
+[SEC] ecdhe_init done
+[SHA] hash init 
+[SHA] supports: SHA1, SHA256, SHA512
+[HMAC] HMAC init 
+[HMAC] supports: SHA1/SHA256/SHA512
+[HKDF] KDF init 
+[HKDF] RFC 5869, based on HMAC-SHA1/SHA256/SHA512
+[RSA] sig verify init 
+[RSA] supports: PKCS#1 v1.5, SHA1/SHA256/SHA384/SHA512
+[SEC] crypto libs done
+[AES] AES crypto module init 
+[AES] supports AES-128/192/256, ECB/CBC mode 
+[SECBOOT] secure boot init done 
+ standard [SEC] aes+secure_boot done
+[PERM] perm manager init done 
+ on  on  on [PERM] seeded /data/contacts/contacts.txt
+[PERM] seeded /data/sms/sms.txt
+[PERM] seeded /data/phone/calls.txt
+[PERM] seeded /data/photos/photos.txt
+[PERM] seeded /data/browser/bookmarks.txt
+[PERM] seeded /data/music/favorites.txt
+[PERM] seeded /data/clock/alarms.txt
+[PERM] sms_seed_welcome skipped (BIOS debug)
+[PERM] permission_manager_init returning...
+[SEC] permission_manager_init done
+[INIT] calling prm_selftest...
+[PRM-SELFTEST] disk persistence test skipped (BIOS compat)
+[PERM-SELFTEST] 8/8 PASS
+[INIT] prm_selftest done
+[PRIV] privacy compute deep init done 
+ on  on  on  on [INIT] privacy_compute_init done, calling security2_init...
+defaultAES[SEC2] security enhanced init done 
+   not enabled [INIT] security2_init done
+[INIT] phase done:  security encryption 
+ init 0x0000000D module
+
+[INIT] phase:  system service 
+===  system service  ===
+[SERVICES] service manager init done 
+[SERVICES] start boot service ...
+networkaudiobluetoothwifiguinetwork[SVC] net service start 
+networkaudio[SVC] audio service start 
+audiobluetooth[SVC] BT service start 
+bluetoothwifi[SVC] WiFi service start 
+wifigui[SVC] GUI service start 
+gui[TRACE] trace subsystem init done 
+[PERF] perf counters init done 
+[LOG] kernel log system init done 
+[MEDIA] media framework init done 
+[CAMERA HAL] camera HAL init done 
+[RIL] RIL init done 
+LTE ready China Mobile860123456789012[OTA] OTA upgrade system init done 
+AV0.13 A/B dual partition ready, supports delta update & auto rollback 
+[PHONE] phone service init done 
+[SMS] SMS service init done 
+[SETTINGS] system settings app init done 
+[SETTINGS] font size applied: 0x00000024px (setting=0x00000032)
+[GFX-FONT] loading default font config...
+[GFX-FONT] registered font: Default (Built-in) (0x000B8D54 bytes)
+[TTF] loading font, tables=0x00000014
+[TTF] font loaded: 0x00000800 units/em, 0x0000186D glyphs, ascent=0x0000076D descent=0xFFFFFE1D
+[GFX-FONT] selected font: Default (Built-in)
+[GFX-FONT] loaded built-in Default font
+[GFX-FONT] registered font: CJK (Built-in) (0x000EEE60 bytes)
+[GFX-FONT] loaded built-in CJK font
+[GFX-FONT] loaded 0x00000002 font(s) from config
+[NOTIF] notif center init done 
+[BACKUP] data backup & migrate init done 
+ on  on  on [STORAGE] storage manager init done 
+ on [MULTIUSER] multi-user / privacy space init done 
+ close [STABILITY] stability monitor init done 
+ on  on  on [POWER] power optimizer init done 
+[MEMOPT] mem optimizer init done 
+ on  on [BOOTOPT] boot optimizer init done 
+ on  on [KSLIM] kernel slimmer init done 
+ on  on [PERFPROF] perf profiler init done 
+[INIT] phase done:  system service 
+ init 0x00000016 module
+
+[INIT] phase:  app framework 
+===  app framework  ===
+[APPS] starting app framework (72 modules)...
+[APPS] protect mode: graphics/desktop init skipped
+[APPFW] app framework init done 
+ 4 components: Activity/Service/Broadcast/Provider
+[PM] package manager init done 
+[APPS] 1/7: core framework done
+[APPS-DEBUG] about to call notification_init
+[NOTIF] init (minimal BIOS version)
+[NOTIF] init done
+[APPS] notification_init done
+[WS] window system deep init done 
+[APPS] windowsystem_init done
+[SHARE] init done
+[ACCOUNT] init done
+[SUI] init done
+[APPS] systemui_init done
+[APPS] 2/7: webengine/ai/media...
+[WEB] Web engine init done 
+ HTML parse + CSS + DOM + JS engine 
+MobileNetSpeechRecNLP[AI] AI subsystem init done 
+ on Hey Hepu[MEDIA2] media deep init done 
+[DM] desktop mode init done 
+[GF] game framework init done 
+[ENT] enterprise features init done 
+[DEV] dev tools init done 
+0.17.0[COMPAT] compat layer init done 
+[APPS] 3/7: bt/usb/gfx/camera...
+[BT2] BT deep init done 
+Hepu OS[USB2] USB deep init done 
+ device  enabled  enabled [CAM2] camera deep init done 
+[AUDIO2] audio deep init done 
+[TELECOM2] telecom deep init done 
+[AI2] AI enhanced init done 
+Hepu NPU Gen2[CARLINK] carlink init done 
+[ENT2] enterprise security init done 
+[APPS] 4/7: kernel/drivers/userland...
+[KOPT] kernel opt init done 
+[DRV2] driver complete init done 
+[APPECO] app ecosystem init done 
+[KCORE] kernel core init done 
+[DRV_R] driver realization init done 
+[USERLAND] user mode complete init done 
+[BOOT] boot chain complete init done 
+[KDBG] kernel debugger init done 
+[KPERF] perf profile init done 
+[DIST] distributed system init done 
+hepu-cluster[HDPK] H-DPK device pack subsystem init done 
+[DS] device 3-tier support init done 
+[FP] kernel fingerprint enhanced edition init done 
+HEPU OSGPLv3 + HEPU   [APPS] 5/7: apps (file/camera/browser...)
+[APPS] file_manager_init...
+[FM] file manager init done 
+/[APPS] camera_app_init...
+[CAMERA] init (minimal BIOS version)
+[CAMERA] init done
+[APPS] gallery_init...
+[GALLERY] gallery app init done 
+[APPS] browser_init...
+[BROWSER] browser app init done 
+ on [APPS] app_store_init...
+[STORE] app store init done (third-party platform)
+[APPS] system_tools_init...
+[TASKMGR] task manager init done
+[TOOLS] system tools init done 
+[APPS] music_player_init...
+[MUSIC] music player init done 
+ close [APPS] video_player_init...
+[VIDEO] video player init done 
+[APPS] photo_editor_init...
+[PEDIT] photo editor init done 
+[APPS] voice_recorder_init...
+[VOICE] voice recorder init done 
+[APPS] audio_effects_init...
+[AEEFF] audio fx init done 
+ on [APPS] hug_sdk_init...
+[HUGSDK] .hug SDK init done 
+1.0.0/opt/hepu/sdk[APPS] hug_template_init...
+[HTPL] app template gen init done 
+[APPS] hug_debugger_init...
+[HDBG] debugger init done 
+[APPS] hug_depman_init...
+[HDEPMAN] dep manager init done 
+[APPS] apk_parser_init...
+[APKP] APK parseer init done 
+[APPS] 5.5/7: compat/android...
+[MICROG] microG service init done 
+ on [ART] ART run runtime init done 
+[COMPAT] compat layer init done 
+[CONTAINER] app container isolation init done 
+[DOS] distributed device interconnect init done 
+ on [CAR] car connect init done 
+ on  on [RT] RT kernel deep init done 
+(null)[I18N] system i18n framework init done 
+[IME] multilingual IME init done 
+[FREEZE] kernel level background freeze init done 
+ on [IDRAND] device ID randomizer init done 
+ on  on [AINOTIF] AI notif classify init done 
+ on  on [CREATOR] creator mode init done 
+ on [ONBOARD] system onboarding init done 
+[LOWMEM] lowmem throttle mode init done 
+ on [HDPK] H-DPK community template init done 
+ on [ANDROID-API] Android API compat layer init(API 34)
+[BIST] builtin BIST module init 
+[AI-ASSIST] AI assistant framework init(wakeword: Xiao Hepu)
+[INIT] phase done:  app framework 
+ init 0x00000048 module
+
+[INIT] QUIC DATAGRAM + QPACK dynamic table 
+
+=== init done: total 0x000000A5 module ===
+
+[DBG] after hepu_init_sequence
+[VVRAM] auto-mount: checking MBR...
+[VVRAM] auto-mount: failed to read MBR (IDE not ready)
+/app/[KUNIT] unit test framework init 
+  ops  count   bit ops [KBENCH] perf benchmark framework init 
+
+=== Hepu OS perf benchmark ===
+ipc_send48035158698ipc_recv18116214337mutex_lock+unlock26024315201sem_wait+signal818702507006page_alloc+free1275121519008page4k_alloc+free4103399623436memcpy(8K)3912834344306963page_zero(4K)1109810773513540
+=== benchmark report ===
+ name  iteration  avg  min  max ------------------------------------------------------------
+ipc_send100048035158698ipc_recv100018116214337mutex_lock+unlock1000026024315201sem_wait+signal10000818702507006page_alloc+free50001275121519008page4k_alloc+free10004103399623436memcpy(8K)20003912834344306963page_zero(4K)50001109810773513540[KUNIT] start registered test suite ...
+ ring buffer region   table   table  net proto [KUNIT] ext test suite registered(4 suite, 10 cases)
+ encryption algo [KUNIT] encryption test suite registered(6 cases)
+ net proto [KUNIT] net test suite registered(5 cases)
+ fs [KUNIT] fs test suite registered(7 cases)
+[KUNIT-REPORT] test report generator init 
+ driver module [KUNIT] driver test suite registered(11 cases)
+[KBENCH-REPORT] perf report generator init 
+ scheduler [KUNIT] scheduler test suite registered(9 cases)
+ memory mgr [KUNIT] memory mgr test suite registered(9 cases)
+IPC  [KUNIT] IPC test suite registered(11 cases)
+ irq handling [KUNIT] irq test suite registered(10 cases)
+ syscall [KUNIT] syscall test suite registered(10 cases)
+ net proto deep [KUNIT] net deep test suite registered(12 cases)
+ encryption algo deep [KUNIT] encryption deep test suite registered(11 cases)
+ fs deep [KUNIT] fs deep test suite registered(12 cases)
+ boot flow [KUNIT] boot flow test suite registered(14 cases)
+ driver deep [KUNIT] driver deep test suite registered(15 cases)
+ data struct deep [KUNIT] data struct deep test suite registered(12 cases)
+ algo correctness [KUNIT] algo correctness test suite registered(16 cases)
+ concurrent & sync [KUNIT] concurrent & sync test suite registered(13 cases)
+ error handling & boundary [KUNIT] error handling & boundary test suite registered(14 cases)
+ memory security [KUNIT] memory security test suite registered(12 cases)
+ time & timer [KUNIT] time & timer test suite registered(13 cases)
+ I/O [KUNIT] I/O test suite registered(13 cases)
+ config & param [KUNIT] config & param test suite registered(11 cases)
+ multilingual & i18n [KUNIT] multilingual & i18n test suite registered(13 cases)
+ security & perm [KUNIT] security & perm test suite registered(9 cases)
+ process & thread [KUNIT] process & thread test suite registered(13 cases)
+ net security deep [KUNIT] net security deep test suite registered(12 cases)
+ storage & block device [KUNIT] storage & block device test suite registered(11 cases)
+ power mgmt [KUNIT] power mgmt test suite registered(12 cases)
+V1.02 memory side module [KUNIT] V1.02 memory side module test suite registered(9 cases)
+V1.02 HAL side module [KUNIT] V1.02 HAL side module test suite registered(8 cases)
+stress[KUNIT] stress suite registered
+p3-security[KUNIT] p3-security suite registered
+ syscall deep [KUNIT] syscall deep test suite registered(50 cases)
+ memory deep [KUNIT] memory deep test suite registered(25 cases)
+ user scenario [KUNIT] user scenario test suite registered(16 cases)
+ recovery [KUNIT] recovery test suite registered(13 cases)
+ perf benchmark [KUNIT] perf benchmark test suite registered(10 cases)
+ integration [KUNIT] integration test suite registered(14 cases)
+ security E2E [KUNIT] security E2E test suite registered(15 cases)
+ compatibility [KUNIT] compatibility test suite registered(13 cases)
+ stress E2E [KUNIT] stress E2E test suite registered(9 cases)
+ filesystem E2E [KUNIT] filesystem E2E test suite registered(13 cases)
+ network E2E [KUNIT] network E2E test suite registered(18 cases)
+ driver E2E [KUNIT] driver E2E test suite registered(18 cases)
+ graphics [KUNIT] graphics test suite registered(20 cases)
+ performance [KUNIT] performance test suite registered(12 cases)
+[KUNIT] all test suite registered done 
+[KTEST] === Auto-run all kunit suites ===
+
+=== Hepu OS kernel unit tests ===
+  ops   ops [KUNIT] suite:  字符串 ops  (0x00000005 tests)
+strlenPASS
+strcpyPASS
+strcmpPASS
+memsetPASS
+memcpyPASS
+[KUNIT] result: 0x00000005 passed, 0x00000000 failed, 0x00000000 skipped
+ count   count  [KUNIT] suite:  count 学运算  (0x00000005 tests)
+  PASS
+  PASS
+  PASS
+  PASS
+  PASS
+[KUNIT] result: 0x00000005 passed, 0x00000000 failed, 0x00000000 skipped
+ bit ops  bit ops [KUNIT] suite:  bit ops  (0x00000005 tests)
+  bit & PASS
+  bit  PASS
+  bit  PASS
+ bit  PASS
+  bit  PASS
+[KUNIT] result: 0x00000005 passed, 0x00000000 failed, 0x00000000 skipped
+ ring buffer region  ring buffer region [KUNIT] suite:  ring buffer region  (0x00000003 tests)
+ basic ops PASS
+  protected PASS
+  PASS
+[KUNIT] result: 0x00000003 passed, 0x00000000 failed, 0x00000000 skipped
+  table   table [KUNIT] suite:  哈希 table  (0x00000002 tests)
+  PASS
+  PASS
+[KUNIT] result: 0x00000002 passed, 0x00000000 failed, 0x00000000 skipped
+  table   table [KUNIT] suite:  链 table  (0x00000002 tests)
+ insert PASS
+ len PASS
+[KUNIT] result: 0x00000002 passed, 0x00000000 failed, 0x00000000 skipped
+ net proto  net proto [KUNIT] suite:  net proto  (0x00000003 tests)
+IP verify & PASS
+ bytes  PASS
+MAC format PASS
+[KUNIT] result: 0x00000003 passed, 0x00000000 failed, 0x00000000 skipped
+ encryption algo  encryption algo [KUNIT] suite:  encryption algo  (0x00000006 tests)
+AES-128 ECBPASS
+AES-256 ECBPASS
+SHA-256 empty  PASS
+SHA-256 abcPASS
+SHA-1 abcPASS
+HMAC-SHA256PASS
+[KUNIT] result: 0x00000006 passed, 0x00000000 failed, 0x00000000 skipped
+ net proto  net proto [KUNIT] suite:  net proto  (0x00000005 tests)
+IP verify &  PASS
+IP verify & verify PASS
+ Ethernet frame PASS
+DNS name  PASS
+QUIC  count PASS
+[KUNIT] result: 0x00000005 passed, 0x00000000 failed, 0x00000000 skipped
+ fs  fs [KUNIT] suite:  fs  (0x00000007 tests)
+ path  PASS
+ path  PASS
+ext2 superblock PASS
+ext2 inode size PASS
+VFS fd alloc PASS
+VFS fd  PASS
+ perm check PASS
+[KUNIT] result: 0x00000007 passed, 0x00000000 failed, 0x00000000 skipped
+ driver module  driver module [KUNIT] suite:  driver module  (0x0000000B tests)
+VGA  PASS
+VGA bit  PASS
+VGA  count PASS
+ keyboard scan  PASS
+ keyboard ASCIIPASS
+PIC port PASS
+PIC IRQ mapping PASS
+PIT freq PASS
+PIT port PASS
+PCI addr PASS
+PCI vendor IDPASS
+[KUNIT] result: 0x0000000B passed, 0x00000000 failed, 0x00000000 skipped
+ scheduler  scheduler [KUNIT] suite:  scheduler  (0x00000009 tests)
+ process state PASS
+ state  PASS
+  level level  PASS
+  level  PASS
+ time  value PASS
+ time  PASS
+  level sched PASS
+  sched PASS
+PID alloc PASS
+[KUNIT] result: 0x00000009 passed, 0x00000000 failed, 0x00000000 skipped
+ memory mgr  memory mgr [KUNIT] suite:  memory mgr  (0x00000009 tests)
+ page size PASS
+ pages pair  PASS
+PTE  PASS
+PDE  PASS
+ physical pages alloc PASS
+ physical pages  PASS
+ heap alloc PASS
+ heap  PASS
+ pair  alloc PASS
+[KUNIT] result: 0x00000009 passed, 0x00000000 failed, 0x00000000 skipped
+IPC  IPC  [KUNIT] suite: IPC 通信  (0x0000000B tests)
+ msg queue basic PASS
+ msg queue  PASS
+ msg queue empty PASS
+ semaphore basic PASS
+ semaphore  PASS
+ semaphore max PASS
+ mutex basic PASS
+ mutex all  PASS
+ share memory PASS
+  basic PASS
+  PASS
+[KUNIT] result: 0x0000000B passed, 0x00000000 failed, 0x00000000 skipped
+ irq handling  irq handling [KUNIT] suite:  irq handling  (0x0000000A tests)
+IDT size PASS
+IDT init PASS
+IDT type PASS
+IRQ  PASS
+CPU  PASS
+IRQ registered PASS
+IRQ  PASS
+ not handling IRQPASS
+ irq  PASS
+PIC  PASS
+[KUNIT] result: 0x0000000A passed, 0x00000000 failed, 0x00000000 skipped
+ syscall  syscall [KUNIT] suite:  syscall  (0x0000000A tests)
+ syscall  PASS
+ call nums  PASS
+ param  PASS
+  value PASS
+ error handling PASS
+fd alloc PASS
+fd  PASS
+fd invalid PASS
+fd lseekPASS
+ perm check PASS
+[KUNIT] result: 0x0000000A passed, 0x00000000 failed, 0x00000000 skipped
+ net proto deep  net proto deep [KUNIT] suite:  net proto deep  (0x0000000C tests)
+ Ethernet frame parse PASS
+EtherTypePASS
+IPv4 header parse PASS
+IP proto  PASS
+TCP  PASS
+TCP port PASS
+TCP  PASS
+UDP header PASS
+ICMP type PASS
+ARP packages PASS
+DNS header PASS
+DNS  PASS
+[KUNIT] result: 0x0000000C passed, 0x00000000 failed, 0x00000000 skipped
+ encryption algo deep  encryption algo deep [KUNIT] suite:  encryption algo deep  (0x0000000B tests)
+AES-CBCPASS
+AES-192PASS
+SHA-224PASS
+SHA-384PASS
+SHA-512PASS
+HMAC-SHA1PASS
+HMAC-SHA512PASS
+HKDF basic PASS
+ key len PASS
+CSPRNG non  PASS
+CSPRNG not  PASS
+[KUNIT] result: 0x0000000B passed, 0x00000000 failed, 0x00000000 skipped
+ fs deep  fs deep [KUNIT] suite:  fs deep  (0x0000000C tests)
+ext2 superblock magic PASS
+ext2 block size PASS
+ext2  PASS
+ext2 inode type PASS
+ext2 inode perm PASS
+ext2 inode block PASS
+ext2 dir PASS
+ext2 dir type PASS
+ bitmap alloc PASS
+ bitmap  PASS
+ path deep PASS
+ file ext  PASS
+[KUNIT] result: 0x0000000C passed, 0x00000000 failed, 0x00000000 skipped
+ boot flow  boot flow [KUNIT] suite:  boot flow  (0x0000000E tests)
+Multiboot magic PASS
+Multiboot  PASS
+GDT size PASS
+GDT code seg PASS
+GDT data seg PASS
+GDT  PASS
+IDT size PASS
+IDT type PASS
+IDT  PASS
+ pages table  PASS
+ page dir PASS
+ pages pair  PASS
+ memory layout PASS
+ physical virtual  PASS
+[KUNIT] result: 0x0000000E passed, 0x00000000 failed, 0x00000000 skipped
+ driver deep  driver deep [KUNIT] suite:  driver deep  (0x0000000F tests)
+PCI port PASS
+PCI addr format PASS
+PCI type  PASS
+PCI vendor IDPASS
+IDE port PASS
+IDE state  PASS
+IDE cmd PASS
+IDE LBA addr PASS
+  port PASS
+  PASS
+  state PASS
+PIT port PASS
+PIT freq PASS
+ keyboard port PASS
+ keyboard state PASS
+[KUNIT] result: 0x0000000F passed, 0x00000000 failed, 0x00000000 skipped
+ data struct deep  data struct deep [KUNIT] suite:  data struct deep  (0x0000000C tests)
+  table  PASS
+ empty  table PASS
+  LIFOPASS
+  PASS
+  PASS
+ queue FIFOPASS
+ queue  PASS
+  insert  PASS
+  not hits PASS
+  PASS
+BST insert  PASS
+BST struct PASS
+[KUNIT] result: 0x0000000C passed, 0x00000000 failed, 0x00000000 skipped
+ algo correctness  algo correctness [KUNIT] suite:  algo correctness  (0x00000010 tests)
+  PASS
+  empty count  PASS
+  unit  PASS
+  PASS
+  PASS
+  hits PASS
+  not hits PASS
+  PASS
+  PASS
+  PASS
+ max  count PASS
+ orders  PASS
+  count  PASS
+CRC32PASS
+CRC32 empty PASS
+ verify & PASS
+[KUNIT] result: 0x00000010 passed, 0x00000000 failed, 0x00000000 skipped
+ concurrent & sync  concurrent & sync [KUNIT] suite:  concurrent & sync  (0x0000000D tests)
+  init PASS
+  unlock PASS
+ mutex basic PASS
+ mutex  PASS
+ mutex error all  PASS
+ semaphore basic PASS
+ semaphore  PASS
+ semaphore max PASS
+  PASS
+  PASS
+  PASS
+  CASPASS
+  PASS
+[KUNIT] result: 0x0000000D passed, 0x00000000 failed, 0x00000000 skipped
+ error handling & boundary  error handling & boundary [KUNIT] suite:  error handling & boundary  (0x0000000E tests)
+ empty ptr strlenPASS
+ empty ptr memcpyPASS
+u32  PASS
+u32  PASS
+ buffer region  PASS
+ buffer region  PASS
+ buffer region  size PASS
+  protected PASS
+  check PASS
+  bit funcs PASS
+ error  PASS
+ error  PASS
+ count  boundary PASS
+  boundary PASS
+[KUNIT] result: 0x0000000E passed, 0x00000000 failed, 0x00000000 skipped
+ memory security  memory security [KUNIT] suite:  memory security  (0x0000000C tests)
+ basic alloc PASS
+  len alloc PASS
+  memory alloc PASS
+  alloc PASS
+ alloc release  alloc PASS
+ pair  alloc PASS
+ memory pool basic PASS
+ memory pool  PASS
+ memory pool invalid PASS
+ memory  mode PASS
+ memory copy  PASS
+ memory  PASS
+[KUNIT] result: 0x0000000C passed, 0x00000000 failed, 0x00000000 skipped
+ time & timer  time & timer [KUNIT] suite:  time & timer  (0x0000000D tests)
+ s  runtime  s PASS
+ runtime  s  s PASS
+  s count PASS
+  PASS
+  count PASS
+Unix  PASS
+ timer create PASS
+ timer trigger PASS
+ cycles timer PASS
+ timer cancel PASS
+ timer  PASS
+ timeout check PASS
+ time format PASS
+[KUNIT] result: 0x0000000D passed, 0x00000000 failed, 0x00000000 skipped
+ I/O  I/O [KUNIT] suite:  I/O  (0x0000000D tests)
+VGA  PASS
+VGA  PASS
+VGA  PASS
+VGA  bit  PASS
+ keyboard scan  PASS
+ keyboard release  PASS
+ keyboard ShiftPASS
+ scan  ASCIIPASS
+  port PASS
+  state PASS
+ port  PASS
+ ring IOPASS
+ ring IO  PASS
+[KUNIT] result: 0x0000000D passed, 0x00000000 failed, 0x00000000 skipped
+ config & param  config & param [KUNIT] suite:  config & param  (0x0000000B tests)
+ config set get PASS
+ config update PASS
+ config  count PASS
+ config  PASS
+ cmdline parse PASS
+ cmdline empty PASS
+ start param default PASS
+ start param verify PASS
+ system param PASS
+ system param  PASS
+ version  PASS
+[KUNIT] result: 0x0000000B passed, 0x00000000 failed, 0x00000000 skipped
+ multilingual & i18n  multilingual & i18n [KUNIT] suite:  multilingual & i18n  (0x0000000D tests)
+UTF-8 ASCIIPASS
+UTF-8 2 bytes PASS
+UTF-8 3 bytes PASS
+UTF-8 4 bytes PASS
+UTF-8 len  PASS
+ lang  PASS
+ lang name PASS
+ lang switch PASS
+ runtime region  PASS
+ runtime region  PASS
+  format PASS
+ count  format PASS
+ IME state PASS
+[KUNIT] result: 0x0000000D passed, 0x00000000 failed, 0x00000000 skipped
+ security & perm  security & perm [KUNIT] suite:  security & perm  (0x00000009 tests)
+ perm bit PASS
+ role perm PASS
+ perm check PASS
+ACL basic PASS
+ACL update PASS
+ capabilities check PASS
+  level  PASS
+  log PASS
+  PASS
+[KUNIT] result: 0x00000009 passed, 0x00000000 failed, 0x00000000 skipped
+ process & thread  process & thread [KUNIT] suite:  process & thread  (0x0000000D tests)
+ process state PASS
+ process state  PASS
+PCB init PASS
+PCB state  PASS
+  level  PASS
+  level time  PASS
+ thread basic PASS
+ thread state PASS
+ ctx size PASS
+ ctx save resume PASS
+ process table create PASS
+ process table  failed PASS
+IPC msg PASS
+[KUNIT] result: 0x0000000D passed, 0x00000000 failed, 0x00000000 skipped
+ net security deep  net security deep [KUNIT] suite:  net security deep  (0x0000000C tests)
+TLS records header PASS
+TLS version PASS
+TLS records parse PASS
+TLS handshake type PASS
+TLS  suite PASS
+X.509 version PASS
+X.509 signature algo PASS
+X.509 has  PASS
+ cert  PASS
+ key  type PASS
+ security param PASS
+TLS  PASS
+[KUNIT] result: 0x0000000C passed, 0x00000000 failed, 0x00000000 skipped
+ storage & block device  storage & block device [KUNIT] suite:  storage & block device  (0x0000000B tests)
+MBR struct PASS
+MBR signature PASS
+MBR partition type PASS
+MBR partition parse PASS
+GPT header PASS
+GPT signature PASS
+ block device PASS
+ block size PASS
+ disk cache PASS
+ cache LRUPASS
+IO  PASS
+[KUNIT] result: 0x0000000B passed, 0x00000000 failed, 0x00000000 skipped
+ power mgmt  power mgmt [KUNIT] suite:  power mgmt  (0x0000000C tests)
+ power state PASS
+ power state  PASS
+ state  PASS
+ non  PASS
+ battery basic PASS
+ battery  PASS
+  mode PASS
+  set PASS
+CPU freq PASS
+CPU scheduler PASS
+  mgr PASS
+ wakeup  PASS
+[KUNIT] result: 0x0000000C passed, 0x00000000 failed, 0x00000000 skipped
+V1.02 memory side module V1.02 memory side module [KUNIT] suite: V1.02 memory side module  (0x00000009 tests)
+LRU pages  / remove PASS
+LRU  PASS
+ bulk reclaim boundary PASS
+ memory  check PASS
+swap  PASS
+swap non  ops PASS
+ hugepage  PASS
+ hugepage supports detect PASS
+ hugepage stats PASS
+[KUNIT] result: 0x00000009 passed, 0x00000000 failed, 0x00000000 skipped
+V1.02 HAL side module V1.02 HAL side module [KUNIT] suite: V1.02 HAL side module  (0x00000008 tests)
+ perm registered / unregister [IPC-PERM] IPC perm check subsystem init done 
+PASS
+ perm check PASS
+ perm stats PASS
+ACPI struct size PASS
+ACPI empty ptr protected PASS
+ACPI table query PASS
+  PASS
+  stats PASS
+[KUNIT] result: 0x00000008 passed, 0x00000000 failed, 0x00000000 skipped
+stressstress[KUNIT] suite: stress (0x00000009 tests)
+kmalloc_stressPASS
+kfree_null_safePASS
+affinity_apiPASS
+frag_stats_callPASS
+switch_counterPASS
+lock_roundtripPASS
+buddy_single_backendPASS
+slab_all_sizes_reusePASS
+page_cache_pressurePASS
+[KUNIT] result: 0x00000009 passed, 0x00000000 failed, 0x00000000 skipped
+p3-securityp3-security[KUNIT] suite: p3-security (0x00000002 tests)
+s3_normal_user_denied create own.txt kernel/kunit/kunit_p3_security.c[KUNIT-ASSERT]  create own.txt 
+FAIL
+[KUNIT-FAIL] p3-security/s3_normal_user_denied
+posix_error_table create keep kernel/kunit/kunit_p3_security.c[KUNIT-ASSERT]  create keep 
+FAIL
+[KUNIT-FAIL] p3-security/posix_error_table
+[KUNIT] result: 0x00000000 passed, 0x00000002 failed, 0x00000000 skipped
+[KUNIT-FAIL-SUITE] p3-security failed=0x00000002
+[KTEST] suite[0x00000026] p3-security returned 0x0x00000002
+ syscall deep  syscall deep [KUNIT] suite:  syscall deep  (0x00000032 tests)
+syscall number rangePASS
+syscall table completePASS
+syscall max rangePASS
+syscall getpidPASS
+syscall getuidPASS
+syscall getgidPASS
+syscall timePASS
+syscall brkPASS
+syscall null pointerPASS
+syscall invalid fdPASS
+syscall write basicPASS
+syscall close invalidPASS
+syscall lseek invalidPASS
+syscall kill invalid pidPASS
+syscall kill invalid sigPASS
+syscall mkdir nullPASS
+syscall rmdir nullPASS
+syscall unlink nullPASS
+syscall access nullPASS
+syscall chdir nullPASS
+syscall rename nullPASS
+syscall socket invalidPASS
+syscall bind invalidPASS
+syscall listen invalidPASS
+syscall accept invalidPASS
+syscall connect invalidPASS
+syscall send invalidPASS
+syscall recv invalidPASS
+syscall dup invalidPASS
+syscall dup2 invalidPASS
+syscall ioctl invalidPASS
+syscall fcntl invalidPASS
+syscall select invalidPASS
+syscall fstat invalidPASS
+syscall stat nullPASS
+syscall getpid perfPASS
+syscall getpid idempotentPASS
+syscall time monotonicPASS
+syscall error codesPASS
+syscall max boundaryPASS
+syscall fork basicPASS
+syscall signal basicPASS
+syscall open nullPASS
+syscall pipePASS
+syscall mmap invalidPASS
+syscall munmap invalidPASS
+syscall huge countPASS
+syscall table key itemsPASS
+syscall stabilityPASS
+syscall return typesPASS
+[KUNIT] result: 0x00000032 passed, 0x00000000 failed, 0x00000000 skipped
+ memory deep  memory deep [KUNIT] suite:  memory deep  (0x00000019 tests)
+kmalloc basicPASS
+kmalloc zeroPASS
+kmalloc largePASS
+kfree nullPASS
+kfree doublePASS
+aligned allocPASS
+page alignedPASS
+zero allocPASS
+multiple alloc freePASS
+memory writablePASS
+alignmentPASS
+no overlapPASS
+alloc free allocPASS
+small allocPASS
+medium allocPASS
+page allocPASS
+usage statsPASS
+free statsPASS
+batch pressurePASS
+alternatingPASS
+patternPASS
+zero initPASS
+large contiguousPASS
+no crashPASS
+boundaryPASS
+[KUNIT] result: 0x00000019 passed, 0x00000000 failed, 0x00000000 skipped
+ user scenario  user scenario [KUNIT] suite:  user scenario  (0x00000010 tests)
+ boot complete PASS
+ interrupts active PASS
+ memory available PASS
+ user auth PASS
+ process running PASS
+ file operation PASS
+ terminal input PASS
+ text edit PASS
+ calculator PASS
+ network config PASS
+ dns resolve PASS
+ volume control PASS
+ brightness PASS
+ datetime PASS
+ cleanup PASS
+ shutdown prepare PASS
+[KUNIT] result: 0x00000010 passed, 0x00000000 failed, 0x00000000 skipped
+ recovery  recovery [KUNIT] suite:  recovery  (0x0000000D tests)
+ null deref PASS
+ div by zero PASS
+ stack overflow PASS
+ invalid opcode PASS
+ invalid syscall PASS
+ invalid fd PASS
+ invalid pointer PASS
+ leak alloc free PASS
+ leak multiple PASS
+ interrupts restore PASS
+ memory consistency PASS
+ degrade graphics PASS
+ degrade network PASS
+[KUNIT] result: 0x0000000D passed, 0x00000000 failed, 0x00000000 skipped
+ perf benchmark  perf benchmark [KUNIT] suite:  perf benchmark  (0x0000000A tests)
+ bench getpid PASS
+ bench time PASS
+ bench kmalloc64 PASS
+ bench kmalloc4k PASS
+ bench memcpy4k PASS
+ bench memset4k PASS
+ bench strlen PASS
+ bench strcmp PASS
+ bench scheduler PASS
+ bench boot time PASS
+[KUNIT] result: 0x0000000A passed, 0x00000000 failed, 0x00000000 skipped
+ integration  integration [KUNIT] suite:  integration  (0x0000000E tests)
+ boot chain complete PASS
+ boot interrupts PASS
+ boot paging PASS
+ boot protected mode PASS
+ subsystem memory PASS
+ subsystem scheduler PASS
+ subsystem graphics PASS
+ subsystem timer PASS
+ flow memory alloc PASS
+ flow multiple alloc PASS
+ flow string ops PASS
+ flow syscall seq PASS
+ recovery null ptr PASS
+ recovery invalid syscall PASS
+[KUNIT] result: 0x0000000E passed, 0x00000000 failed, 0x00000000 skipped
+ security E2E  security E2E [KUNIT] suite:  security E2E  (0x0000000F tests)
+ boundary zero size PASS
+ boundary max size PASS
+ boundary null ptr PASS
+ boundary double free PASS
+ input invalid fd PASS
+ input invalid ptr PASS
+ input neg length PASS
+ input string overflow PASS
+ permission uid PASS
+ permission gid PASS
+ memory buffer overflow PASS
+ memory use after free PASS
+ memory alignment PASS
+ integer overflow add PASS
+ integer overflow mul PASS
+[KUNIT] result: 0x0000000F passed, 0x00000000 failed, 0x00000000 skipped
+ compatibility  compatibility [KUNIT] suite:  compatibility  (0x0000000D tests)
+ cpu vendor PASS
+ cpu sse PASS
+ cpu sse2 PASS
+ cpu fpu PASS
+ cpu apic PASS
+ memory 128mb PASS
+ memory alignment PASS
+ smp cpu count PASS
+ smp current cpu PASS
+ gfx resolution PASS
+ gfx color depth PASS
+ storage present PASS
+ storage sector PASS
+[KUNIT] result: 0x0000000D passed, 0x00000000 failed, 0x00000000 skipped
+ stress E2E  stress E2E [KUNIT] suite:  stress E2E  (0x00000009 tests)
+ stress alloc 1000 PASS
+ stress alloc batch PASS
+ stress leak check PASS
+ stress loop 100k PASS
+ stress memcpy 1000 PASS
+ stress memset 1000 PASS
+ stress syscall 1000 PASS
+ stress strlen 1000 PASS
+ stress timer 100 PASS
+[KUNIT] result: 0x00000009 passed, 0x00000000 failed, 0x00000000 skipped
+ filesystem E2E  filesystem E2E [KUNIT] suite:  filesystem E2E  (0x0000000D tests)
+ ext2 magic PASS
+ ext2 superblock fields PASS
+ ext2 read root inode PASS
+ ext2 invalid inode PASS
+ ext2 list root dir PASS
+ ext2 resolve root path PASS
+ ext2 resolve invalid path PASS
+ ext2 small file read PASS
+ ext2 null file read PASS
+ vfs mount count PASS
+ vfs open close PASS
+ block read sector0 PASS
+ block read invalid PASS
+[KUNIT] result: 0x0000000D passed, 0x00000000 failed, 0x00000000 skipped
+ network E2E  network E2E [KUNIT] suite:  network E2E  (0x00000012 tests)
+ eth header size PASS
+ eth broadcast mac PASS
+ ip checksum PASS
+ ip parse valid PASS
+ ip parse invalid PASS
+ tcp header size PASS
+ tcp port range PASS
+ tcp flags PASS
+ udp header size PASS
+ udp checksum optional PASS
+ icmp echo type PASS
+ arp opcode PASS
+ socket create TCPPASS
+ socket invalid PASS
+ socket bind TCPPASS
+ dns port PASS
+ netif count PASS
+ netif mac PASS
+[KUNIT] result: 0x00000012 passed, 0x00000000 failed, 0x00000000 skipped
+ driver E2E  driver E2E [KUNIT] suite:  driver E2E  (0x00000012 tests)
+ pci enumerate PASS
+ pci config read PASS
+ pci class code PASS
+ rtl8139 detect PASS
+ rtl8139 init PASS
+ rtl8139 mac PASS
+ e1000 detect PASS
+ e1000 init PASS
+ ahci detect PASS
+ ahci port count PASS
+ ahci read sector PASS
+ ac97 detect PASS
+ ac97 init PASS
+ ac97 volume PASS
+ usb init PASS
+ usb device count PASS
+ irq register PASS
+ irq enable PASS
+[KUNIT] result: 0x00000012 passed, 0x00000000 failed, 0x00000000 skipped
+ graphics  graphics [KUNIT] suite:  graphics  (0x00000014 tests)
+ gfx init PASS
+ gfx resolution PASS
+ gfx bpp PASS
+ gfx framebuffer PASS
+ gfx color rgb PASS
+ gfx color black PASS
+ gfx draw pixel PASS
+ gfx draw line PASS
+ gfx draw rect PASS
+ gfx fill rect PASS
+ gfx draw circle PASS
+ gfx fill circle PASS
+ font load PASS
+ font char width PASS
+ font string width PASS
+ font height PASS
+ font draw char PASS
+ font draw string PASS
+ multi monitor count PASS
+ gfx clear PASS
+[KUNIT] result: 0x00000014 passed, 0x00000000 failed, 0x00000000 skipped
+ performance  performance [KUNIT] suite:  performance  (0x0000000C tests)
+ perf syscall getpid PASS
+ perf syscall time PASS
+ perf kmalloc small PASS
+ perf kmalloc large PASS
+ perf memcpy 4k PASS
+ perf memset 4k PASS
+ perf scheduler PASS
+ perf irq count PASS
+ perf memory usage PASS
+ perf kheap usage PASS
+ perf process count PASS
+ perf boot time PASS
+[KUNIT] result: 0x0000000C passed, 0x00000000 failed, 0x00000000 skipped
+[KTEST] RESULT: FAIL
+[KLOG] save-to-disk: calling writefile
+[KLOG] save-to-disk: writefile returned
+=== PCI devices ===
+BridgeBridgeStorageBridgeDisplayNetworkSerial/USBpci-00:00buspci-00:01buspci-00:01storagepci-00:01buspci-00:02displaypci-00:03networkpci-00:04usb[USB] USB subsystem init done 
+[USB] subsystem init done
+UHCI[USB] PCI: UHCI host controller detected
+[USB] UHCI init io=0x0000C040
+[USB] UHCI reset wait fallback (continue)
+[USB] UHCI reset wait fallback
+[USB] UHCI running
+device connectedempty[USB-HID] HID class driver initialized
+[USB-HID] Keyboard demo (new HID driver, V8.32)
+[USB-HID] No HID devices connected
+[USB] Initializing USB subsystem (V8.32 new stack)
+[USB] Core initialized
+[USB-HID] HID class driver initialized
+HID[MSC] USB Mass Storage class driver initialized
+MSC[PRINTER] USB printer driver initialized
+Printer[UHCI] pci_cmd=0x00000107
+[UHCI] frame_phys=0x0344B000 frbase=0x0344B000
+[UHCI] port 0x00000000 status=0x00000083
+connected[UHCI-RESET] set pr=0x00000283
+[UHCI-RESET] after enable write=0x0000008F
+[UHCI-RESET] final=0x00000085
+[UHCI-CTRL] qh=0x0344AE00 tds=0x0344C020 cmd=0x00000041 sts=0x00000000
+[UHCI-CTRL-OK] dev=0x00000000 req/ep=0x00000006 status=0x000007FF
+[UHCI-CTRL] qh=0x0344AE00 tds=0x0344C020 cmd=0x00000041 sts=0x00000000
+[UHCI-CTRL-OK] dev=0x00000000 req/ep=0x00000005 status=0x000007FF
+[UHCI-CTRL] qh=0x0344AE00 tds=0x0344C020 cmd=0x00000041 sts=0x00000000
+[UHCI-CTRL-OK] dev=0x00000001 req/ep=0x00000006 status=0x000007FF
+[UHCI-CTRL] qh=0x0344AE00 tds=0x0344C020 cmd=0x00000041 sts=0x00000000
+[UHCI-CTRL-OK] dev=0x00000001 req/ep=0x00000006 status=0x000007FF
+[UHCI-CTRL] qh=0x0344AE00 tds=0x0344C020 cmd=0x00000041 sts=0x00000000
+[UHCI-CTRL-OK] dev=0x00000001 req/ep=0x00000006 status=0x000007FF
+[UHCI-CTRL] qh=0x0344AE00 tds=0x0344C020 cmd=0x00000041 sts=0x00000000
+[UHCI-CTRL-OK] dev=0x00000001 req/ep=0x00000009 status=0x000007FF
+MSC[UHCI-CTRL] qh=0x0344AE00 tds=0x0344C020 cmd=0x00000041 sts=0x00000000
+[UHCI-CTRL-OK] dev=0x00000001 req/ep=0x000000FF status=0x000007FF
+[UHCI-CTRL] qh=0x0344AE00 tds=0x0344C020 cmd=0x00000041 sts=0x00000000
+[UHCI-CTRL-OK] dev=0x00000001 req/ep=0x000000FE status=0x000007FF
+[UHCI-BULK] dev=0x00000001 ep=0x00000002 len=0x0000001F tds=0x0A001860 n=0x00000001 frame0=0x0344AE02
+[UHCI-BULK] dev=0x00000001 ep=0x00000081 len=0x0000000D tds=0x0A001860 n=0x00000001 frame0=0x0344AE02
+[UHCI-BULK] dev=0x00000001 ep=0x00000002 len=0x0000001F tds=0x0A001860 n=0x00000001 frame0=0x0344AE02
+[UHCI-BULK] dev=0x00000001 ep=0x00000081 len=0x00000024 tds=0x0A001860 n=0x00000001 frame0=0x0344AE02
+[UHCI-BULK] dev=0x00000001 ep=0x00000081 len=0x0000000D tds=0x0A001860 n=0x00000001 frame0=0x0344AE02
+QEMU    QEMU HARDDISK   2.5+QEMU    QEMU HARDDISK   [UHCI-BULK] dev=0x00000001 ep=0x00000002 len=0x0000001F tds=0x0A001860 n=0x00000001 frame0=0x0344AE02
+[UHCI-BULK] dev=0x00000001 ep=0x00000081 len=0x00000008 tds=0x0A001860 n=0x00000001 frame0=0x0344AE02
+[UHCI-BULK] dev=0x00000001 ep=0x00000081 len=0x0000000D tds=0x0A001860 n=0x00000001 frame0=0x0344AE02
+[MSC-CAP] blocks=0x00020000 bsize=0x00000200
+[UHCI-BULK] dev=0x00000001 ep=0x00000002 len=0x0000001F tds=0x0A001860 n=0x00000001 frame0=0x0344AE02
+[UHCI-BULK] dev=0x00000001 ep=0x00000081 len=0x00000200 tds=0x0A000140 n=0x00000008 frame0=0x0344AE02
+[UHCI-BULK] dev=0x00000001 ep=0x00000081 len=0x0000000D tds=0x0A001860 n=0x00000001 frame0=0x0344AE02
+[MSC-READ] lba0 rc=0x00000000 bytes=0x0000004F0x000000500x000000450x0000004E0x000000300x000000320x0000002D0x00000041
+[UHCI-BULK] dev=0x00000001 ep=0x00000002 len=0x0000001F tds=0x0A001860 n=0x00000001 frame0=0x0344AE02
+[UHCI-BULK] dev=0x00000001 ep=0x00000002 len=0x00001000 tds=0x066AE2B0 n=0x00000040 frame0=0x0344AE02
+[UHCI-BULK] dev=0x00000001 ep=0x00000081 len=0x0000000D tds=0x0A001860 n=0x00000001 frame0=0x0344AE02
+[UHCI-BULK] dev=0x00000001 ep=0x00000002 len=0x0000001F tds=0x0A001860 n=0x00000001 frame0=0x0344AE02
+[UHCI-BULK] dev=0x00000001 ep=0x00000081 len=0x00001000 tds=0x066AE2B0 n=0x00000040 frame0=0x0344AE02
+[UHCI-BULK] dev=0x00000001 ep=0x00000081 len=0x0000000D tds=0x0A001860 n=0x00000001 frame0=0x0344AE02
+[MSC-WRITE] lba=0x0001FFF8 wr=0x00000000 rd=0x00000000 mismatch=0xFFFFFFFF
+[UHCI] port 0x00000001 status=0x00000080
+[UHCI] Controller initialized
+[USB] Subsystem init done
+[AC97] No audio controller found
+[MOUSE] PS/2 mouse enable report failed
+[INPUT] input subsystem init done 
+[TOUCH] no hardware touchscreen, using software sim
+=== user processes ===
+[KHEAP-BIG] size=0x00010000 caller=0x001AB18E
+init user mode [UPROC] exec-static name=init rc=1
+[KHEAP-BIG] size=0x00010000 caller=0x001AB18E
+procb user mode [UPROC] exec-static name=procb rc=2
+[PROC] preemptive sched ready , timer will switch processes 
+init[FRAME] ds=0x0x00000023 edi=0x0x00000000 esi=0x0x00000000 ebp=0x0x00000000 esp=0x0x00000000 ebx=0x0x00000000 edx=0x0x00000000 ecx=0x0x00000000 eax=0x0x00000000 irq=0x0x00000000 err=0x0x00000000 eip=0x0x001016AB cs=0x0x0000001B eflags=0x0x00000200 useresp=0x0x40010000 ss=0x0x00000023
+  [user init] Hello! Running in ring 3
+  [user init] Hello! Running in ring 3
+  [user init] alive(tick), preemptive sched works
+  [user init] alive(tick), preemptive sched works
+  [proc-B] user-mode process running, preemptive sched works
+  [proc-B] user-mode process running, preemptive sched works
+[PAGING] dir freed
+(start Shell...)
+[MAC] autoload: disk not ready
+[MAC] AUTOLOAD: MOUNT FAIL
+[SHELL] main started
+ [SHELL] self-test: waiting 3s for keyboard ready...
+ [SHELL] self-test done, ready for input
+[AUTO] protect mode: autostart demos skipped, text shell only
+[IP] UDP packet received
+[UDP] packet received
+[UDP] no socket for port
+hepu@os:~$ 
