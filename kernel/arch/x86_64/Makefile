@@ -127,6 +127,7 @@ C_SOURCES = \
     $(KERNEL_DIR)/net/tls_crypto.c \
     $(KERNEL_DIR)/net/tls_handshake.c \
     $(KERNEL_DIR)/net/tls_client.c \
+    $(KERNEL_DIR)/net/tls12_client.c \
     $(ARCH_DIR)/ps2mouse64.c \
     $(ARCH_DIR)/usb64.c \
     $(ARCH_DIR)/ehci64.c \
