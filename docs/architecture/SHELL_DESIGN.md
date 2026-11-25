@@ -1,7 +1,7 @@
 ---
 title: Hepu Shell 设计原则
 status: active
-sys_version: 0.58.0
+sys_version: 0.62.1
 updated: 2026-10-29
 owner: architecture
 source_of_truth: null
@@ -97,7 +97,7 @@ Hepu Shell 为 Hepu 内核模型设计，语法、模型和 sh/bash 不兼容。
 
 ---
 
-## 当前实现状态（0.54.6）
+## 当前实现状态（0.62.1）
 
 当前 shell 是内核内置的简易版（shell64.c），是过渡产品。
 

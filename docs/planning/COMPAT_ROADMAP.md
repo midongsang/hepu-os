@@ -1,7 +1,7 @@
 ---
 title: 兼容层落地路线（COMPAT_ROADMAP）
 status: active
-sys_version: 0.58.0
+sys_version: 0.62.1
 updated: 2026-11-12
 owner: planning
 source_of_truth: null

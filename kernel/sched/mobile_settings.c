@@ -10,6 +10,7 @@
 #include "permission_manager.h"
 #include "string.h"
 #include <stdint.h>
+#include "version.h"
 
 /* 共享变量 (定义在 mobile.c 中) */
 extern uint8_t mob_accent;
@@ -73,7 +74,7 @@ void mobile_run_settings(void)
             } else if (i == 3) {
                 gfx_puts(gfx_width - 40, y + 2, "2.4G/8G", 0x0B);
             } else if (i == 4) {
-                gfx_puts(gfx_width - 40, y + 2, "V1.02", 0x0B);
+                gfx_puts(gfx_width - 40, y + 2, "v" HEPU_OS_VERSION, 0x0B);
             } else if (i == 5) {
                 /* V2.55 Power: 显示当前电量 */
                 extern int pm_get_battery(void *);
@@ -128,7 +129,7 @@ void mobile_run_settings(void)
         /* 关于手机子页 */
         if (set_vals[4]) {
             gfx_fillrect(4, 36 + SET_ITEMS * 20 + 2, gfx_width - 8, 40, 0x00);
-            gfx_puts(8, 36 + SET_ITEMS * 20 + 4, "HEPU OS V1.02", 0x0F);
+            gfx_puts(8, 36 + SET_ITEMS * 20 + 4, "HEPU OS v" HEPU_OS_VERSION, 0x0F);
             if (sys_lang_en) gfx_puts(8, 36 + SET_ITEMS * 20 + 14, "Hepu Hyper Evolve OS", 0x0B);
             else gfx_puts_zh(8, 36 + SET_ITEMS * 20 + 14, "赫普超进化系统", 0x0B);
             gfx_puts(8, 36 + SET_ITEMS * 20 + 24, "GPLv3  |  x86", 0x08);

@@ -1,18 +1,18 @@
 ---
 title: SYSTEM_VERIFICATION
 status: active
-sys_version: 0.58.0
+sys_version: 0.62.1
 updated: 2026-11-01
 owner: planning
 source_of_truth: null
 supersedes: null
 ---
 
-# HepuOS 系统验证计划 V0.10.1
+# HepuOS 系统验证计划 V0.62.1
 
 > 文档版本：V1.0  
 > 创建日期：2026-10-07  
-> 适用版本：HepuOS 0.10.1  
+> 适用版本：HepuOS 0.62.1
 > 维护者：HepuOS 开发团队
 
 ---

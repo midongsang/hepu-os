@@ -19,7 +19,7 @@
 
   <!-- ================= 标题 ================= -->
   <text x="40" y="52" class="title">赫普OS 系统框架图</text>
-  <text x="40" y="76" class="subtitle">HEPU Hyper Evolve OS · 自研微内核 · 四层分层隔离架构 · 系统版本 V1.02 · 文档版本 V4.64</text>
+  <text x="40" y="76" class="subtitle">HEPU Hyper Evolve OS · 自研微内核 · 四层分层隔离架构 · 系统版本 0.62.1 · 文档版本 V4.64</text>
   <line x1="40" y1="92" x2="1160" y2="92" stroke="#E4E3DD" stroke-width="1.5"/>
 
   <!-- ================= 第一层：应用与交互生态层 ================= -->

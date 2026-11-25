@@ -21,7 +21,7 @@ BLD=/tmp/hepu_boot
 KERNEL=$ROOT/build_v250/hepu-kernel.bin
 DATADISK=$ROOT/build/ext2disk.img
 OUT=$ROOT/build
-SYSTEM_VER=v1.02
+SYSTEM_VER=v0.62.1
 
 mkdir -p $BLD $OUT
 if [ ! -f "$KERNEL" ]; then echo "无内核, 先 make all"; exit 1; fi

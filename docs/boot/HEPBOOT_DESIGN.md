@@ -1,14 +1,14 @@
 ---
 title: HEPBOOT_DESIGN
 status: active
-sys_version: 0.58.0
+sys_version: 0.62.1
 updated: 2026-11-01
 owner: boot
 source_of_truth: null
 supersedes: null
 ---
 
-> ⚠️ **版本说明**：sys_version 已对齐 0.54.6，但正文口径仍为 v0.13.x ~ v0.33.x 设计稿。源码事实请以 `kernel/arch/x86_64/Makefile` 实际编入为准。
+> ⚠️ **版本说明**：sys_version 已对齐 0.62.1，但正文口径仍为 v0.13.x ~ v0.33.x 设计稿。源码事实请以 `kernel/arch/x86_64/Makefile` 实际编入为准。
 
 
 # HepuBoot 引导系统设计文档

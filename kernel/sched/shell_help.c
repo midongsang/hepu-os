@@ -12,6 +12,7 @@
 #include "keyboard.h"
 #include "pit.h"
 #include "hepu.h"
+#include <version.h>
 extern const char *hepu_kernel_version;
 extern const char *hepu_system_version;
 #include "process.h"
@@ -144,7 +145,7 @@ void cmd_help(char *args)
     }
     /* help: 分组总览 */
     vga_puts(" HEPU OS "); vga_puts(i18n_get(I18N_HELP_TITLE));
-    vga_puts(" (v1.02) -- help <cmd> for details\n");
+    vga_puts(" (v" HEPU_OS_VERSION ") -- help <cmd> for details\n");
     vga_puts("   help all - full manual\n\n");
     char last = 0;
     for (uint32_t i = 0; i < HELP_ENTRIES; i++) {
@@ -184,7 +185,7 @@ extern const char *hepu_system_version;
     vga_printf(" : Hepu OS v%s (HEPU Hyper Evolve OS)\n", hepu_system_version);
     vga_puts(i18n_get(I18N_KERNEL_VER));
     vga_printf(" : v%s x86(i686) 32-bit microkernel, ring0/ring3\n", hepu_kernel_version);
-    vga_puts(" Boot   : Multiboot (ISO/IMG) | ROM hepu-os-v1.02\n");
+    vga_puts(" Boot   : Multiboot (ISO/IMG) | ROM hepu-os-v" HEPU_OS_VERSION "\n");
     vga_printf(" "); vga_puts(i18n_get(I18N_MEM_USED));
     vga_printf(": kheap %uKB (used %uKB free %uKB)\n", ht / 1024, hu / 1024, hf / 1024);
     vga_printf(" Procs  : total=%u running=%u ready=%u | uptime %u.%02us\n",
@@ -202,7 +203,7 @@ extern const char *hepu_system_version;
 const man_entry_t man_table[] = {
     {"help", "help [cmd|all]\n  List all commands, or show syntax/example of one.\n  help all prints the full manual table.\n"},
     {"man",  "man [cmd|all]\n  Detailed manual for a command; man all prints every page.\n"},
-    {"version", "version\n  System v1.02 + Kernel v1.0.2 + license.\n"},
+    {"version", "version\n  System v" HEPU_OS_VERSION " + Kernel v" HEPU_OS_VERSION " + license.\n"},
     {"about", "about\n  Full system info: version, arch, kheap, procs, feature list.\n"},
     {"ps",   "ps\n  Process table: PID, state, mem, cpu, violations.\n  Expect: total procs:1, current PID:0, pid=1 init NORM.\n"},
     {"ktest","ktest\n  Kernel self-test: heap, paging, locks, IPC, signals.\n  ~16s. Used for regression after every change.\n"},

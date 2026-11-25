@@ -1,14 +1,14 @@
 ---
 title: API_REFERENCE
 status: active
-sys_version: 0.58.0
+sys_version: 0.62.1
 updated: 2026-11-12
 owner: specs
 source_of_truth: null
 supersedes: null
 ---
 
-> ⚠️ **版本说明**：sys_version 已对齐 0.54.6，但正文口径仍为 v0.13.x ~ v0.33.x 设计稿。源码事实请以 `kernel/arch/x86_64/Makefile` 实际编入为准。
+> ⚠️ **版本说明**：sys_version 已对齐 0.62.1，但正文口径仍为 v0.13.x ~ v0.33.x 设计稿。源码事实请以 `kernel/arch/x86_64/Makefile` 实际编入为准。
 
 
 # 赫普OS API参考文档
@@ -25,7 +25,7 @@ supersedes: null
 
 本文档记录赫普OS的系统调用和标准库函数，供应用开发者参考。
 
-- 内核版本：0.54.6
+- 内核版本：0.62.1
 - 系统调用数量：104个（详见 [SYSCALL_ABI.md](SYSCALL_ABI.md)）
 - 标准库：libhepu（stdio/string/stdlib/unistd）
 

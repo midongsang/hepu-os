@@ -1,7 +1,7 @@
 ---
 title: USB 与无线输入支持（V0.13.62）
 status: active
-sys_version: 0.58.0
+sys_version: 0.62.1
 updated: 2026-11-11
 owner: kernel
 source_of_truth: kernel/arch/x86_64/usb64.c
@@ -10,7 +10,7 @@ supersedes: null
 
 # USB 与无线输入支持
 
-## 现状（0.60.7）
+## 现状（0.62.1）
 
 - 主机控制器（64 位）：`usb64.c` 本身**就是 UHCI（USB 1.1）驱动**，另配 EHCI（USB 2.0）`ehci64.c` 与 XHCI（USB 3.0）`xhci64.c`。`usb64_init()` 的**第一尝试路径是 UHCI**：先按 PIIX3 `0x7020` / PIIX4 `0x7112` 找控制器（`usb64.c:344-346`），找不到才降级 EHCI，再不行才 XHCI。原因是 QEMU 默认的 `piix` 芯片组只提供 UHCI，因此 UHCI 是最常被命中的那条路径。
 - 32 位侧另有独立实现 `kernel/drivers/usb/uhci.c`（遗留树），与 64 位的 `usb64.c` 不是同一份代码。

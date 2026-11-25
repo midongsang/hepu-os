@@ -1,19 +1,19 @@
 ---
 title: BUILD
 status: active
-sys_version: 0.58.0
+sys_version: 0.62.1
 updated: 2026-11-01
 owner: guides
 source_of_truth: null
 supersedes: null
 ---
 
-> ⚠️ **版本说明**：sys_version 已对齐 0.54.6，但正文口径仍为 v0.13.x ~ v0.33.x 设计稿。源码事实请以 `kernel/arch/x86_64/Makefile` 实际编入为准。
+> ⚠️ **版本说明**：sys_version 已对齐 0.62.1；正文部分章节仍保留历史设计稿口径，源码事实请以 `kernel/arch/x86_64/Makefile` 实际编入为准。
 
 
 # 赫普OS 开发者指南
 
-> 版本：见 frontmatter `sys_version`（0.54.6） | 更新日期：2026-11-01
+> 版本：见 frontmatter `sys_version`（0.62.1） | 更新日期：2026-11-25
 
 ## 目录
 
@@ -49,8 +49,8 @@ supersedes: null
 
 ### 当前版本
 
-- 内核版本：0.54.6
-- 引导器版本：HepuBoot v0.09
+- 内核版本：0.62.1
+- 引导器版本：HepuBoot v1.02
 - 支持架构：x86（32位）、x86_64（框架）
 - 内核大小：约4.1MB
 

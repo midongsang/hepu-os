@@ -1,14 +1,14 @@
 ---
 title: UNIFIED_SOURCE_TREE
 status: active
-sys_version: 0.58.0
+sys_version: 0.62.1
 updated: 2026-11-11
 owner: docs
 source_of_truth: null
 supersedes: null
 ---
 
-> ⚠️ **版本说明**：sys_version 已对齐 0.54.6，但正文口径仍为 v0.13.x ~ v0.33.x 设计稿。源码事实请以 `kernel/arch/x86_64/Makefile` 实际编入为准。
+> ⚠️ **版本说明**：sys_version 已对齐 0.62.1，但正文口径仍为 v0.13.x ~ v0.33.x 设计稿。源码事实请以 `kernel/arch/x86_64/Makefile` 实际编入为准。
 
 
 # 赫普OS 统一源码树进度

@@ -1,8 +1,8 @@
 ---
 title: 赫普OS 文档索引
 status: active
-sys_version: 0.62.0
-updated: 2026-11-18
+sys_version: 0.62.1
+updated: 2026-11-25
 generator: tools/gen_docs_index.py
 source_of_truth: frontmatter of docs/*
 ---
@@ -57,12 +57,15 @@ source_of_truth: frontmatter of docs/*
 - [Android HAL 移植方案（ANDROID_HAL_PORTING）](planning/ANDROID_HAL_PORTING.md)
 - [COMPATIBILITY_LAYER](planning/COMPATIBILITY_LAYER.md)
 - [兼容层落地路线（COMPAT_ROADMAP）](planning/COMPAT_ROADMAP.md)
+- [EPOLL_REGRESSION_2026-11-18](planning/EPOLL_REGRESSION_2026-11-18.md)
 - [Hepu 完整开发路线图](planning/FULL_ROADMAP.md)
 - [内核优化与兼容预埋路线（KERNEL_OPT_PLAN）](planning/KERNEL_OPT_PLAN.md)
 - [模块化设计准则（MODULARITY）](planning/MODULARITY.md)
 - [MULTIARCH_PORT_EVALUATION](planning/MULTIARCH_PORT_EVALUATION.md)
+- [赫普OS 下一阶段路线（度量 / 可靠性 / 架构收敛）](planning/NEXT_PHASE_PLAN.md) `(proposed)`
 - [P3_BLOCKERS](planning/P3_BLOCKERS.md)
 - [组合B：SMP 硬化包实施计划（PLAN_SMP_HARDENING_R5）](planning/PLAN_SMP_HARDENING_R5.md)
+- [REGRESS32_FIX_2026-11-18](planning/REGRESS32_FIX_2026-11-18.md)
 - [赫普OS 开发路线图（唯一优先级来源）](planning/ROADMAP.md)
 - [ROADMAP 事实核对审计（2026-11-18，A 段）](planning/ROADMAP_AUDIT_2026-11-18.md)
 - [RUST](planning/RUST.md)
@@ -94,7 +97,9 @@ source_of_truth: frontmatter of docs/*
 
 ## status
 
+- [2026-11-18 四条并行任务的集成交付记录](status/INTEGRATION_2026-11-18.md)
 - [赫普OS 未关闭问题清单](status/OPEN_BUGS.md)
+- [PERF_BASELINE_2026-11-18](status/PERF_BASELINE_2026-11-18.md)
 - [SYSTEM_TOOLS](status/SYSTEM_TOOLS.md)
 - [VERSIONING](status/VERSIONING.md)
 - [VM_INSTANCES](status/VM_INSTANCES.md)

@@ -1,8 +1,8 @@
 ---
 title: VERSIONING
 status: active
-sys_version: 0.62.0
-updated: 2026-11-18
+sys_version: 0.62.1
+updated: 2026-11-25
 owner: status
 source_of_truth: null
 supersedes: null
@@ -107,12 +107,26 @@ supersedes: null
 
 ## 当前版本
 
-**0.62.0**
+**0.62.1**
 - 重要版本：0
 - 默认版本：62
-- bug版本：0
+- bug版本：1
 
 > 版本号以本文件 frontmatter `sys_version` 为唯一事实源。以下为历史迭代记录。
+
+**0.62.1 迭代内容（2026-11-25，B 线可靠性 + 版本/文档整理）**
+
+1. **B-1 崩溃自动重启闭环**：`shell_main` 入口维护 3 次重启计数；用户态崩溃经
+   `crash_restart_mark()` 标记，`sys_exit` 在无其他活进程时切回主线栈重入
+   `shell_main`，不再依赖未锚定的 `longjmp` 上下文。QEMU 32 位 AUTO 构建实测
+   `crashsvc` 连续崩溃 3 次（PID 3/4/5），`restarts=3` 后回到 `hepu@os:~`。
+2. **B-4 32 位网络修复**：ARP/TCP 收发字节序、TCP 伪首部校验和、ARP 等待与
+   `ping`/`tcp_connect` 握手；QEMU e1000 实测 ping 4/4、TCP established。
+3. **P2 内存长稳**：30 分钟压测 975,200 轮、0 skip，`free=0x627D` 全程稳定。
+4. **版本显示与文档整理**：32/64 位 shell、Settings、桌面终端、记事本、启动横幅、
+   移动端关于/设置、`/hepu_boot.log` 标题统一引用 `HEPU_OS_VERSION`；50 个 active
+   文档 frontmatter 对齐到本版本，文档索引重建，`tools/check_docs.py` 版本一致性
+   错误清零；README 与镜像/运行脚本路径同步到 0.62.1。
 
 **0.62.0 迭代内容（2026-11-18，多架构第一程 + 抽象层收口）**
 

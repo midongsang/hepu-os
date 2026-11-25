@@ -4,6 +4,7 @@
  * ========================================================================== */
 
 #include <stdint.h>
+#include <version.h>
 #include <stddef.h>
 
 extern void vga_puts(const char *s);
@@ -62,7 +63,7 @@ void notes64_init(void)
         "Use 'notes save <file>' to save.\n"
         "Use 'notes edit' to enter edit mode.\n"
         "\n"
-        "HepuOS 64-bit v0.56.1\n",
+        "HepuOS 64-bit v" HEPU_OS_VERSION "\n",
         NOTES_MAX_TEXT);
     notes.text_len = notes_strlen(notes.text);
 

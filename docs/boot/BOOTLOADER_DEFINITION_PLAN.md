@@ -1,21 +1,21 @@
 ---
 title: BOOTLOADER_DEFINITION_PLAN
 status: active
-sys_version: 0.58.0
+sys_version: 0.62.1
 updated: 2026-11-01
 owner: boot
 source_of_truth: null
 supersedes: null
 ---
 
-> ⚠️ **版本说明**：sys_version 已对齐 0.54.6，但正文口径仍为 v0.13.x ~ v0.33.x 设计稿。源码事实请以 `kernel/arch/x86_64/Makefile` 实际编入为准。
+> ⚠️ **版本说明**：sys_version 已对齐 0.62.1，但正文口径仍为 v0.13.x ~ v0.33.x 设计稿。源码事实请以 `kernel/arch/x86_64/Makefile` 实际编入为准。
 
 
 # HepuBoot 全局定义规划与命名规范
 
 ## 版本
 
-见 frontmatter `sys_version`（当前 0.54.6）。
+见 frontmatter `sys_version`（当前 0.62.1）。
 
 ## 目的
 规范引导器中所有宏定义、标签、内存地址的命名和分配，避免重复定义、地址冲突和跳转歧义。
@@ -209,7 +209,7 @@ supersedes: null
 - **影响**: 仅影响QEMU测试
 - **解决方案**: 必须使用`-drive if=ide,format=raw,file=...`参数
 
-## 六、当前稳定配置（0.54.6）
+## 六、当前稳定配置（0.62.1）
 
 | 参数 | 值 | 说明 |
 |------|-----|------|

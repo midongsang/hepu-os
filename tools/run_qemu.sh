@@ -3,7 +3,7 @@
 # 用法: ./run_qemu.sh [32|64] [镜像文件]
 
 ARCH=${1:-32}
-IMAGE=${2:-build/hepu-os-hybrid-v0.10.5.img}
+IMAGE=${2:-build/hepu-os-v0.62.1.img}
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export LD_LIBRARY_PATH="$SCRIPT_DIR/qemu_libs/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH"

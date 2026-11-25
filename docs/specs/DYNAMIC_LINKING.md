@@ -1,14 +1,14 @@
 ---
 title: DYNAMIC_LINKING
 status: active
-sys_version: 0.58.0
+sys_version: 0.62.1
 updated: 2026-11-12
 owner: specs
 source_of_truth: null
 supersedes: null
 ---
 
-> ⚠️ **版本说明**：sys_version 已对齐 0.54.6，但正文口径仍为 v0.13.x ~ v0.33.x 设计稿。源码事实请以 `kernel/arch/x86_64/Makefile` 实际编入为准。
+> ⚠️ **版本说明**：sys_version 已对齐 0.62.1，但正文口径仍为 v0.13.x ~ v0.33.x 设计稿。源码事实请以 `kernel/arch/x86_64/Makefile` 实际编入为准。
 
 
 > 注: 原文为 i386 重定位方案, 需按 x86_64 重写(PT_INTERP+ET_DYN+R_X86_64_*), 见 planning/ROADMAP.md P1-2。

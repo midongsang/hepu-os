@@ -1,14 +1,14 @@
 ---
 title: ENVIRONMENT
 status: active
-sys_version: 0.58.0
+sys_version: 0.62.1
 updated: 2026-11-01
 owner: guides
 source_of_truth: null
 supersedes: null
 ---
 
-> ⚠️ **版本说明**：sys_version 已对齐 0.54.6，但正文口径仍为 v0.13.x ~ v0.33.x 设计稿。源码事实请以 `kernel/arch/x86_64/Makefile` 实际编入为准。
+> ⚠️ **版本说明**：sys_version 已对齐 0.62.1，但正文口径仍为 v0.13.x ~ v0.33.x 设计稿。源码事实请以 `kernel/arch/x86_64/Makefile` 实际编入为准。
 
 
 # HepuOS 开发环境维护指南
@@ -102,19 +102,19 @@ make
 
 ### 测试BIOS引导
 ```bash
-qemu-system-i386 -drive if=ide,format=raw,file=build/hepu-os-hybrid-v0.10.5.img -boot c -m 512M -serial file:/tmp/serial.log -vga std
+qemu-system-i386 -drive if=ide,format=raw,file=build/hepu-os-v0.62.1.img -boot c -m 512M -serial file:/tmp/serial.log -vga std
 ```
 
 ### 测试UEFI引导
 ```bash
-qemu-system-x86_64 -bios tools/firmware/OVMF_CODE.fd -drive if=ide,format=raw,file=build/hepu-os-hybrid-v0.10.5.img -m 512M
+qemu-system-x86_64 -bios tools/firmware/OVMF_CODE.fd -drive if=ide,format=raw,file=build/hepu-os-v0.62.1.img -m 512M
 ```
 
 ## 故障排查
 
 ### QEMU启动后无输出
 1. 检查镜像是否正确：`ls -la build/*.img`
-2. 检查引导器是否更新：`dd if=build/hepu-os-hybrid-v0.10.5.img bs=512 count=1 2>/dev/null | xxd | tail -3`
+2. 检查引导器是否更新：`dd if=build/hepu-os-v0.62.1.img bs=512 count=1 2>/dev/null | xxd | tail -3`
 3. 检查串口输出：`cat /tmp/serial.log`
 
 ### 编译失败

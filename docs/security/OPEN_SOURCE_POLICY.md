@@ -1,7 +1,7 @@
 ---
 title: OPEN_SOURCE_POLICY
 status: active
-sys_version: 0.58.0
+sys_version: 0.62.1
 updated: 2026-11-01
 owner: security
 source_of_truth: null

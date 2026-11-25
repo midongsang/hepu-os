@@ -5,6 +5,7 @@
  * ========================================================================== */
 
 #include <stdint.h>
+#include <version.h>
 #include <stddef.h>
 
 extern void vga_puts(const char *s);
@@ -86,7 +87,7 @@ void syssettings64_init(void)
 
     /* === 系统信息 === */
     add_setting("System", "OS Name", "HepuOS", "Operating system name");
-    add_setting("System", "Version", "0.56.1", "Current kernel version");
+    add_setting("System", "Version", HEPU_OS_VERSION, "Current kernel version");
     add_setting("System", "Architecture", "x86_64", "CPU architecture");
     add_setting("System", "Kernel Mode", "Long Mode", "64-bit protected mode");
     add_setting("System", "Boot Loader", "HepuBoot", "Boot loader name");

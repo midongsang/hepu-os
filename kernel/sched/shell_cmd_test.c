@@ -9,6 +9,7 @@
 #include <stdint.h>
 #include <string.h>
 #include "vga.h"
+#include <version.h>
 #include "process.h"
 #include "shell.h"
 #include "serial.h"
@@ -305,7 +306,7 @@ void firstboot_welcome(void)
         return;   /* 无数据盘/写入失败: 静默跳过 */
     vga_puts("\n");
     vga_puts(" =============================================================\n");
-    vga_puts("   HEPU OS (Hyper Evolve) v1.02 — ");
+    vga_puts("   HEPU OS (Hyper Evolve) v" HEPU_OS_VERSION " — ");
     vga_puts(i18n_get(I18N_BOOT_COMPLETE));
     vga_putc('\n');
     vga_puts(" -------------------------------------------------------------\n");

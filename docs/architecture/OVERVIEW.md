@@ -1,7 +1,7 @@
 ---
 title: OVERVIEW
 status: active
-sys_version: 0.58.0
+sys_version: 0.62.1
 updated: 2026-11-12
 owner: architecture
 source_of_truth: kernel/arch/x86_64/Makefile
@@ -22,7 +22,7 @@ supersedes: null
 
 | 项目 | 值 |
 |------|-----|
-| 当前版本 | **0.57.0**（`docs/status/VERSIONING.md` frontmatter；本文正文中"0.54.6"为撰写时的历史基线，规格以 frontmatter 为准） |
+| 当前版本 | **0.62.1**（`docs/status/VERSIONING.md` frontmatter；本文正文中"0.54.6"为撰写时的历史基线，规格以 frontmatter 为准） |
 | 内核架构 | x86_64 长模式 |
 | 编译约束 | -m64 -mcmodel=small -mno-red-zone -ffreestanding -fno-pie |
 | 工具链 | gcc / binutils (x86_64 宿主) |
@@ -295,7 +295,7 @@ supersedes: null
 
 ### 6.1 构建系统
 ```bash
-# 64 位内核（必须在 hepu-v0.54.6 根目录）
+# 64 位内核（必须在 hepu-v0.62.1 根目录）
 make -C kernel/arch/x86_64 BUILD_DIR=$(pwd)/build_x86_64
 # 产物：build_x86_64/hepu-kernel64.bin
 

@@ -4,6 +4,7 @@
  * ========================================================================== */
 
 #include <stdint.h>
+#include <version.h>
 #include <stddef.h>
 #include "uproc.h"
 
@@ -226,7 +227,7 @@ void x86_64_kernel_main(void)
 
     /* 显示启动信息 */
     vga_puts("========================================\n");
-    vga_puts("  HepuOS 64-bit Kernel v0.56.1\n");
+    vga_puts("  HepuOS 64-bit Kernel v" HEPU_OS_VERSION "\n");
     vga_puts("  x86_64 Long Mode\n");
     vga_puts("========================================\n\n");
 

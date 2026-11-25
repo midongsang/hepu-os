@@ -1,7 +1,7 @@
 ---
 title: KERNEL
 status: active
-sys_version: 0.58.0
+sys_version: 0.62.1
 updated: 2026-11-12
 owner: architecture
 source_of_truth: kernel/arch/x86_64/Makefile
@@ -120,7 +120,7 @@ struct scheduler_ops scheduler_v2_ops = { ... };
 - 一旦标记稳定，不能随意增删字段、调整对齐
 - 破坏性修改需要版本大升级
 
-### 4.3 当前64位系统调用表（v0.54.6）
+### 4.3 当前64位系统调用表（v0.62.1）
 
 系统调用分两路处理：
 - **原生 Hepu ABI**：`syscall64_full.c` 中 `syscall_table[SYSCALL_MAX]`，按进程 `env_type == ENV_NATIVE` 时直接命中
@@ -186,7 +186,7 @@ struct storage_ops {
 - 不允许为某一块板子在核心代码加 `#ifdef BOARD_XXX`
 - 废弃驱动放在 `drivers/legacy/` 目录，默认不编译
 
-### 5.3 当前64位驱动状态（v0.54.6）
+### 5.3 当前64位驱动状态（v0.62.1）
 - ✅ IDE/PATA驱动：`ide64.c`，PIO 模式
 - ✅ AHCI SATA驱动：`ahci64.c`，BAR5 高区 MMIO + storage_hal 接入
 - ✅ 键盘驱动：`keyboard64.c`，PS/2 8042 IRQ1（读-改-写配置字节 bit0 + 0xF4 开扫描）

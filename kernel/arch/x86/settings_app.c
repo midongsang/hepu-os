@@ -3,6 +3,7 @@
  * ========================================================================== */
 
 #include <stdint.h>
+#include <version.h>
 #include "settings_app.h"
 #include "vga.h"
 #include "string.h"
@@ -746,7 +747,7 @@ int settings_get_system_info(char *buf, int size)
 
     int len = 0;
     len += tools_strcat(buf + len, "=== System Info ===\n", size - len);
-    len += tools_strcat(buf + len, "OS: HepuOS v1.0.2\n", size - len);
+    len += tools_strcat(buf + len, "OS: HepuOS v" HEPU_OS_VERSION "\n", size - len);
     len += tools_strcat(buf + len, "Kernel: 3.9MB\n", size - len);
 
     char tmp[64];

@@ -1,6 +1,8 @@
 #ifndef HEPU_BRAND_H
 #define HEPU_BRAND_H
 
+#include "version.h"
+
 /* ============================================================================
  * 赫普OS 品牌定义
  * 基于 HEPU品牌视觉识别规范 V1.0
@@ -40,10 +42,10 @@
 #define HEPU_VGA_CYAN         0x0B  /* 青色（赫普蓝近似） */
 
 /* 版本 */
-#define HEPU_VERSION_MAJOR    0
-#define HEPU_VERSION_MINOR    61
-#define HEPU_VERSION_PATCH    0
-#define HEPU_VERSION_STRING   "V0.61.0"
+#define HEPU_VERSION_MAJOR    HEPU_OS_VERSION_MAJOR
+#define HEPU_VERSION_MINOR    HEPU_OS_VERSION_MINOR
+#define HEPU_VERSION_PATCH    HEPU_OS_VERSION_BUG
+#define HEPU_VERSION_STRING   "v" HEPU_OS_VERSION
 
 /* 开机画面文字 */
 #define HEPU_BOOT_LINE1       "  H E P U  "

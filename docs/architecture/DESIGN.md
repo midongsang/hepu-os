@@ -1,11 +1,15 @@
 ---
 title: 赫普OS 系统设计（现行）
 status: active
-sys_version: 0.58.0
+sys_version: 0.62.1
 updated: 2026-11-12
 source_of_truth: kernel/arch/x86_64/
 iteration_history: ../history/DESIGN_ITERATIONS.md
 ---
+
+> 版本说明：frontmatter `sys_version` 是当前版本（0.62.1）；正文若干
+> “0.54.6 基线”章节是当时的设计快照，不是当前发布版本号，规格以 frontmatter
+> 与 `docs/status/VERSIONING.md` 为准。
 
 ## 开发规范（硬性约束，所有开发者必须遵守）
 

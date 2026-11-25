@@ -159,6 +159,7 @@ extern void serial_puts(unsigned short, const char *);
 #include "kernel_slimmer.h"
 #include "perf_profiler.h"
 #include "hepu_brand.h"
+#include "version.h"
 #include "app_container.h"
 #include "distributed_os.h"
 #include "car_connect.h"
@@ -285,8 +286,8 @@ extern hepu_fingerprint_t hepu_fingerprint;
  * 0.9.0: 版本号格式统一为三段式(重要版本.默认版本.bug版本)
  *        重要版本=0(未到重要里程碑), 默认版本=9, bug版本=0
  * 0.10.0: 默认版本+1, 新增25个桌面应用, 完善图形子系统和应用生态 */
-const char *hepu_kernel_version = "1.0.2";
-const char *hepu_system_version = "0.10.5";
+const char *hepu_kernel_version = HEPU_OS_VERSION;
+const char *hepu_system_version = HEPU_OS_VERSION;
 const char *hepu_kernel_name = "HEPU Hyper Evolve OS";
 
 /* 简单的用户态测试函数（原型阶段在内核态模拟） */
@@ -443,7 +444,7 @@ void hepu_kernel_main(uint32_t magic, multiboot_info_t *mb_info)
         /* 绘制标题 */
         extern void boot_draw_string(int, int, const char *, uint32_t);
         extern void boot_fill_rect(int, int, int, int, uint32_t);
-        boot_draw_string(50, 30, "HepuOS Kernel v0.10.0", 0x00FFFFFF);
+        boot_draw_string(50, 30, "HepuOS Kernel v" HEPU_OS_VERSION, 0x00FFFFFF);
         boot_draw_string(50, 50, "Hepu Hyper Evolve OS", 0x00808080);
         boot_fill_rect(50, 72, 600, 1, 0x00404040);
 

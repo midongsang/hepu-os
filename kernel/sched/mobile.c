@@ -9,6 +9,7 @@
 #include "serial.h"
 #include "ime.h"
 #include <stdint.h>
+#include <version.h>
 #include "vga_gfx.h"
 #include "vga.h"
 #include "mouse.h"
@@ -526,7 +527,7 @@ void mobile_app_info(int idx)
         int tw = zh_str_width(mob_app_names[idx]);
         gfx_puts_zh((gfx_width - tw) / 2, 40, mob_app_names[idx], 0x0B);
         gfx_puts((gfx_width - 90) / 2, 62, "App Info", 0x0F);
-        gfx_puts((gfx_width - 150) / 2, 80, "Version 1.0.2  |  HEPU", 0x08);
+        gfx_puts((gfx_width - 150) / 2, 80, "Version " HEPU_OS_VERSION "  |  HEPU", 0x08);
         gfx_puts((gfx_width - 130) / 2, 94, "GPLv3  |  x86", 0x08);
         gfx_flip();
         char kc;

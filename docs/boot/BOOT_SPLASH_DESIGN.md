@@ -1,7 +1,7 @@
 ---
 title: BOOT_SPLASH_DESIGN
 status: active
-sys_version: 0.58.0
+sys_version: 0.62.1
 updated: 2026-11-01
 owner: boot
 source_of_truth: null
@@ -39,7 +39,7 @@ supersedes: null
 - 沿用深色背景（不切换文本模式）
 - 左上角滚动内核初始化日志：
   ```
-  HepuOS Kernel 0.54.6
+  HepuOS Kernel 0.62.1
   [INIT] PM: Memory manager initialized
   [INIT] IDT: Interrupt table setup
   [INIT] PROC: Scheduler ready

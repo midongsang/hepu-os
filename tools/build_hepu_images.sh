@@ -22,7 +22,7 @@ OUTDIR=$ROOT/build
 # SYSTEM_VER = 系统(内核)版本, 与内核 hepu_kernel_version 一致, 大版本才递增
 # 镜像版本跟随系统版本: 镜像文件名=hepu-os-<SYSTEM_VER>.{iso,img}
 # 文档版本(DESIGN.md)单独记录迭代历史, 不进镜像文件名
-SYSTEM_VER=v1.02
+SYSTEM_VER=v0.62.1
 
 # ===== clean 目标(V2.01新增): 清理全部构建产物与中间文件 =====
 # 用法: ./build_hepu_images.sh clean

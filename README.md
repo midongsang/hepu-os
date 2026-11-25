@@ -5,8 +5,8 @@
 [![Build](https://github.com/midongsang/hepu-os/actions/workflows/ci.yml/badge.svg)](https://github.com/midongsang/hepu-os/actions/workflows/ci.yml)
 [![Release](https://github.com/midongsang/hepu-os/actions/workflows/release.yml/badge.svg)](https://github.com/midongsang/hepu-os/actions/workflows/release.yml)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPLv3-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-v0.62.0-brightgreen.svg)](#当前版本)
-[![Kernel size](https://img.shields.io/badge/kernel-946KB-blue.svg)](#当前版本)
+[![Version](https://img.shields.io/badge/version-v0.62.1-brightgreen.svg)](#当前版本)
+[![Kernel size](https://img.shields.io/badge/kernel-969KB-blue.svg)](#当前版本)
 [![glibc 动态链接](https://img.shields.io/badge/glibc-✓-brightgreen.svg)](#核心特性)
 [![ext2](https://img.shields.io/badge/ext2-✓-brightgreen.svg)](#核心特性)
 [![SMP](https://img.shields.io/badge/SMP-4core-green.svg)](#核心特性)
@@ -96,10 +96,20 @@ AHCI 厂商实现差异（ABAR 与端口复位流程）。
 
 ## 当前版本
 
-**0.62.0** — 当前版本（版本号唯一事实源：`docs/status/VERSIONING.md` frontmatter，
+**0.62.1** — 当前版本（版本号唯一事实源：`docs/status/VERSIONING.md` frontmatter，
 代码侧单一来源：`kernel/include/version.h`，32/64 位共用）
 
-本版是**多架构第一程 + 抽象层收口**：ARM64 从 UEFI 出图（M0）走到自己的页表接管（M1c）
+本版是**B 线可靠性收口 + 版本/文档整理**：
+
+- **B-1 崩溃自动重启闭环**：同一启动内 `crashsvc` 连续崩溃 3 次，`restarts` 累计到 3，
+  PID 依次 3/4/5；第 3 次后回到 `hepu@os:~`，不再停在 `[PAGING] dir freed`。
+- **B-4 32 位网络修复**：ARP/TCP 收发字节序、TCP 伪首部校验和、ARP 等待与
+  `ping`/`tcp_connect` 握手；QEMU e1000 实测 ping 4/4、TCP established。
+- **P2 内存长稳**：30 分钟压测 975,200 轮、0 skip，`free=0x627D` 全程稳定。
+- **显示版本统一**：32 位 shell/启动画面/品牌头全部引用 `HEPU_OS_VERSION`；
+  50 个 active 文档 frontmatter 对齐 0.62.1，`tools/check_docs.py` 版本错误清零。
+
+**上一版（0.62.0）** —— 多架构第一程 + 抽象层收口：ARM64 从 UEFI 出图（M0）走到自己的页表接管（M1c）
 与全 RAM 映射（M1d-1）；同时抽出 `arch_port` 抽象层、给能力校验加上"拒绝即审计"。
 
 **ARM64 M0（已达成）**：UEFI 固件 → `BOOTAA64.EFI` → GOP 800×600 → 整屏填色 → PSCI 关机，
@@ -152,11 +162,11 @@ TCP/HTTP 栈收发正常。已换源 `t.weather.itboy.net`（又拍云，非常 
 失败改为最多 6 次重试。实测 `[WX] weather fetched temp=9 desc=多云`，
 ![](docs/assets/desktop-weather-live.jpg)。
 
-**版本号双源统一**：`kernel/include/hepu_brand.h` 里还留着一份 `V0.33.1` 的字面量
-（全仓库零引用的死代码），已同步到 0.61.0，避免后续误用。
+**版本号双源统一**：`kernel/include/hepu_brand.h` 不再维护第二份版本字面量，
+改为引用 `kernel/include/version.h` 的 `HEPU_OS_VERSION`。
 
-体积（默认参数重编，上限 1,048,576 B）：64 位 **968,560 B**（余量约 79 KB），
-32 位 **3,761,541 B**；双架构 0 error，32 位冒烟 `serial=1 initrd=1 net=1 desk=1
+体积（默认参数重编，上限 1,048,576 B）：64 位 **992,656 B**（余量约 54.6 KB），
+32 位 **3,817,997 B**；双架构 0 error，32 位冒烟 `serial=1 initrd=1 net=1 desk=1
 fault=0 bound=1` PASS。
 
 ### 0.60.7（上一版）
@@ -218,9 +228,9 @@ PASS: child ran in shared address space, both counters advanced
 
 ## 核心特性
 
-- **64位长模式内核**：约946KB（968,944字节），-O2优化，114个源码模块
+- **64位长模式内核**：约969KB（992,656字节），-O2优化，114个源码模块
 - **SMP多处理器**：4核并行，per-CPU调度，负载均衡，IPI核间中断
-- **双内核混合引导**：64位内核（968,944 B）+ 32位内核（3,761,541 B），启动菜单选择
+- **双内核混合引导**：64位内核（992,656 B）+ 32位内核（3,817,997 B），启动菜单选择
 - **三重引导支持**：BIOS + UEFI + CD-ROM
 - **图形桌面环境**：1920×1080 真彩色，100/125/150/200% 四档 UI 缩放，TrueType 字体，窗口投影与悬停反馈
 - **ext2文件系统**：完整文件/目录操作（创建/读写/删除）

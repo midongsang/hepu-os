@@ -1,7 +1,7 @@
 ---
 title: DESKTOP_SHELL
 status: active
-sys_version: 0.58.0
+sys_version: 0.62.1
 updated: 2026-11-01
 owner: architecture
 source_of_truth: null
@@ -15,7 +15,7 @@ supersedes: null
 > 本文档把参考视频（宿主 Arch Linux + niri + Clavis Shell 桌面演示）中展示的系统功能与交互，
 > 对照参考项目源码（`extracted/os-source/hepu_os_src/ref_projects/quickshell/`），
 > 逐项给出 Hepu OS 的落地开发路径。
-> 最后更新：2026-10-22 ｜ 适用系统版本：0.54.6
+> 最后更新：2026-10-22 ｜ 适用系统版本：0.62.1
 
 ---
 

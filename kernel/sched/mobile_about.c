@@ -8,6 +8,7 @@
 #include "keyboard.h"
 #include "font_zh.h"
 #include <stdint.h>
+#include <version.h>
 
 /* 共享变量 (定义在 mobile.c 中) */
 extern uint8_t mob_accent;
@@ -27,7 +28,7 @@ void mobile_run_about(void)
         else gfx_puts_zh((gfx_width - 96) / 2, 24, "关于赫普", 0x05);
         if (!sys_lang_en) gfx_puts_zh((gfx_width - 160) / 2, 48, "赫普超进化系统", 0x0F);
         gfx_puts((gfx_width - 140) / 2, 70, "Hepu Hyper Evolve OS", 0x0A);
-        gfx_puts((gfx_width - 110) / 2, 90, "Version 1.0.2", 0x0B);
+        gfx_puts((gfx_width - 110) / 2, 90, "Version " HEPU_OS_VERSION, 0x0B);
         gfx_puts((gfx_width - 120) / 2, 110, "License: GPLv3", 0x07);
         gfx_puts((gfx_width - 150) / 2, 130, "Kernel arch: x86 microkernel", 0x07);
         gfx_flip();
