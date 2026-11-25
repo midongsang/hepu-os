@@ -397,12 +397,20 @@ void cmd_ifconfig(void)
         vga_printf("eth0: not found\n");
     }
 
-    /* RTL8139统计 */
+    /* 统计：RTL8139 和 e1000 可能只有一个在位，两个都读再合并；
+     * 旧实现只读 rtl8139，e1000 在位时 link 恒为 DOWN。 */
     extern void rtl8139_get_stats(uint32_t *tx_pkts, uint32_t *rx_pkts,
                                    uint32_t *tx_bytes, uint32_t *rx_bytes, int *link);
-    uint32_t tx_pkts, rx_pkts, tx_bytes, rx_bytes;
-    int link;
+    extern void e1000_get_stats(uint32_t *tx_pkts, uint32_t *rx_pkts,
+                                uint32_t *tx_bytes, uint32_t *rx_bytes, int *link);
+    uint32_t tx_pkts = 0, rx_pkts = 0, tx_bytes = 0, rx_bytes = 0;
+    uint32_t e_tx_pkts = 0, e_rx_pkts = 0, e_tx_bytes = 0, e_rx_bytes = 0;
+    int link = 0, e_link = 0;
     rtl8139_get_stats(&tx_pkts, &rx_pkts, &tx_bytes, &rx_bytes, &link);
+    e1000_get_stats(&e_tx_pkts, &e_rx_pkts, &e_tx_bytes, &e_rx_bytes, &e_link);
+    tx_pkts += e_tx_pkts; rx_pkts += e_rx_pkts;
+    tx_bytes += e_tx_bytes; rx_bytes += e_rx_bytes;
+    link = link || e_link;
     vga_printf("      Link: %s\n", link ? "UP" : "DOWN");
     vga_printf("      TX: %u packets, %u bytes\n", tx_pkts, tx_bytes);
     vga_printf("      RX: %u packets, %u bytes\n", rx_pkts, rx_bytes);

@@ -9,6 +9,17 @@
 #include "vga.h"
 #include "string.h"
 extern void serial_puts(uint16_t port, const char *s);
+extern uint32_t ip_get_local(void);
+
+/* ARP 线上字段一律大端；本文件的结构体字段按主机序使用。 */
+static inline uint16_t arp_htons(uint16_t v) { return (uint16_t)((v >> 8) | (v << 8)); }
+static inline uint16_t arp_ntohs(uint16_t v) { return arp_htons(v); }
+static inline uint32_t arp_htonl(uint32_t v)
+{
+    return ((v & 0xFF) << 24) | ((v & 0xFF00) << 8) |
+           ((v & 0xFF0000) >> 8) | ((v & 0xFF000000) >> 24);
+}
+static inline uint32_t arp_ntohl(uint32_t v) { return arp_htonl(v); }
 
 static hepu_arp_cache_entry_t arp_cache[ARP_CACHE_SIZE];
 static uint32_t arp_tick_count = 0;
@@ -39,19 +50,19 @@ int arp_send_request(uint32_t target_ip)
 
     /* 构造ARP包 */
     hepu_arp_packet_t *arp = (hepu_arp_packet_t *)(packet + 14);
-    arp->hw_type = ARP_HW_TYPE_ETHERNET;
-    arp->proto_type = ARP_PROTO_TYPE_IPV4;
+    arp->hw_type = arp_htons(ARP_HW_TYPE_ETHERNET);
+    arp->proto_type = arp_htons(ARP_PROTO_TYPE_IPV4);
     arp->hw_addr_len = ARP_HW_ADDR_LEN;
     arp->proto_addr_len = ARP_PROTO_ADDR_LEN;
-    arp->opcode = ARP_OP_REQUEST;
+    arp->opcode = arp_htons(ARP_OP_REQUEST);
 
-    /* 获取本机MAC和IP */
+    /* 获取本机MAC和IP；sender_ip 必须填本机地址，不能留 0。 */
     uint8_t local_mac[6];
     eth_get_mac("eth0", local_mac);
     memcpy(arp->sender_hw, local_mac, 6);
-    arp->sender_ip = 0;  /* 待设置 */
+    arp->sender_ip = arp_htonl(ip_get_local());
     memset(arp->target_hw, 0, 6);
-    arp->target_ip = target_ip;
+    arp->target_ip = arp_htonl(target_ip);
 
     /* 发送 */
     eth_send("eth0", packet, sizeof(packet));
@@ -76,18 +87,18 @@ int arp_send_reply(uint32_t target_ip, const uint8_t *target_mac)
 
     /* ARP包 */
     hepu_arp_packet_t *arp = (hepu_arp_packet_t *)(packet + 14);
-    arp->hw_type = ARP_HW_TYPE_ETHERNET;
-    arp->proto_type = ARP_PROTO_TYPE_IPV4;
+    arp->hw_type = arp_htons(ARP_HW_TYPE_ETHERNET);
+    arp->proto_type = arp_htons(ARP_PROTO_TYPE_IPV4);
     arp->hw_addr_len = ARP_HW_ADDR_LEN;
     arp->proto_addr_len = ARP_PROTO_ADDR_LEN;
-    arp->opcode = ARP_OP_REPLY;
+    arp->opcode = arp_htons(ARP_OP_REPLY);
 
     uint8_t local_mac[6];
     eth_get_mac("eth0", local_mac);
     memcpy(arp->sender_hw, local_mac, 6);
-    arp->sender_ip = 0;
+    arp->sender_ip = arp_htonl(ip_get_local());
     memcpy(arp->target_hw, target_mac, 6);
-    arp->target_ip = target_ip;
+    arp->target_ip = arp_htonl(target_ip);
 
     eth_send("eth0", packet, sizeof(packet));
     return 0;
@@ -100,24 +111,35 @@ int arp_process_packet(const uint8_t *data, uint32_t length)
 
     const hepu_arp_packet_t *arp = (const hepu_arp_packet_t *)data;
 
-    if (arp->hw_type != ARP_HW_TYPE_ETHERNET ||
-        arp->proto_type != ARP_PROTO_TYPE_IPV4) {
+    uint16_t hw_type = arp_ntohs(arp->hw_type);
+    uint16_t proto_type = arp_ntohs(arp->proto_type);
+    uint16_t opcode = arp_ntohs(arp->opcode);
+    uint32_t sender_ip = arp_ntohl(arp->sender_ip);
+
+    if (hw_type != ARP_HW_TYPE_ETHERNET ||
+        proto_type != ARP_PROTO_TYPE_IPV4 ||
+        arp->hw_addr_len != ARP_HW_ADDR_LEN ||
+        arp->proto_addr_len != ARP_PROTO_ADDR_LEN) {
         return -1;
     }
 
-    /* 添加到缓存 */
-    arp_add_entry(arp->sender_ip, arp->sender_hw);
+    /* 发送方地址为 0 的探测包不进缓存，避免污染表项。 */
+    if (sender_ip != 0) {
+        arp_add_entry(sender_ip, arp->sender_hw);
+    }
 
     /* 如果是请求，回复 */
-    if (arp->opcode == ARP_OP_REQUEST) {
+    if (opcode == ARP_OP_REQUEST) {
         vga_printf("[ARP] got request: %d.%d.%d.%d ask \n",
-                   (arp->sender_ip >> 24) & 0xFF, (arp->sender_ip >> 16) & 0xFF,
-                   (arp->sender_ip >> 8) & 0xFF, arp->sender_ip & 0xFF);
-        /* arp_send_reply(arp->sender_ip, arp->sender_hw); */
-    } else if (arp->opcode == ARP_OP_REPLY) {
+                   (sender_ip >> 24) & 0xFF, (sender_ip >> 16) & 0xFF,
+                   (sender_ip >> 8) & 0xFF, sender_ip & 0xFF);
+        if (sender_ip != 0) {
+            arp_send_reply(sender_ip, arp->sender_hw);
+        }
+    } else if (opcode == ARP_OP_REPLY) {
         vga_printf("[ARP] got reply: %d.%d.%d.%d -> %02x:%02x:%02x:%02x:%02x:%02x\n",
-                   (arp->sender_ip >> 24) & 0xFF, (arp->sender_ip >> 16) & 0xFF,
-                   (arp->sender_ip >> 8) & 0xFF, arp->sender_ip & 0xFF,
+                   (sender_ip >> 24) & 0xFF, (sender_ip >> 16) & 0xFF,
+                   (sender_ip >> 8) & 0xFF, sender_ip & 0xFF,
                    arp->sender_hw[0], arp->sender_hw[1], arp->sender_hw[2],
                    arp->sender_hw[3], arp->sender_hw[4], arp->sender_hw[5]);
     }

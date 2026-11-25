@@ -17,6 +17,16 @@
 extern void serial_puts(uint16_t port, const char *s);
 #include "kheap.h"
 
+/* TCP 线上字段一律大端，连接结构体中的端口/序号按主机序保存。 */
+static inline uint16_t tcp_htons(uint16_t v) { return (uint16_t)((v >> 8) | (v << 8)); }
+static inline uint16_t tcp_ntohs(uint16_t v) { return tcp_htons(v); }
+static inline uint32_t tcp_htonl(uint32_t v)
+{
+    return ((v & 0xFF) << 24) | ((v & 0xFF00) << 8) |
+           ((v & 0xFF0000) >> 8) | ((v & 0xFF000000) >> 24);
+}
+static inline uint32_t tcp_ntohl(uint32_t v) { return tcp_htonl(v); }
+
 #define TCP_SIM_SYNACK_TICKS  2   /* 模拟对端 SYN-ACK 延迟 (tick) */
 #define TCP_SIM_FIN_TICKS     2   /* 模拟对端 FIN+ACK 延迟 */
 #define TCP_SIM_ACK_TICKS     1   /* 模拟对端 ACK 延迟 */
@@ -100,34 +110,35 @@ typedef struct {
 #define TCP_FLAG_ACK  0x10
 #define TCP_FLAG_URG  0x20
 
-/* V8.01: 计算TCP校验和（包含伪首部） */
+/* V8.01: 计算TCP校验和（包含伪首部）。
+ * 伪首部与 TCP 头都按线上的大端字节解释，结果再由调用方转成网络序写入。 */
 static uint16_t tcp_checksum(uint32_t src_ip, uint32_t dest_ip,
                               const uint8_t *data, uint32_t length)
 {
+    uint8_t pseudo[12];
+    pseudo[0] = (uint8_t)(src_ip >> 24);
+    pseudo[1] = (uint8_t)(src_ip >> 16);
+    pseudo[2] = (uint8_t)(src_ip >> 8);
+    pseudo[3] = (uint8_t)src_ip;
+    pseudo[4] = (uint8_t)(dest_ip >> 24);
+    pseudo[5] = (uint8_t)(dest_ip >> 16);
+    pseudo[6] = (uint8_t)(dest_ip >> 8);
+    pseudo[7] = (uint8_t)dest_ip;
+    pseudo[8] = 0;
+    pseudo[9] = 6;  /* TCP */
+    pseudo[10] = (uint8_t)(length >> 8);
+    pseudo[11] = (uint8_t)length;
+
     uint32_t sum = 0;
+    for (int i = 0; i < 12; i += 2)
+        sum += ((uint16_t)pseudo[i] << 8) | pseudo[i + 1];
+    for (uint32_t i = 0; i + 1 < length; i += 2)
+        sum += ((uint16_t)data[i] << 8) | data[i + 1];
+    if (length & 1)
+        sum += (uint16_t)data[length - 1] << 8;
 
-    /* 伪首部 */
-    sum += (src_ip >> 16) & 0xFFFF;
-    sum += src_ip & 0xFFFF;
-    sum += (dest_ip >> 16) & 0xFFFF;
-    sum += dest_ip & 0xFFFF;
-    sum += 0x0006;  /* 协议号TCP=6 */
-    sum += length;
-
-    /* TCP头和数据 */
-    const uint16_t *ptr = (const uint16_t *)data;
-    while (length > 1) {
-        sum += *ptr++;
-        length -= 2;
-    }
-    if (length == 1) {
-        sum += *(const uint8_t *)ptr;
-    }
-
-    while (sum >> 16) {
+    while (sum >> 16)
         sum = (sum & 0xFFFF) + (sum >> 16);
-    }
-
     return (uint16_t)(~sum);
 }
 
@@ -146,13 +157,13 @@ static int tcp_send_packet(hepu_hepu_tcp_connection_t *conn,
     memset(tcp_packet, 0, sizeof(tcp_packet));
 
     tcp_header_t *tcp = (tcp_header_t *)tcp_packet;
-    tcp->src_port = conn->local_port;
-    tcp->dest_port = conn->remote_port;
-    tcp->seq_num = conn->seq_num;
-    tcp->ack_num = conn->ack_num;
+    tcp->src_port = tcp_htons(conn->local_port);
+    tcp->dest_port = tcp_htons(conn->remote_port);
+    tcp->seq_num = tcp_htonl(conn->seq_num);
+    tcp->ack_num = tcp_htonl(conn->ack_num);
     tcp->data_offset = (5 << 4);  /* 数据偏移=20字节 */
     tcp->flags = flags;
-    tcp->window = conn->window;
+    tcp->window = tcp_htons(conn->window);
     tcp->checksum = 0;
     tcp->urgent_ptr = 0;
 
@@ -161,8 +172,8 @@ static int tcp_send_packet(hepu_hepu_tcp_connection_t *conn,
         memcpy(tcp_packet + sizeof(tcp_header_t), data, data_len);
     }
 
-    /* 计算校验和 */
-    tcp->checksum = tcp_checksum(src_ip, dest_ip, tcp_packet, tcp_len);
+    /* 计算校验和，字段按网络序落内存后再转网络序写入 */
+    tcp->checksum = tcp_htons(tcp_checksum(src_ip, dest_ip, tcp_packet, tcp_len));
 
     /* 通过IP层发送（协议号6=TCP） */
     extern int ip_send(uint32_t dest_ip, uint8_t protocol,
@@ -187,11 +198,13 @@ int tcp_process_packet(uint32_t src_ip, const uint8_t *data, uint32_t length)
     if (!tcp_initialized || !data || length < sizeof(tcp_header_t)) return -1;
 
     const tcp_header_t *tcp = (const tcp_header_t *)data;
-    uint16_t src_port = tcp->src_port;
-    uint16_t dest_port = tcp->dest_port;
-    uint32_t seq_num = tcp->seq_num;
-    uint32_t ack_num = tcp->ack_num;
+    uint16_t src_port = tcp_ntohs(tcp->src_port);
+    uint16_t dest_port = tcp_ntohs(tcp->dest_port);
+    uint32_t seq_num = tcp_ntohl(tcp->seq_num);
+    uint32_t ack_num = tcp_ntohl(tcp->ack_num);
+    uint16_t window = tcp_ntohs(tcp->window);
     (void)ack_num;
+    (void)window;
     uint8_t flags = tcp->flags;
 
     /* 查找匹配的连接 */
@@ -281,8 +294,21 @@ int tcp_connect(uint32_t remote_ip, uint16_t remote_port, uint16_t local_port)
 
     serial_puts(0x3F8, "[TCP] connect SYN_SENT\n");
 
-    /* V8.01: 真实发送SYN包 */
+    /* V8.01: 真实发送SYN包，并同步等待 SYN-ACK；否则 shell 返回时
+     * 状态还停在 SYN_SENT，用户看不到连接是否真的建立。 */
     tcp_send_packet(conn, TCP_FLAG_SYN, NULL, 0);
+    extern void net_poll(void);
+    extern uint32_t pit_get_ticks(void);
+    uint32_t start = pit_get_ticks();
+    while ((uint32_t)(pit_get_ticks() - start) < 100u) {
+        net_poll();
+        if (conn->state == TCP_STATE_ESTABLISHED) break;
+    }
+    if (conn->state == TCP_STATE_ESTABLISHED) {
+        serial_puts(0x3F8, "[TCP] connect established\n");
+    } else {
+        serial_puts(0x3F8, "[TCP] connect timeout\n");
+    }
 
     return fd;
 }

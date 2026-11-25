@@ -9,6 +9,7 @@
 #include "vga.h"
 #include "string.h"
 extern void serial_puts(uint16_t port, const char *s);
+extern void serial_puthex(uint16_t port, uint32_t v);
 
 static int icmp_initialized = 0;
 static uint16_t icmp_next_id = 0x1234;
@@ -82,7 +83,16 @@ int icmp_send_echo_request(uint32_t dest_ip, uint16_t id, uint16_t seq,
 /* 处理ICMP包 */
 int icmp_process_packet(const uint8_t *data, uint32_t length)
 {
-    if (!icmp_initialized || !data || length < sizeof(hepu_icmp_header_t)) return -1;
+    if (!icmp_initialized) {
+        serial_puts(0x3F8, "[ICMP] not initialized\n");
+        return -1;
+    }
+    if (!data || length < sizeof(hepu_icmp_header_t)) {
+        serial_puts(0x3F8, "[ICMP] short/invalid len=");
+        serial_puthex(0x3F8, length);
+        serial_puts(0x3F8, "\n");
+        return -1;
+    }
 
     const hepu_icmp_header_t *icmp = (const hepu_icmp_header_t *)data;
 
@@ -92,6 +102,11 @@ int icmp_process_packet(const uint8_t *data, uint32_t length)
             icmp_reply_received = 1;
             icmp_reply_id = icmp->data.echo.id;
             icmp_reply_seq = icmp->data.echo.seq;
+            serial_puts(0x3F8, "[ICMP] echo reply id=");
+            serial_puthex(0x3F8, icmp->data.echo.id);
+            serial_puts(0x3F8, " seq=");
+            serial_puthex(0x3F8, icmp->data.echo.seq);
+            serial_puts(0x3F8, "\n");
             vga_printf("[ICMP] recv Echo Reply(id=%d, seq=%d)\n",
                        icmp->data.echo.id, icmp->data.echo.seq);
             break;
@@ -131,6 +146,13 @@ int ping_once(uint32_t dest_ip, hepu_ping_result_t *result)
     uint32_t icmp_len = sizeof(hepu_icmp_header_t) + sizeof(data);
     icmp->checksum = icmp_checksum(icmp_packet, icmp_len);
 
+    /* 先清标志再发：ip_send 在 ARP 未解析时会同步 poll，回复可能在
+     * ip_send 返回前就到达，放在发送后清会把已经收到的回复丢掉。 */
+    icmp_reply_received = 0;
+    uint32_t start_time = 0;
+    extern uint32_t pit_get_ticks(void);
+    start_time = pit_get_ticks();
+
     /* V7.98: 使用IP层发送 */
     extern int ip_send(uint32_t dest_ip, uint8_t protocol, const uint8_t *data, uint32_t data_len);
     int ret = ip_send(dest_ip, 1, icmp_packet, icmp_len);
@@ -140,10 +162,6 @@ int ping_once(uint32_t dest_ip, hepu_ping_result_t *result)
     }
 
     /* 等待回复（最多2秒） */
-    icmp_reply_received = 0;
-    uint32_t start_time = 0;
-    extern uint32_t pit_get_ticks(void);
-    start_time = pit_get_ticks();
 
     while (!icmp_reply_received) {
         /* 网络轮询接收数据包 */
@@ -163,6 +181,7 @@ int ping_once(uint32_t dest_ip, hepu_ping_result_t *result)
     if (icmp_reply_received && icmp_reply_id == id) {
         result->rtt_ms = pit_get_ticks() - start_time;
         result->success = 1;
+        serial_puts(0x3F8, "[PING] reply\n");
         vga_printf("64 bytes from %d.%d.%d.%d: icmp_seq=%d ttl=%d time=%dms\n",
                    (dest_ip >> 24) & 0xFF, (dest_ip >> 16) & 0xFF,
                    (dest_ip >> 8) & 0xFF, dest_ip & 0xFF,
@@ -170,6 +189,7 @@ int ping_once(uint32_t dest_ip, hepu_ping_result_t *result)
     } else {
         result->rtt_ms = 0;
         result->success = 0;
+        serial_puts(0x3F8, "[PING] timeout\n");
         vga_printf("Request timeout for icmp_seq %d\n", seq);
     }
 
@@ -220,6 +240,11 @@ int ping(const char *hostname, int count, int interval_ms, hepu_ping_stats_t *st
     if (stats->transmitted > 0) {
         loss = ((stats->transmitted - stats->received) * 100) / stats->transmitted;
     }
+    serial_puts(0x3F8, "[PING] stats received=");
+    serial_puthex(0x3F8, stats->received);
+    serial_puts(0x3F8, " transmitted=");
+    serial_puthex(0x3F8, stats->transmitted);
+    serial_puts(0x3F8, "\n");
     vga_printf("\n--- %s ping stats ---\n", hostname);
     vga_printf("%d packets transmitted, %d received, %d%% packet loss\n",
                stats->transmitted, stats->received, loss);

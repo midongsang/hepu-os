@@ -126,10 +126,22 @@ int ip_send(uint32_t dest_ip, uint8_t protocol, const uint8_t *data, uint32_t da
     if (is_broadcast) {
         memset(dest_mac, 0xFF, 6);  /* 广播MAC */
     } else if (arp_lookup(next_hop, dest_mac) != 0) {
-        /* ARP缓存未命中，发送ARP请求 */
+        /* ARP 缓存未命中：发请求后同步等一小段，让 DHCP/DNS/ping/TCP
+         * 的首包也能直接出去，而不是把失败留给调用方重试。 */
         arp_send_request(next_hop);
         serial_puts(0x3F8, "[IP] ARP miss, sending request\n");
-        return -1;  /* 暂时无法发送，等ARP回复后重试 */
+        extern void net_poll(void);
+        extern uint32_t pit_get_ticks(void);
+        uint32_t arp_start = pit_get_ticks();
+        while ((uint32_t)(pit_get_ticks() - arp_start) < 100u) {
+            net_poll();
+            if (arp_lookup(next_hop, dest_mac) == 0) break;
+        }
+        if (arp_lookup(next_hop, dest_mac) != 0) {
+            serial_puts(0x3F8, "[IP] ARP timeout\n");
+            return -1;
+        }
+        serial_puts(0x3F8, "[IP] ARP resolved\n");
     }
 
     /* 获取本机MAC */
