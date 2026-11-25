@@ -239,10 +239,13 @@ static int tcp64_send_inner(int sock, const uint8_t *data, int length)
 static int tcp64_recv_inner(int sock, uint8_t *buffer, int max_len)
 {
     if (!tcp_initialized || sock < 0 || sock >= TCP_MAX_CONNECTIONS) return -1;
-    if (!tcp_conns[sock].used) return -1;
 
     tcp_connection_t *conn = &tcp_conns[sock];
-    if (conn->rx_read >= conn->rx_len) return 0;
+    /* 对端 FIN 后连接可能已标记 closed，但接收缓冲里仍可能有未读正文；
+       先交付缓冲数据，再报告连接已关闭。 */
+    if (conn->rx_read >= conn->rx_len) {
+        return conn->used ? 0 : -1;
+    }
 
     int avail = conn->rx_len - conn->rx_read;
     if (avail > max_len) avail = max_len;
@@ -363,28 +366,28 @@ static void tcp64_handle_inner(const uint8_t *packet, int length, uint32_t src_i
             break;
 
         case TCP_ESTABLISHED:
-            if (tcp->flags & TCP_FIN) {
-                /* 收到FIN，发送ACK */
-                conn->state = TCP_CLOSE_WAIT;
-                conn->ack_num = seq + 1;
-                tcp_send_packet(conn, TCP_ACK, NULL, 0);
-                /* 发送FIN */
-                conn->state = TCP_LAST_ACK;
-                tcp_send_packet(conn, TCP_FIN | TCP_ACK, NULL, 0);
-            } else if (data_len > 0) {
-                /* 收到数据 */
+            /* 同一段可能同时带数据和 FIN；先收数据再处理 FIN，
+               否则 close 前的最后一段正文会被整体丢掉。 */
+            if (data_len > 0) {
                 if (conn->rx_len + data_len <= TCP_RX_BUF_SIZE) {
                     tcp_memcpy(conn->rx_buf + conn->rx_len, data, data_len);
                     conn->rx_len += data_len;
                 }
                 conn->ack_num = seq + data_len;
+            }
+            if (tcp->flags & TCP_FIN) {
+                conn->state = TCP_CLOSE_WAIT;
+                conn->ack_num = seq + data_len + 1;
                 tcp_send_packet(conn, TCP_ACK, NULL, 0);
-                tcp_process_ack(conn, ack);
+                conn->state = TCP_LAST_ACK;
+                tcp_send_packet(conn, TCP_FIN | TCP_ACK, NULL, 0);
+            } else if (data_len > 0) {
+                tcp_send_packet(conn, TCP_ACK, NULL, 0);
             } else if (tcp->flags & TCP_ACK) {
                 /* V0.54.12(R4 NET-02): 纯 ACK 分支——只确认我方数据，
                    不存数据、不回 ACK；旧实现此处静默丢弃。 */
-                tcp_process_ack(conn, ack);
             }
+            tcp_process_ack(conn, ack);
             break;
 
         case TCP_FIN_WAIT1:
