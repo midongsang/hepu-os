@@ -80,11 +80,18 @@ static usb_driver_t *usb_match_driver(usb_device_t *dev)
             }
         }
 
-        /* 按类匹配 */
+        /* 按类匹配：设备类可能为 0，真实类在接口描述符中 */
         if (drv->match_class) {
-            if (drv->match_class == dev->device_class) {
-                return drv;
+            int matched = (drv->match_class == dev->device_class);
+            for (int c = 0; c < dev->num_configs && !matched; c++) {
+                for (int i = 0; i < dev->configs[c].num_interfaces; i++) {
+                    if (dev->configs[c].interfaces[i].class_code == drv->match_class) {
+                        matched = 1;
+                        break;
+                    }
+                }
             }
+            if (matched) return drv;
         }
     }
 
@@ -173,6 +180,10 @@ int hepu_usb_enumerate_device(usb_controller_t *ctrl, int hub_addr, int port, in
     dev->speed = speed;
     dev->state = USB_STATE_DEFAULT;
     dev->address = 0;  /* 初始地址0 */
+    /* USB 2.0 默认控制管道最大包长就是 8；第一次取设备描述符前
+     * bMaxPacketSize0 还不知道，若保持 0，控制 TD 的 maxlen=0，
+     * SETUP 后 DATA/STATUS 阶段永远 ACTIVE（OPEN-02 实测）。 */
+    dev->max_packet_size0 = 8;
 
     /* 1. 获取设备描述符（前8字节，获取max_packet_size0） */
     usb_device_descriptor_t dev_desc;
@@ -219,16 +230,64 @@ int hepu_usb_enumerate_device(usb_controller_t *ctrl, int hub_addr, int port, in
     vga_printf("[USB] Device: VID=0x%04x PID=0x%04x class=0x%02x\n",
                dev->vendor_id, dev->product_id, dev->device_class);
 
-    /* 4. 获取配置描述符 */
+    /* 4. 获取配置描述符（含接口/端点子描述符） */
     if (dev->num_configs > 0) {
         usb_config_descriptor_t cfg_desc;
         ret = hepu_usb_get_descriptor(dev, USB_DT_CONFIG, 0, 0, &cfg_desc,
                                   sizeof(usb_config_descriptor_t));
         if (ret >= 0) {
             dev->configs[0].value = cfg_desc.bConfigurationValue;
-            dev->configs[0].num_interfaces = cfg_desc.bNumInterfaces;
+            dev->configs[0].num_interfaces = 0;
+
+            uint16_t total = cfg_desc.wTotalLength;
+            if (total > sizeof(usb_config_descriptor_t) && total <= 512) {
+                uint8_t *buf = (uint8_t *)kmalloc(total);
+                if (buf) {
+                    ret = hepu_usb_get_descriptor(dev, USB_DT_CONFIG, 0, 0,
+                                                  buf, total);
+                    if (ret >= 0) {
+                        uint16_t off = sizeof(usb_config_descriptor_t);
+                        usb_interface_t *cur_if = NULL;
+                        while (off + 2 <= total) {
+                            uint8_t *d = buf + off;
+                            uint8_t dlen = d[0];
+                            uint8_t dtype = d[1];
+                            if (dlen < 2 || off + dlen > total) break;
+                            if (dtype == USB_DT_INTERFACE && dlen >= 9) {
+                                usb_interface_descriptor_t *id =
+                                    (usb_interface_descriptor_t *)d;
+                                if (dev->configs[0].num_interfaces < USB_MAX_INTERFACES) {
+                                    cur_if = &dev->configs[0].interfaces[
+                                        dev->configs[0].num_interfaces++];
+                                    memset(cur_if, 0, sizeof(*cur_if));
+                                    cur_if->number = id->bInterfaceNumber;
+                                    cur_if->alt_setting = id->bAlternateSetting;
+                                    cur_if->class_code = id->bInterfaceClass;
+                                    cur_if->sub_class = id->bInterfaceSubClass;
+                                    cur_if->protocol = id->bInterfaceProtocol;
+                                    cur_if->num_endpoints = 0;
+                                }
+                            } else if (dtype == USB_DT_ENDPOINT && dlen >= 7 && cur_if) {
+                                usb_endpoint_descriptor_t *ed =
+                                    (usb_endpoint_descriptor_t *)d;
+                                if (cur_if->num_endpoints < USB_MAX_ENDPOINTS) {
+                                    usb_endpoint_t *ep =
+                                        &cur_if->endpoints[cur_if->num_endpoints++];
+                                    ep->address = ed->bEndpointAddress;
+                                    ep->type = ed->bmAttributes & 0x03;
+                                    ep->max_packet_size = ed->wMaxPacketSize;
+                                    ep->interval = ed->bInterval;
+                                    ep->toggle = 0;
+                                }
+                            }
+                            off += dlen;
+                        }
+                    }
+                    kfree(buf);
+                }
+            }
             vga_printf("[USB] Config: %d interfaces\n",
-                       cfg_desc.bNumInterfaces);
+                       dev->configs[0].num_interfaces);
         }
     }
 

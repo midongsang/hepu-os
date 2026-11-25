@@ -62,14 +62,14 @@ typedef struct uhci_qh {
     uint32_t element;     /* 元素链接指针 */
 } __attribute__((packed)) uhci_qh_t;
 
-/* TD状态位 */
-#define UHCI_TD_STS_ACTIVE   0x00000080  /* 活跃 */
-#define UHCI_TD_STS_STALLED  0x00000040  /* 停滞 */
-#define UHCI_TD_STS_DBUFERR  0x00000020  /* 数据缓冲区错误 */
-#define UHCI_TD_STS_BABBLE   0x00000010  /* 错误 */
-#define UHCI_TD_STS_NAK      0x00000008  /* NAK */
-#define UHCI_TD_STS_CRCTO    0x00000004  /* CRC/超时错误 */
-#define UHCI_TD_STS_BITSTUFF 0x00000002  /* 位填充错误 */
+/* TD状态位（UHCI 1.1 规范：status/control 高字，Active 在 bit23） */
+#define UHCI_TD_STS_ACTIVE   0x00800000  /* 活跃 */
+#define UHCI_TD_STS_STALLED  0x00400000  /* 停滞 */
+#define UHCI_TD_STS_DBUFERR  0x00200000  /* 数据缓冲区错误 */
+#define UHCI_TD_STS_BABBLE   0x00100000  /* 错误 */
+#define UHCI_TD_STS_NAK      0x00080000  /* NAK */
+#define UHCI_TD_STS_CRCTO    0x00040000  /* CRC/超时错误 */
+#define UHCI_TD_STS_BITSTUFF 0x00020000  /* 位填充错误 */
 
 /* TD令牌 */
 #define UHCI_TD_TOKEN_PID_OUT  0xE1  /* OUT令牌 */
