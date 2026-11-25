@@ -14,6 +14,7 @@ supersedes: DEVELOPMENT_ROADMAP.md, PRIORITY_ROADMAP.md, X86_64_DEVELOPMENT_PLAN
 > 状态定义：未开始 | 进行中 | 验证中 | ✅ 已完成（已完成项完整索引见 `status/VERSIONING.md`）。
 > 事实源：`kernel/arch/x86_64/Makefile` 中实际编入的 C_SOURCES/ASM_SOURCES。
 > 上次全面修订：2026-11-18（对齐 0.62.0 实况；逐条依据见 `docs/planning/ROADMAP_AUDIT_2026-11-18.md`）。
+> 2026-11-25：版本号统一到 0.62.1，路线条目与优先级未变。
 
 ---
 
