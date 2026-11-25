@@ -173,6 +173,10 @@ int hepu_usb_enumerate_device(usb_controller_t *ctrl, int hub_addr, int port, in
     dev->speed = speed;
     dev->state = USB_STATE_DEFAULT;
     dev->address = 0;  /* 初始地址0 */
+    /* USB 2.0 默认控制管道最大包长就是 8；第一次取设备描述符前
+     * bMaxPacketSize0 还不知道，若保持 0，控制 TD 的 maxlen=0，
+     * SETUP 后 DATA/STATUS 阶段永远 ACTIVE（OPEN-02 实测）。 */
+    dev->max_packet_size0 = 8;
 
     /* 1. 获取设备描述符（前8字节，获取max_packet_size0） */
     usb_device_descriptor_t dev_desc;
