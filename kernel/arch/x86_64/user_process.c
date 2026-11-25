@@ -5,12 +5,14 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include "types.h"
 #include "hepu_smap.h"
 #include "elf64.h"
 #include "domain64.h"
 #include "spinlock.h"
 #include "uproc.h"
 #include "uproc_loader64.h"
+#include "user_cred.h"
 
 /* V0.13.43: 与 GDT Linux 标准布局一致 (0x18=用户数据, 0x20=用户代码) */
 #define USER_CS 0x20  /* 用户代码段选择子 */
@@ -76,6 +78,19 @@ extern int uaspace_free_isolated(uint64_t pml4_phys, uint64_t cur_cr3);
 #define UWIN_START 0x0000000040000000ULL   /* 用户窗口（PDPT[1]） */
 #define UWIN_END   0x0000000080000000ULL
 
+/* SEC-04: 每进程凭据。fork 出的子进程不在 user_procs 表里，另有快照表，
+ * 见 user_process_cred_fork_prepare()。 */
+typedef struct {
+    int active;
+    int uid;
+    int gid;
+    int euid;
+    int egid;
+    int umask;
+    uint32_t caps;      /* HEPU_PROC_CAP_* 位图 */
+    int cap_uid;        /* 授权时绑定的 uid；uid 变更后能力位自动失效 */
+} proc_cred_t;
+
 /* 用户进程结构 */
 typedef struct {
     int pid;
@@ -100,11 +115,58 @@ typedef struct {
     int tls_reserved;    /* V0.33: TLS 预留区是否已为本进程映射好 */
     uint64_t mem_pages;       /* P1: 本域已计入的物理页（mmap/brk/模块） */
     uint64_t mem_limit_pages; /* P1: 本域内存配额（页），0=不限制 */
+    proc_cred_t cred;         /* SEC-04: 本进程凭据（fork 子进程另见快照表） */
 } user_process_t;
 
 #define MAX_USER_PROCS 8
 user_process_t user_procs[MAX_USER_PROCS];
 static uint8_t g_proc_isolated[MAX_USER_PROCS];   /* 该槽位的页表是否为隔离模式（不改 user_process_t 布局） */
+
+/* SEC-04: 内核上下文/无用户进程时的根凭据。默认 umask 022。 */
+static proc_cred_t g_kernel_cred = {
+    .active = 1, .uid = 0, .gid = 0, .euid = 0, .egid = 0, .umask = 022,
+    .caps = 0, .cap_uid = 0
+};
+/* fork 子进程凭据快照：sys_fork 创建子进程时按 fork 快照槽复制一份；
+ * 调度器切到该 process64 槽时由 user_process_cred_bind_proc64() 激活。
+ * 这样 fork 后子进程 setuid 不会改到父进程，父进程返回时又自动落回自己的槽。 */
+#define FORK_CRED_SLOTS 32
+static proc_cred_t g_fork_creds[FORK_CRED_SLOTS];
+static int g_active_proc64[16];   /* 每 CPU 当前 process64 槽；-1 = 非 fork 子进程 */
+
+int current_user_proc = -1;
+
+extern uint32_t smp_get_current_cpu(void);
+
+static proc_cred_t *cred_active(void)
+{
+    uint32_t cpu = smp_get_current_cpu();
+    if (cpu < 16) {
+        int idx = g_active_proc64[cpu];
+        if (idx >= 0 && idx < FORK_CRED_SLOTS && g_fork_creds[idx].active)
+            return &g_fork_creds[idx];
+    }
+    if (current_user_proc >= 0 && current_user_proc < MAX_USER_PROCS &&
+        user_procs[current_user_proc].active)
+        return &user_procs[current_user_proc].cred;
+    return &g_kernel_cred;
+}
+
+static int cred_has_cap(const proc_cred_t *c, uint32_t cap)
+{
+    if (!c || !(c->caps & cap)) return 0;
+    /* 能力位绑定授权时的 uid；setuid 后 uid 不再匹配则自动失效 */
+    return c->cap_uid == c->uid && c->cap_uid == c->euid;
+}
+
+/* 新进程槽默认继承调用者凭据；首次启动（current_user_proc=-1）回落 root。 */
+static void user_process_cred_init_slot(int idx)
+{
+    if (idx < 0 || idx >= MAX_USER_PROCS) return;
+    proc_cred_t *src = cred_active();
+    user_procs[idx].cred = src ? *src : g_kernel_cred;
+    user_procs[idx].cred.active = 1;
+}
 /* V0.57.3: clone 线程的页表共享引用计数。
  * clone 出的子线程与父线程共用同一张 PML4，父线程退出时不能直接释放它——
  * 只要还有线程活着，释放后线程一触碰内存就 #PF。这里记账，release 时看计数。 */
@@ -113,7 +175,6 @@ static int g_clone_thr_pid[MAX_USER_PROCS][8];
 static int g_clone_thr_n[MAX_USER_PROCS];
 static int g_last_isolated;                        /* 最近一次创建页表实际使用的模式 */
 static void user_free_aspace(int idx);
-int current_user_proc = -1;
 
 /* OPEN-04: 安装器白名单（定义见 user_process_get_current_pid 之后） */
 static int installer_name_match(const char *path);
@@ -345,8 +406,117 @@ void user_process_init(void)
         user_procs[i].active = 0;
         user_procs[i].pid = -1;
     }
+    for (int i = 0; i < 16; i++) g_active_proc64[i] = -1;
+    for (int i = 0; i < FORK_CRED_SLOTS; i++) g_fork_creds[i].active = 0;
     user_proc_initialized = 1;
     vga_puts("[USER64] User process manager initialized\n");
+}
+
+/* ---- SEC-04: 当前凭据访问 ---- */
+int user_process_cred_get_uid(void)   { return cred_active()->uid; }
+int user_process_cred_get_gid(void)   { return cred_active()->gid; }
+int user_process_cred_get_euid(void)  { return cred_active()->euid; }
+int user_process_cred_get_egid(void)  { return cred_active()->egid; }
+int user_process_cred_get_umask(void) { return cred_active()->umask; }
+
+int user_process_cred_setuid(int uid)
+{
+    proc_cred_t *c = cred_active();
+    if (uid < 0) return HEPU_EINVAL;
+    if (c->euid != 0 && uid != c->uid && uid != c->euid) return HEPU_EPERM;
+    if (uid != c->uid) {
+        /* 凭据主体变更：能力位不能跨 uid 保留 */
+        c->caps = 0;
+        c->cap_uid = uid;
+    }
+    c->uid = uid;
+    c->euid = uid;
+    return 0;
+}
+
+int user_process_cred_setgid(int gid)
+{
+    proc_cred_t *c = cred_active();
+    if (gid < 0) return HEPU_EINVAL;
+    if (c->euid != 0 && gid != c->gid && gid != c->egid) return HEPU_EPERM;
+    c->gid = gid;
+    c->egid = gid;
+    return 0;
+}
+
+int user_process_cred_setumask(int mask)
+{
+    proc_cred_t *c = cred_active();
+    int old = c->umask;
+    c->umask = mask & 0777;
+    return old;
+}
+
+int user_process_cred_has_cap(uint32_t cap)
+{
+    return cred_has_cap(cred_active(), cap);
+}
+
+int user_process_grant_cap(int pid, uint32_t cap)
+{
+    for (int i = 0; i < MAX_USER_PROCS; i++) {
+        if (user_procs[i].active && user_procs[i].pid == pid) {
+            user_procs[i].cred.caps |= cap;
+            user_procs[i].cred.cap_uid = user_procs[i].cred.uid;
+            return 0;
+        }
+    }
+    return -1;
+}
+
+/* fork 子进程凭据快照：复制当前生效凭据，等调度器切到子进程时启用。 */
+int user_process_cred_fork_prepare(int child_idx)
+{
+    if (child_idx < 0 || child_idx >= FORK_CRED_SLOTS) return -1;
+    proc_cred_t *src = cred_active();
+    if (!src) return -1;
+    g_fork_creds[child_idx] = *src;
+    g_fork_creds[child_idx].active = 1;
+    return 0;
+}
+
+void user_process_cred_bind_proc64(int proc_idx)
+{
+    uint32_t cpu = smp_get_current_cpu();
+    if (cpu < 16) {
+        g_active_proc64[cpu] = (proc_idx >= 0 && proc_idx < FORK_CRED_SLOTS) ? proc_idx : -1;
+    }
+}
+
+void user_process_cred_fork_leave(int child_idx)
+{
+    if (child_idx >= 0 && child_idx < FORK_CRED_SLOTS)
+        g_fork_creds[child_idx].active = 0;
+}
+
+int user_process_cred_selftest(void)
+{
+    proc_cred_t c = g_kernel_cred;
+    c.caps = HEPU_PROC_CAP_RAW_DISK | HEPU_PROC_CAP_MKFS | HEPU_PROC_CAP_REBOOT;
+    c.cap_uid = c.uid;
+    if (!cred_has_cap(&c, HEPU_PROC_CAP_RAW_DISK)) {
+        vga_puts("[CRED] selftest FAIL: root cap not visible\n");
+        return -1;
+    }
+    /* 模拟 setuid 到普通用户：能力位必须失效 */
+    c.uid = c.euid = 1000;
+    if (cred_has_cap(&c, HEPU_PROC_CAP_RAW_DISK)) {
+        vga_puts("[CRED] selftest FAIL: cap survived uid change\n");
+        return -1;
+    }
+    /* 普通用户不应有高危能力 */
+    c.caps = 0;
+    if (cred_has_cap(&c, HEPU_PROC_CAP_MKFS)) {
+        vga_puts("[CRED] selftest FAIL: unprivileged cap\n");
+        return -1;
+    }
+    vga_puts("[CRED] selftest PASS (per-process cred + cap uid binding)\n");
+    return 0;
 }
 
 /* 创建用户态进程 */
@@ -375,6 +545,7 @@ int user_process_create(const char *name, void (*entry)(void))
     proc->active = 1;       /* 占槽与 pid 同在锁内，避免两核拿到同槽 */
     g_pt_lock_holder = -1;
     spinlock_unlock_irqrestore(&g_proc_table_lock, pt_flags);
+    user_process_cred_init_slot(idx);   /* SEC-04: 继承调用者凭据，首次启动回落 root */
     proc->env_type = ENV_NATIVE;   /* P1: 内置测试进程属于原生交互域 */
     proc->domain_id = domain64_env_to_id(ENV_NATIVE);
     user_process_mem_init(idx);    /* P1: 初始化域内存配额 */
@@ -701,6 +872,7 @@ int user_process_create_elf(const char *name, void *code_data, uint64_t code_siz
     proc->active = 1;      /* SB-10: 占槽与 pid 在锁内完成 */
     g_pt_lock_holder = -1;
     spinlock_unlock_irqrestore(&g_proc_table_lock, pt_flags);
+    user_process_cred_init_slot(idx);   /* SEC-04: exec 继承调用者凭据，不重置为 root */
     proc->kill_requested = 0;
     proc->env_type = env_type;   /* V0.33: 进程级 ABI 标记 */
     proc->domain_id = domain64_env_to_id(env_type);
@@ -2297,7 +2469,13 @@ static int installer_name_match(const char *path)
     return *p == 0;   /* 长度必须相等, 拒绝前缀同名 */
 }
 
-void user_process_grant_installer(int pid) { g_installer_pid = pid; }
+void user_process_grant_installer(int pid)
+{
+    g_installer_pid = pid;
+    /* SEC-04: 安装器不只靠 PID 白名单，显式拿到三项高危能力位 */
+    user_process_grant_cap(pid, HEPU_PROC_CAP_RAW_DISK | HEPU_PROC_CAP_MKFS |
+                                HEPU_PROC_CAP_REBOOT);
+}
 
 int user_process_is_installer(void)
 {
