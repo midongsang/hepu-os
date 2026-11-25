@@ -911,6 +911,8 @@ void x86_64_kernel_main(void)
     /* 初始化用户态进程 */
     vga_puts("[INIT] Initializing 64-bit user process support...\n");
     user_process_init();
+    { extern int user_process_cred_selftest(void);
+      (void)user_process_cred_selftest(); }
 
 #if defined(HEPU_S4_SELFTEST) && HEPU_S4_SELFTEST
     /* P4/S4: 用户态 getdents 非根目录（open("/s4dir") -> getdents64）。

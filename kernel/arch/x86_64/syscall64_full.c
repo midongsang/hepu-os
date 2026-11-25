@@ -22,6 +22,7 @@
 #define READDIR_STAGE_MAX   2048
 #include "epoll64.h"   /* epoll/eventfd2/pselect6 v1 最小实现（仅 LT） */
 #include "display_backend.h"  /* §5-4: fb_desc_t（前台所有权按真实 pitch 算映射长度） */
+#include "user_cred.h"
 
 int g_running_linux_elf = 0;  /* V0.20.70: 当前是否在运行Linux ABI ELF */
 
@@ -33,16 +34,17 @@ extern int copy_str_from_user(char *kernel_dst, const char *user_src, size_t max
 extern int hepu_is_user_address(uintptr_t addr, size_t size);
 
 /* OPEN-04 / SEC-04: 高危操作（裸盘读写 / mkfs / reboot）闸口。
- * 原闸口只放行 PID==0（内核 idle 上下文）。安装器是用户态唯一需要这些操作的
- * 程序: exec 阶段按可执行文件名精确匹配后把 PID 记入白名单（见 user_process.c）。
- * 这里仅放行「内核上下文」或「白名单内的安装器进程」，其余用户进程维持原拒绝；
- * 不拆除整道闸，不做全局 capability 放宽。 */
-static inline int syscall_installer_allowed(void)
+ * 原闸口只放行 PID==0（内核 idle 上下文）或安装器白名单。SEC-04 起增加
+ * 进程级能力位：进程必须持有对应 cap（且 cap 绑定 uid 未失效）；安装器
+ * 在 exec 白名单授予时同时拿到三项 cap，旧白名单保留作为兼容兜底。 */
+static inline int syscall_priv_allowed(uint32_t cap)
 {
     extern int user_process_get_current_pid(void);
     extern int user_process_is_installer(void);
     int p = user_process_get_current_pid();
-    return p == 0 || user_process_is_installer();
+    if (p == 0) return 1;
+    if (user_process_is_installer()) return 1;
+    return user_process_cred_has_cap(cap);
 }
 
 /* 安全修复：从用户空间复制路径字符串
@@ -632,10 +634,9 @@ int syscall_pipe_bytes(int pipe_buf)
 extern int ext2_64_mkfs(uint32_t part_lba, uint32_t part_sectors, const char *label);
 static int64_t sys_mkfs(uint32_t lba, uint32_t sectors, const char *label, uint32_t magic, int drive)
 {
-    /* 安全：mkfs 是高危操作。V0.54.12(R4 SC-04) 在原魔数之外加 PID==0
-       临时闸——魔数是源码内可见常量，单独不足以鉴权；完整能力模型待后续。
-       OPEN-04: 安装器白名单进程一并放行（见 syscall_installer_allowed）。 */
-    if (!syscall_installer_allowed()) return -1;
+    /* 安全：mkfs 是高危操作。魔数是源码内可见常量，单独不足以鉴权；
+       SEC-04 起要求 MKFS 能力位；OPEN-04 安装器白名单一并放行。 */
+    if (!syscall_priv_allowed(HEPU_PROC_CAP_MKFS)) return -1;
     if (magic != 0x4D4B4653u) return -1;
     extern void ide64_set_drive(int drive);
     ide64_set_drive(drive ? 1 : 0);
@@ -654,17 +655,14 @@ extern int64_t sys_mprotect(uint64_t addr, uint64_t len, int prot);
 /* ============================================================================
  * P0-3: 权限模型（uid/gid/umask/chmod/chown）
  * 此前这些系统调用全是桩（恒返回 0）。这里给出最小可用实现：
- *   - 全局当前凭据（ruid/euid/rgid/egid + umask），与既有单用户模型一致；
+ *   - 每进程凭据（ruid/euid/rgid/egid + umask），fork 子进程走快照继承；
  *   - chmod/chown 落到 ext2 inode 的 i_mode / i_uid / i_gid 并写回磁盘；
  *   - setuid/setgid 按 Linux 语义：仅 root 可切换到其他用户；
  *   - 权限检查：改 mode/owner 需 root 或文件属主，非 root 不能转让属主。
- * 说明：尚未实现 per-process 凭据继承（fork 后仍共享全局凭据），留待后续。
+ * 说明：SEC-04 起凭据按进程/ fork 快照隔离；capability64 对象句柄尚未与本层统一。
  * ========================================================================== */
-static int g_cred_uid   = 0;
-static int g_cred_gid   = 0;
-static int g_cred_euid  = 0;
-static int g_cred_egid  = 0;
-static int g_cred_umask = 022;   /* 默认 022，同常见发行版 */
+/* SEC-04: 凭据已搬入 user_process_t（每进程一份），这里不再保留全局静态量。
+ * 所有读写统一走 user_cred.h 的访问器；fork 子进程走 fork 快照表。 */
 
 extern uint32_t ext2_64_lookup(const char *path);
 extern int ext2_read_inode(uint32_t ino, ext2_inode_t *inode);
@@ -682,7 +680,8 @@ static int64_t do_chmod_path(const char *kpath, int mode)
     if (ext2_read_inode(ino, &inode) != 0) return HEPU_EIO;
 
     /* root 或属主可修改权限位 */
-    if (g_cred_euid != 0 && inode.i_uid != (uint16_t)g_cred_euid) return HEPU_EPERM;
+    int euid = user_process_cred_get_euid();
+    if (euid != 0 && inode.i_uid != (uint16_t)euid) return HEPU_EPERM;
 
     /* 保留文件类型位，替换权限位（含 setuid/setgid/sticky） */
     inode.i_mode = (uint16_t)((inode.i_mode & EXT2_S_IFMT) | (mode & 07777));
@@ -700,11 +699,13 @@ static int64_t do_chown_path(const char *kpath, int owner, int group)
     ext2_inode_t inode;
     if (ext2_read_inode(ino, &inode) != 0) return HEPU_EIO;
 
-    if (g_cred_euid != 0) {
+    int euid = user_process_cred_get_euid();
+    int gid = user_process_cred_get_gid();
+    if (euid != 0) {
         /* 非 root：只能操作自己拥有的文件，不能转让属主，属组须为自己所属组 */
-        if (inode.i_uid != (uint16_t)g_cred_euid) return HEPU_EPERM;
+        if (inode.i_uid != (uint16_t)euid) return HEPU_EPERM;
         if (owner != -1 && (uint16_t)owner != inode.i_uid) return HEPU_EPERM;
-        if (group != -1 && (uint16_t)group != (uint16_t)g_cred_gid) return HEPU_EPERM;
+        if (group != -1 && (uint16_t)group != (uint16_t)gid) return HEPU_EPERM;
     }
 
     if (owner != -1) inode.i_uid = (uint16_t)owner;
@@ -723,9 +724,7 @@ static int64_t sys_dup(int fd) { return fd; }
 
 /* sys_umask: 保存并返回旧的 umask */
 static int64_t sys_umask(int mask) {
-    int old = g_cred_umask;
-    g_cred_umask = mask & 0777;
-    return old;
+    return user_process_cred_setumask(mask);
 }
 
 /* sys_gettimeofday: 返回真实时间 (timeval: sec, usec) */
@@ -793,10 +792,10 @@ static int64_t sys_ps(struct hep_ps_entry *entries, int max) {
 }
 
 /* V0.20.23: 返回当前凭据 */
-static int64_t sys_getuid(void) { return g_cred_uid; }
-static int64_t sys_getgid(void) { return g_cred_gid; }
-static int64_t sys_geteuid(void) { return g_cred_euid; }
-static int64_t sys_getegid(void) { return g_cred_egid; }
+static int64_t sys_getuid(void) { return user_process_cred_get_uid(); }
+static int64_t sys_getgid(void) { return user_process_cred_get_gid(); }
+static int64_t sys_geteuid(void) { return user_process_cred_get_euid(); }
+static int64_t sys_getegid(void) { return user_process_cred_get_egid(); }
 
 /* V0.20.55: sched_yield */
 static int64_t sys_sched_yield(void) {
@@ -995,16 +994,10 @@ static int64_t sys_getpgrp(void) { return 1; }
 static int64_t sys_vfork(void) { return 0; }
 /* setuid/setgid：root 可切换任意用户；非 root 只能切换到当前 uid/gid */
 static int64_t sys_setuid(int uid) {
-    if (uid < 0) return HEPU_EINVAL;
-    if (g_cred_euid != 0 && uid != g_cred_uid && uid != g_cred_euid) return HEPU_EPERM;
-    g_cred_uid = g_cred_euid = uid;
-    return 0;
+    return user_process_cred_setuid(uid);
 }
 static int64_t sys_setgid(int gid) {
-    if (gid < 0) return HEPU_EINVAL;
-    if (g_cred_euid != 0 && gid != g_cred_gid && gid != g_cred_egid) return HEPU_EPERM;
-    g_cred_gid = g_cred_egid = gid;
-    return 0;
+    return user_process_cred_setgid(gid);
 }
 
 /* P0-4: seccomp(2) —— 仅实现 STRICT 模式与动作查询；BPF 过滤器暂不支持 */
@@ -1020,7 +1013,7 @@ static int64_t sys_seccomp(unsigned int op, unsigned int flags, uint64_t args)
         /* 已启用后不可重复设置（Linux 亦如此） */
         if (seccomp64_get_mode(slot) != SECCOMP_MODE_DISABLED) return HEPU_EINVAL;
         /* 暂以 root 作为启用条件（尚无 no_new_privs 跟踪） */
-        if (g_cred_euid != 0) return HEPU_EPERM;
+        if (user_process_cred_get_euid() != 0) return HEPU_EPERM;
         seccomp64_enable_strict(slot);
         vga_puts("[SECCOMP] strict mode enabled for slot ");
         print_syscall_number(slot);
@@ -1030,7 +1023,7 @@ static int64_t sys_seccomp(unsigned int op, unsigned int flags, uint64_t args)
     case SECCOMP_SET_MODE_FILTER: {
         /* P0-5: 安装 cBPF 过滤器。与 strict 一致，已启用后不可重复设置。 */
         if (seccomp64_get_mode(slot) != SECCOMP_MODE_DISABLED) return HEPU_EINVAL;
-        if (g_cred_euid != 0) return HEPU_EPERM;
+        if (user_process_cred_get_euid() != 0) return HEPU_EPERM;
         if (!args) return HEPU_EFAULT;
 
         seccomp_fprog_t prog;
@@ -1685,6 +1678,8 @@ static fork_snap_t g_fork_snaps[FORK_SNAP_SLOTS];
 /* 调度器切到某进程时调用：把该进程的快照槽挂到本核 per-CPU 的 %gs:0x10 */
 void syscall64_bind_fork_snap(int proc_idx)
 {
+    /* SEC-04: 同步本 CPU 的 process64 槽，供凭据访问器选择 fork 子进程快照。 */
+    user_process_cred_bind_proc64(proc_idx);
     if (proc_idx < 0 || proc_idx >= FORK_SNAP_SLOTS) proc_idx = 0;
     syscall64_set_fork_snap((uint64_t)&g_fork_snaps[proc_idx]);
 }
@@ -1739,6 +1734,7 @@ static void sys_exit(int code)
         extern int process64_set_zombie(int code);
         process64_set_zombie(code);
         _sn->child_pml4 = 0;
+        user_process_cred_fork_leave(_ci);   /* SEC-04: 子进程凭据快照随退出失效 */
         extern void fork_return_to_parent(void);
         fork_return_to_parent();
     }
@@ -1995,6 +1991,8 @@ static int64_t sys_fork(void)
         return -1;
     }
     fork_snap_t *sn = &g_fork_snaps[cslot];
+    /* SEC-04: 子进程继承父进程凭据副本；子进程 setuid 不会改到父进程。 */
+    user_process_cred_fork_prepare(cslot);
     sn->child_pml4   = child_pml4_v;
     sn->child_rip    = g_syscall_ret_rip;
     sn->child_rsp    = *syscall64_ustack_slot_ptr();
@@ -2744,7 +2742,7 @@ static int64_t wrap_getcwd(int64_t a1, int64_t a2, int64_t a3, int64_t a4, int64
 static int64_t sys_disk_read(uint64_t lba, void *user_buf, uint64_t count, int drive)
 {
     /* SEC-04: 裸盘读写需特权。OPEN-04: 安装器白名单进程一并放行。 */
-    if (!syscall_installer_allowed()) return -1;
+    if (!syscall_priv_allowed(HEPU_PROC_CAP_RAW_DISK)) return -1;
     if (count < 1 || count > 64 || lba > 0xFFFFFFFFULL - count) return -1;  /* lba 会被截断为32位 */
     static uint8_t kb[64 * 512];   /* 最多64扇区=32KB */
     extern int ide64_read_sectors(uint32_t lba, uint8_t count, uint8_t *buffer);
@@ -2764,7 +2762,7 @@ static int64_t sys_disk_read(uint64_t lba, void *user_buf, uint64_t count, int d
 static int64_t sys_disk_write(uint64_t lba, void *user_buf, uint64_t count, int drive)
 {
     /* SEC-04: 裸盘写需特权。OPEN-04: 安装器白名单进程一并放行。 */
-    if (!syscall_installer_allowed()) return -1;
+    if (!syscall_priv_allowed(HEPU_PROC_CAP_RAW_DISK)) return -1;
     if (count < 1 || count > 64 || lba > 0xFFFFFFFFULL - count) return -1;  /* lba 会被截断为32位 */
     static uint8_t kb[64 * 512];
     extern int ide64_write_sectors(uint32_t lba, uint8_t count, const uint8_t *buffer);
@@ -2793,10 +2791,9 @@ static int64_t wrap_disk_write(int64_t a1, int64_t a2, int64_t a3, int64_t a4, i
 /* V0.13.49: 重启系统（安装引导流: 安装完成后重启进入新系统） */
 static int64_t sys_reboot(void)
 {
-    /* V0.54.12(R4 SC-03): 临时权限闸，PID==0 才允许重启。
-       完整 cred/capability 模型留作后续架构项；内核内安装/文本 shell 走
-       直接调用不经过本分发，不受影响。OPEN-04: 安装器白名单一并放行。 */
-    if (!syscall_installer_allowed()) return -1;
+    /* SEC-04: 重启要求 REBOOT 能力位；内核内安装/文本 shell 走直接调用，
+       不经过本分发，不受影响。OPEN-04 安装器白名单一并放行。 */
+    if (!syscall_priv_allowed(HEPU_PROC_CAP_REBOOT)) return -1;
     vga_puts("[SYSCALL] Rebooting system...\n");
     /* 重启前把 SATA/AHCI 写缓存落盘（FLUSH CACHE EXT，等 BSY/DRDY 干净），
      * 避免复位脉冲打断设备内部写缓存导致刚写的扇区丢失。 */
