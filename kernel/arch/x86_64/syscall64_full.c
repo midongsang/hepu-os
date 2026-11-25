@@ -2126,13 +2126,17 @@ static int64_t sys_execve(const char *path, char *const argv[], char *const envp
                     vga_put_hex(isz);
                     vga_puts(" bytes\n");
                     elf64_load_library("ld.so", interp_buf, isz);
-                    /* 解析 interpreter 的符号后, 入口改为 interpreter 的 */
+                    /* V0.62.1: 这里是旧 native execve 桩，不负责动态装载；
+                     * 真正的 PT_INTERP 装载/映射在 user_process_exec（P1-7）。
+                     * 原实现把 entry 改成 interpreter 的 e_entry，但
+                     * elf64_load_library 只把模块登记进 loaded_modules，既没有
+                     * 映射到用户地址空间，也没有重定位；跳过去就是未映射地址。
+                     * 旧桩保持静态入口，不返回 interpreter 入口，避免误导调用方。 */
                     if (elf64_verify(interp_buf) == 0) {
-                        /* e_entry 是 ELF header 第 24 字节 (64位) */
-                        entry = *(uint64_t*)((uint8_t*)interp_buf + 24);
-                        vga_puts("[SYSCALL] New entry (interp): ");
-                        vga_put_hex(entry);
-                        vga_puts("\n");
+                        uint64_t interp_entry = *(uint64_t*)((uint8_t*)interp_buf + 24);
+                        vga_puts("[SYSCALL] interp e_entry=");
+                        vga_put_hex(interp_entry);
+                        vga_puts(" (old execve stub: keep static entry)\n");
                     }
                 } else {
                     vga_puts("[SYSCALL] Interpreter not found, continuing static\n");

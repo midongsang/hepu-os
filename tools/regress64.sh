@@ -51,6 +51,10 @@ export QEMU_MODULE_DIR="$T/usr/lib/x86_64-linux-gnu/qemu"
 
 if [ "${HEPU_SKIP_BUILD:-0}" != "1" ]; then
     say "构建 64 位内核..."
+    # S4_SELFTEST 是编译期宏；make 不因 CFLAGS 变化重编已有 .o。
+    # 不 clean 会在普通构建之后误用旧 kernel_main_64.o，导致 [S4U] 段缺失。
+    make -C "$ROOT/kernel/arch/x86_64" clean >/dev/null 2>&1
+    mkdir -p "$ROOT/build_x86_64"
     make -C "$ROOT/kernel/arch/x86_64" -j2 S4_SELFTEST=1 \
         >"$ROOT/build_x86_64/regress64_build.log" 2>&1 \
         || { say "FAIL (64 位构建)"; tail -40 "$ROOT/build_x86_64/regress64_build.log"; exit 1; }
