@@ -16,6 +16,8 @@
 #include "tls.h"
 #include "csprng.h"
 #include "sha.h"
+#include "x509.h"
+#include "tls12_trusted_ca.h"
 #include "vga.h"
 
 /* ---- 64 位 TCP / DNS 接口（定义于 arch/x86_64） ---- */
@@ -27,6 +29,12 @@ extern int  tcp64_close(int sock);
 extern int  tcp64_get_state(int sock);
 extern void net64_poll(void);
 extern uint64_t rtc64_get_timestamp(void);
+extern uint16_t rtc64_get_year(void);
+extern uint8_t  rtc64_get_month(void);
+extern uint8_t  rtc64_get_day(void);
+extern uint8_t  rtc64_get_hours(void);
+extern uint8_t  rtc64_get_minutes(void);
+extern uint8_t  rtc64_get_seconds(void);
 
 #define TCP_ESTABLISHED 4
 
@@ -60,6 +68,10 @@ typedef struct {
     uint8_t  client_random[32];
     uint8_t  server_random[32];
     uint16_t cipher;
+
+    /* 对端证书链 */
+    x509_cert_t chain[X509_MAX_CHAIN_LEN];
+    int      chain_len;
 
     /* 握手消息重组缓冲 */
     uint8_t  hs_accum[16384];
@@ -349,6 +361,105 @@ static int parse_server_hello(tls12_sess_t *s, const uint8_t *msg, uint32_t msg_
 }
 
 /* ----------------------------------------------------------------------------
+ * Certificate 消息解析与证书链校验
+ * -------------------------------------------------------------------------- */
+
+static int parse_certificate(tls12_sess_t *s, const uint8_t *msg, uint32_t msg_len)
+{
+    if (msg_len < 4 + 3) {
+        tls12_fail(s, "Certificate", "消息长度不足");
+        return -1;
+    }
+    if (msg[0] != HS_CERTIFICATE) {
+        tls12_fail(s, "Certificate", "握手类型不是 Certificate");
+        return -1;
+    }
+
+    uint32_t off = 4;
+    uint32_t list_len = ((uint32_t)msg[off] << 16) |
+                        ((uint32_t)msg[off + 1] << 8) | msg[off + 2];
+    off += 3;
+    uint32_t list_end = off + list_len;
+    if (list_end > msg_len) {
+        tls12_fail(s, "Certificate", "证书列表长度越界");
+        return -1;
+    }
+
+    while (off + 2 <= list_end && s->chain_len < X509_MAX_CHAIN_LEN) {
+        uint16_t clen = ((uint16_t)msg[off] << 8) | msg[off + 1];
+        off += 2;
+        if (clen == 0 || off + clen > list_end) {
+            tls12_fail(s, "Certificate", "单张证书长度非法");
+            return -1;
+        }
+        if (x509_parse(msg + off, clen, &s->chain[s->chain_len]) == 0) {
+            s->chain_len++;
+        } else {
+            vga_printf("[TLS12] 警告: 第 %d 张证书 DER 解析失败\n", s->chain_len);
+        }
+        off += clen;
+    }
+
+    if (s->chain_len == 0) {
+        tls12_fail(s, "Certificate", "证书链为空");
+        return -1;
+    }
+
+    vga_printf("[TLS12] Certificate: 收到 %d 张证书\n", s->chain_len);
+    for (int i = 0; i < s->chain_len; i++) {
+        vga_printf("[TLS12]   [#%d] subject=%s  issuer=%s\n",
+                   i, s->chain[i].subject, s->chain[i].issuer);
+    }
+    return 0;
+}
+
+static int validate_certificate_chain(tls12_sess_t *s)
+{
+    uint64_t now = x509_make_sort_time(rtc64_get_year(), rtc64_get_month(),
+                                         rtc64_get_day(), rtc64_get_hours(),
+                                         rtc64_get_minutes(), rtc64_get_seconds());
+
+    /* 有效期：逐张检查 notBefore / notAfter */
+    for (int i = 0; i < s->chain_len; i++) {
+        int r = x509_check_date_sort(&s->chain[i], now);
+        if (r != X509_VALID) {
+            tls12_fail(s, "Certificate",
+                       r == X509_ERR_EXPIRED ? "证书已过期" : "证书尚未生效");
+            return -1;
+        }
+    }
+
+    /* 主机名：叶子证书 SAN 优先，无 SAN 时 CN 兜底 */
+    if (x509_check_hostname(&s->chain[0], s->host) != 0) {
+        tls12_fail(s, "Certificate", "主机名与 SAN/CN 不匹配");
+        return -1;
+    }
+    vga_puts("[TLS12] 主机名校验通过（SAN 优先 / CN 兜底）\n");
+
+    /* 信任锚：编译期编入的测试 CA */
+    if (tls12_trusted_ca_der_len == 0) {
+        tls12_fail(s, "Certificate", "内核未编入信任锚 CA");
+        return -1;
+    }
+    x509_cert_t anchor;
+    if (x509_parse(tls12_trusted_ca_der, tls12_trusted_ca_der_len, &anchor) != 0) {
+        tls12_fail(s, "Certificate", "信任锚解析失败");
+        return -1;
+    }
+    x509_add_trusted_ca(&anchor);
+
+    x509_cert_t trusted[X509_MAX_CHAIN_LEN];
+    int n = x509_get_trusted_cas(trusted, X509_MAX_CHAIN_LEN);
+    int r = x509_verify_chain(s->chain, s->chain_len, trusted, n);
+    if (r != X509_VALID) {
+        tls12_fail(s, "Certificate", "证书链验签失败或不受信（unknown CA）");
+        return -1;
+    }
+    vga_puts("[TLS12] 证书链信任锚校验通过\n");
+    return 0;
+}
+
+/* ----------------------------------------------------------------------------
  * 主流程
  * -------------------------------------------------------------------------- */
 
@@ -426,9 +537,22 @@ int tls12_client_run(const char *hostname, uint16_t port,
         return TLS12_FAIL;
     }
 
-    /* 里程碑①边界：证书 / 密钥交换 / Finished / 记录层在后续里程碑接入。
+    /* 5. Certificate 消息 + 证书链校验 */
+    if (next_handshake_message(&sess, msg, sizeof(msg), &msg_len, 5) != 0) {
+        tls12_fail(&sess, "Certificate", "未收到 Certificate 消息");
+        tcp64_close(sess.sock);
+        return TLS12_FAIL;
+    }
+    if (parse_certificate(&sess, msg, msg_len) != 0 ||
+        validate_certificate_chain(&sess) != 0) {
+        tcp64_close(sess.sock);
+        return TLS12_FAIL;
+    }
+    if (result) result->cert_count = sess.chain_len;
+
+    /* 里程碑②边界：密钥交换 / Finished / 记录层在后续里程碑接入。
      * 在此之前绝不把会话标记为 complete。 */
-    vga_puts("[TLS12] 阶段①通过：ServerHello 协商 OK（后续阶段未接入）\n");
+    vga_puts("[TLS12] 阶段②通过：证书链校验 OK（后续阶段未接入）\n");
 
     tcp64_close(sess.sock);
     if (result) result->complete = 0;

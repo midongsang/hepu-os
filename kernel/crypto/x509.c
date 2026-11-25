@@ -47,6 +47,123 @@ static int x509_read_length(const uint8_t *data, int *offset, int max_len)
     return length;
 }
 
+/* 可排序时间戳 YYYYMMDDHHMMSS */
+uint64_t x509_make_sort_time(uint16_t year, uint8_t month, uint8_t day,
+                              uint8_t hour, uint8_t minute, uint8_t second)
+{
+    return (((uint64_t)year * 10000ULL + month * 100ULL + day) * 10000ULL +
+            hour * 100ULL + minute) * 100ULL + second;
+}
+
+/* 解析 ASN.1 UTCTime(0x17) / GeneralizedTime(0x18) 字符串 */
+static uint64_t x509_parse_time(const uint8_t *s, int len, int generalized)
+{
+    char d[16]; int di = 0;
+    for (int i = 0; i < len && di < 15; i++) {
+        if (s[i] >= '0' && s[i] <= '9') d[di++] = (char)s[i];
+        else break;
+    }
+    int year;
+    if (generalized) {
+        year = (d[0]-'0')*1000 + (d[1]-'0')*100 + (d[2]-'0')*10 + (d[3]-'0');
+    } else {
+        int yy = (d[0]-'0')*10 + (d[1]-'0');
+        year = yy >= 50 ? 1900 + yy : 2000 + yy;
+    }
+    int off = generalized ? 4 : 2;
+    int month = (d[off]-'0')*10 + (d[off+1]-'0');
+    int day   = (d[off+2]-'0')*10 + (d[off+3]-'0');
+    int hour  = (d[off+4]-'0')*10 + (d[off+5]-'0');
+    int minute= (d[off+6]-'0')*10 + (d[off+7]-'0');
+    int second= di >= off+10 ? (d[off+8]-'0')*10 + (d[off+9]-'0') : 0;
+    return x509_make_sort_time((uint16_t)year, (uint8_t)month, (uint8_t)day,
+                               (uint8_t)hour, (uint8_t)minute, (uint8_t)second);
+}
+
+/* 解析 SubjectAltName GeneralNames */
+static void x509_parse_san(const uint8_t *data, int len, x509_cert_t *cert)
+{
+    int off = 0, end = len;
+    if (off < end && data[off] == 0x30) {
+        off++;
+        int gl = x509_read_length(data, &off, end);
+        if (gl < 0) return;
+        end = off + gl;
+    }
+    while (off < end && cert->san_count < X509_MAX_SAN) {
+        uint8_t gtag = data[off]; off++;
+        int gl = x509_read_length(data, &off, end);
+        if (gl < 0 || off + gl > end) return;
+        if (gtag == 0x02) { /* dNSName IA5String */
+            if (gl > 0 && gl <= X509_SAN_DNS_LEN) {
+                memcpy(cert->san_dns[cert->san_count], data + off, gl);
+                cert->san_dns[cert->san_count][gl] = 0;
+                cert->san_ip_len[cert->san_count] = 0;
+                cert->san_count++;
+            }
+        } else if (gtag == 0x04) { /* iPAddress: IPv4(4) / IPv6(16) */
+            if (gl == 4 || gl == 16) {
+                memcpy(cert->san_ip[cert->san_count], data + off, gl);
+                cert->san_ip_len[cert->san_count] = (uint8_t)gl;
+                cert->san_dns[cert->san_count][0] = 0;
+                cert->san_count++;
+            }
+        }
+        off += gl;
+    }
+}
+
+/* 解析 BasicConstraints，提取 cA 标记 */
+static void x509_parse_bc(const uint8_t *data, int len, x509_cert_t *cert)
+{
+    int off = 0;
+    if (off < len && data[off] == 0x30) {
+        off++;
+        int sl = x509_read_length(data, &off, len);
+        if (sl < 0) return;
+    }
+    if (off + 2 <= len && data[off] == 0x01) {
+        cert->is_ca = data[off + 2] ? 1 : 0;
+    }
+}
+
+/* 解析 extensions [3] EXPLICIT */
+static void x509_parse_extensions(const uint8_t *der, int off, int end,
+                                   x509_cert_t *cert)
+{
+    if (off < end && der[off] == 0x30) {
+        off++;
+        int sl = x509_read_length(der, &off, end);
+        if (sl < 0) return;
+        end = off + sl;
+    }
+    while (off + 2 <= end) {
+        if (der[off] != 0x30) break;
+        off++;
+        int el = x509_read_length(der, &off, end);
+        if (el < 0) return;
+        int eend = off + el;
+        if (der[off] != 0x06) { off = eend; continue; }
+        off++;
+        int oidl = x509_read_length(der, &off, eend);
+        if (oidl < 0) return;
+        const uint8_t *oid = der + off;
+        int is_san = (oidl == 3 && oid[0] == 0x55 && oid[1] == 0x1D && oid[2] == 0x11);
+        int is_bc  = (oidl == 3 && oid[0] == 0x55 && oid[1] == 0x1D && oid[2] == 0x19);
+        off += oidl;
+        if (off < eend && der[off] == 0x01) off += 2; /* critical BOOLEAN */
+        if (off < eend && der[off] == 0x04) {
+            off++;
+            int vlen = x509_read_length(der, &off, eend);
+            if (vlen >= 0 && off + vlen <= eend) {
+                if (is_san) x509_parse_san(der + off, vlen, cert);
+                else if (is_bc) x509_parse_bc(der + off, vlen, cert);
+            }
+        }
+        off = eend;
+    }
+}
+
 /* V7.80: 解析X.509 Name结构，提取CN（Common Name）字段
  * Name ::= SEQUENCE OF RelativeDistinguishedName
  * RDN ::= SET OF AttributeTypeAndValue
@@ -193,16 +310,28 @@ int x509_parse(const uint8_t *der, uint32_t len, x509_cert_t *cert)
         offset += issuer_len;
     }
 
-    /* validity SEQUENCE */
+    /* validity SEQUENCE：notBefore / notAfter（UTCTime 或 GeneralizedTime） */
     if (der[offset] == 0x30) {
         offset++;
         int validity_len = x509_read_length(der, &offset, len);
         if (validity_len < 0) return X509_ERR_PARSE;
         X509_CHECK_LEN(offset, validity_len);
-        /* 简化：设置默认有效期 */
-        cert->not_before = 0;
-        cert->not_after = 0xFFFFFFFF;
-        offset += validity_len;
+        int vend = offset + validity_len;
+        if (offset < vend && (der[offset] == 0x17 || der[offset] == 0x18)) {
+            int gen1 = der[offset] == 0x18; offset++;
+            int t1 = x509_read_length(der, &offset, vend);
+            if (t1 < 0 || offset + t1 > vend) return X509_ERR_PARSE;
+            cert->not_before_sort = x509_parse_time(der + offset, t1, gen1);
+            offset += t1;
+        }
+        if (offset < vend && (der[offset] == 0x17 || der[offset] == 0x18)) {
+            int gen2 = der[offset] == 0x18; offset++;
+            int t2 = x509_read_length(der, &offset, vend);
+            if (t2 < 0 || offset + t2 > vend) return X509_ERR_PARSE;
+            cert->not_after_sort = x509_parse_time(der + offset, t2, gen2);
+            offset += t2;
+        }
+        offset = vend;
     }
 
     /* subject Name SEQUENCE */
@@ -274,6 +403,21 @@ int x509_parse(const uint8_t *der, uint32_t len, x509_cert_t *cert)
     cert->tbs_data = &der[tbs_start];
     cert->tbs_len = tbs_end - tbs_start;
     if (cert->tbs_len > 4096) cert->tbs_len = 4096;  /* 安全限制 */
+
+    /* 扫描 TBS 尾部的 extensions [3]（SAN / BasicConstraints） */
+    while (offset < tbs_end) {
+        uint8_t ext_tag = der[offset];
+        if (ext_tag == 0xA3) {
+            offset++;
+            int ext_len = x509_read_length(der, &offset, tbs_end);
+            if (ext_len >= 0) x509_parse_extensions(der, offset, offset + ext_len, cert);
+            break;
+        }
+        offset++;
+        int skip = x509_read_length(der, &offset, tbs_end);
+        if (skip < 0) break;
+        offset += skip;
+    }
 
     /* V7.76: 解析signatureAlgorithm（在TBS之后） */
     offset = tbs_end;
@@ -410,7 +554,7 @@ int x509_verify_chain(const x509_cert_t *chain, int chain_len,
     return X509_VALID;
 }
 
-/* 检查有效期 */
+/* 检查有效期（旧口径，保留兼容） */
 int x509_check_date(const x509_cert_t *cert, uint32_t current_time)
 {
     if (!cert) return X509_ERR_PARSE;
@@ -419,20 +563,66 @@ int x509_check_date(const x509_cert_t *cert, uint32_t current_time)
     return X509_VALID;
 }
 
-/* 检查主机名 */
+/* 检查有效期（可排序时间戳口径） */
+int x509_check_date_sort(const x509_cert_t *cert, uint64_t now_sort)
+{
+    if (!cert) return X509_ERR_PARSE;
+    if (cert->not_before_sort != 0 && now_sort < cert->not_before_sort)
+        return X509_ERR_NOT_YET_VALID;
+    if (cert->not_after_sort != 0 && now_sort > cert->not_after_sort)
+        return X509_ERR_EXPIRED;
+    return X509_VALID;
+}
+
+/* dNSName 匹配：精确 + 单级通配符 *.domain */
+static int x509_dns_match(const char *pattern, const char *host)
+{
+    if (!pattern || !host) return 0;
+    if (strcmp(pattern, host) == 0) return 1;
+    if (pattern[0] == '*' && pattern[1] == '.') {
+        const char *dom = pattern + 2;
+        const char *h = strchr(host, '.');
+        if (h && strcmp(h + 1, dom) == 0) return 1;
+    }
+    return 0;
+}
+
+/* 判断目标是否为点分十进制 IPv4 字面量，是则输出 4 字节大端序 */
+static int x509_is_ipv4_literal(const char *hostname, uint8_t out[4])
+{
+    const char *p = hostname;
+    for (int i = 0; i < 4; i++) {
+        uint32_t v = 0; int digits = 0;
+        while (*p >= '0' && *p <= '9') { v = v*10 + (*p-'0'); p++; digits++; }
+        if (!digits || v > 255) return 0;
+        out[i] = (uint8_t)v;
+        if (i < 3) { if (*p != '.') return 0; p++; }
+    }
+    return *p == 0;
+}
+
+/* 检查主机名：SAN 优先（dNSName / iPAddress），无 SAN 时兜底 CN。
+ * 证书一旦携带 SAN，RFC 6125 规定不再使用 CN 兜底。 */
 int x509_check_hostname(const x509_cert_t *cert, const char *hostname)
 {
     if (!cert || !hostname) return -1;
 
-    /* 简化：检查subject中的CN */
-    if (strstr(cert->subject, hostname) != NULL) return 0;
+    uint8_t target_ip[4] = {0};
+    int target_is_ip = x509_is_ipv4_literal(hostname, target_ip);
 
-    /* 通配符匹配 */
-    if (cert->subject[0] == '*' && cert->subject[1] == '.') {
-        const char *domain = strchr(hostname, '.');
-        if (domain && strcmp(domain, &cert->subject[1]) == 0) return 0;
+    for (int i = 0; i < cert->san_count; i++) {
+        if (target_is_ip && cert->san_ip_len[i] == 4) {
+            if (memcmp(cert->san_ip[i], target_ip, 4) == 0) return 0;
+        } else if (!target_is_ip && cert->san_dns[i][0]) {
+            if (x509_dns_match(cert->san_dns[i], hostname)) return 0;
+        }
     }
 
+    /* 存在 SAN 但无一匹配：拒绝，不走 CN 兜底 */
+    if (cert->san_count > 0) return -1;
+
+    /* CN 兜底 */
+    if (x509_dns_match(cert->subject, hostname)) return 0;
     return -1;
 }
 

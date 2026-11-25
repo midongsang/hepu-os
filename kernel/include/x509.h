@@ -7,6 +7,8 @@
 #define X509_MAX_CHAIN_LEN 8
 #define X509_MAX_SERIAL_LEN 20
 #define X509_MAX_NAME_LEN 256
+#define X509_MAX_SAN        8
+#define X509_SAN_DNS_LEN    63
 
 /* X.509版本 */
 #define X509_VERSION_1 0
@@ -50,6 +52,14 @@ typedef struct {
     int      path_len_constraint;
     int      key_usage;
     int      valid;
+    /* SAN（Subject Alternative Name）：dNSName 与 iPAddress */
+    char     san_dns[X509_MAX_SAN][X509_SAN_DNS_LEN + 1];
+    uint8_t  san_ip[X509_MAX_SAN][16];
+    uint8_t  san_ip_len[X509_MAX_SAN];
+    int      san_count;
+    /* 有效期，可排序时间戳 YYYYMMDDHHMMSS（十进制数比较即可） */
+    uint64_t not_before_sort;
+    uint64_t not_after_sort;
     /* V7.76: TBSCertificate位置（用于SHA256哈希计算和RSA验签） */
     const uint8_t *tbs_data;
     uint32_t tbs_len;
@@ -73,7 +83,11 @@ int x509_verify(const x509_cert_t *cert, const x509_cert_t *ca_cert);
 int x509_verify_chain(const x509_cert_t *chain, int chain_len,
                       const x509_cert_t *trusted_cas, int ca_count);
 int x509_check_date(const x509_cert_t *cert, uint32_t current_time);
+int x509_check_date_sort(const x509_cert_t *cert, uint64_t now_sort);
 int x509_check_hostname(const x509_cert_t *cert, const char *hostname);
+/* 构造可排序时间戳 YYYYMMDDHHMMSS */
+uint64_t x509_make_sort_time(uint16_t year, uint8_t month, uint8_t day,
+                              uint8_t hour, uint8_t minute, uint8_t second);
 int x509_add_trusted_ca(const x509_cert_t *ca);
 int x509_get_trusted_cas(x509_cert_t *cas, int max);
 const char *x509_verify_error_text(x509_verify_result_t result);
