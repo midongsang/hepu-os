@@ -94,14 +94,14 @@ static void x509_parse_san(const uint8_t *data, int len, x509_cert_t *cert)
         uint8_t gtag = data[off]; off++;
         int gl = x509_read_length(data, &off, end);
         if (gl < 0 || off + gl > end) return;
-        if (gtag == 0x02) { /* dNSName IA5String */
+        if (gtag == 0x82) { /* dNSName [2] IA5String */
             if (gl > 0 && gl <= X509_SAN_DNS_LEN) {
                 memcpy(cert->san_dns[cert->san_count], data + off, gl);
                 cert->san_dns[cert->san_count][gl] = 0;
                 cert->san_ip_len[cert->san_count] = 0;
                 cert->san_count++;
             }
-        } else if (gtag == 0x04) { /* iPAddress: IPv4(4) / IPv6(16) */
+        } else if (gtag == 0x87) { /* iPAddress [7]: IPv4(4) / IPv6(16) */
             if (gl == 4 || gl == 16) {
                 memcpy(cert->san_ip[cert->san_count], data + off, gl);
                 cert->san_ip_len[cert->san_count] = (uint8_t)gl;
@@ -149,9 +149,11 @@ static void x509_parse_extensions(const uint8_t *der, int off, int end,
         if (oidl < 0) return;
         const uint8_t *oid = der + off;
         int is_san = (oidl == 3 && oid[0] == 0x55 && oid[1] == 0x1D && oid[2] == 0x11);
-        int is_bc  = (oidl == 3 && oid[0] == 0x55 && oid[1] == 0x1D && oid[2] == 0x19);
+        /* BasicConstraints OID 2.5.29.19 = 55 1D 13（注意：不是 0x19） */
+        int is_bc  = (oidl == 3 && oid[0] == 0x55 && oid[1] == 0x1D && oid[2] == 0x13);
         off += oidl;
-        if (off < eend && der[off] == 0x01) off += 2; /* critical BOOLEAN */
+        /* critical BOOLEAN：tag(0x01)+len(0x01)+value(1) 共 3 字节 */
+        if (off < eend && der[off] == 0x01) off += 3;
         if (off < eend && der[off] == 0x04) {
             off++;
             int vlen = x509_read_length(der, &off, eend);

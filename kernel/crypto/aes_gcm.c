@@ -203,19 +203,9 @@ int gcm_final(gcm_ctx_t *ctx, uint8_t *tag, int tag_len)
     if (!ctx || !ctx->initialized || !tag) return -1;
     if (tag_len < 4 || tag_len > 16) return -1;
 
-    /* 填充AAD到16字节边界 */
-    uint32_t aad_pad = (16 - (ctx->aad_len / 8 % 16)) % 16;
-    if (aad_pad > 0) {
-        uint8_t zeros[16] = {0};
-        ghash_update(ctx, zeros, aad_pad);
-    }
-
-    /* 填充密文到16字节边界 */
-    uint32_t ct_pad = (16 - (ctx->data_len / 8 % 16)) % 16;
-    if (ct_pad > 0) {
-        uint8_t zeros[16] = {0};
-        ghash_update(ctx, zeros, ct_pad);
-    }
+    /* 注意：最后一个不完整数据块已在 ghash_update 内部零填充，
+     * 这里不能再把填充零作为一次独立 ghash_update 喂进去——
+     * 那会对累加器多做一次 ×H，破坏 GHASH。 */
 
     /* 追加长度块：[len(AAD)]_64 || [len(CT)]_64 */
     uint8_t len_block[16];
