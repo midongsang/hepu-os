@@ -12,6 +12,7 @@ extern void vga_put_hex(uint64_t val);   /* V0.55.1: 提前原型, 消除隐式�
 #include "capability64.h"
 #include "shared/ai/hepu_ai.h"
 #include "uproc.h"
+#include "tls12_client.h"
 
 #define SHELL_BUF_SIZE 256
 #define SHELL_MAX_ARGS 8
@@ -3279,20 +3280,48 @@ static void shell_cmd_devmode(int argc, char **argv)
     }
 }
 
-/* V0.62: TLS 1.2 真连接探针 —— 发真实 ClientHello、解析 ServerHello
- * 用法: tls12 [host|ip] [port]  默认 10.0.2.2:4433 */
-static void shell_cmd_tls12(const char *args)
+/* TLS 1.2 真实客户端握手 —— 用法: tls12 [host|ip] [port]
+ * 默认 10.0.2.2:4433（QEMU slirp 中 10.0.2.2 指向宿主） */
+static void shell_cmd_tls12(int argc, char **argv)
 {
-    extern int tls12_probe(const char *hostname, uint16_t port);
+    extern int tls12_client_run(const char *hostname, uint16_t port,
+                                const char *http_path,
+                                uint8_t *resp, uint32_t resp_max,
+                                uint32_t *resp_len, tls12_result_t *result);
+
     const char *host = "10.0.2.2";
     uint16_t port = 4433;
-    if (args && *args) host = args;
-    vga_puts("tls12: probing ");
+    if (argc > 1) host = argv[1];
+    if (argc > 2) {
+        uint32_t p = 0;
+        for (const char *q = argv[2]; *q; q++) {
+            if (*q < '0' || *q > '9') { p = 0; break; }
+            p = p * 10 + (uint32_t)(*q - '0');
+        }
+        if (p > 0 && p < 65536) port = (uint16_t)p;
+    }
+
+    vga_puts("tls12: 真实 TLS1.2 握手 ");
     vga_puts(host);
-    vga_puts(" ...\n");
-    int r = tls12_probe(host, port);
-    if (r == 0) vga_puts("tls12: ServerHello parsed OK\n");
-    else        vga_puts("tls12: probe failed\n");
+    vga_puts(":");
+    vga_put_hex((uint64_t)port);
+    vga_puts("\n");
+
+    uint8_t resp[2048];
+    uint32_t resp_len = 0;
+    tls12_result_t res;
+    int r = tls12_client_run(host, port, NULL,
+                             resp, sizeof(resp), &resp_len, &res);
+    if (r == 0 && res.complete) {
+        vga_puts("tls12: 握手完成，加密通道建立\n");
+    } else {
+        vga_puts("tls12: 握手未完成");
+        if (res.fail_stage[0]) {
+            vga_puts(" 阶段="); vga_puts(res.fail_stage);
+            vga_puts(" 原因="); vga_puts(res.fail_reason);
+        }
+        vga_puts("\n");
+    }
 }
 
 static void shell_cmd_sysprof(const char *args)

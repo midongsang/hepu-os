@@ -179,7 +179,13 @@ static int hepu_tls_build_client_hello(hepu_tls_session_t *session, uint8_t *buf
     return p - buffer;
 }
 
-/* TLS握手 */
+/* TLS握手（旧路径 / 未实现）
+ *
+ * 警告：本函数是历史遗留的"模拟握手"——只在本地生成随机数就把状态置为
+ * HANDSHAKE_DONE，既没有发送真实 ClientHello，也没有解析对端消息、验签或
+ * 校验 Finished，不能作为加密通道使用。64 位 shell 的 `tls12` 命令已改走
+ * kernel/net/tls12_client.c 的真实 TLS 1.2 状态机；本路径仅为兼容旧符号
+ * 引用保留，未完成真实握手，禁止据此判定连接已加密。 */
 int hepu_tls_handshake(hepu_tls_session_t *session)
 {
     if (!tls_initialized || !session) return -1;

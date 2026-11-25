@@ -226,7 +226,8 @@ static int asn1_read_integer(const uint8_t *data, uint32_t len, uint32_t *offset
     uint32_t int_len = asn1_read_length(data, len, offset);
     if (int_len == 0 || *offset + int_len > len) return -1;
 
-    /* 去除前导0x00（用于表示正数） */
+    /* 编码长度用于回跳 offset；前导 0x00 仅在取值时剥离 */
+    uint32_t encoded_len = int_len;
     const uint8_t *p = data + *offset;
     while (int_len > 1 && p[0] == 0x00) {
         p++;
@@ -235,7 +236,7 @@ static int asn1_read_integer(const uint8_t *data, uint32_t len, uint32_t *offset
 
     *value = p;
     *value_len = int_len;
-    *offset += int_len;
+    *offset += encoded_len;
     return 0;
 }
 

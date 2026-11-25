@@ -127,6 +127,8 @@ C_SOURCES = \
     $(KERNEL_DIR)/net/tls_crypto.c \
     $(KERNEL_DIR)/net/tls_handshake.c \
     $(KERNEL_DIR)/net/tls_client.c \
+    $(KERNEL_DIR)/net/tls12_client.c \
+    $(KERNEL_DIR)/net/tls12_e2e_selftest.c \
     $(ARCH_DIR)/ps2mouse64.c \
     $(ARCH_DIR)/usb64.c \
     $(ARCH_DIR)/ehci64.c \
@@ -248,6 +250,13 @@ endif
 # 64 位镜像级回归 tools/regress64.sh 用 S4_SELFTEST=1 构建。
 ifeq ($(S4_SELFTEST),1)
 CFLAGS += -DHEPU_S4_SELFTEST
+endif
+
+# TLS 1.2 端到端开机自检（默认关闭；仅联调测试构建用 TLS_E2E_SELFTEST=1 打开）。
+# 打开后在 DHCP 就绪后自动跑一次真实握手 + 加密 GET，结果打串口。
+# 默认构建（gate.sh / regress64.sh）不进这段代码，不影响回归。
+ifeq ($(TLS_E2E_SELFTEST),1)
+CFLAGS += -DHEPU_TLS_E2E_SELFTEST
 endif
 
 # ATA 高 LBA 写读回环自检（desktop64.c 内 #ifdef HEPU_ATA_HILBA_TEST）。

@@ -1382,6 +1382,16 @@ void x86_64_kernel_main(void)
         hepu_tls_init();
         vga_puts("[OK] Crypto full + TLS ready\n");
 
+        /* TLS 1.2 端到端开机自检：默认关闭，仅 TLS_E2E_SELFTEST=1 测试构建
+         * 编入。DHCP 就绪后自动跑一次真实握手 + 加密 GET，结果打串口；
+         * 默认构建（gate.sh / regress64.sh）不进入这段代码。 */
+#if defined(HEPU_TLS_E2E_SELFTEST) && HEPU_TLS_E2E_SELFTEST
+        {
+            extern void tls12_e2e_selftest(void);
+            tls12_e2e_selftest();
+        }
+#endif
+
         /* ---------------------------------------------------------------
          * 用户程序注册与启动
          *
