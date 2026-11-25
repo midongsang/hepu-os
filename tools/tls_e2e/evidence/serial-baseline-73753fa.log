@@ -1,0 +1,572 @@
+[Stage2_64] Kernel loaded OK
+[Stage2_64] Entering protected mode...
+[Stage2_64] Protected mode OK
+[Stage2_64] Kernel copied to 0x100000
+[Stage2_64] CPU supports long mode
+[Stage2_64] Page tables built, enabling paging...
+LM>
+JMP>
+¿-
+[UART] COM1 initialized at 115200 baud
+=== HepuOS 64-bit Kernel booting ===
+========================================
+  HepuOS 64-bit Kernel v0.62.1
+  x86_64 Long Mode
+========================================
+
+[OK] Long mode active
+[INFO] CPU supports x86_64: [x86_64] CPU supports long mode (x86_64)
+Yes
+[INFO] MB magic: 0x2BADB002
+[INFO] MB info addr: 0x0
+[INIT] Enabling SCE (System Call Extensions)...
+[x86_64] SCE (System Call Extensions) enabled
+[INIT] Enabling NXE (No-Execute)...
+[x86_64] NXE (No-Execute Enable) enabled
+[INIT] Enabling FPU/SSE...
+[x86_64] FPU/SSE enabled
+[BOOT] cores cycles=0x78452E
+[BOOT] cores
+[INIT] phase:  cores subsystem 
+[INIT] Initializing physical memory manager (2GB max)...
+[INFO] PMM physical memory: 0x100 MB
+[PMM] reserved kernel stack: 0x1F3000 - 0x203000
+[OK] Physical memory manager initialized
+[BOOT] step1 done
+[DRV] Unified driver framework initialized
+[BOOT] step2 done (drv_init)
+[INFO] Memory: total=0x100MB used=0x28MB free=0xD7MB
+[INIT] Initializing kernel heap (32MB)...
+[KHEAP] kheap init: 0x20MB (0x0x2000000 bytes)
+[OK] Kernel heap initialized
+[INIT] Initializing crypto core...
+[AES] AES crypto module init 
+[AES] supports AES-128/192/256, ECB/CBC mode 
+[SHA] hash init 
+[SHA] supports: SHA1, SHA256, SHA512
+[HMAC] HMAC init 
+[HMAC] supports: SHA1/SHA256/SHA512
+[HKDF] KDF init 
+[HKDF] RFC 5869, based on HMAC-SHA1/SHA256/SHA512
+[CSPRNG] CSPRNG init (V7.75 multi-source entropy)
+[CSPRNG] algo: ChaCha20, reseed interval: 1000000
+[CSPRNG] entropy sources: RDRAND=1 RDTSC=1 MEM=1 STACK=1
+[OK] Crypto core initialized
+[INIT] Initializing user space access protection...
+[USERACC] User space access protection initialized
+[USERACC] User window: 0x40000000-0x7FFFFFFF (strict, pages must be mapped)
+[INIT] Initializing PIT timer...
+[PIT64] Programmable Interval Timer initialized
+[PIT64] Frequency: 1000 Hz (1ms tick)
+[OK] PIT timer initialized
+[INIT] Initializing 64-bit virtual memory (4-level paging)...
+[INFO] PML4 allocated at: 0x28AA000
+[VMM64] Init start
+[VMM64] PML4 ptr set
+[VMM64] PML4 cleared
+[VMM64] Mapping low identity...
+[VMM64] Mapping high direct map...
+[VMM64] Mapping done
+[VMM64] Init complete
+[VMM64] CR3 loaded: 0x28AA000
+[OK] Switched to kernel page tables
+[BOOT] step3 done (paging)
+[BOOT] hw_driver cycles=0x292C3EC
+[BOOT] hw_driver
+[INIT] phase:  HW driver 
+[INIT] Early IDT (crash-safe)...
+[IRQ64] Initializing 64-bit IDT...
+[IRQ64] IDT loaded (256 entries)
+[IRQ64] Initializing PIC (8259)...
+[IRQ64] PIC initialized (IRQ0 PIT + IRQ1 keyboard enabled)
+[IRQ64] IRQ entries 32-47 set
+[IRQ64] APIC timer vector 0x40 set
+[IRQ64] IPI vector 0x50 set
+[IRQ64] APIC spurious/error vectors set (0xFE/0xFF, spurious has dedicated entry)
+[IRQ64] PIT+keyboard+UART handlers registered
+[IRQ64] Interrupts enabled (PIC mode)
+[OK] Early IDT installed
+[x86_64] SMEP enabled
+[x86_64] SMAP enabled
+[x86_64] SSE/SIMD user-mode enabled (CR4.OSFXSR|OSXMMEXCPT)
+[x86_64] hardware state: SMEP=on SMAP=on SSE=on
+[GFX64] early fb text mirror active: 0x400x0x300
+[INIT] Initializing APIC (step 1: Local APIC only)...
+[APIC64] Local APIC ID=0 Ver=0x14
+[APIC64] Local APIC initialized (PIC compatible mode)
+[OK] APIC initialized
+[BOOT] step4 done (APIC)
+[APIC] Switching to pure APIC mode...
+[IOAPIC] ID=0 Ver=0x20 MaxRedir=42
+[IOAPIC] Initialized
+[APIC] Switched to pure APIC mode
+[TSS64] Initializing per-CPU TSS...
+[TSS64] Per-CPU TSS descriptors set (0x10 cores)
+[OK] TSS loaded (0x28)
+[INIT] SMP init...
+[SMP] Initializing multi-processor support...
+[ACPI] Initializing ACPI...
+[ACPI] RSDP found at 0xF59E0
+[ACPI] RSDT physical address: 0xFFE1905
+[ACPI] RSDT found, length=0x34
+[ACPI] MADT found, length=0x78
+[ACPI] Local APIC address: 0xFEE00000
+[ACPI] CPU: apic_id=0x0, proc_id=0x0
+[ACPI] I/O APIC: id=0x0, addr=0xFEC00000
+[ACPI] IRQ override: ISA IRQ0x0 -> GSI0x2
+[ACPI] IRQ override: ISA IRQ0x5 -> GSI0x5
+[ACPI] IRQ override: ISA IRQ0x9 -> GSI0x9
+[ACPI] IRQ override: ISA IRQ0xA -> GSI0xA
+[ACPI] IRQ override: ISA IRQ0xB -> GSI0xB
+[ACPI] Total CPUs found: 0x1
+[ACPI] HPET table present at 0xFFE18A5 len=0x38 base=0xFED00000
+[SMP] Using ACPI MADT, CPU count: 0x1[SMP] BSP APIC ID: 0x0[SMP] Copying trampoline...
+[SMP] trampoline_size=0x126[SMP] memcpy done
+[SMP] AP trampoline copied to 0x8000 (0x126 bytes)
+[APIC] timer calibrated: tick_hz=0x3BAB3A3 ICR=0xF467 src=HPET
+[HPET] primary tick armed: timers=0x3 period_ticks=0x186A0 gsi=0x10 route=0x10 intcap=0x4 vec=0x42 rc=0x0
+[SMP] BSP APIC timer enabled
+[SMP] Initialization complete, 0x1 CPUs online
+[OK] SMP done
+[BOOT] step5 done (SMP)
+[INIT] 64-bit GDT/TSS verified (per-CPU TSS set before SMP)
+[INIT] 64-bit IDT ready (early install)
+[INIT] Initializing 64-bit syscall...
+[SYSCALL64] Initializing 64-bit syscall...
+[SYSCALL64] percpu=0x0000000000265A40 kstack=0x000000000020C6D0 msr_gsbase=0000000000265A40
+[SYSCALL64] Syscall initialized (STAR/LSTAR/CSTAR/SFMASK/GS)
+[SYSCALL64] Entry point: 0x00000000001001B
+¾ºþÊï¾­ÞGÐ[COMPATG] linux_map selftest PASS entries=0x67 bad=0x0
+[SYSCALL64] Full syscall interface initialized
+[SYSCALL64] Testing syscall...
+[SYSCALL64] PID: 1
+[SYSCALL64] Test complete
+[BOOT] security cycles=0x50ECF5DA
+[BOOT] security
+[INIT] phase:  security encryption 
+[ELF64] ELF64 loader initialized
+[INIT] Initializing 64-bit IDE driver...
+[IDE64] Initializing IDE controller...
+[IDE64] Drive ready
+[IDE64] IDE controller initialized
+[INIT] Detecting IDE drive capacity...
+[IDE64] Drive master: 256MB (LBA48)
+[IDE64] Drive slave: 0MB (LBA28)
+[INIT] Parsing MBR partition table...
+[INIT] Found Linux partition 1: LBA=13000 size=224MB
+[INIT] Using partition 1 as root (initrd recovery)
+[STORAGE] HAL initialized (direct IDE fallback)
+[INIT] Early AHCI/SATA init...
+[AHCI64] Initializing SATA host adapter...
+[AHCI64] No AHCI controller found
+[BOOT] fs cycles=0x7188AF8C
+[BOOT] fs
+[INIT] phase:  fs 
+[INIT] Initializing 64-bit ext2 filesystem...
+[EXT2_64] Initializing ext2 filesystem...
+[EXT2_64] Trying IDE master drive
+[EXT2_64] ext2 found on master drive
+[EXT2_64] Magic OK, block_size=0x1000 groups=0x2 first_data_block=0x0
+[EXT2_64] GDT block=0x1
+[EXT2_64] GDT loaded, inodes_per_group=0x7000
+[EXT2_64] Root inode OK, size=0x1000
+[EXT2_64] Root directory contents:
+0x0 rec=0xC nlen=0x1
+  ./
+0xC rec=0xC nlen=0x2
+  ../
+0x18 rec=0x14 nlen=0xA
+  lost+found/
+0x2C rec=0x10 nlen=0x5
+  fonts/
+0x3C rec=0xC nlen=0x3
+  usr/
+0x48 rec=0xC nlen=0x3
+  etc/
+0x54 rec=0xFAC nlen=0x7
+  drivers/
+[OK] ext2 filesystem mounted
+[EXT2_64] Failed to read /hello.txt
+[EXT2_64] Write /test_write.txt (0x21 bytes)
+[EXT2_64] Verify read: HepuOS 64-bit ext2 write test OK!
+[CONFORM64] read_c32=MISSING
+[CONFORM64] verify_c64=FROM_64BIT
+[EXT2_64] Shared ext2 algorithm initialized
+[BOOT] step6 done (ext2)
+[EXTRESIZE] root=0x32C8 size=0x70000 rc=0x0
+[PARTS] MBR scan rc=0x0
+[PARTS] P0x1 type=0x83 lba=0x32C8 sz=0x70000 ext2=0x1
+[S4] fs selftest begin
+[S4] mkdir PASS
+[S4] write-read PASS
+[S4] getdents-nonroot PASS
+[S4] fs selftest PASS
+[S4] result=0x1
+[MEMPRESS] Phys free=0xD74A000 KHEAP used=0xA5830/0x2000000 cache=0x9 slots pressure=0x0
+[INIT] Initializing 64-bit RTL8139 network...
+[RTL8139] Initializing...
+[PCI64] enumerate count=0x6
+[PCI64] bus=0x0 dev=0x0 func=0x0 vend=0x8086 devid=0x1237 class=0x6/0x0/0x0 hdr=0x0 bar0=0x0
+[PCI64] bus=0x0 dev=0x1 func=0x0 vend=0x8086 devid=0x7000 class=0x6/0x1/0x0 hdr=0x80 bar0=0x0
+[PCI64] bus=0x0 dev=0x1 func=0x1 vend=0x8086 devid=0x7010 class=0x1/0x1/0x80 hdr=0x0 bar0=0x0
+[PCI64] bus=0x0 dev=0x1 func=0x3 vend=0x8086 devid=0x7113 class=0x6/0x80/0x0 hdr=0x0 bar0=0x0
+[PCI64] bus=0x0 dev=0x2 func=0x0 vend=0x1234 devid=0x1111 class=0x3/0x0/0x0 hdr=0x0 bar0=0xFD000000
+[PCI64] bus=0x0 dev=0x3 func=0x0 vend=0x8086 devid=0x100E class=0x2/0x0/0x0 hdr=0x0 bar0=0xFEB80000
+[RTL8139] Device not found
+[INIT] Initializing 64-bit graphics (VBE)...
+[GFX64] Mode set: 0x400x0x300x0x20 pitch=0x1000 fb=0xFD000000
+[GFX64] Initializing graphics subsystem...
+[TTF64] Font loaded: 0x89 glyphs, 0x800 units/em
+[GFX64] TrueType font loaded (DejaVuSans subset)
+[TTF64] CJK font loaded: 0x2D5 glyphs
+[GFX64] CJK font loaded (NotoSansCJK subset)
+[OK] Graphics initialized
+[INIT] TrueType font enabled for graphics
+[CSPRNG] CSPRNG init (V7.75 multi-source entropy)
+[CSPRNG] algo: ChaCha20, reseed interval: 1000000
+[CSPRNG] entropy sources: RDRAND=1 RDTSC=1 MEM=1 STACK=1
+[BOOT] net cycles=0xC644CD02
+[BOOT] net
+[INIT] phase:  net proto 
+[INIT] Initializing 64-bit network stack...
+[NET64] Initializing network stack...
+[ETH64] Initializing ethernet driver...
+[ETH64] Using default MAC: 00:1A:36:5D:A7:C9
+[OK] Ethernet driver initialized
+[ARP64] ARP protocol initialized
+[IP64] IPv4 protocol initialized
+[ICMP64] ICMP protocol initialized
+[UDP64] UDP protocol initialized
+[TCP64] TCP protocol initialized
+[OK] Network stack initialized (ETH/ARP/IP/ICMP/UDP/TCP)
+[INIT] Initializing 64-bit DHCP client...
+[DHCP64] DHCP client initialized
+[INIT] Initializing 64-bit DNS resolver...
+[DNS64] DNS resolver initialized
+[INIT] Initializing 64-bit HTTP client...
+[HTTP64] HTTP client initialized
+[BOOT] sys_service cycles=0xC710E8C8
+[BOOT] sys_service
+[INIT] phase:  system service 
+[INIT] Initializing 64-bit process manager...
+[DOMAIN] initialized (kernel/system/gui/linux-compat-0)
+[QoS] initialized
+[hepua] initialized (skeleton, rule-based diagnostics)
+[CAP64] Capability subsystem initialized
+[DEVFS64] device fs init: null, zero, console
+[SEC64] security layer init done (route C: MAC + cap, enforcing=1)
+  domains=7, types=9, rules=12, apps=5
+[SMP] per-CPU idle bound: 0x0
+[PROC64] Process manager initialized (32 procs, 5 priorities, idle=PID0)
+[PROC64] Created process: kbeat (pid=1, prio=0)
+[PROC64] Created process: khouse (pid=2, prio=2)
+[PROC64] Created process: kstat (pid=3, prio=3)
+[INIT] Initializing 64-bit user process support...
+[USER64] User process manager initialized
+[USER64] isolation mode: skip built-in legacy hello self-test
+[SELFTEST] boot self-test battery disabled (build with BOOT_SELFTEST=1 to enable)
+[INIT] Initializing 64-bit keyboard driver...
+[KEYBOARD64] Initializing PS/2 keyboard...
+[KEYBOARD64] Keyboard initialized
+[INIT] Initializing 64-bit PS/2 mouse...
+[MOUSE64] read_config timeout, using raw polling mode
+[MOUSE64] IntelliMouse 4-byte wheel mode enabled
+[MOUSE64] PS/2 mouse ready (aux device, IRQ12)
+[MOUSE64] PS/2 mouse ready
+[INIT] Initializing 64-bit AHCI/SATA...
+[INIT] Initializing 16550 UART serial (COM1)...
+[UART] COM1 initialized at 115200 baud
+[INIT] Initializing AC'97 audio...
+[AC97] Initializing AC'97 audio controller...
+[AC97] No AC'97 audio device found
+[INIT] Initializing Hepu Desktop IPC...
+[HSIPC] Initialized, channels: 2
+[INIT] Initializing Hepu Desktop services...
+[AUDIO] Service initialized (AC97)
+[PROC] Monitor initialized (snapshot-based)
+[FILEMON] Monitor initialized
+[SERVICES] All services initialized
+[INIT] Initializing Hepu Desktop extras...
+[LOCK] Screen lock initialized
+[ANIM] Animation system initialized
+[THEME] Theme engine initialized, themes: 3
+[PLUGIN] Plugin system initialized
+[DRV] Registered: IDE (ID=0)
+[DRV] Registered: RTC (ID=1)
+[DRV] Registered: PIT (ID=2)
+[DRV] Registered: PS/2 Keyboard (ID=3)
+[DRV] Registered: PS/2 Mouse (ID=4)
+[DRV] Registered: PCI (ID=5)
+[DRV] Registered: E1000 (ID=6)
+[DRV] Registered: AHCI (ID=7)
+[DRV] Registered: USB (ID=8)
+[AC97] Initializing AC'97 audio controller...
+[AC97] No AC'97 audio device found
+[GPS64] GPS service initialized
+[L10N] language: en_US
+[OK] All drivers registered to unified framework
+[RTL8139] Initializing...
+[RTL8139] Device not found
+[E1000] Initializing...
+[E1000] Found at MMIO 0xFEB80000 (dev 0x3)
+[E1000] MAC: 0x52:0x54:0x0:0x12:0x34:0x56
+[E1000] STATUS=0x80080783 CTRL=0x40
+[ETH64] MAC updated: 0x52:0x54:0x0:0x12:0x34:0x56
+[OK] E1000 initialized
+[ETH64] MAC updated: 0x52:0x54:0x0:0x12:0x34:0x56
+[OK] Network up (E1000 + TCP/IP, static 10.0.2.15)
+[NET_HAL] Initializing network HAL...
+[NET_HAL] E1000 initialized (eth0)
+[NET_HAL] Network HAL initialized: 1 device
+[SOCKET64] Initializing BSD Socket API...
+[SOCKET64] Socket API initialized
+[INIT] Initializing 64-bit font manager...
+[INIT] Initializing 64-bit window manager...
+[INIT] Initializing 64-bit file manager...
+[FM64] File manager initialized
+[INIT] Initializing 64-bit system settings...
+[SETTINGS] System settings initialized (30 items)
+[INIT] Initializing 64-bit notepad...
+[NOTES] Notepad initialized
+[INIT] Initializing 64-bit terminal enhancement...
+[TERM64] Terminal enhanced (10 new commands)
+[INIT] Initializing 64-bit app store...
+[APPSTORE] Initialized with 16 apps (4 preinstalled)
+[INIT] Initializing 64-bit RTC...
+[RTC64] Initializing Real Time Clock...
+[RTC64] RTC initialized
+[RTC64] Current time: 0x7EA-0xB-0x19 0x6:0x38:0x34
+[AUTH] No account yet (first boot)
+
+[HepuOS] First boot detected, setup wizard pending...
+
+
+[INFO] Kernel stack: 0x2086D0 - 0x20C6D0
+[INFO] EFER MSR: 0xD01
+
+========================================
+  64-bit Kernel Initialization Complete!
+  Starting Shell...
+========================================
+[BOOT] app_framework cycles=0xCCCA3500
+[BOOT] app_framework
+[INIT] phase:  app framework 
+[GFX64] Mode set: 0x400x0x300x0x20 pitch=0x1000 fb=0xFD000000
+[GFX64] Initializing graphics subsystem...
+[TTF64] Font loaded: 0x89 glyphs, 0x800 units/em
+[GFX64] TrueType font loaded (DejaVuSans subset)
+[TTF64] CJK font loaded: 0x2D5 glyphs
+[GFX64] CJK font loaded (NotoSansCJK subset)
+[OK] Graphics initialized
+[DESKTOP64] Desktop initialized: 1024x768
+[INIT] Desktop environment ready
+[LUA64] selftest start
+hepu lua Lua 5.4
+sum(1..100)=5050
+sqrt2=1.414213
+table=1,4,9,16,25
+acc=66666.6666
+[LUA64] selftest result: ok
+[HPET] tickå¯¹è´¦ kernel_tick=0xF8 hpet_tick=0x15
+[RSA] sig verify init 
+[RSA] supports: PKCS#1 v1.5, SHA1/SHA256/SHA384/SHA512
+[ECDHE] ECDHE init 
+[ECDHE] supports: secp256r1, secp384r1, secp521r1, X25519
+[X509] cert verify init 
+[X509] supports RSA/ECDSA, SHA1/SHA256/SHA384/SHA512
+[TLS] TLS/SSL encryption transport init 
+[TLS] supports TLS 1.2/1.3, AES-128/256-GCM
+[TLS-CRYPTO] initialized
+[TLS-HS] TLS handshake module init 
+[TLS-HS] integrated: ECDHE+RSA+HKDF+X.509
+[TLS-CLIENT] initialized (TLS 1.2)
+[TLS-REC] TLS 1.3 record layer initialized
+[OK] Crypto full + TLS ready
+[REG] user programs registered, starting autorun set...
+[REG] exec /bin/hello.elf[USER64] exec: /bin/hello.elf
+[USER64] exec ERROR: Cannot read file
+[UPROC] exec path=/bin/hello.elf rc=-2
+ -> not found
+[REG] exec /bin/sec_test.elf[USER64] exec: /bin/sec_test.elf
+[USER64] exec ERROR: Cannot read file
+[UPROC] exec path=/bin/sec_test.elf rc=-2
+ -> not found
+[REG] exec /bin/clone_test.elf[USER64] exec: /bin/clone_test.elf
+[USER64] exec ERROR: Cannot read file
+[UPROC] exec path=/bin/clone_test.elf rc=-2
+ -> not found
+[REG] exec /bin/ps.elf[USER64] exec: /bin/ps.elf
+[USER64] exec ERROR: Cannot read file
+[UPROC] exec path=/bin/ps.elf rc=-2
+ -> not found
+[REG] autorun done
+[REG] uproc noent probe /bin/no_such_uproc.elf
+[USER64] exec: /bin/no_such_uproc.elf
+[USER64] exec ERROR: Cannot read file
+[UPROC] exec path=/bin/no_such_uproc.elf rc=-2
+[REG] uproc argv probe /bin/comptest.elf uproc1 uproc2
+[USER64] exec: /bin/comptest.elf
+[USER64] exec ERROR: Cannot read file
+[UPROC] exec path=/bin/comptest.elf rc=-2
+[SB08] bsp probe PASS
+[GFX-BB] pages=00000300 bytes=00300000 w=00000400 h=00000300
+[GFXDB] backend equivalence PASS lfb=0x52F49DC5 mirror=0x52F49DC5
+[DESKOWN] owner slot=0x0 (dirty+zorder+focus armed)
+[WM] create owner-probe 200x120
+[DESKOWN] zorder/focus selftest PASS pass=0x3 reject=0x0 create_probe=0x1 fail_code=0x0
+[DESKOWN] selftest PASS pass=00000003 reject=00000000 create_probe=00000001 fail_code=00000000
+[Hepu Desktop] config: 3 sections, background=0xf0ebe0
+[DISPLAY] auto scale=100% (screen 1024x768)
+[SCALE] pct=00000064 bar_h=00000020 island=00000078 accent=00C9A96E theme=00000000
+[NOTIFY] Welcome to Hepu OS: Hepu Desktop loaded
+[SB22] tlb shootdowns=0x0
+[WM] create Settings 460x430
+[Hepu Desktop] booting to lock screen
+[Hepu Desktop] Initialized (1024x768)
+[DESKTOP64] Hepu Desktop started via desk_registry
+[USB64] No UHCI controller found
+[EHCI64] No EHCI controller found
+[XHCI] Controller not found
+[DESKTOP64] Desktop running with mouse support
+[DHCP64] Sending Discover...
+0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0x52 0x54 
+[DHCP64] discover rc=0x123
+[BOOT] desktop_frame1
+[GEOM] pct=100 screen=1024x768 logical=1024x768 | sidebar x=10 y=50 w=280 h=500 | cc x=654 y=48 w=360 h=390 | gap_x=364
+[GEOM] theme accent=0xc9a96e panel_bg=0xe8dfd0 panel_fg=0x5c4a32 tab=0
+[GEOM] sidebar clamped: w=280 h=500 right=290 bottom=550 (caps 409/702)
+[PNG64] read n=8022 sig=137,80,78,71
+[PNG64] decoded 128x128 px0=6,6,4,0
+[CURSOR] load arrow=0 link=0 text=0 move=0 want=24 ready=1 nominal=24 hot=(1,0)
+z[P0] island t=8
+[P0] island t=16
+[P0] island t=24
+[P0] island t=32
+[P0] island t=40
+[P0] island t=48
+[E1000] RX got frame len=0x140 hdr: 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0x52 0x55 
+[DHCP64] Offer received, IP: 10.0.2.15
+0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0x52 0x54 
+[DHCP64] discover rc=0x12A
+[DHCP64] Sending Request...
+[E1000] RX got frame len=0x140 hdr: 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0x52 0x55 
+[DHCP64] IP assigned: 10.0.2.15
+[DHCP64] netmask: 255.255.255.0
+[DHCP64] gateway: 10.0.2.2
+[DHCP64] DNS: 10.0.2.3
+[DHCP64] lease: 0x15180s T1: 0xA8C0s
+[NOTIFY] Network connected: IP: 10.0.2.15
+[NET64] Probe: ICMP echo to gateway 10.0.2.2
+0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0x52 0x54 
+[E1000] RX got frame len=0x44 hdr: 0x52 0x54 0x0 0x12 0x34 0x56 0x52 0x55 
+[ARP64] rx oper=0x200 spa=0xA000202
+[ARP64] resolved 0xA000202 -> 0x52:0x55:0xA:0x0:0x2:0x2
+0x52 0x55 0xA 0x0 0x2 0x2 0x52 0x54 
+[NET64] Probe: TCP connect to 10.0.2.2:8081
+0x52 0x55 0xA 0x0 0x2 0x2 0x52 0x54 
+[NET64] Probe: TCP connect sock=0x0
+[E1000] RX got frame len=0x66 hdr: 0x52 0x54 0x0 0x12 0x34 0x56 0x52 0x55 
+[ICMP64] echo reply from 10.0.2.2 id=0x1234 seq=0x0
+[E1000] RX got frame len=0x40 hdr: 0x52 0x54 0x0 0x12 0x34 0x56 0x52 0x55 
+0x52 0x55 0xA 0x0 0x2 0x2 0x52 0x54 
+[TCP64] Connection established
+[NET64] Probe: TCP state=0x4
+0x52 0x55 0xA 0x0 0x2 0x2 0x52 0x54 
+[E1000] RX got frame len=0x40 hdr: 0x52 0x54 0x0 0x12 0x34 0x56 0x52 0x55 
+[P0] island t=56
+[E1000] RX got frame len=0x40 hdr: 0x52 0x54 0x0 0x12 0x34 0x56 0x52 0x55 
+0x52 0x55 0xA 0x0 0x2 0x2 0x52 0x54 
+[P0] island t=64
+[P0] island t=72
+[P0] island t=80
+[P0] island t=88
+[P0] island t=96
+[P0] island t=100
+z[P0] island t=92
+[P0] island t=84
+[P0] island t=76
+[P0] island t=68
+[P0] island t=60
+[P0] island t=52
+z[P0] island t=44
+[P0] island t=36
+[P0] island t=28
+[P0] island t=20
+[P0] island t=12
+[P0] island t=4
+[P0] island t=0
+zzz[PERF] intervalK=0000E4F9 renderK=0000B28E presentK=000093B7 ratio=0000004D p99K=000110F6 maxK=00013A59
+z[HTTP64] Resolving t.weather.itboy.net...
+0xFF 0xFF 0xFF 0xFF 0xFF 0xFF 0x52 0x54 
+[E1000] RX got frame len=0x44 hdr: 0x52 0x54 0x0 0x12 0x34 0x56 0x52 0x55 
+[ARP64] rx oper=0x200 spa=0xA000203
+[ARP64] resolved 0xA000203 -> 0x52:0x55:0xA:0x0:0x2:0x3
+0x52 0x55 0xA 0x0 0x2 0x3 0x52 0x54 
+[E1000] RX got frame len=0x11A hdr: 0x52 0x54 0x0 0x12 0x34 0x56 0x52 0x55 
+[HTTP64] Connecting to 115.231.101.162:80...
+0x52 0x55 0xA 0x0 0x2 0x2 0x52 0x54 
+[E1000] RX got frame len=0x40 hdr: 0x52 0x54 0x0 0x12 0x34 0x56 0x52 0x55 
+0x52 0x55 0xA 0x0 0x2 0x2 0x52 0x54 
+[TCP64] Connection established
+[HTTP64] Sending request...
+0x52 0x55 0xA 0x0 0x2 0x2 0x52 0x54 
+[E1000] RX got frame len=0x40 hdr: 0x52 0x54 0x0 0x12 0x34 0x56 0x52 0x55 
+[E1000] RX got frame len=0x5DA hdr: 0x52 0x54 0x0 0x12 0x34 0x56 0x52 0x55 
+0x52 0x55 0xA 0x0 0x2 0x2 0x52 0x54 
+[E1000] RX got frame len=0x5DA hdr: 0x52 0x54 0x0 0x12 0x34 0x56 0x52 0x55 
+0x52 0x55 0xA 0x0 0x2 0x2 0x52 0x54 
+[E1000] RX got frame len=0x5DA hdr: 0x52 0x54 0x0 0x12 0x34 0x56 0x52 0x55 
+0x52 0x55 0xA 0x0 0x2 0x2 0x52 0x54 
+[E1000] RX got frame len=0xA7 hdr: 0x52 0x54 0x0 0x12 0x34 0x56 0x52 0x55 
+0x52 0x55 0xA 0x0 0x2 0x2 0x52 0x54 
+0x52 0x55 0xA 0x0 0x2 0x2 0x52 0x54 
+[HTTP64] Received 4320 bytes
+[WX] weather fetched temp=9 desc=é˜´
+[E1000] RX got frame len=0x40 hdr: 0x52 0x54 0x0 0x12 0x34 0x56 0x52 0x55 
+z[E1000] RX got frame len=0xA6 hdr: 0x52 0x54 0x0 0x12 0x34 0x56 0x52 0x55 
+zzz[E1000] RX got frame len=0xA6 hdr: 0x52 0x54 0x0 0x12 0x34 0x56 0x52 0x55 
+z[PERF] intervalK=0000E5AD renderK=0000AB3D presentK=00008E3E ratio=0000004A p99K=00011AAF maxK=00012780
+zzzz[E1000] RX got frame len=0xA6 hdr: 0x52 0x54 0x0 0x12 0x34 0x56 0x52 0x55 
+zz[PERF] intervalK=0000E527 renderK=0000B3A0 presentK=0000944D ratio=0000004E p99K=00012FBF maxK=000135C2
+zzzzzzz[PERF] intervalK=0000E181 renderK=0000B057 presentK=00009220 ratio=0000004E p99K=000128D3 maxK=0001359F
+zz[E1000] RX got frame len=0xA6 hdr: 0x52 0x54 0x0 0x12 0x34 0x56 0x52 0x55 
+zzzz[PERF] intervalK=0000E42C renderK=0000B16A presentK=000093E8 ratio=0000004D p99K=00010CF8 maxK=00012198
+zzzzz[PERF] intervalK=0000E31C renderK=0000B2ED presentK=000094DA ratio=0000004E p99K=00012363 maxK=00013496
+z[E1000] RX got frame len=0xA6 hdr: 0x52 0x54 0x0 0x12 0x34 0x56 0x52 0x55 
+zzzz[PERF] intervalK=0000E291 renderK=0000AFB6 presentK=000094B2 ratio=0000004D p99K=00012105 maxK=00013C96
+zzzzzz[PERF] intervalK=0000E435 renderK=0000B1CF presentK=000095AD ratio=0000004D p99K=000107EF maxK=000112B0
+[E1000] RX got frame len=0xA6 hdr: 0x52 0x54 0x0 0x12 0x34 0x56 0x52 0x55 
+zzzzzz[PERF] intervalK=0000E2A7 renderK=0000AF82 presentK=000093D1 ratio=0000004D p99K=00011C43 maxK=00013133
+zzzzz[E1000] RX got frame len=0xA6 hdr: 0x52 0x54 0x0 0x12 0x34 0x56 0x52 0x55 
+zz[PERF] intervalK=0000E4A5 renderK=0000B558 presentK=000094E9 ratio=0000004F p99K=00012EEC maxK=0001346D
+zzzzz[PERF] intervalK=0000E0CF renderK=0000AD40 presentK=00009208 ratio=0000004D p99K=0001095D maxK=0001113D
+zzzz[E1000] RX got frame len=0xA6 hdr: 0x52 0x54 0x0 0x12 0x34 0x56 0x52 0x55 
+z[PERF] intervalK=0000E972 renderK=0000BA93 presentK=000098D2 ratio=0000004F p99K=00013E39 maxK=0001843D
+[PERF] intervalK=0000E534 renderK=0000B473 presentK=00009594 ratio=0000004E p99K=00011FD1 maxK=00013561
+[E1000] RX got frame len=0xA6 hdr: 0x52 0x54 0x0 0x12 0x34 0x56 0x52 0x55 
+[PERF] intervalK=0000E0D3 renderK=0000AFEE presentK=0000912E ratio=0000004E p99K=0001171F maxK=0001448E
+[PERF] intervalK=0000E2DB renderK=0000B05F presentK=0000948B ratio=0000004D p99K=000108EB maxK=0001683E
+[E1000] RX got frame len=0xA6 hdr: 0x52 0x54 0x0 0x12 0x34 0x56 0x52 0x55 
+[PERF] intervalK=0000DF71 renderK=0000AF5D presentK=00008FA1 ratio=0000004E p99K=00012218 maxK=0001433F
+[E1000] RX got frame len=0xA6 hdr: 0x52 0x54 0x0 0x12 0x34 0x56 0x52 0x55 
+[PERF] intervalK=0000E1B0 renderK=0000AF2D presentK=00009264 ratio=0000004D p99K=000121AA maxK=00013850
+[PERF] intervalK=0000D87A renderK=0000A6C4 presentK=00008915 ratio=0000004D p99K=000107D0 maxK=00013022
+[E1000] RX got frame len=0xA6 hdr: 0x52 0x54 0x0 0x12 0x34 0x56 0x52 0x55 
+[PERF] intervalK=0000DD31 renderK=0000AB1D presentK=00008FCF ratio=0000004D p99K=0001230E maxK=00012FC1
+[PERF] intervalK=0000E5EE renderK=0000B589 presentK=000095F6 ratio=0000004E p99K=0001300C maxK=00013A80
+[E1000] RX got frame len=0xA6 hdr: 0x52 0x54 0x0 0x12 0x34 0x56 0x52 0x55 
+[PERF] intervalK=0000DCB0 renderK=0000A9A0 presentK=00008D7C ratio=0000004C p99K=00011FC6 maxK=000135A2
+[PERF] intervalK=0000E72A renderK=0000B4A8 presentK=00009912 ratio=0000004E p99K=00012160 maxK=00013589
+[E1000] RX got frame len=0xA6 hdr: 0x52 0x54 0x0 0x12 0x34 0x56 0x52 0x55 
+[PERF] intervalK=0000E369 renderK=0000B08B presentK=00009402 ratio=0000004D p99K=0001262D maxK=0001444C
+[PERF] intervalK=0000E541 renderK=0000B244 presentK=000096D1 ratio=0000004D p99K=00011C46 maxK=00012EC3
+[E1000] RX got frame len=0xA6 hdr: 0x52 0x54 0x0 0x12 0x34 0x56 0x52 0x55 
+[PERF] intervalK=0000E350 renderK=0000B14C presentK=000094EF ratio=0000004D p99K=00011BF0 maxK=000134DC
+[E1000] RX got frame len=0xA6 hdr: 0x52 0x54 0x0 0x12 0x34 0x56 0x52 0x55 
+[PERF] intervalK=0000E76B renderK=0000B841 presentK=00009749 ratio=0000004F p99K=00013069 maxK=00013FC2
+[PERF] intervalK=0000E446 renderK=0000B3AD presentK=000094AC ratio=0000004E p99K=00015E2B maxK=0001B938
+[E1000] RX got frame len=0xA6 hdr: 0x52 0x54 0x0 0x12 0x34 0x56 0x52 0x55 
+[PERF] intervalK=0000E3E2 renderK=0000B391 presentK=000094CA ratio=0000004E p99K=00013453 maxK=00013923
+[PERF] intervalK=0000E568 renderK=0000B3E8 presentK=00009636 ratio=0000004E p99K=0001303E maxK=00013DE3
+[E1000] RX got frame len=0xA6 hdr: 0x52 0x54 0x0 0x12 0x34 0x56 0x52 0x55 
+[PERF] intervalK=0000E4D5 renderK=0000B3FE presentK=00009583 ratio=0000004E p99K=00012797 maxK=00019A4A
