@@ -193,6 +193,22 @@ void ext2_free_inode(uint32_t inode_num)
     ext2_block_dirty(ext2_gdt[g].bg_inode_bitmap);
     ext2_gdt[g].bg_free_inodes_count++;
     ext2_sb->s_free_inodes_count++;
+
+    /* P1: 与共享 ext2_algo_free_inode 对齐——释放 inode 时必须把盘上 inode 表项
+     * 一并清零。只清位图、不清表项会残留旧 i_mode/i_size/i_block/i_links_count，
+     * e2fsck 据此报 unattached/unused inode、inode 位图-表差异、目录 filetype 与
+     * 引用计数不一致（本次实测孤儿 inode 33/34）。 */
+    uint32_t inode_table = ext2_gdt[g].bg_inode_table;
+    uint32_t abs_off = i * ext2_inode_size;
+    uint32_t b_idx = inode_table + abs_off / ext2_block_size;
+    uint32_t b_off = abs_off % ext2_block_size;
+    uint8_t *tp = ext2_block_access(b_idx);
+    if (tp) {
+        uint32_t wipe = ext2_inode_size > sizeof(ext2_inode_t)
+                            ? sizeof(ext2_inode_t) : ext2_inode_size;
+        memset(tp + b_off, 0, wipe);
+        ext2_block_dirty(b_idx);
+    }
 }
 
 int ext2_write_inode(uint32_t inode_num, ext2_inode_t *inode)

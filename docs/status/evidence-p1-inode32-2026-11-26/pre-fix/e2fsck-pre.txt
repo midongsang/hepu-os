@@ -1,0 +1,35 @@
+=== e2fsck -fn ===
+e2fsck 1.46.5 (30-Dec-2021)
+Pass 1: Checking inodes, blocks, and sizes
+Pass 2: Checking directory structure
+Entry '..' in <32>/<34> (34) has an incorrect filetype (was 2, should be 1).
+Fix? no
+
+Pass 3: Checking directory connectivity
+Unconnected directory inode 34 (<32>/<34>)
+Connect to /lost+found? no
+
+'..' in ... (34) is <32> (32), should be <The NULL inode> (0).
+Fix? no
+
+Pass 4: Checking reference counts
+Inode 32 ref count is 1, should be 2.  Fix? no
+
+Unattached zero-length inode 33.  Clear? no
+
+Unattached inode 33
+Connect to /lost+found? no
+
+Inode 34 ref count is 2, should be 1.  Fix? no
+
+Pass 5: Checking group summary information
+Block bitmap differences:  +1235
+Fix? no
+
+Inode bitmap differences:  +(33--34)
+Fix? no
+
+
+/home/user/Doubao/chats/38452875115179010/.toolchain/run/p1-inode32/part-after.img: ********** WARNING: Filesystem still has errors **********
+
+/home/user/Doubao/chats/38452875115179010/.toolchain/run/p1-inode32/part-after.img: 32/14592 files (0.0% non-contiguous), 5356/58368 blocks
