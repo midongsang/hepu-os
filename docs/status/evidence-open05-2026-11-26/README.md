@@ -112,32 +112,39 @@ worker 链路（来源同上）：
 ```
 [LOGD] spawn /bin/logd.elf
 [USER64] exec: /bin/logd.elf
+[USER64] exec: read 8576 bytes
 [UPROC] pid=100 slot=0 active=1
-[LOGD] consumed=16 wrote=/var/log/hepu/2026-11-26.log bytes=1237 last_seq=16
+[LOGD] consumed=16 wrote=/var/log/hepu/2026-11-26.log bytes=1350 last_seq=16
 [SYSCALL64] Process exited with code 0
 [UPROC] exec path=/bin/logd.elf rc=100
 ```
 
 判据：6s 节流后拉起 `/bin/logd.elf`；worker 消费 16 条、写入 dated 文件、游标到 16；
-进程 `code 0` 正常退出；桌面主循环在 worker 退出后继续（桌面帧持续推进，见串口后续
-`[PERF]` 行）。
+串口 `bytes=1350` 与读回文件实际字节数（1350）一致；进程 `code 0` 正常退出；
+桌面主循环在 worker 退出后继续（串口后续仍有 `[P0] island` / `[PERF]` 推进行）。
 
 ### 3.3 ext2 读回：dated 文件连续、游标一致、事件逐条核对
 
 宿主机 dd 抽 ext2 分区（LBA 264192，245760 扇区）后 `debugfs` 独立读回：
 
 - `readback/64-dated-file.txt`：`/var/log/hepu/2026-11-26.log`，16 行，seq 从 1 连续到 16，
-  1237 字节；
+  1350 字节；`file` 判定为 `ASCII text`（非二进制）；每行 seq 为 8 位十进制、tick 为
+  16 个 hex 字符；
 - `readback/64-cursor.txt`：`/var/log/hepu/.cursor`，内容 `16`，等于 last_seq=16；
 - `readback/64-kernel-events-snapshot.txt`：同镜像内核 `/hepu_events.log` 读回，作为对照表参照。
+
+**逐字节核对**：`/hepu_events.log` 在启动过程中落盘两次——前 14 行是早期保存的
+seq 1..14，15–30 行是后一次保存的完整 seq 1..16，第 31 行是 seq 17（桌面就绪）。
+`diff readback/64-dated-file.txt` 对快照 15–30 行结果为**逐字节一致**（无差异行）；
+前 14 行与快照 1–14 行亦一致。
 
 事件逐条核对（左列串口原文，右列读回文件行）：
 
 | 串口原文（`serial64/serial-64-default-raw.txt`） | 读回文件行（`readback/64-dated-file.txt`） |
 | --- | --- |
-| `=== HepuOS 64-bit Kernel booting ===`（启动横幅；事件 seq 1） | `00000001 ... INFO  boot64  pid=0 code=1 64-bit kernel entry` |
-| `[SERVICES] registered: network (stub)`（行 34；事件 seq 2） | `00000002 ... INFO  service  pid=0 code=10 registered network (stub)` |
-| `[SERVICES] started: network (stub)`（行 41；事件 seq 7） | `00000007 ... INFO  service  pid=0 code=11 started network (stub)` |
+| `=== HepuOS 64-bit Kernel booting ===`（启动横幅；事件 seq 1） | `00000001 0000000000000000 INFO  boot64  pid=0 code=1 64-bit kernel entry` |
+| `[SERVICES] registered: network (stub)`（行 34；事件 seq 2） | `00000002 0000000000000000 INFO  service  pid=0 code=10 registered network (stub)` |
+| `[SERVICES] started: network (stub)`（行 41；事件 seq 7） | `00000007 0000000000000000 INFO  service  pid=0 code=11 started network (stub)` |
 
 ### 3.4 门禁（默认构建 tip 上跑）
 
@@ -157,9 +164,11 @@ ktest_result=PASS ktest=1 fail_suites=0 fail_cases=0 skip_cases=6 p3_skip=2
 
 #### 32 位带盘冒烟：`smoke32.sh --disk 70`
 
-原始串口：`serial32/serial-32-disk-raw.txt`。
+原始串口：`serial32/serial-32-disk-raw.txt`；脚本判定汇总：`serial32/smoke32-disk.txt`
+（本轮单独留存，不与无盘共用 `$EV/tests/smoke32.txt`）。
 
 ```
+ktest_result=PASS ktest=1 fail_suites=0 fail_cases=0 skip_cases=0 p3_skip=0
 [KTEST] RESULT: ALL PASS
 [KUNIT] suite: p3-security (0x00000002 tests)
 [KUNIT] result: 0x00000002 passed, 0x00000000 failed, 0x00000000 skipped
@@ -167,7 +176,7 @@ ktest_result=PASS ktest=1 fail_suites=0 fail_cases=0 skip_cases=6 p3_skip=2
 [KUNIT] result: 0x00000006 passed, 0x00000000 failed, 0x00000000 skipped
 ```
 
-带盘环境 ext2 后端可用，无显式 SKIP。
+带盘环境 ext2 后端可用，全文件 `KUNIT-SKIP` 计数 0。
 
 #### 64 位默认 HPET 桌面：`boot64.sh`
 
@@ -191,8 +200,8 @@ ktest_result=PASS ktest=1 fail_suites=0 fail_cases=0 skip_cases=6 p3_skip=2
 - `serial64/serial-64-boot64-gate-raw.txt`：`boot64.sh` 门禁原始串口。
 - `serial64-probe/serial-64-probe-raw.txt`：探针镜像 `journal` 原文（见 README-emergency.md）。
 - `serial32/serial-32-nodisk-raw.txt` / `.txt`、`serial32/smoke32-nodisk.txt`：无盘冒烟串口与脚本汇总。
-- `serial32/serial-32-disk-raw.txt` / `.txt`：带盘冒烟串口。
-- `readback/64-dated-file.txt`：debugfs 读回的 dated 文件（16 行）。
+- `serial32/serial-32-disk-raw.txt` / `.txt`、`serial32/smoke32-disk.txt`：带盘冒烟串口与脚本汇总。
+- `readback/64-dated-file.txt`：debugfs 读回的 dated 文件（16 行，ASCII text，1350 字节）。
 - `readback/64-cursor.txt`：读回的 `.cursor`（`16`）。
 - `readback/64-kernel-events-snapshot.txt`：同镜像内核 `/hepu_events.log` 读回。
 - `build/default-build-checks.txt`：strings 计数与构建日志探针宏检查。

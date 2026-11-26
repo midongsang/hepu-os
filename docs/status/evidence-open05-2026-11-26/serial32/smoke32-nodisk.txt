@@ -1,3 +1,6 @@
+[regress] 无盘模式：不挂 IDE 盘（p3-security 预期显式 SKIP）
+[regress] 32-bit smoke boot 70s (i386 multiboot, mode=nodisk)
+tools/regress/smoke32.sh: line 85: 22542 Killed                  qemu-system-i386 -L "$CHAT/.toolchain/pkg/datadir" -kernel "$WT/build_v250/kernel.elf" -m 256 -smp 1 -display none -monitor unix:$MON,server,nowait "${DRIVE[@]}" -serial file:$SER -no-reboot {qfd}>&- > /dev/null 2>&1
 mode=nodisk disk=/tmp/hepu-smoke32-test.img
 serial=1 initrd=1 net=1 desk=1 fault=0 lines=740
 ext2_mounted=0 ext2_nodisk=1
@@ -17,3 +20,4 @@ p3-security: passed=0 failed=0 skipped=2
 [KUNIT-SKIP] event-log/rotation_creates_dot1 (ext2 backend unavailable)
 [KUNIT-SKIP] admin/mount_dup_device (ext2 backend unavailable)
 [KUNIT-SKIP] admin/chmod_chown_persist (ext2 backend unavailable)
+[regress] ✓ 冒烟通过（mode=nodisk）
