@@ -101,6 +101,7 @@ source_of_truth: frontmatter of docs/*
 - [2026-11-18 四条并行任务的集成交付记录](status/INTEGRATION_2026-11-18.md)
 - [赫普OS 未关闭问题清单](status/OPEN_BUGS.md)
 - [PERF_BASELINE_2026-11-18](status/PERF_BASELINE_2026-11-18.md)
+- [本轮收尾状态（P1 存储 / P3 门禁 / OPEN-02 边界 / SB-25 方案）](status/ROUND_2026-11-26_P1_P3_OPEN02.md)
 - [SYSTEM_TOOLS](status/SYSTEM_TOOLS.md)
 - [VERSIONING](status/VERSIONING.md)
 - [VM_INSTANCES](status/VM_INSTANCES.md)
