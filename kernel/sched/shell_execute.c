@@ -291,6 +291,12 @@ void shell_execute(char *cmd)
         cmd_fs(args);
     } else if (strcmp(cmd, "dmesg") == 0) {
         cmd_dmesg(args);
+    } else if (strcmp(cmd, "journal") == 0 || strcmp(cmd, "log") == 0) {
+        extern void cmd_journal(char*);
+        cmd_journal(args);
+    } else if (strcmp(cmd, "service") == 0) {
+        extern void cmd_service(char*);
+        cmd_service(args);
     } else if (strcmp(cmd, "loglevel") == 0) {
         cmd_loglevel(args);
     } else if (strcmp(cmd, "phone") == 0) {

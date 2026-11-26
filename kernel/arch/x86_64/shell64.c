@@ -13,11 +13,14 @@ extern void vga_put_hex(uint64_t val);   /* V0.55.1: 提前原型, 消除隐式�
 #include "shared/ai/hepu_ai.h"
 #include "uproc.h"
 #include "tls12_client.h"
+#include "event_log.h"
+#include "services.h"
 
 #define SHELL_BUF_SIZE 256
 #define SHELL_MAX_ARGS 8
 
 extern void vga_puts(const char *s);
+extern void vga_printf(const char *fmt, ...);
 extern void vga_putchar(char c);
 extern char keyboard64_getchar(void);
 extern int keyboard64_haschar(void);
@@ -191,7 +194,7 @@ static int shell_read_line(char *buf, int max)
                 }
             } else if (c == '\t') { /* Tab 补全 */
                 /* 简单补全：匹配常用命令 */
-                static const char *cmds[] = {"help","hepu","ls","cat","pwd","echo","ps","cd","mkdir","rm","clear","date","uname","reboot","sleep","exec","browser","scrapling","ifconfig","version","meminfo","free","top","mem","dev","sandbox","info","dmesg","sync","vmstat","pstree","id","who","w","lsblk","blkid","timedatectl","lscpu","lspci","lsusb","ss","htop","kill","killall","renice","taskset",0};
+                static const char *cmds[] = {"help","hepu","ls","cat","pwd","echo","ps","cd","mkdir","rm","clear","date","uname","reboot","sleep","exec","browser","scrapling","ifconfig","version","meminfo","free","top","mem","dev","sandbox","info","dmesg","journal","log","service","sync","vmstat","pstree","id","who","w","lsblk","blkid","timedatectl","lscpu","lspci","lsusb","ss","htop","kill","killall","renice","taskset",0};
                 char prefix[64]; int plen = 0;
                 int i = pos - 1;
                 while (i >= 0 && buf[i] != ' ') { i--; }
@@ -380,7 +383,7 @@ static void shell_cmd_history(int argc, char **argv) {
 /* V0.20.67: which 命令 */
 static void shell_cmd_which(int argc, char **argv) {
     if (argc < 2) { vga_puts("usage: which <command>\n"); return; }
-    static const char *cmds[] = {"help","hepu","ls","cat","pwd","echo","ps","cd","mkdir","rm","clear","date","uname","reboot","sleep","exec","browser","scrapling","ifconfig","version","meminfo","free","history","which","dmesg","sync","vmstat","pstree","id","who","w","lsblk","blkid","timedatectl","lscpu","lspci","lsusb","ss","htop",0};
+    static const char *cmds[] = {"help","hepu","ls","cat","pwd","echo","ps","cd","mkdir","rm","clear","date","uname","reboot","sleep","exec","browser","scrapling","ifconfig","version","meminfo","free","history","which","dmesg","journal","log","service","sync","vmstat","pstree","id","who","w","lsblk","blkid","timedatectl","lscpu","lspci","lsusb","ss","htop",0};
     for (int i = 0; cmds[i]; i++) {
         if (strcmp(cmds[i], argv[1]) == 0) {
             vga_puts(argv[1]);
@@ -2361,6 +2364,102 @@ static void shell_cmd_dmesg(int argc, char **argv)
     vga_puts(" bytes buffered --\n");
 }
 
+/* service: 统一服务管理入口（与 32 位共用 kernel/sched/services.c 表） */
+static const char *svc_state_name64(int st)
+{
+    switch (st) {
+        case SERVICE_INACTIVE: return "inactive";
+        case SERVICE_ACTIVATING: return "activating";
+        case SERVICE_ACTIVE: return "active";
+        case SERVICE_DEACTIVATING: return "deactivating";
+        case SERVICE_FAILED: return "failed";
+        default: return "?";
+    }
+}
+
+static void shell_cmd_service(int argc, char **argv)
+{
+    service_t list[SERVICE_MAX];
+    if (argc < 2 || strcmp(argv[1], "list") == 0) {
+        int n = services_list(list, SERVICE_MAX);
+        vga_printf("[SVC] services=%d active=%d\n", n, services_active_count());
+        for (int i = 0; i < n; i++)
+            vga_printf("  %-12s %-10s enabled=%d pid=%d restarts=%d\n",
+                       list[i].def.name, svc_state_name64(list[i].state),
+                       list[i].def.enabled, list[i].def.pid,
+                       list[i].restart_count);
+        return;
+    }
+    if (strcmp(argv[1], "status") == 0) {
+        if (argc < 3) { vga_puts("usage: service status <name>\n"); return; }
+        service_t st;
+        if (services_status(argv[2], &st) != 0) {
+            vga_printf("[SVC] not found: %s\n", argv[2]);
+            return;
+        }
+        vga_printf("  %-12s %-10s enabled=%d pid=%d restarts=%d\n",
+                   st.def.name, svc_state_name64(st.state),
+                   st.def.enabled, st.def.pid, st.restart_count);
+        vga_printf("  desc=%s deps=%d\n", st.def.description, st.def.dep_count);
+        return;
+    }
+    if (strcmp(argv[1], "start") == 0 || strcmp(argv[1], "stop") == 0 ||
+        strcmp(argv[1], "restart") == 0 || strcmp(argv[1], "enable") == 0 ||
+        strcmp(argv[1], "disable") == 0) {
+        if (argc < 3) { vga_printf("usage: service %s <name>\n", argv[1]); return; }
+        int rc = -1;
+        if (strcmp(argv[1], "start") == 0) rc = services_start(argv[2]);
+        else if (strcmp(argv[1], "stop") == 0) rc = services_stop(argv[2]);
+        else if (strcmp(argv[1], "restart") == 0) rc = services_restart(argv[2]);
+        else if (strcmp(argv[1], "enable") == 0) rc = services_enable(argv[2]);
+        else rc = services_disable(argv[2]);
+        vga_printf("[SVC] %s %s: %s (rc=%d)\n", argv[1], argv[2],
+                   rc == 0 ? "ok" : "failed", rc);
+        return;
+    }
+    vga_puts("usage: service list | status <name> | start|stop|restart|enable|disable <name>\n");
+}
+
+/* journal: 统一事件日志（与 32 位共用 event_log 数据源） */
+static int journal_level(const char *s)
+{
+    int v = 0;
+    if (!s || !*s) return -1;
+    while (*s >= '0' && *s <= '9') { v = v * 10 + (*s - '0'); s++; }
+    if (*s || v < 0 || v > 4) return -1;
+    return v;
+}
+
+static void shell_cmd_journal(int argc, char **argv)
+{
+    if (argc < 2) { event_log_dump(1); return; }
+    if (strcmp(argv[1], "stat") == 0) {
+        char num[16];
+        shell_itoa((int)event_log_count(), num);
+        vga_puts("[LOG] entries="); vga_puts(num);
+        vga_puts(" cap=256 sink=/hepu_events.log\n");
+        return;
+    }
+    if (strcmp(argv[1], "clear") == 0) {
+        event_log_clear();
+        vga_puts("[LOG] event ring cleared\n");
+        return;
+    }
+    if (strcmp(argv[1], "save") == 0) {
+        int rc = event_log_save();
+        if (rc >= 0) { vga_puts("[LOG] saved -> /hepu_events.log\n"); }
+        else { vga_puts("[LOG] save failed (ext2 not ready?)\n"); }
+        return;
+    }
+    if (strcmp(argv[1], "-l") == 0 || strcmp(argv[1], "level") == 0) {
+        int lv = (argc >= 3) ? journal_level(argv[2]) : -1;
+        if (lv < 0) { vga_puts("usage: journal [-l <0..4>]|stat|save|clear\n"); return; }
+        event_log_dump(lv);
+        return;
+    }
+    vga_puts("usage: journal [-l <0..4>]|stat|save|clear\n");
+}
+
 /* sync: 把块缓存与 ext2 inode 缓存刷到盘上 */
 static void shell_cmd_sync(int argc, char **argv)
 {
@@ -3419,6 +3518,9 @@ static shell_command_t shell_commands[] = {
     {"meminfo", shell_cmd_meminfo},
     {"pci", shell_cmd_pci},
     {"dmesg", shell_cmd_dmesg},
+    {"journal", shell_cmd_journal},
+    {"log", shell_cmd_journal},
+    {"service", shell_cmd_service},
     {"sync", shell_cmd_sync},
     {"vmstat", shell_cmd_vmstat},
     {"pstree", shell_cmd_pstree},

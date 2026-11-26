@@ -224,6 +224,14 @@ void x86_64_kernel_main(void)
      * 16550 UART (uart64_init 在 kernel/arch/x86_64/uart64.c)，纯 IO port 访问, 不依赖 paging/FPU. */
     uart64_init(0);
     uart64_puts(0, "=== HepuOS 64-bit Kernel booting ===\n");
+    extern void event_log_platform_init64(void);
+    event_log_platform_init64();
+    {
+        extern void services_init(void);
+        extern void services_start_boot(void);
+        services_init();
+        services_start_boot();
+    }
 
     /* 显示启动信息 */
     vga_puts("========================================\n");
@@ -682,6 +690,12 @@ void x86_64_kernel_main(void)
     ext2_64_init();
     klog64_log("[BOOT] ext2 root mounted");
     vga_puts("[BOOT] step6 done (ext2)\n");
+    {
+        extern int event_log_save(void);
+        int ev = event_log_save();
+        uart64_puts(0, ev >= 0 ? "[EVENT] early save to /hepu_events.log\n"
+                               : "[EVENT] early save skipped (no ext2)\n");
+    }
 
     /* V0.13.54: 根分区 ext2 自动扩展 (分区表 > 文件系统时扩展到全分区) */
     if (g_root_size > 0) {
@@ -1374,6 +1388,12 @@ void x86_64_kernel_main(void)
             vga_puts("\n");
         }
         klog64_log("[GUI] desktop environment ready");
+        {
+            extern int event_log_save(void);
+            int ev = event_log_save();
+            uart64_puts(0, ev >= 0 ? "[EVENT] saved to /hepu_events.log\n"
+                                   : "[EVENT] save skipped (no ext2)\n");
+        }
 
         /* Crypto 完整懒加载 + TLS (延迟到桌面后，启动更快) */
         extern void crypto_init_full_lazy(void);

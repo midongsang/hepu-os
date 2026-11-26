@@ -38,6 +38,9 @@ const help_entry_t help_table[] = {
     {"echo",      "INFO", "echo <msg>",                   "echo a message",                 "echo hello"},
     {"time",      "INFO", "time",                         "show uptime",                    "time"},
     {"dmesg",     "INFO", "dmesg [-l <0..3>]",            "show kernel log; -l filters by level", "dmesg -l 1"},
+    {"journal",   "LOG",  "journal [-l <0..4>]|stat|save|clear", "unified event log (same source as service/boot logs)", "journal -l 1"},
+    {"log",       "LOG",  "log [same as journal]",          "alias of journal",                "log stat"},
+    {"service",   "SYS",  "service list|status|start|stop|restart|enable|disable", "system service manager", "service list"},
     {"loglevel",  "INFO", "loglevel [<0..3>]",            "get/set global log threshold",   "loglevel 1"},
     /* ---- 进程/资源 PROC ---- */
     {"ps",        "PROC", "ps",                           "list processes (PID/prio/limits)",  "ps"},
