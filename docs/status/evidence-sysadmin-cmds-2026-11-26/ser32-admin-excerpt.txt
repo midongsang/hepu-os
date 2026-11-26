@@ -1,0 +1,8 @@
+=== KTEST final result ===
+[KTEST] RESULT: ALL PASS
+=== p3-security + admin suites ===
+[KUNIT] suite: p3-security (0x00000002 tests)
+[KUNIT] result: 0x00000002 passed, 0x00000000 failed, 0x00000000 skipped
+--
+[KUNIT] suite:  system admin commands  (0x00000006 tests)
+[KUNIT] result: 0x00000006 passed, 0x00000000 failed, 0x00000000 skipped

@@ -1,0 +1,5 @@
+QEMU started, inst=/tmp/hepu-admin64-inst
+marker: step1 done
+marker: booting to lock
+64 boot capture done -> /home/user/Doubao/chats/38452875115179010/hepu-work-syscmd/docs/status/evidence-sysadmin-cmds-2026-11-26/ser64-boot.log
+EXIT=0

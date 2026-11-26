@@ -86,6 +86,16 @@ const help_entry_t help_table[] = {
     {"hug",       "FS",   "hug <app.hug>",                "run a .hug native app",          "hug demo.hug"},
     {"apps",      "FS",   "apps",                         "list unified app registry (dual-mode)", "apps"},
     {"run",       "FS",   "run <elf|exe|macho>",          "run compat binary (Linux/Windows/macOS)", "run linuxhello"},
+    /* ---- 系统管理 ADMIN（第二阶段补齐） ---- */
+    {"chmod",     "ADMIN","chmod <mode> <file>",          "set octal permission bits (no symbolic mode)", "chmod 755 /a.txt"},
+    {"chown",     "ADMIN","chown <uid[:gid]> <file>",     "set owner/group, persisted to ext2 inode", "chown 1:1 /a.txt"},
+    {"chgrp",     "ADMIN","chgrp <gid> <file>",          "set group owner",               "chgrp 1 /a.txt"},
+    {"mount",     "ADMIN","mount [dev dir]",               "list mounts, or attach a partition to a directory", "mount"},
+    {"umount",    "ADMIN","umount <dir>",                  "detach a runtime mountpoint",   "umount /mnt"},
+    {"fsck",      "ADMIN","fsck [--check-only|--fix]",     "check ext2 consistency (read-only by default)", "fsck"},
+    {"mkfs",      "ADMIN","mkfs <dev>",                    "rejected: in-kernel formatter not implemented", "mkfs /dev/hd0p1"},
+    {"useradd",   "ADMIN","useradd <name>",                "rejected: single-owner model, no persisted multi-user DB", "useradd alice"},
+    {"userdel",   "ADMIN","userdel <name>",                "rejected: single-owner model", "userdel alice"},
     /* ---- 设备 DEV ---- */
     {"gfx",       "DEV",  "gfx",                          "enter GUI (VGA graphics mode)",  "gfx"},
     {"gfxtest",   "DEV",  "gfxtest",                      "gfx solid color fill test",      "gfxtest"},

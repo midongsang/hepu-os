@@ -1,0 +1,22 @@
+=== HepuOS 双内核 UEFI 镜像构建 ===
+[GPT] 使用 sgdisk 生成标准分区表...
+[GPT] ESP LBA 2048-264191, DATA LBA 264192-509951
+[FAT32] 使用 mkfs.vfat + mcopy 生成 ESP...
+  EFI/BOOT/BOOTX64.EFI (106844 bytes)
+  KERNEL64.BIN (1014384 bytes)
+  KERNEL32.BIN (3844653 bytes)
+  HEPBOOT.CFG (103 bytes)
+[FAT32] ESP分区创建完成
+[EXT2] 创建根分区...
+  写入 rootfs 树: 2 文件 / 2 目录
+  写入 /fonts/DejaVuSans.ttf
+  写入 /usr/share/wallpapers/wallpaper{,-1,-2}.png + /wallpaper.png
+  写入 /usr/share/cursors/*.xcur (17 个)
+  写入 /bin/*.elf (1 个)
+[EXT2] 根分区创建完成
+[GPT] MBR: slot0=0xEE(start=1, 524287 sectors) slot1=0x83(start=264192, 245760 sectors)
+
+=== 构建完成 ===
+  镜像: /home/user/Doubao/chats/38452875115179010/hepu-work-syscmd/docs/status/evidence-sysadmin-cmds-2026-11-26/hepu64.img
+  大小: 268435456 bytes (256MB)
+  布局: GPT | ESP(FAT32 128MB, EFI/BOOT/BOOTX64.EFI + KERNEL64.BIN + HEPBOOT.CFG) | Root(ext2 120MB)

@@ -545,6 +545,23 @@ int vfs_close(int fd)
     return 0;
 }
 
+/* 管理命令辅助：路径下是否存在已打开 fd（mount/umount 忙碌判定）。
+ * 路径相等或位于 path/ 前缀之下即视为忙碌。只读扫描，不改动 fd 表。 */
+int vfs_path_busy(const char *path)
+{
+    if (!path || !*path) return 0;
+    size_t plen = strlen(path);
+    for (int i = 0; i < VFS_MAX_FDS; i++) {
+        if (!fd_table[i].used || !fd_table[i].path[0]) continue;
+        const char *p = fd_table[i].path;
+        if (strncmp(p, path, plen) == 0 &&
+            (p[plen] == '\0' || p[plen] == '/')) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 int vfs_read(int fd, void *buf, uint32_t size)
 {
     if (fd < 0 || fd >= VFS_MAX_FDS || !fd_table[fd].used) return -1;

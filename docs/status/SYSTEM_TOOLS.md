@@ -37,10 +37,10 @@
 | df | 有 | ext2 超级块统计 |
 | du | 有 | 递归统计 |
 | sync | 有（v0.59.3 新增） | `blk_cache_flush` + `ext2_cache_flush_all` |
-| mount / umount | 缺 | 当前是固定挂载表（启动时建立），无运行时挂载点管理 |
+| mount / umount | 部分（2026-11-26 补齐校验链） | 无参列挂载表；启动根记录种子化、不可卸载。校验链覆盖：设备不存在、重复挂载设备、重复挂载点、挂载点缺失/非目录、非空目录；失败回滚不留半挂。**边界**：内核当前单 ext2 上下文（块缓存/超级块/GDT 不支持第二实例），把另一分区挂到目录的真实绑定本轮未落地，命中后明确报降级；32 位忙碌判定接 VFS fd 表前缀扫描，64 位 fd 忙碌判定延期 |
 | fdisk / parted | 缺 | 无分区编辑器；只读扫描 |
-| mkfs | 缺 | — |
-| fsck | 缺 | — |
+| mkfs | 缺（命令显式拒绝） | 内核内无 ext2 格式化能力；活动文件系统不可原地重建。真实格式化需在主机用 mke2fs 造盘再挂 IDE。成本：需实现超级块/GDT/块位图/inode 位图/inode 表/根目录初始化，并处理挂载中磁盘的卸载与重建，本轮延期 |
+| fsck | 有（2026-11-26 接 shell 命令） | 复用既有 ext2 一致性检查：超级块魔数/块组计数/位图与空闲计数/目录 inode 引用；默认只读 `--check-only`，`--fix/-f` 在 32 位接既有修复路径，64 位修复路径预留。结论行可 grep：`[FSCK] RESULT: CLEAN|ISSUES|ERROR` |
 | swapon / swapoff | 缺 | 无 swap 子系统 |
 
 ## 四、用户与权限
@@ -48,10 +48,10 @@
 | 工具 | 状态 | 说明 |
 |---|---|---|
 | id | 有 | 见上 |
-| useradd / userdel / usermod | 缺 | 账号体系是单账号（account.conf），无多用户管理 |
+| useradd / userdel / usermod | 缺（命令显式拒绝） | 账号体系是单属主（`/account.conf`），无持久化本地多用户数据库（无 /etc/passwd、无组模型）；内存态隐私空间注册表不是登录账号且不落盘，命令显式拒绝并说明原因，不伪造多用户能力。`usermod` 同口径 |
 | groupadd 等 | 缺 | 无组模型 |
 | passwd | 部分 | 有改密入口（account 重写），无独立命令 |
-| chmod / chown / chgrp | 缺 | 权限位在 inode 里有，缺 shell 层命令 |
+| chmod / chown / chgrp | 有（2026-11-26 补齐） | 仅数字八进制模式（**不支持 ugo+rwx 符号模式**）；chown 支持 `uid[:gid]`、`chgrp` 改属组。inode 具备 i_uid/i_gid 字段，属性改写落盘 ext2 inode 并 sync；内存态无属主字段的节点只改内存并告警。32/64 行为对齐，64 位 shell 暂无角色门禁（与现有 fs 命令一致） |
 | su / sudo | 缺 | 角色模型是 developer/normal，无提权切换 |
 
 ## 五、网络

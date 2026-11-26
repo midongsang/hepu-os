@@ -194,7 +194,7 @@ static int shell_read_line(char *buf, int max)
                 }
             } else if (c == '\t') { /* Tab 补全 */
                 /* 简单补全：匹配常用命令 */
-                static const char *cmds[] = {"help","hepu","ls","cat","pwd","echo","ps","cd","mkdir","rm","clear","date","uname","reboot","sleep","exec","browser","scrapling","ifconfig","version","meminfo","free","top","mem","dev","sandbox","info","dmesg","journal","log","service","sync","vmstat","pstree","id","who","w","lsblk","blkid","timedatectl","lscpu","lspci","lsusb","ss","htop","kill","killall","renice","taskset",0};
+                static const char *cmds[] = {"help","hepu","ls","cat","pwd","echo","ps","cd","mkdir","rm","clear","date","uname","reboot","sleep","exec","browser","scrapling","ifconfig","version","meminfo","free","top","mem","dev","sandbox","info","dmesg","journal","log","service","sync","chmod","chown","chgrp","mount","umount","fsck","mkfs","useradd","userdel","vmstat","pstree","id","who","w","lsblk","blkid","timedatectl","lscpu","lspci","lsusb","ss","htop","kill","killall","renice","taskset",0};
                 char prefix[64]; int plen = 0;
                 int i = pos - 1;
                 while (i >= 0 && buf[i] != ' ') { i--; }
@@ -383,7 +383,7 @@ static void shell_cmd_history(int argc, char **argv) {
 /* V0.20.67: which 命令 */
 static void shell_cmd_which(int argc, char **argv) {
     if (argc < 2) { vga_puts("usage: which <command>\n"); return; }
-    static const char *cmds[] = {"help","hepu","ls","cat","pwd","echo","ps","cd","mkdir","rm","clear","date","uname","reboot","sleep","exec","browser","scrapling","ifconfig","version","meminfo","free","history","which","dmesg","journal","log","service","sync","vmstat","pstree","id","who","w","lsblk","blkid","timedatectl","lscpu","lspci","lsusb","ss","htop",0};
+    static const char *cmds[] = {"help","hepu","ls","cat","pwd","echo","ps","cd","mkdir","rm","clear","date","uname","reboot","sleep","exec","browser","scrapling","ifconfig","version","meminfo","free","history","which","dmesg","journal","log","service","sync","chmod","chown","chgrp","mount","umount","fsck","mkfs","useradd","userdel","vmstat","pstree","id","who","w","lsblk","blkid","timedatectl","lscpu","lspci","lsusb","ss","htop",0};
     for (int i = 0; cmds[i]; i++) {
         if (strcmp(cmds[i], argv[1]) == 0) {
             vga_puts(argv[1]);
@@ -3440,6 +3440,21 @@ static void shell_cmd_bsod(int argc, char **argv)
 }
 
 /* 命令表 */
+/* 系统管理命令适配：转发到 shell_cmd_admin64.c 的集中分派。 */
+extern int shell_admin64_dispatch(const char *cmd, char *args);
+static void shell_admin64_adapter(int argc, char **argv)
+{
+    static char admin_args[256];
+    int pos = 0;
+    for (int i = 1; i < argc && pos < (int)sizeof(admin_args) - 1; i++) {
+        if (i > 1) admin_args[pos++] = ' ';
+        for (int j = 0; argv[i][j] && pos < (int)sizeof(admin_args) - 1; j++)
+            admin_args[pos++] = argv[i][j];
+    }
+    admin_args[pos] = 0;
+    shell_admin64_dispatch(argv[0], admin_args);
+}
+
 static shell_command_t shell_commands[] = {
 
     {"bsod", shell_cmd_bsod},
@@ -3562,6 +3577,15 @@ static shell_command_t shell_commands[] = {
     {"taskmgr", (void*)term64_cmd_taskmgr},
     {"notes", (void*)term64_cmd_notes},
     {"history", (void*)term64_cmd_history},
+    {"chmod", (void*)shell_admin64_adapter},
+    {"chown", (void*)shell_admin64_adapter},
+    {"chgrp", (void*)shell_admin64_adapter},
+    {"mount", (void*)shell_admin64_adapter},
+    {"umount", (void*)shell_admin64_adapter},
+    {"fsck", (void*)shell_admin64_adapter},
+    {"mkfs", (void*)shell_admin64_adapter},
+    {"useradd", (void*)shell_admin64_adapter},
+    {"userdel", (void*)shell_admin64_adapter},
     {NULL, NULL}
 };
 
