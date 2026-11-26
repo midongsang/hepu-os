@@ -1,0 +1,46 @@
+00000001 0000000000000000 INFO boot pid=0 code=1 kernel entry
+00000002 0000000000000000 INFO kernel pid=0 code=0 [BOOT] early screen snapshot:
+
+00000003 0000000000000000 INFO kernel pid=0 code=0   ÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿ
+
+00000004 0000000000000000 INFO kernel pid=0 code=0   ÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿ
+
+00000005 0000000000000000 INFO kernel pid=0 code=0   ÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿ
+
+00000006 0000000000000000 INFO kernel pid=0 code=0   ÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿ
+
+00000007 0000000000000000 INFO kernel pid=0 code=0   ÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿ
+
+00000008 0000000000000000 INFO kernel pid=0 code=0   ÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿ
+
+00000009 0000000000000000 INFO kernel pid=0 code=0 [KLOG] kernel log started
+
+00000010 0000000000000000 INFO service pid=0 code=10 registered network (stub)
+00000011 0000000000000000 INFO service pid=0 code=10 registered audio (stub)
+00000012 0000000000000000 INFO service pid=0 code=10 registered wifi (stub)
+00000013 0000000000000000 INFO service pid=0 code=10 registered bluetooth (stub)
+00000014 0000000000000000 INFO service pid=0 code=10 registered gui (stub)
+00000015 0000000000000000 INFO service pid=0 code=11 started network (stub)
+00000016 0000000000000000 INFO service pid=0 code=11 started audio (stub)
+00000017 0000000000000000 INFO service pid=0 code=11 started wifi (stub)
+00000018 0000000000000000 INFO service pid=0 code=11 started gui (stub)
+00000019 0000000000000000 INFO service pid=0 code=11 started bluetooth (stub)
+00000020 00000000000000bd INFO kunit pid=0 code=77 event log selftest marker
+00000021 00000000000000bd INFO service pid=0 code=10 registered k-a (stub)
+00000022 00000000000000bd INFO service pid=0 code=10 registered k-b (stub)
+00000023 00000000000000bd INFO service pid=0 code=10 registered k-c (stub)
+00000024 00000000000000bd INFO service pid=0 code=11 started k-a (stub)
+00000025 00000000000000be INFO service pid=0 code=11 started k-b (stub)
+00000026 00000000000000be INFO service pid=0 code=11 started k-c (stub)
+00000027 00000000000000be INFO service pid=0 code=10 registered k-c1 (stub)
+00000028 00000000000000be INFO service pid=0 code=10 registered k-c2 (stub)
+00000029 00000000000000be ERROR service pid=0 code=16 cycle: k-c2 depends on k-c1
+00000030 00000000000000be INFO service pid=0 code=10 registered k-m1 (stub)
+00000031 00000000000000be ERROR service pid=0 code=16 dep missing: k-m1 needs k-nope
+00000032 00000000000000be INFO service pid=0 code=10 registered k-flaky (stub)
+00000033 00000000000000be ERROR service pid=0 code=13 start failed k-flaky rc=-1
+00000034 00000000000000be WARN service pid=0 code=14 backoff retry 1/2 k-flaky delay=1 ticks
+00000035 00000000000000be ERROR service pid=0 code=13 start failed k-flaky rc=-1
+00000036 00000000000000be WARN service pid=0 code=14 backoff retry 2/2 k-flaky delay=2 ticks
+00000037 00000000000000be ERROR service pid=0 code=13 start failed k-flaky rc=-1
+00000038 00000000000000be ERROR service pid=0 code=15 give up k-flaky after 3 failures

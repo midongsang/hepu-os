@@ -1,0 +1,188 @@
+[VMA] selftest: start
+[VMA] selftest: done (pass=0x0000000A, fail=0x00000000)
+[ZRAM] selftest: start
+[ZRAM] selftest: done (pass=0x00000007, fail=0x00000000)
+[SWAP] init OK (8MB)
+[VRAM] selftest: start
+[VRAM] selftest: done (pass=0x00000007, fail=0x00000000)
+[CRYPTO] selftest: start
+[CRYPTO] all modules initialized
+[CRYPTO] selftest: done (pass=0x00000007, fail=0x00000000)
+[SNAPSHOT] selftest: start
+[SNAPSHOT] selftest: done (pass=0x00000007, fail=0x00000000)
+[UMEM] selftest: start
+[UMEM] selftest: done (pass=0x00000007, fail=0x00000000)
+[TRANSCOMP] selftest: start
+[TRANSCOMP] selftest: done (pass=0x00000007, fail=0x00000000)
+[VVRAM] selftest: start
+[VVRAM] selftest: done (pass=0x00000007, fail=0x00000000)
+[GFX-TEST] legacy gfx_selftest disabled (using pluggable gfx subsystem)
+[GFX-TEST] starting graphics subsystem selftest...
+[GFX-TEST] selftest done (pass=0x0000000A, fail=0x00000000)
+[VRAM-VIRT] selftest: start
+[VRAM-VIRT] selftest: done (pass=0x00000007, fail=0x00000000)
+[INIT] phase:  cores subsystem
+[INIT] phase done:  cores subsystem
+[INIT] phase:  HW driver
+[INIT] phase done:  HW driver
+[INIT] phase:  fs
+[IDE] selftest: no drive present, skip
+[EXT2] selftest: no disk, skip
+[SEC32] user_access contract PASS limit=0xBFFFFFFF
+[INIT] phase done:  fs
+[INIT] phase:  net proto
+[INIT] phase done:  net proto
+[INIT] phase:  security encryption
+[SEC] MAC init done, domains=7 types=9 rules=12
+[SEC] sec_init done
+[SEC-AUDIT] DENY s=untrusted_app t=app_data_t: access denied
+[SEC-AUDIT] DENY s=untrusted_app t=system_t: access denied
+[SEC-AUDIT] DENY s=untrusted_app t=private_t: access denied
+[SEC-AUDIT] ALLOW(permissive) s=untrusted_app t=app_data_t: would be denied
+[SEC-AUDIT] PERM-DENY s=browser_app t=browser_data_t: storage
+[SEC-AUDIT] DENY s=browser_app t=calc_data_t: access denied
+[SEC-AUDIT] DENY s=browser_app t=system_t: access denied
+[SEC-AUDIT] PERM-DENY s=browser_app t=contact_t: contacts
+[SEC-SELFTEST] MAC: 16/16 PASS
+[SEC] sec_selftest done
+[SEC] x509_init done
+[SEC] csprng_init done
+[SEC] ecdhe_init done
+[SEC] crypto libs done
+[SEC] aes+secure_boot done
+[PERM] permission_manager_init returning...
+[SEC] permission_manager_init done
+[INIT] calling prm_selftest...
+[PERM-SELFTEST] 8/8 PASS
+[INIT] prm_selftest done
+[INIT] privacy_compute_init done, calling security2_init...
+[INIT] security2_init done
+[INIT] phase done:  security encryption
+[INIT] phase:  system service
+[INIT] phase done:  system service
+[INIT] phase:  app framework
+[APPS] 1/7: core framework done
+[APPS] 2/7: webengine/ai/media...
+[APPS] 3/7: bt/usb/gfx/camera...
+[APPS] 4/7: kernel/drivers/userland...
+[APPS] 5/7: apps (file/camera/browser...)
+[APPS] 5.5/7: compat/android...
+[APPS] 6/7: pre-desktop done, calling elastic_desktop_init...
+[APPS] 7/7: elastic_desktop_init done!
+[INIT] phase done:  app framework
+[INIT] QUIC DATAGRAM + QPACK dynamic table
+[KTEST] === Auto-run all kunit suites ===
+[KUNIT] suite: ops  (0x00000005 tests)
+[KUNIT] result: 0x00000005 passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  count (0x00000005 tests)
+[KUNIT] result: 0x00000005 passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  bit ops  (0x00000005 tests)
+[KUNIT] result: 0x00000005 passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  ring buffer region  (0x00000003 tests)
+[KUNIT] result: 0x00000003 passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite: table  (0x00000002 tests)
+[KUNIT] result: 0x00000002 passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite: table  (0x00000002 tests)
+[KUNIT] result: 0x00000002 passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  net proto  (0x00000003 tests)
+[KUNIT] result: 0x00000003 passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  encryption algo  (0x00000006 tests)
+[KUNIT] result: 0x00000006 passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  net proto  (0x00000005 tests)
+[KUNIT] result: 0x00000005 passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  fs  (0x00000007 tests)
+[KUNIT] result: 0x00000007 passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  driver module  (0x0000000B tests)
+[KUNIT] result: 0x0000000B passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  scheduler  (0x00000009 tests)
+[KUNIT] result: 0x00000009 passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  memory mgr  (0x00000009 tests)
+[KUNIT] result: 0x00000009 passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite: IPC (0x0000000B tests)
+[KUNIT] result: 0x0000000B passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  irq handling  (0x0000000A tests)
+[KUNIT] result: 0x0000000A passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  syscall  (0x0000000A tests)
+[KUNIT] result: 0x0000000A passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  net proto deep  (0x0000000C tests)
+[KUNIT] result: 0x0000000C passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  encryption algo deep  (0x0000000B tests)
+[KUNIT] result: 0x0000000B passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  fs deep  (0x0000000C tests)
+[KUNIT] result: 0x0000000C passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  boot flow  (0x0000000E tests)
+[KUNIT] result: 0x0000000E passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  driver deep  (0x0000000F tests)
+[KUNIT] result: 0x0000000F passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  data struct deep  (0x0000000C tests)
+[KUNIT] result: 0x0000000C passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  algo correctness  (0x00000010 tests)
+[KUNIT] result: 0x00000010 passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  concurrent & sync  (0x0000000D tests)
+[KUNIT] result: 0x0000000D passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  error handling & boundary  (0x0000000E tests)
+[KUNIT] result: 0x0000000E passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  memory security  (0x0000000C tests)
+[KUNIT] result: 0x0000000C passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  time & timer  (0x0000000D tests)
+[KUNIT] result: 0x0000000D passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  I/O  (0x0000000D tests)
+[KUNIT] result: 0x0000000D passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  config & param  (0x0000000B tests)
+[KUNIT] result: 0x0000000B passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  multilingual & i18n  (0x0000000D tests)
+[KUNIT] result: 0x0000000D passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  security & perm  (0x00000009 tests)
+[KUNIT] result: 0x00000009 passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  process & thread  (0x0000000D tests)
+[KUNIT] result: 0x0000000D passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  net security deep  (0x0000000C tests)
+[KUNIT] result: 0x0000000C passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  storage & block device  (0x0000000B tests)
+[KUNIT] result: 0x0000000B passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  power mgmt  (0x0000000C tests)
+[KUNIT] result: 0x0000000C passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite: V1.02 memory side module  (0x00000009 tests)
+[KUNIT] result: 0x00000009 passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite: V1.02 HAL side module  (0x00000008 tests)
+[KUNIT] result: 0x00000008 passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite: stress (0x00000009 tests)
+[KUNIT] result: 0x00000009 passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite: p3-security (0x00000002 tests)
+[KUNIT-SKIP] p3-security/s3_normal_user_denied (ext2 backend unavailable)
+[KUNIT-SKIP] p3-security/posix_error_table (ext2 backend unavailable)
+[KUNIT] result: 0x00000000 passed, 0x00000000 failed, 0x00000002 skipped
+[KUNIT] suite: event-log (0x00000002 tests)
+[KUNIT] result: 0x00000002 passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite: system-manager (0x00000006 tests)
+[KUNIT] result: 0x00000006 passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  syscall deep  (0x00000032 tests)
+[KUNIT] result: 0x00000032 passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  memory deep  (0x00000019 tests)
+[KUNIT] result: 0x00000019 passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  user scenario  (0x00000010 tests)
+[KUNIT] result: 0x00000010 passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  recovery  (0x0000000D tests)
+[KUNIT] result: 0x0000000D passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  perf benchmark  (0x0000000A tests)
+[KUNIT] result: 0x0000000A passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  integration  (0x0000000E tests)
+[KUNIT] result: 0x0000000E passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  security E2E  (0x0000000F tests)
+[KUNIT] result: 0x0000000F passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  compatibility  (0x0000000D tests)
+[KUNIT] result: 0x0000000D passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  stress E2E  (0x00000009 tests)
+[KUNIT] result: 0x00000009 passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  filesystem E2E  (0x0000000D tests)
+[KUNIT] result: 0x0000000D passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  network E2E  (0x00000012 tests)
+[KUNIT] result: 0x00000012 passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  driver E2E  (0x00000012 tests)
+[KUNIT] result: 0x00000012 passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  graphics  (0x00000014 tests)
+[KUNIT] result: 0x00000014 passed, 0x00000000 failed, 0x00000000 skipped
+[KUNIT] suite:  performance  (0x0000000C tests)
+[KUNIT] result: 0x0000000C passed, 0x00000000 failed, 0x00000000 skipped
+[KTEST] RESULT: ALL PASS
+[EVENT] save skipped (no ext2)

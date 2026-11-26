@@ -99,15 +99,57 @@ API：
 
 ## 3. 服务表统一
 
-`kernel/sched/services.c` 现在是 32/64 共同的注册/启动/停止/查询实现：
+`kernel/sched/services.c` 是 32/64 共同的注册/启动/停止/查询实现：
 
 - 注册、启动、停止、失败都会写 `event_log`，来源 `service`；
-- 事件码：10=registered、11=started、12=stopping、13=start failed；
+- 事件码：10=registered、11=started、12=stopping、13=start failed（第一阶段沿用）；
+- 第二阶段新增局部事件码（常量定义在 `services.c` 内，未改 `kernel/include/event_log.h`）：
+  14=backoff scheduled（已安排退避重试）、15=give up（超过重试上限停止重试）、
+  16=dependency error（缺依赖 / 循环依赖）；
 - 64 位没有 32 位 `crash_ctx_snapshot_for_restart` 实现，`HEPU_KERNEL_64` 下提供显式 no-op 桩，避免链接失败，也不伪造恢复现场；
-- 64 位启动时调用 `services_init()` + `services_start_boot()`，注册 network/audio/bluetooth/wifi/gui 五项；
+- 64 位启动时调用 `services_init()` + `services_start_boot()`，注册 network/audio/wifi/bluetooth/gui 五项；
 - 32/64 shell 都提供 `service list|status|start|stop|restart|enable|disable`，读同一张表。
 
-**边界要说清**：这五项内置服务的 start/stop 仍是打印空壳，`service start` 成功只代表服务状态机接受请求，不代表真实 daemon/进程已被拉起。第一阶段统一的是“服务事实源和管理入口”，不是服务监督能力。
+### 3.1 依赖拓扑顺序（第二阶段）
+
+- 服务定义带前置依赖 `depends[]`；`services_start_boot()` 先做全图校验
+  （`services_validate_graph()`），再按 Kahn 拓扑排序启动，依赖先于被依赖者；
+- 缺依赖：事件 16 同时报出“谁依赖谁”（`<svc> needs <dep>`），该服务置 FAILED，
+  不静默跳过、不假装启动；
+- 循环依赖：DFS 回边检出，事件 16 记录环上两端，环上服务剔除出启动序列；
+- 内置依赖关系：wifi→network，bluetooth→wifi，gui→network+audio。
+
+### 3.2 健康状态与 STUB 标注（第二阶段）
+
+运行时健康状态 `service_health_t`：`HEALTH_UNKNOWN / HEALTH_STUB /
+HEALTH_HEALTHY / HEALTH_FAILED`。
+
+- `STUB`：无真实 daemon/进程，仅状态机空壳。五项内置服务全部标 STUB；
+- `service start` 返回成功只代表状态机接受请求；空壳服务保持 STUB，
+  **不得**报 HEALTHY。`services_is_healthy()` 仅认 HEALTHY，STUB/FAILED 均不算健康；
+- `service list/status` 输出健康列；STUB 行附 “no real daemon/process,
+  state machine only” 备注。
+
+### 3.3 失败计数与指数退避（第二阶段）
+
+- 每次失败记 `fail_count`；可重启服务按 tick 指数退避，退避间隔
+  1/2/4/8 tick（基数 1，位移封顶 3）；
+- 达到重试上限（默认 3，可按服务 `max_retries` 覆盖）后置 FAILED 并停止重试，
+  事件 15 记 give up；退避排程记事件 14；
+- 退避判定在 `services_monitor_tick()` 内按单调 tick 评估；KUnit 可通过
+  `services_set_clock_hook()` 替换时钟做确定性验证。
+
+### 3.4 命名空间收敛（第二阶段）
+
+平行集合盘点与处置见
+`docs/status/evidence-service-supervisor-2026-11-26/service-registry-mapping.md`。
+64 位音频后端 `hs_audio_init()` 已绑定到统一表 `audio` 服务；microG 槽位、
+分布式远端能力、IPC 名字表、应用框架组件分属不同抽象层，保留并标注归属，
+不作为第二套系统服务注册表。
+
+**边界要说清**：这五项内置服务的 start/stop 仍是打印空壳（64 位音频仅初始化
+后端结构体），健康标 STUB 不代表真实 daemon/进程已被拉起。本轮统一的是
+“服务事实源、启动顺序、健康标注与退避监督框架”，不是真实进程拉起能力。
 
 ## 4. 命令
 
@@ -140,19 +182,23 @@ service start|stop|restart|enable|disable <name>
 - 64 位 UEFI：`[EVENT] early save...`、`[EVENT] saved...`，debugfs 读到 service register/start 与 boot64 事件；
 - 32/64 构建均通过。
 
-第二阶段加固见 `docs/status/evidence-log-hardening-2026-11-26/`：
+第二阶段（日志加固）证据见 `docs/status/evidence-log-hardening-2026-11-26/`；
 
 - 32 位无盘：event-log 6 用例 4 passed / 0 failed / 2 skipped（追加、轮转两项无 ext2 后端显式 SKIP），p3-security 两项 SKIP 属预期，`[KTEST] RESULT: ALL PASS`；
 - 32 位带盘：p3-security `passed=2 failed=0 skipped=0`，event-log 6/0/0，`[KTEST] RESULT: ALL PASS`；debugfs 读回 `/hepu_events.log`，含两次追加写入的 `MARK-A` / `MARK-B` 标记；
-- 64 位 UEFI 三轮带盘（`snapshot=off`）：每轮两次 `[EVENT]` 落盘；第三轮后 debugfs 读回主文件，三轮的 boot64 入口与 network 注册事件均在，未超 8192 阈值故本轮未生成 `.1`；
+- 64 位 UEFI 三轮带盘（`snapshot=off`）：每轮两次 `[EVENT]` 落盘；第三轮后 debugfs 读回主文件，三轮的 boot64 入口与 network 注册事件均在，未超 8192 阈值故未生成 `.1`；
 - 轮转触发与 `.1` 生成由 32 位带盘 KUnit `rotation_creates_dot1` 在测试内下调阈值验证；
 - 32/64 构建均 0 error，`python3 tools/check_docs.py` `warns=0 errors=0`。
+
+第二阶段（服务监督）证据见 `docs/status/evidence-service-supervisor-2026-11-26/`：32 位无盘/带盘冒烟、
+落盘事件日志（STUB 标注、拓扑顺序、循环/缺依赖事件、退避链 13/14/15）、平行集合映射表；
+64 位 UEFI 启动顺序与 `boot services started: N/N` 见该目录串口日志。
 
 ## 6. 未完成与下一阶段
 
 1. ~~**dmesg 统一**~~（第二阶段已完成）：`dmesg` 默认读 `event_log`，支持 `-l` 级别过滤；legacy `klog`/`klog64` 文本环仅由 `-k` / `--legacy` 显式回退；
-2. **用户态 logd**：内核侧追加写与按大小一级轮转已落地（见 2.2），仍缺用户态守护进程、按日期轮转、远程 syslog；
-3. **服务监督**：`services.c` 仍是状态机 + 空壳启动函数，缺真实进程拉起、健康检查、失败退避和依赖启动顺序验证；
-4. **命名空间收敛**：`microg_service.c`、`distributed_os.c`、`hsservices.c` 仍是平行服务集合，需要逐个标注归属或迁入统一表；
+2. **用户态 logd**：内核侧追加写与按大小一级轮转已落地（见 2.2），仍缺用户态守护进程、按日期轮转、远程 syslog（登记 OPEN-05）；
+3. **服务监督**：依赖拓扑顺序、健康状态（STUB/HEALTHY/FAILED）、失败计数与 tick 指数退避、上限放弃已落地；仍缺 `services_monitor_tick()` 的周期调度调用方、真实进程/daemon 拉起、存活探测与崩溃恢复，内置五项仍是空壳（登记 OPEN-06）；
+4. **命名空间收敛**：已完成盘点映射并把 64 位音频后端迁入统一表绑定；`microg_service.c`、`distributed_os.c`、IPC 名字表、应用框架组件分属不同抽象层，保留并标注归属；跨层映射与用户态服务化仍待后续；
 5. **管理面扩展**：`mount/umount`、`chmod/chown`、`useradd/userdel`、`fsck/mkfs` 仍是缺口，不能因为加了 `journal`/`service` 就宣称系统管理完整；
 6. ~~**中断安全**~~（第二阶段已完成）：异常/崩溃上下文改走无锁、定长、无变参格式化的 emergency 变体；普通路径仍用自旋锁。遗留：emergency 环目前独立于普通环，尚未并入 `journal` 查询输出，需要时再做合并快照。

@@ -90,7 +90,7 @@
 ## 八~十一
 
 - 包管理：只有 App Store（GUI），无 CLI 包管理器；`sha256sum <path>` 已落地（auth64 流式 init/update/final，4KB 分块读取）
-- 服务管理：32/64 共用 `kernel/sched/services.c` 的服务表，`service list|status|start|stop|restart|enable|disable` 已接；内置 network/audio/bluetooth/wifi/gui 的 start/stop 仍是空壳，真实进程监督未实现
+- 服务管理（部分）：32/64 共用 `kernel/sched/services.c` 统一服务表，`service list|status|start|stop|restart|enable|disable` 已接；第二阶段已落地依赖拓扑顺序启动、缺依赖/循环依赖检出、健康状态（UNKNOWN/STUB/HEALTHY/FAILED）标注与失败指数退避（上限放弃）；内置 network/audio/wifi/bluetooth/gui 仍为空壳并标 STUB，真实 daemon/进程拉起、存活探测与崩溃恢复未实现；平行集合盘点见 `evidence-service-supervisor-2026-11-26/service-registry-mapping.md`
 - 统一事件日志：`kernel/shared/log/event_log.c` + `kernel/include/event_log.h`，`klog`/`klog64` 作为文本适配器写入；详见 `docs/design/EVENT_LOG_AND_SERVICE_LAYER.md`
 - 图形面板：任务管理器、磁盘管理器、设备管理器、日志查看器、设置（显示/外观）均已有，后端就是上面这些 CLI 的同一批数据源
 
