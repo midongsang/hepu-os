@@ -146,6 +146,7 @@
  * flip 只对 owner 有效; 单缓冲模式下调用 flip 返回 0 且不做任何事(已经是前台)。
  * 是否双缓冲由 SYS_FB_DESC 的 FB_DESC_FLAG_DOUBLE_BUFFERED 告知。 */
 #define SYS_FB_FLIP         232
+#define SYS_EVENT_LOG_PULL  233 /* OPEN-05: 按 after_seq 游标拉取事件环；子命令含 RTC 日期 */
 #define SYS_EXIT_GROUP      228   /* 进程组退出 */
 /* ---- 原有 syscall 保持不变（用 #ifdef 保护，若已定义则跳过） ---- */
 #define SYS_GFX_INIT       200   /* 初始化VGA图形模式 (V4.02: gfxtest支持) */

@@ -281,6 +281,13 @@ ifeq ($(SVC_PROBE),1)
 CFLAGS += -DHEPU_SVC_PROBE
 endif
 
+# OPEN-05 取证夹具：默认关闭；仅取证构建用 make EMERG_PROBE=1 打开，
+# 启动时向 emergency 异常环写一条探针条目，供 `journal` 验证异常环并入输出。
+# 发布构建不编入。
+ifeq ($(EMERG_PROBE),1)
+CFLAGS += -DHEPU_EMERG_PROBE
+endif
+
 # Linux 兼容进程的 syscall 跟踪（调试用，默认关）。
 # 打开： make HEPU_TRACE_LINUX_SYSCALL=1
 ifeq ($(HEPU_TRACE_LINUX_SYSCALL),1)

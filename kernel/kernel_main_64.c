@@ -236,6 +236,17 @@ void x86_64_kernel_main(void)
         services_init();
         services_start_boot();
     }
+#ifdef HEPU_EMERG_PROBE
+    /* OPEN-05 取证夹具：默认构建不编入。仅 EMERG_PROBE=1 取证镜像在启动序列早期
+     * （图形/文本两条路径都经过此处）向 emergency 异常环写一条探针 FATAL 条目，
+     * 供 `journal` 验证异常环并入查询输出。不是产品路径，不进服务表。 */
+    {
+        extern void event_log_emergency_write(int level, const char *source,
+                                              uint32_t code, const char *msg);
+        event_log_emergency_write(4, "open05-probe", 99,
+                                  "OPEN-05 emergency journal probe");
+    }
+#endif
 
     /* 显示启动信息 */
     vga_puts("========================================\n");

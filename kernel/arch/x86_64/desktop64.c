@@ -271,6 +271,27 @@ void desktop64_run(void)
          * 中断上下文不直接调 services_start（它会 vga/event_log/可能落盘）。 */
         { extern void services_monitor_poll(void); services_monitor_poll(); }
 
+        /* OPEN-05: 非驻留 logd worker 周期触发。自有节流变量与时间基准，不改动
+         * OPEN-06 节拍的间隔与语义。worker 是短命进程：hepu_exec 同步切态，其
+         * exit(0) 后返回本循环；不做常驻 daemon（BSP 无可抢占用户调度，常驻会
+         * 冻结桌面）。每 6 秒检查一次，仅当事件环出现新序号时才拉起，避免空转刷盘。 */
+        {
+            static uint64_t logd_last_ms = 0;
+            static uint32_t logd_last_seq = 0;
+            extern uint32_t event_log_newest_seq(void);
+            if (now - logd_last_ms >= 6000) {
+                logd_last_ms = now;
+                uint32_t newest = event_log_newest_seq();
+                if (newest != logd_last_seq) {
+                    static const char *const logd_argv[] = { "/bin/logd.elf" };
+                    vga_puts("[LOGD] spawn /bin/logd.elf\n");
+                    int pr = hepu_exec("/bin/logd.elf", 1, logd_argv);
+                    if (pr < 0) vga_puts("[LOGD] spawn -> not found\n");
+                    logd_last_seq = newest;
+                }
+            }
+        }
+
         /* V0.13.9: 天气真实数据拉取 (60 帧≈8s 后一次, 阻塞 ~1-3s)
          * V0.56.1: 原来只试一次, 网络(DHCP/DNS)没就绪就永久空白。改为失败重试,
          * 最多 6 次, 每次间隔 60 帧; 成功后不再请求。 */

@@ -237,6 +237,44 @@ uint32_t event_log_count(void)
     return ring_count;
 }
 
+uint32_t event_log_newest_seq(void)
+{
+    uint32_t s;
+    ring_lock_acquire();
+    s = ring_count ? ring_seq - 1 : 0;
+    ring_unlock_release();
+    return s;
+}
+
+uint32_t event_log_pull_after(uint32_t after_seq, event_log_entry_t *out,
+                              uint32_t max, uint32_t *out_last_seq,
+                              uint32_t *out_oldest_seq)
+{
+    uint32_t i, start, n = 0, oldest = 0, newest = 0;
+    if (!out || max == 0) return 0;
+
+    ring_lock_acquire();
+    if (ring_count == 0) {
+        ring_unlock_release();
+        if (out_last_seq) *out_last_seq = 0;
+        if (out_oldest_seq) *out_oldest_seq = 0;
+        return 0;
+    }
+    start = (ring_count == EVENT_LOG_CAP) ?
+            ring_head : (ring_head + EVENT_LOG_CAP - ring_count) % EVENT_LOG_CAP;
+    oldest = ring[start].seq;
+    newest = ring[(ring_head + EVENT_LOG_CAP - 1) % EVENT_LOG_CAP].seq;
+    for (i = 0; i < ring_count && n < max; i++) {
+        const event_log_entry_t *e = &ring[(start + i) % EVENT_LOG_CAP];
+        if (e->seq > after_seq) out[n++] = *e;
+    }
+    ring_unlock_release();
+
+    if (out_last_seq) *out_last_seq = n ? out[n - 1].seq : newest;
+    if (out_oldest_seq) *out_oldest_seq = oldest;
+    return n;
+}
+
 void event_log_clear(void)
 {
     ring_lock_acquire();
@@ -327,6 +365,28 @@ void event_log_dump(int min_level)
     event_log_format(text, sizeof(text), min_level);
     vga_puts("\n========== event log (journal) ==========\n");
     vga_puts(text);
+
+    /* OPEN-05: emergency 异常环并入 journal 查询输出。独立环原先只在崩溃路径
+     * 内部可见，`journal` 命令查不到；这里在普通环之后追加一段带 [EMERG]
+     * 标记的异常条目（定长 16 条，无锁写入，快照仍走既有无锁拷贝路径）。 */
+    {
+        static event_log_entry_t em[EVENT_EMERG_CAP + 1];
+        uint32_t ne = event_log_emergency_snapshot(em, EVENT_EMERG_CAP + 1);
+        if (ne > 0) {
+            char line[EVENT_LOG_MSG_MAX + 96];
+            uint32_t i;
+            vga_puts("---------- emergency ring ----------\n");
+            for (i = 0; i < ne; i++) {
+                snprintf(line, sizeof(line),
+                         "[EMERG] %08u %08x%08x %-5s %-12s pid=%u code=%u %s\n",
+                         em[i].seq, (unsigned int)(em[i].tick >> 32),
+                         (unsigned int)(em[i].tick & 0xFFFFFFFFu),
+                         event_log_level_name(em[i].level), em[i].source,
+                         em[i].pid, em[i].code, em[i].msg);
+                vga_puts(line);
+            }
+        }
+    }
     vga_puts("========== end of event log ==========\n");
 }
 

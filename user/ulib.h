@@ -78,6 +78,22 @@ static inline uint64_t syscall5(uint64_t nr, uint64_t arg1, uint64_t arg2,
     return ret;
 }
 
+/* OPEN-05: 第 6 参数走 r9（用户态 SysV 系统调用约定；内核 entry_64.S 从栈槽回传给 wrap a6）。 */
+static inline uint64_t syscall6(uint64_t nr, uint64_t arg1, uint64_t arg2,
+                                uint64_t arg3, uint64_t arg4, uint64_t arg5,
+                                uint64_t arg6)
+{
+    register uint64_t ret asm("rax");
+    register uint64_t r10 asm("r10") = arg4;
+    register uint64_t r8  asm("r8")  = arg5;
+    register uint64_t r9  asm("r9")  = arg6;
+    asm volatile("syscall" : "=a"(ret)
+                 : "a"(nr), "D"(arg1), "S"(arg2), "d"(arg3), "r"(r10),
+                   "r"(r8), "r"(r9)
+                 : "rcx", "r11", "memory");
+    return ret;
+}
+
 /* 系统调用函数 */
 static inline int write(int fd, const void *buf, size_t count)
 {
@@ -152,6 +168,37 @@ static inline void sleep(uint64_t ms)
 static inline int getpid(void)
 {
     return (int)syscall0(SYS_GETPID);
+}
+
+/* OPEN-05: 事件条目镜像。字段顺序/宽度必须与 kernel/include/event_log.h
+ * 的 event_log_entry_t 保持一致（64 位原生 ABI，不做兼容层翻译）。 */
+typedef struct {
+    uint32_t seq;
+    uint64_t tick;
+    uint8_t  level;
+    uint8_t  source_len;
+    uint16_t reserved;
+    uint32_t pid;
+    uint32_t code;
+    char     source[16];
+    char     msg[144];
+} hepu_event_entry_t;
+
+/* event_log_pull flags: bit0 = 一并带上 emergency 环快照条目。 */
+#define EVENT_LOG_PULL_EMERG 1u
+
+/* 拉取 after_seq 之后的事件条目；返回条数，*last_seq 回写本批最大序号（可空）。 */
+static inline int event_log_pull(uint32_t after_seq, hepu_event_entry_t *buf,
+                                 uint32_t max, uint32_t *last_seq, uint32_t flags)
+{
+    return (int)syscall6(SYS_EVENT_LOG_PULL, 0, after_seq, (uint64_t)buf,
+                         max, (uint64_t)last_seq, flags);
+}
+
+/* 读 RTC 当前日期时间：tm[0..5] = year, month, day, hour, minute, second。 */
+static inline int event_log_date(uint32_t tm[6])
+{
+    return (int)syscall3(SYS_EVENT_LOG_PULL, 1, 0, (uint64_t)tm);
 }
 
 /* 字符串函数 */

@@ -43,7 +43,8 @@ TARGETS := $(BUILD_DIR)/hello.elf $(BUILD_DIR)/shell.elf $(BUILD_DIR)/forktest.e
            $(BUILD_DIR)/s4getdents.elf \
            $(BUILD_DIR)/credtest.elf \
            $(BUILD_DIR)/fbsyn.elf \
-           $(BUILD_DIR)/install64.elf
+           $(BUILD_DIR)/install64.elf \
+           $(BUILD_DIR)/logd.elf
 
 # 全量构建目标：原生用户程序 + Linux 兼容层 PIE 测试程序 + 历史测试程序（SEC-12）
 # 注意：真正的 all 目标在**文件末尾**定义 —— GNU Make 在**读取规则时**就展开
@@ -146,6 +147,15 @@ $(BUILD_DIR)/install64.o: $(USER_DIR)apps/install64/install64.c | $(BUILD_DIR)
 $(BUILD_DIR)/install64.elf: $(BUILD_DIR)/install64.o $(LDSCRIPT)
 	$(LD) $(LDFLAGS) -T $(LDSCRIPT) -o $@ $<
 	@echo "Built user ELF: $@"
+
+# logd: OPEN-05 非驻留事件日志 worker（内核周期拉起，单次批量拉取后退出）
+$(BUILD_DIR)/logd.o: $(USER_DIR)apps/logd/logd.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/logd.elf: $(BUILD_DIR)/logd.o $(LDSCRIPT)
+	$(LD) $(LDFLAGS) -T $(LDSCRIPT) -o $@ $<
+	@echo "Built user ELF: $@"
+	@ls -lh $@
 
 $(BUILD_DIR)/clone_test.o: $(USER_DIR)apps/clone_test.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@

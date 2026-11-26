@@ -87,6 +87,16 @@ uint32_t event_log_count(void);
 uint32_t event_log_snapshot(event_log_entry_t *out, uint32_t max);
 const char *event_log_level_name(int level);
 
+/* OPEN-05: 游标增量拉取普通环。after_seq=0 表示从头拉取；out 容量 max 条。
+ * 返回写入 out 的条数（按时间顺序）；*out_last_seq 回写本批最大序号，无记录时
+ * 回写当前环内最新序号；*out_oldest_seq 回写环内最旧条目序号（调用方据此判定
+ * 游标是否落后过 256 条而丢历史）。 */
+uint32_t event_log_pull_after(uint32_t after_seq, event_log_entry_t *out,
+                              uint32_t max, uint32_t *out_last_seq,
+                              uint32_t *out_oldest_seq);
+/* 当前环内最新条目序号（空环返回 0）。 */
+uint32_t event_log_newest_seq(void);
+
 /* 格式化最近事件；min_level 为最低级别。返回写入字节数（不含结尾 0）。 */
 uint32_t event_log_format(char *out, uint32_t cap, int min_level);
 void event_log_dump(int min_level);

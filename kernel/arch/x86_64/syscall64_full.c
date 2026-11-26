@@ -21,6 +21,7 @@
 #define READDIR_MAX_ENTRIES 64
 #include "epoll64.h"   /* epoll/eventfd2/pselect6 v1 最小实现（仅 LT） */
 #include "display_backend.h"  /* §5-4: fb_desc_t（前台所有权按真实 pitch 算映射长度） */
+#include "event_log.h"        /* OPEN-05: 事件环用户态游标拉取接口 */
 #include "user_cred.h"
 
 int g_running_linux_elf = 0;  /* V0.20.70: 当前是否在运行Linux ABI ELF */
@@ -136,6 +137,8 @@ int copy_user_path(char *dst, size_t dstsz, const char *user_path)
  * （生成器只认 SYSCALL_xxx 形式；直接写 [SYS_xxx]= 会静默漏登记）。 */
 #define SYSCALL_HEPU_THREAD_EXIT   SYS_HEPU_THREAD_EXIT
 #define SYSCALL_HEPU_PS            SYS_HEPU_PS
+/* OPEN-05: 事件环游标拉取 + RTC 日子命令。套 SYSCALL_ 别名供 gen_syscall_doc.py 登记。 */
+#define SYSCALL_EVENT_LOG_PULL     SYS_EVENT_LOG_PULL
 
 /* ---- wait4/creations ---- */
 #define SYSCALL_WAIT4       SYS_WAIT4
@@ -2805,6 +2808,72 @@ static int64_t wrap_net_stats(int64_t a1, int64_t a2, int64_t a3, int64_t a4, in
 }
 
 /* 系统调用表（函数指针数组，参考32位实现） */
+/* OPEN-05: 事件环用户态接口（SYS_EVENT_LOG_PULL）。
+ * a1 = cmd: 0=按游标拉取普通环; 1=读 RTC 日期。
+ * cmd 0: a2=after_seq(上次消费到的序号,0=从头), a3=buf(event_log_entry_t[]),
+ *        a4=max(<=64), a5=out_last_seq(uint32_t*,回写本批最大序号,可空),
+ *        a6=flags(bit0=快照时一并带上 emergency 环条目)。
+ * cmd 1: a2=buf(uint32_t[6] [year,month,day,hour,minute,second])。
+ * 64 位专用；32 位共用号表但分派表不登记，走未知号返回 -1（ENOSYS 口径）。 */
+#define EVENT_LOG_PULL_MAX 64
+
+static int64_t sys_event_log_pull(int64_t cmd, uint64_t after_seq,
+                                  void *buf, uint64_t max,
+                                  uint64_t out_last_seq, uint64_t flags)
+{
+    extern int copy_to_user(void *user_dst, const void *kernel_src, size_t size);
+    extern uint32_t event_log_pull_after(uint32_t, event_log_entry_t *, uint32_t,
+                                         uint32_t *, uint32_t *);
+    extern uint32_t event_log_emergency_snapshot(event_log_entry_t *, uint32_t);
+    extern uint16_t rtc64_get_year(void);
+    extern uint8_t  rtc64_get_month(void);
+    extern uint8_t  rtc64_get_day(void);
+    extern uint8_t  rtc64_get_hours(void);
+    extern uint8_t  rtc64_get_minutes(void);
+    extern uint8_t  rtc64_get_seconds(void);
+
+    if (cmd == 1) {
+        if (!buf) return -1;
+        uint32_t tm[6];
+        tm[0] = rtc64_get_year();
+        tm[1] = rtc64_get_month();
+        tm[2] = rtc64_get_day();
+        tm[3] = rtc64_get_hours();
+        tm[4] = rtc64_get_minutes();
+        tm[5] = rtc64_get_seconds();
+        if (copy_to_user(buf, tm, sizeof(tm)) != 0) return -1;
+        return 0;
+    }
+    if (cmd != 0) return -1;
+    if (!buf || max == 0 || max > EVENT_LOG_PULL_MAX) return -1;
+
+    static event_log_entry_t recs[EVENT_LOG_PULL_MAX];
+    uint32_t last = 0, oldest = 0;
+    uint32_t n = event_log_pull_after((uint32_t)after_seq, recs, (uint32_t)max,
+                                      &last, &oldest);
+    uint32_t base = n;
+    /* flags bit0: 一并快照 emergency 环，追加在普通环条目之后。 */
+    if ((flags & 1u) != 0) {
+        base += event_log_emergency_snapshot(recs + base,
+                                             EVENT_LOG_PULL_MAX - base);
+    }
+    if (base > 0 &&
+        copy_to_user(buf, recs, (size_t)base * sizeof(event_log_entry_t)) != 0) {
+        return -1;
+    }
+    if (out_last_seq) {
+        uint32_t l = last;
+        copy_to_user((void *)(uintptr_t)out_last_seq, &l, 4);
+    }
+    return (int64_t)base;
+}
+
+static int64_t wrap_event_log(int64_t a1, int64_t a2, int64_t a3, int64_t a4,
+                              int64_t a5, int64_t a6) {
+    return sys_event_log_pull(a1, (uint64_t)a2, (void *)(uintptr_t)a3,
+                              (uint64_t)a4, (uint64_t)a5, (uint64_t)a6);
+}
+
 /* 读取能力授权审计环（只返回拒绝记录）。a1=用户缓冲(cap_audit_rec_t[]) a2=最多条数 */
 static int64_t wrap_cap_audit(int64_t a1, int64_t a2, int64_t a3, int64_t a4, int64_t a5, int64_t a6) {
     (void)a3;(void)a4;(void)a5;(void)a6;
@@ -2934,6 +3003,7 @@ static syscall_fn_t syscall_table[SYSCALL_MAX] = {
     [SYS_FB_RELEASE]    = wrap_fb_release,
     [SYS_FB_FLIP]       = wrap_fb_flip,
     [SYS_CAP_AUDIT]     = wrap_cap_audit,
+    [SYSCALL_EVENT_LOG_PULL] = wrap_event_log,
 };
 
 /* 安全修复：旧实现用 char tmp[8]/buf[8] 打印调用号，用户传入 rax=2147483647
