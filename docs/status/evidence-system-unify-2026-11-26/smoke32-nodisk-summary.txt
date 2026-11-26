@@ -1,0 +1,15 @@
+mode=nodisk disk=/tmp/hepu-smoke32-test.img
+serial=1 initrd=1 net=1 desk=1 fault=0 lines=89934
+ext2_mounted=0 ext2_nodisk=1
+ktest_result=PASS ktest=1 fail_suites=0 fail_cases=0 skip_cases=2 p3_skip=2
+p3-security: passed=0 failed=0 skipped=2
+--- p3-security cases ---
+[KUNIT-SKIP] p3-security/s3_normal_user_denied (ext2 backend unavailable)
+[KUNIT-SKIP] p3-security/posix_error_table (ext2 backend unavailable)
+--- failed suites ---
+(none)
+--- failed cases ---
+(none)
+--- skipped cases ---
+[KUNIT-SKIP] p3-security/s3_normal_user_denied (ext2 backend unavailable)
+[KUNIT-SKIP] p3-security/posix_error_table (ext2 backend unavailable)

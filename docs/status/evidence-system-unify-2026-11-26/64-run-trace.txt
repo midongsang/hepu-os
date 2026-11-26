@@ -1,0 +1,62 @@
+[1] 重编 64 位
+-rwxr-xr-x 1 user user 1013168 Nov 26 11:54 build_x86_64/hepu-kernel64.bin
+[2] 造 UEFI 双架构镜像
+Disk /tmp/int64-5978.img: 524288 sectors, 256.0 MiB
+Sector size (logical): 512 bytes
+Disk identifier (GUID): 5EE329B8-EA19-469C-90F9-623B046167DA
+Partition table holds up to 128 entries
+Main partition table begins at sector 2 and ends at sector 33
+First usable sector is 34, last usable sector is 524254
+Partitions will be aligned on 2048-sector boundaries
+Total free space is 16317 sectors (8.0 MiB)
+
+Number  Start (sector)    End (sector)  Size       Code  Name
+   1            2048          264191   128.0 MiB   EF00  EFI System Partition
+   2          264192          509951   120.0 MiB   8300  HepuOS Root
+-rw-r--r-- 1 user user 268435456 Nov 26 12:07 /tmp/int64-5978.img
+[3] 启动（snapshot 关闭）
+[4] 串口标记
+=== HepuOS 64-bit Kernel booting ===
+[SERVICES] service manager init done 
+[SERVICES] start boot service ...
+[SERVICES] registered: network
+[SERVICES] registered: audio
+[SERVICES] registered: bluetooth
+[SERVICES] registered: wifi
+[SERVICES] registered: gui
+[SERVICES] start: network
+[SERVICES] started: network
+[SERVICES] start: audio
+[SERVICES] started: audio
+[SERVICES] start: bluetooth
+[SERVICES] started: bluetooth
+[SERVICES] start: wifi
+[SERVICES] started: wifi
+[SERVICES] start: gui
+[SERVICES] started: gui
+[SERVICES] boot services started: 5/5
+  HepuOS 64-bit Kernel v0.62.1
+[EXT2_64] Verify read: HepuOS 64-bit ext2 write test OK!
+[EVENT] early save to /hepu_events.log
+[SERVICES] All services initialized
+[EVENT] saved to /hepu_events.log
+  HepuOS 64-bit User Mode Application
+[5] 从盘上读 /hepu_events.log
+partition2 first-lba=264192
+17 /home/user/Doubao/chats/38452875115179010/hepu-os/ev-integration-64/hepu_events.log
+00000001 0000000000000000 INFO  boot64       pid=0 code=1 64-bit kernel entry
+00000002 0000000000000000 INFO  service      pid=0 code=10 registered network
+00000003 0000000000000000 INFO  service      pid=0 code=10 registered audio
+00000004 0000000000000000 INFO  service      pid=0 code=10 registered bluetooth
+00000005 0000000000000000 INFO  service      pid=0 code=10 registered wifi
+00000006 0000000000000000 INFO  service      pid=0 code=10 registered gui
+00000007 0000000000000000 INFO  service      pid=0 code=11 started network
+00000008 0000000000000000 INFO  service      pid=0 code=11 started audio
+00000009 0000000000000000 INFO  service      pid=0 code=11 started bluetooth
+00000010 0000000000000000 INFO  service      pid=0 code=11 started wifi
+00000011 0000000000000000 INFO  service      pid=0 code=11 started gui
+00000012 0000000000000000 INFO  kernel64     pid=0 code=0 [BOOT] driver framework initialized
+00000013 0000000000000084 INFO  kernel64     pid=0 code=0 [BOOT] storage HAL initialized
+00000014 00000000000000a5 INFO  kernel64     pid=0 code=0 [BOOT] ext2 root mounted
+00000015 000000000000012f INFO  kernel64     pid=0 code=0 [BOOT] network up (E1000, static IP)
+[6] 清理镜像（511MB 留 /tmp 会被其他构建脚本的 rm 抹掉）
