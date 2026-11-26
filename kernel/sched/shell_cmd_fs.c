@@ -19,6 +19,7 @@
 #include "ide_ext2.h"
 #include "ide.h"
 #include "wm.h"
+#include "event_log.h"
 
 static void show_partitions(const uint8_t *mbr)
 {
@@ -44,18 +45,45 @@ static void show_partitions(const uint8_t *mbr)
     if (n == 0) vga_puts("  (no active partitions)\n");
 }
 
-/* V2.25: gfx 纯色填充测试——定位花屏根源: 依次填红绿蓝白 */
+/* dmesg: 默认读统一事件日志（序号/tick/级别/pid/source/消息，支持 -l 级别过滤）；
+ * `-k` / `--legacy` 显式保留旧 klog 文本环，仅作兼容回退。 */
 void cmd_dmesg(char *arg)
 {
     extern void klog_dump(void);
     extern void klog_dump_level(int);
-    if (arg && strncmp(arg, "-l", 2) == 0 && arg[2] == ' ') {
-        int lvl = 0;
-        for (int i = 3; arg[i]; i++) lvl = lvl * 10 + (arg[i] - '0');
-        klog_dump_level(lvl);
+    int legacy = 0;
+    int ev_level = EVENT_INFO;
+    int legacy_level = -1;
+
+    if (arg && *arg) {
+        if (strcmp(arg, "--legacy") == 0 ||
+            (arg[0] == '-' && arg[1] == 'k' &&
+             (arg[2] == 0 || arg[2] == ' '))) {
+            legacy = 1;
+        }
+        const char *lp = strstr(arg, "-l");
+        if (lp) {
+            const char *p = lp + 2;
+            int v = 0, any = 0;
+            while (*p == ' ') p++;
+            while (*p >= '0' && *p <= '9') {
+                v = v * 10 + (*p - '0');
+                p++;
+                any = 1;
+            }
+            if (any) {
+                if (v >= EVENT_DEBUG && v <= EVENT_FATAL) ev_level = v;
+                legacy_level = v;
+            }
+        }
+    }
+
+    if (!legacy) {
+        event_log_dump(ev_level);
         return;
     }
-    klog_dump();
+    if (legacy_level >= 0) klog_dump_level(legacy_level);
+    else klog_dump();
 }
 
 /* V3.87-E14: 设置全局日志阈值 0=ERR 1=WARN 2=INFO 3=DEBUG */

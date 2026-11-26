@@ -3,13 +3,16 @@
  * 落盘通道(重要, 实测验证):
  *  - 崩溃发生在异常隔离上下文(idt_handler)——此路径禁止直接做 ext2 文件 IO
  *    (实测在崩溃上下文调 ide_ext2_writefile 触发 GPF halt);
- *  - 因此崩溃帧先写入 **klog 环形缓冲**(纯内存, 安全);
+ *  - 也禁止拿 event_log 普通路径的自旋锁/变参格式化：崩溃帧走 emergency
+ *    变体（klog_emergency_puts 纯内存文本环 + event_log_emergency_write
+ *    无锁定长环，溢出计入 drop 统计）;
  *  - `crashlog` 命令与 `klog save` 复用已验证的 klog_save_to_disk()
  *    落盘到 /hepu_boot.log(该通道多轮验证可靠), 然后过滤打印 [CRASH] 行;
  *  - 真机黑屏/重启后, 挂载数据盘读 /hepu_boot.log 即可查看崩溃历史。
  */
 #include <stdint.h>
 #include <stddef.h>
+#include "event_log.h"
 
 extern void serial_puts(uint16_t port, const char *s);
 extern int snprintf(char *str, size_t size, const char *format, ...);
@@ -65,7 +68,13 @@ int crashlog_append(const char *name, uint32_t pid,
     line[n++] = '\n';
     line[n] = 0;
 #undef PUSH
-    klog_puts(line);
+    /* 异常隔离上下文：禁止走「自旋锁 + 动态格式化」的普通 event_log 路径。
+     * 文本环用 emergency 变体（纯内存），结构化记录写 emergency 独立定长环。 */
+    {
+        extern void klog_emergency_puts(const char *);
+        klog_emergency_puts(line);
+        event_log_emergency_write(EVENT_FATAL, "kernel", 13, line);
+    }
     serial_puts(0x3F8, "[CRASHLOG] recorded: ");
     if (name) serial_puts(0x3F8, name);
     serial_puts(0x3F8, "\n");

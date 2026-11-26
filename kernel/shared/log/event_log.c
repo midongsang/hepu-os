@@ -16,8 +16,17 @@ static volatile uint32_t ring_seq;    /* 下一条序号 */
 static volatile int ring_lock_word;
 static event_log_clock_fn clock_source;
 static event_log_pid_fn pid_source;
-static event_log_sink_fn sink_source;
+static const event_log_file_ops_t *file_ops;
 static int serial_mirror;
+static uint32_t rotate_threshold = EVENT_LOG_ROTATE_BYTES;
+
+/* emergency 独立定长环：无锁，只服务异常/崩溃上下文。 */
+static event_log_entry_t emerg_ring[EVENT_EMERG_CAP];
+static volatile uint32_t emerg_head;
+static volatile uint32_t emerg_count;
+static volatile uint32_t emerg_seq;
+static volatile uint32_t emerg_drops;
+static event_log_entry_t emerg_stat;  /* 溢出统计条目（原地更新） */
 
 static uint64_t event_log_now(void)
 {
@@ -68,15 +77,27 @@ void event_log_init(event_log_clock_fn clock_fn)
     ring_lock_word = 0;
     clock_source = clock_fn;
     pid_source = NULL;
-    sink_source = NULL;
+    file_ops = NULL;
     serial_mirror = 0;
+    rotate_threshold = EVENT_LOG_ROTATE_BYTES;
+    emerg_head = 0;
+    emerg_count = 0;
+    emerg_seq = 1;
+    emerg_drops = 0;
     memset(ring, 0, sizeof(ring));
+    memset(emerg_ring, 0, sizeof(emerg_ring));
+    memset(&emerg_stat, 0, sizeof(emerg_stat));
 }
 
 void event_log_set_clock(event_log_clock_fn clock_fn) { clock_source = clock_fn; }
 void event_log_set_pid_source(event_log_pid_fn pid_fn) { pid_source = pid_fn; }
-void event_log_set_sink(event_log_sink_fn sink_fn) { sink_source = sink_fn; }
+void event_log_set_file_ops(const event_log_file_ops_t *ops) { file_ops = ops; }
 void event_log_set_serial(int enabled) { serial_mirror = enabled ? 1 : 0; }
+
+void event_log_test_set_rotate_threshold(uint32_t bytes)
+{
+    rotate_threshold = (bytes == 0) ? EVENT_LOG_ROTATE_BYTES : bytes;
+}
 
 void event_log_write(int level, const char *source, uint32_t code,
                      const char *msg)
@@ -132,6 +153,83 @@ void event_log_emit(int level, const char *source, uint32_t code,
     va_end(args);
     if (n < 0) msg[0] = 0;
     event_log_write(level, source, code, msg);
+}
+
+/* 异常/崩溃上下文专用：不拿自旋锁、不走变参格式化。
+ * 消息由调用方手工拼好后传入；pid 固定记 0（此时 current 可能不可靠）。 */
+static void emerg_update_stat(void)
+{
+    char msg[EVENT_LOG_MSG_MAX];
+    char tmp[11];
+    uint32_t v = emerg_drops;
+    int n = 0, d = 0;
+    const char *p = "[EMERG-STAT] emergency overflow drops=";
+
+    while (*p && n < (int)sizeof(msg) - 12) msg[n++] = *p++;
+    if (v == 0) {
+        msg[n++] = '0';
+    } else {
+        while (v > 0) { tmp[d++] = (char)('0' + (v % 10)); v /= 10; }
+        while (d > 0) msg[n++] = tmp[--d];
+    }
+    msg[n] = 0;
+
+    emerg_stat.seq = emerg_seq++;
+    emerg_stat.tick = event_log_now();
+    emerg_stat.level = EVENT_WARN;
+    emerg_stat.pid = 0;
+    emerg_stat.code = 78;
+    copy_text(emerg_stat.source, sizeof(emerg_stat.source), "emergency");
+    copy_text(emerg_stat.msg, sizeof(emerg_stat.msg), msg);
+    emerg_stat.source_len = (uint8_t)strlen(emerg_stat.source);
+}
+
+void event_log_emergency_write(int level, const char *source, uint32_t code,
+                               const char *msg)
+{
+    uint32_t slot;
+    event_log_entry_t *e;
+
+    if (level < EVENT_DEBUG) level = EVENT_DEBUG;
+    if (level > EVENT_FATAL) level = EVENT_FATAL;
+
+    slot = emerg_head;
+    e = &emerg_ring[slot];
+    memset(e, 0, sizeof(*e));
+    e->seq = emerg_seq++;
+    e->tick = event_log_now();
+    e->level = (uint8_t)level;
+    e->pid = 0;
+    e->code = code;
+    copy_text(e->source, sizeof(e->source), source ? source : "kernel");
+    copy_text(e->msg, sizeof(e->msg), msg ? msg : "");
+    e->source_len = (uint8_t)strlen(e->source);
+
+    if (emerg_count < EVENT_EMERG_CAP) {
+        emerg_count++;
+    } else {
+        emerg_drops++;
+        emerg_update_stat();
+    }
+    emerg_head = (slot + 1) % EVENT_EMERG_CAP;
+}
+
+uint32_t event_log_emergency_count(void) { return emerg_count; }
+uint32_t event_log_emergency_drop_count(void) { return emerg_drops; }
+
+uint32_t event_log_emergency_snapshot(event_log_entry_t *out, uint32_t max)
+{
+    uint32_t i, start, n;
+    if (!out || max == 0) return 0;
+
+    n = emerg_count < max ? emerg_count : max;
+    start = (emerg_count == EVENT_EMERG_CAP) ? emerg_head :
+            (emerg_head + EVENT_EMERG_CAP - emerg_count) % EVENT_EMERG_CAP;
+    for (i = 0; i < n; i++)
+        out[i] = emerg_ring[(start + i) % EVENT_EMERG_CAP];
+
+    if (emerg_drops > 0 && n < max) out[n++] = emerg_stat;
+    return n;
 }
 
 uint32_t event_log_count(void)
@@ -232,11 +330,79 @@ void event_log_dump(int min_level)
     vga_puts("========== end of event log ==========\n");
 }
 
+int event_log_file_read(const char *path, uint8_t *buf, uint32_t max,
+                        uint32_t *out_len)
+{
+    if (!file_ops || !file_ops->read) return -2;
+    return file_ops->read(path, buf, max, out_len);
+}
+
+int event_log_file_size(const char *path, uint32_t *out_size)
+{
+    if (!file_ops || !file_ops->size) return -2;
+    return file_ops->size(path, out_size);
+}
+
+int event_log_file_write(const char *path, const uint8_t *buf, uint32_t len)
+{
+    if (!file_ops || !file_ops->write) return -2;
+    return file_ops->write(path, buf, len);
+}
+
+int event_log_file_remove(const char *path)
+{
+    if (!file_ops || !file_ops->remove) return -2;
+    return file_ops->remove(path);
+}
+
+int event_log_persist(const char *new_text, uint32_t new_len)
+{
+    /* 注意：现有 ext2 驱动没有“原地追加写”原语，write_file 一律整文件重写。
+     * 因此这里走「读旧文件 → 内存拼接 → 整文件写回」；代价是每次落盘都要
+     * 把旧文件整条读回并整块重写，旧内容受阈值缓冲上限约束（见轮转阈值）。 */
+    static uint8_t old_buf[EVENT_LOG_ROTATE_BYTES];
+    static uint8_t mix_buf[EVENT_LOG_ROTATE_BYTES + EVENT_LOG_TEXT_MAX];
+    uint32_t th = rotate_threshold;
+    uint32_t old_len = 0, old_read = 0, mix_len;
+    int rotate;
+
+    if (!file_ops || !new_text) return -2;
+    if (new_len > EVENT_LOG_TEXT_MAX) new_len = EVENT_LOG_TEXT_MAX;
+
+    if (file_ops->size && file_ops->size(EVENT_LOG_PATH_MAIN, &old_len) != 0) {
+        old_len = 0;  /* 文件不存在视为空 */
+    }
+    if (old_len > th) old_len = th;
+
+    rotate = (old_len >= th);
+    if (old_len > 0 && file_ops->read) {
+        if (file_ops->read(EVENT_LOG_PATH_MAIN, old_buf, th, &old_read) != 0) {
+            old_read = 0;
+        }
+    }
+    if (!rotate && old_read + new_len > th) rotate = 1;
+
+    if (rotate) {
+        /* 旧主文件降级为 .1（只保留一级旧档），新内容写主文件。 */
+        if (old_read > 0 && file_ops->write) {
+            file_ops->write(EVENT_LOG_PATH_ROT1, old_buf, old_read);
+        }
+        if (!file_ops->write) return -2;
+        return file_ops->write(EVENT_LOG_PATH_MAIN,
+                               (const uint8_t *)new_text, new_len);
+    }
+
+    if (old_read > 0) memcpy(mix_buf, old_buf, old_read);
+    memcpy(mix_buf + old_read, new_text, new_len);
+    mix_len = old_read + new_len;
+    if (!file_ops->write) return -2;
+    return file_ops->write(EVENT_LOG_PATH_MAIN, mix_buf, mix_len);
+}
+
 int event_log_save(void)
 {
-    static char text[4096];
+    static char text[EVENT_LOG_TEXT_MAX];
     uint32_t n;
-    if (!sink_source) return -2;
     n = event_log_format(text, sizeof(text), EVENT_DEBUG);
-    return sink_source(text, n);
+    return event_log_persist(text, n);
 }
