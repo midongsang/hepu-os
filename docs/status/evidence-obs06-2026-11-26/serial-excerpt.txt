@@ -1,0 +1,5 @@
+[0m[32m[40m  [BOOT] Mode: 32-bit i386
+[APPS] 7/7: elastic_desktop_init done!
+[EDESKTOP] desk_start on 32-bit
+[EDESKTOP] res=0x00000780x0x00000438 desk_start rc=0x00000000
+[EDESKTOP] first frame via registry, cycles=0x000000000x561EE5C2
