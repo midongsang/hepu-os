@@ -36,6 +36,10 @@ void klog_dump_level(int min_level);
 /* 记录纯字符串 */
 void klog_puts(const char *s);
 
+/* emergency 变体：仅写内存文本环，不进入锁保护的统一事件日志普通路径。
+ * 专供异常/崩溃隔离上下文使用。 */
+void klog_emergency_puts(const char *s);
+
 /* 捕获引导器写入 VGA 文本显存(0xB8000)的引导诊断, 追加到日志.
  * 引导器在实模式直写显存, 内核此函数在清屏前调用, 把前 N 行读回. */
 void klog_capture_boot(void);

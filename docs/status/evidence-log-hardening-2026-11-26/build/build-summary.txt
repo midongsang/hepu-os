@@ -1,0 +1,13 @@
+32 位构建：make -j2
+退出码 0；日志中 error: 计数 0；产物 build_v250/hepu-kernel.bin / kernel.elf
+
+64 位构建：make -C kernel/arch/x86_64 -j2
+退出码 0；日志中 error:/undefined 计数 0；产物 build_x86_64/hepu-kernel64.bin (1008912 字节)
+
+文档检查：python3 tools/check_docs.py
+=== docs CI 检查 ===
+当前版本: 0.62.1
+warns=0 errors=0
+make: Entering directory '/home/user/Doubao/chats/38452875115179010/hepu-work-log/kernel/arch/x86_64'
+make: Nothing to be done for 'all'.
+make: Leaving directory '/home/user/Doubao/chats/38452875115179010/hepu-work-log/kernel/arch/x86_64'

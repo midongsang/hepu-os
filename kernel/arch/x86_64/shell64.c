@@ -2346,10 +2346,28 @@ static void shell_cmd_meminfo(int argc, char **argv)
  * 全部只读现有内核数据源，不新增采集路径。
  * ========================================================================== */
 
-/* dmesg: 内核日志环形缓冲 */
+/* dmesg: 默认读统一事件日志；`-k` / `--legacy` 回退旧 klog64 文本环。 */
+static int journal_level(const char *s);
 static void shell_cmd_dmesg(int argc, char **argv)
 {
-    (void)argc; (void)argv;
+    int legacy = 0;
+    int min_level = EVENT_INFO;
+    int i;
+
+    for (i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-k") == 0 || strcmp(argv[i], "--legacy") == 0) {
+            legacy = 1;
+        } else if (strcmp(argv[i], "-l") == 0 && i + 1 < argc) {
+            int lv = journal_level(argv[++i]);
+            if (lv >= 0) min_level = lv;
+        }
+    }
+
+    if (!legacy) {
+        event_log_dump(min_level);
+        return;
+    }
+
     extern uint32_t klog64_snapshot(char *out, uint32_t max);
     extern uint32_t klog64_used(void);
     static char kbuf[4096];

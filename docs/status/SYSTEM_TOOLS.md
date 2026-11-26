@@ -73,16 +73,16 @@
 | lspci / pci | 有（lspci 为别名） | PCI 枚举 |
 | lsusb / usb | 有（lsusb 为别名） | USB 枚举 |
 | lscpu / cpuinfo | 有（lscpu 为别名） | CPU 型号/核数 |
-| dmesg | 有（v0.59.3 新增） | `klog64_snapshot` 环形缓冲 |
+| dmesg | 有（第二阶段加固） | 默认读统一事件流 `event_log`（序号/tick/级别/pid/来源/消息），`-l` 过滤；`-k`/`--legacy` 回退 `klog64_snapshot` 文本环 |
 | sensors | 缺 | 无温度/风扇采集（ACPI thermal zone 未接） |
 
 ## 七、日志与调试
 
 | 工具 | 状态 | 说明 |
 |---|---|---|
-| dmesg | 有 | 仍读 legacy `klog`/`klog64` 文本环；统一事件流用 `journal` |
+| dmesg | 有 | 默认读统一 `event_log`，`-l` 级别过滤；`-k`/`--legacy` 回退 `klog`/`klog64` 文本环 |
 | journal / log | 有（2026-11-26 基础版） | 32/64 共用 `event_log`；带序号/级别/来源/pid/事件码；`journal stat/save/clear` |
-| journald / syslog | 部分 | 已有内核事件环与 ext2 落盘 `/hepu_events.log`；缺用户态 logd、追加写、轮转、远程 syslog |
+| journald / syslog | 部分 | 内核事件环 + ext2 落盘 `/hepu_events.log`，跨启动追加、超 8KB 一级轮转 `.1`；缺用户态 logd、按日期轮转、远程 syslog |
 | strace | 缺 | 需内核侧系统调用桩（大工程） |
 | gdb | 缺 | 无调试器 |
 | objdump / readelf | 缺 | elf64 解析器在内核里，未暴露成命令 |

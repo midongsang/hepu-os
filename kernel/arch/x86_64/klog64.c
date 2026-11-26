@@ -95,16 +95,47 @@ static uint32_t event_log_pid64(void)
     return process64_get_current_pid();
 }
 
-static int event_log_sink64(const char *text, uint32_t len)
+static int el64_file_read(const char *path, uint8_t *buf, uint32_t max,
+                          uint32_t *out_len)
+{
+    extern int ext2_64_read_file(const char *path, uint8_t *buffer, uint32_t max_size);
+    int rd = ext2_64_read_file(path, buf, max);
+    if (rd < 0) { *out_len = 0; return -1; }
+    *out_len = (uint32_t)rd;
+    return 0;
+}
+
+static int el64_file_write(const char *path, const uint8_t *buf, uint32_t len)
 {
     extern int ext2_64_write_file(const char *path, const uint8_t *data, uint32_t size);
-    return ext2_64_write_file("/hepu_events.log", (const uint8_t *)text, len);
+    return ext2_64_write_file(path, buf, len);
 }
+
+static int el64_file_size(const char *path, uint32_t *out_size)
+{
+    extern int ext2_64_stat(const char *path, uint32_t *size, uint8_t *isdir);
+    uint8_t isdir = 0;
+    if (ext2_64_stat(path, out_size, &isdir) != 0) return -1;
+    return 0;
+}
+
+static int el64_file_remove(const char *path)
+{
+    extern int ext2_64_delete_file(const char *path);
+    return ext2_64_delete_file(path);
+}
+
+static const event_log_file_ops_t event_log_file_ops64 = {
+    el64_file_read,
+    el64_file_write,
+    el64_file_size,
+    el64_file_remove
+};
 
 void event_log_platform_init64(void)
 {
     event_log_init(event_log_clock64);
     event_log_set_pid_source(event_log_pid64);
-    event_log_set_sink(event_log_sink64);
+    event_log_set_file_ops(&event_log_file_ops64);
     event_log_emit(EVENT_INFO, "boot64", 1, "64-bit kernel entry");
 }
