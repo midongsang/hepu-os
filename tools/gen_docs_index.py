@@ -44,7 +44,7 @@ def main():
             rel = p[len(root)+1:]
             groups.setdefault(os.path.dirname(rel) or '.', []).append((rel, title, status))
 
-    order = ['.', 'architecture', 'specs', 'guides', 'planning', 'boot', 'security', 'status', 'history', 'history/devlog', 'history/security']
+    order = ['.', 'architecture', 'design', 'specs', 'guides', 'planning', 'boot', 'security', 'status', 'history', 'history/devlog', 'history/security']
     ver = current_version()
     today = datetime.date.today().isoformat()
     lines = [f'''---
