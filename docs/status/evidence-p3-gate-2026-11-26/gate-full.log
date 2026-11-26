@@ -1,0 +1,18 @@
+[1/6] 构建 32 位
+  ✓ 32 位构建 0 error
+[2/6] 构建 64 位
+  ✓ 64 位构建 0 error
+[3/6] VFS 跨启动（verify_p1p3.sh）
+  ✓ 写阶段 + 读阶段 PASS
+[4/6] 带盘冒烟（p3-security 必须 2 passed, 0 failed, 0 skipped）
+  ✓ p3-security 带盘真实 2/2/0
+    p3-security: passed=2 failed=0 skipped=0
+[5/6] kunit 连续 3 次启动（挂盘）
+  ✓ 第 1 次：ALL PASS（p3_skip=0）
+      [KUNIT] result: 0x00000002 passed, 0x00000000 failed, 0x00000000 skipped
+  ✓ 第 2 次：ALL PASS（p3_skip=0）
+      [KUNIT] result: 0x00000002 passed, 0x00000000 failed, 0x00000000 skipped
+  ✓ 第 3 次：ALL PASS（p3_skip=0）
+      [KUNIT] result: 0x00000002 passed, 0x00000000 failed, 0x00000000 skipped
+[6/6] 结论
+GATE: PASS
