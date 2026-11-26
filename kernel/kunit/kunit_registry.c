@@ -44,6 +44,8 @@ extern void kunit_v102_hal_register(void);
 /* V3.97-E43 压力测试 */
 extern void kunit_stress_register(void);
 extern void kunit_p3_security_register(void);
+extern void kunit_event_log_register(void);
+extern void kunit_system_manager_register(void);
 
 /* V0.10.1 系统调用深度测试 */
 extern void kunit_syscall_deep_register(void);
@@ -131,6 +133,8 @@ void kunit_register_all_suites(void)
     /* V3.97-E43 压力套件 */
     kunit_stress_register();
     kunit_p3_security_register();
+    kunit_event_log_register();
+    kunit_system_manager_register();
     /* V0.10.1 系统调用深度测试 */
     kunit_syscall_deep_register();
     /* V0.10.1 内存管理深度测试 */

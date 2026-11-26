@@ -80,8 +80,9 @@
 
 | 工具 | 状态 | 说明 |
 |---|---|---|
-| dmesg | 有 | 见上 |
-| journald / syslog | 缺 | 日志只在内存环形缓冲，未落盘 |
+| dmesg | 有 | 仍读 legacy `klog`/`klog64` 文本环；统一事件流用 `journal` |
+| journal / log | 有（2026-11-26 基础版） | 32/64 共用 `event_log`；带序号/级别/来源/pid/事件码；`journal stat/save/clear` |
+| journald / syslog | 部分 | 已有内核事件环与 ext2 落盘 `/hepu_events.log`；缺用户态 logd、追加写、轮转、远程 syslog |
 | strace | 缺 | 需内核侧系统调用桩（大工程） |
 | gdb | 缺 | 无调试器 |
 | objdump / readelf | 缺 | elf64 解析器在内核里，未暴露成命令 |
@@ -89,7 +90,8 @@
 ## 八~十一
 
 - 包管理：只有 App Store（GUI），无 CLI 包管理器；`sha256sum <path>` 已落地（auth64 流式 init/update/final，4KB 分块读取）
-- 服务管理：无 systemd 类框架，桌面/网络服务由内核启动流程拉起
+- 服务管理：32/64 共用 `kernel/sched/services.c` 的服务表，`service list|status|start|stop|restart|enable|disable` 已接；内置 network/audio/bluetooth/wifi/gui 的 start/stop 仍是空壳，真实进程监督未实现
+- 统一事件日志：`kernel/shared/log/event_log.c` + `kernel/include/event_log.h`，`klog`/`klog64` 作为文本适配器写入；详见 `docs/design/EVENT_LOG_AND_SERVICE_LAYER.md`
 - 图形面板：任务管理器、磁盘管理器、设备管理器、日志查看器、设置（显示/外观）均已有，后端就是上面这些 CLI 的同一批数据源
 
 ## 下一步建议（按依赖排序）

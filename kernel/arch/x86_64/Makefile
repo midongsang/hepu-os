@@ -162,6 +162,8 @@ C_SOURCES = \
     $(ARCH_DIR)/ac9764.c \
     $(ARCH_DIR)/hs_apps.c \
     $(ARCH_DIR)/hs_systools64.c \
+    $(KERNEL_DIR)/shared/log/event_log.c \
+    $(KERNEL_DIR)/sched/services.c \
     $(ARCH_DIR)/klog64.c \
     $(ARCH_DIR)/hs_oobe64.c \
     $(ARCH_DIR)/arch_port_x86_64.c \
@@ -198,7 +200,7 @@ C_OBJECTS = $(addprefix $(BUILD_DIR)/, $(notdir $(C_SOURCES:.c=.o)))
 ASM_OBJECTS = $(addprefix $(BUILD_DIR)/, $(notdir $(ASM_SOURCES:.S=.o)))
 
 # VPATH用于查找源文件
-vpath %.c $(KERNEL_DIR) $(ARCH_DIR) $(KERNEL_DIR)/lib $(KERNEL_DIR)/shared/gfx $(KERNEL_DIR)/shared/drivers $(KERNEL_DIR)/shared/fs $(KERNEL_DIR)/shared/lib $(KERNEL_DIR)/shared/debug $(KERNEL_DIR)/shared/desktop $(KERNEL_DIR)/crypto $(KERNEL_DIR)/net
+vpath %.c $(KERNEL_DIR) $(ARCH_DIR) $(KERNEL_DIR)/lib $(KERNEL_DIR)/shared/gfx $(KERNEL_DIR)/shared/drivers $(KERNEL_DIR)/shared/fs $(KERNEL_DIR)/shared/lib $(KERNEL_DIR)/shared/debug $(KERNEL_DIR)/shared/desktop $(KERNEL_DIR)/shared/log $(KERNEL_DIR)/sched $(KERNEL_DIR)/crypto $(KERNEL_DIR)/net
 vpath %.S $(ARCH_DIR)
 
 

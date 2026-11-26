@@ -15,6 +15,8 @@
 #include "hepu.h"
 #include "dtb.h"
 #include "i18n.h"
+#include "services.h"
+#include "event_log.h"
 
 void cmd_ps(void)
 {
@@ -408,4 +410,128 @@ void cmd_sysinfo(void)
     uint32_t cpu_mhz = cpu ? dtb_get_prop_u32(cpu, "clock-frequency", 0) / 1000000 : 0;
     vga_printf(" platform: hepu-x86 (dtb=%d nodes, cpu=%uMHz)\n",
                dtb_node_count(), cpu_mhz);
+}
+
+/* ============================================================================
+ * 统一事件日志命令 journal / log
+ * 同一份 event_log 数据源，服务 layer 与内核 layer 都写入这里。
+ * ========================================================================== */
+static int cmd_parse_level(const char *s)
+{
+    int v = 0;
+    if (!s || !*s) return -1;
+    while (*s >= '0' && *s <= '9') { v = v * 10 + (*s - '0'); s++; }
+    if (*s || v < 0 || v > 4) return -1;
+    return v;
+}
+
+void cmd_journal(char *arg)
+{
+    extern void event_log_dump(int);
+    extern int event_log_save(void);
+    extern uint32_t event_log_count(void);
+    extern void event_log_clear(void);
+    if (!arg) arg = "";
+    while (*arg == ' ') arg++;
+
+    if (!*arg) {
+        event_log_dump(1);   /* INFO 及以上 */
+        return;
+    }
+    if (strcmp(arg, "stat") == 0) {
+        vga_printf("[LOG] entries=%u cap=%d source=event_log sink=%s\n",
+                   event_log_count(), 256,
+                   "hepu_events.log");
+        return;
+    }
+    if (strcmp(arg, "clear") == 0) {
+        event_log_clear();
+        vga_puts("[LOG] event ring cleared\n");
+        return;
+    }
+    if (strcmp(arg, "save") == 0) {
+        int rc = event_log_save();
+        if (rc >= 0) vga_printf("[LOG] saved %d bytes -> /hepu_events.log\n", rc);
+        else vga_printf("[LOG] save failed rc=%d (ext2 not ready?)\n", rc);
+        return;
+    }
+    if (strncmp(arg, "-l", 2) == 0 || strncmp(arg, "level", 5) == 0) {
+        const char *p = arg;
+        if (strncmp(p, "level", 5) == 0) p += 5;
+        else p += 2;
+        while (*p == ' ') p++;
+        int lv = cmd_parse_level(p);
+        if (lv < 0) { vga_puts("usage: journal [-l <0..4>] | stat | save | clear\n"); return; }
+        event_log_dump(lv);
+        return;
+    }
+    vga_puts("usage: journal [-l <0..4>] | stat | save | clear\n");
+}
+
+/* ============================================================================
+ * 服务管理命令 service
+ * 直接使用 kernel/sched/services.c 的单一服务表；不新增第二套服务事实源。
+ * ========================================================================== */
+static const char *service_state_name(int st)
+{
+    switch (st) {
+        case SERVICE_INACTIVE: return "inactive";
+        case SERVICE_ACTIVATING: return "activating";
+        case SERVICE_ACTIVE: return "active";
+        case SERVICE_DEACTIVATING: return "deactivating";
+        case SERVICE_FAILED: return "failed";
+        default: return "?";
+    }
+}
+
+static void service_print_one(const service_t *s)
+{
+    vga_printf("  %-12s %-10s enabled=%d pid=%d restarts=%d\n",
+               s->def.name, service_state_name(s->state),
+               s->def.enabled, s->def.pid, s->restart_count);
+}
+
+void cmd_service(char *arg)
+{
+    service_t list[SERVICE_MAX];
+    if (!arg) arg = "";
+    while (*arg == ' ') arg++;
+
+    if (!*arg || strcmp(arg, "list") == 0) {
+        int n = services_list(list, SERVICE_MAX);
+        vga_printf("[SVC] services=%d active=%d\n", n, services_active_count());
+        for (int i = 0; i < n; i++) service_print_one(&list[i]);
+        return;
+    }
+
+    char sub[24] = {0};
+    char name[SERVICE_NAME_LEN] = {0};
+    int i = 0;
+    while (*arg && *arg != ' ' && i < 23) sub[i++] = *arg++;
+    while (*arg == ' ') arg++;
+    i = 0;
+    while (*arg && *arg != ' ' && i < SERVICE_NAME_LEN - 1) name[i++] = *arg++;
+
+    if (strcmp(sub, "status") == 0) {
+        if (!name[0]) { vga_puts("usage: service status <name>\n"); return; }
+        service_t st;
+        if (services_status(name, &st) != 0) { vga_printf("[SVC] not found: %s\n", name); return; }
+        service_print_one(&st);
+        vga_printf("  desc=%s deps=%d\n", st.def.description, st.def.dep_count);
+        return;
+    }
+    if (strcmp(sub, "start") == 0 || strcmp(sub, "stop") == 0 ||
+        strcmp(sub, "restart") == 0 || strcmp(sub, "enable") == 0 ||
+        strcmp(sub, "disable") == 0) {
+        if (!name[0]) { vga_printf("usage: service %s <name>\n", sub); return; }
+        int rc = -1;
+        if (strcmp(sub, "start") == 0) rc = services_start(name);
+        else if (strcmp(sub, "stop") == 0) rc = services_stop(name);
+        else if (strcmp(sub, "restart") == 0) rc = services_restart(name);
+        else if (strcmp(sub, "enable") == 0) rc = services_enable(name);
+        else rc = services_disable(name);
+        vga_printf("[SVC] %s %s: %s (rc=%d)\n", sub, name, rc == 0 ? "ok" : "failed", rc);
+        return;
+    }
+    vga_puts("usage: service list | status <name> | start|stop|restart|enable|disable <name>\n");
 }

@@ -378,6 +378,8 @@ void hepu_kernel_main(uint32_t magic, multiboot_info_t *mb_info)
     {
         extern void serial_init_com1(void);
         serial_init_com1();
+        extern void event_log_platform_init(void);
+        event_log_platform_init();
     /* EARLY 探针: 启动最早期读表区物理内容, 区分"引导器未加载.data"与"运行中写坏" */
     extern void serial_puthex(uint16_t, uint32_t);
     {
@@ -685,6 +687,13 @@ void hepu_kernel_main(uint32_t magic, multiboot_info_t *mb_info)
     /* ---- V3.78: 诊断日志落盘 (ext2 已就绪, 写入 /hepu_boot.log) ---- */
     extern void klog_save_to_disk(void);
         klog_save_to_disk();
+    {
+        extern int event_log_save(void);
+        int ev = event_log_save();
+        extern void serial_puts(uint16_t, const char *);
+        serial_puts(0x3F8, ev >= 0 ? "[EVENT] saved to /hepu_events.log\n"
+                                   : "[EVENT] save skipped (no ext2)\n");
+    }
 
     vga_set_color(VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK);
     vga_putc('\n');

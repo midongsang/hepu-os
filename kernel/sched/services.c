@@ -9,6 +9,16 @@
 #include "string.h"
 #include "pit.h"
 #include "crash_ctx.h"
+#include "event_log.h"
+
+#ifdef HEPU_KERNEL_64
+/* 64 位当前没有 32 位 crash_ctx 的 restart snapshot 实现；
+ * 服务管理只记录失败事件，不伪造恢复现场。 */
+void crash_ctx_snapshot_for_restart(uint32_t pid)
+{
+    (void)pid;
+}
+#endif
 
 static service_t services[SERVICE_MAX];
 static int service_count = 0;
@@ -43,6 +53,7 @@ int services_register(service_def_t *def)
             services[i].state = SERVICE_INACTIVE;
             service_count++;
             vga_printf("[SERVICES] registered: %s\n", def->name);
+            event_log_emit(EVENT_INFO, "service", 10, "registered %s", def->name);
             return 0;
         }
     }
@@ -106,6 +117,7 @@ int services_start(const char *name)
                 crash_ctx_snapshot_for_restart((uint32_t)svc->def.pid);
                 svc->restart_count++;
                 vga_printf("[SERVICES] auto reboot(%d/3): %s\n", svc->restart_count, name);
+            event_log_emit(EVENT_ERROR, "service", 13, "start failed %s rc=%d", name, ret);
                 return services_start(name);
             }
             return -1;
@@ -116,6 +128,7 @@ int services_start(const char *name)
     svc->start_time = 0;  /* 原型阶段 */
     svc->restart_count = 0;
     vga_printf("[SERVICES] started: %s\n", name);
+    event_log_emit(EVENT_INFO, "service", 11, "started %s", name);
     return 0;
 }
 
@@ -127,6 +140,7 @@ int services_stop(const char *name)
 
     svc->state = SERVICE_DEACTIVATING;
     vga_printf("[SERVICES] stop: %s\n", name);
+    event_log_emit(EVENT_INFO, "service", 12, "stopping %s", name);
 
     if (svc->def.stop_func) {
         svc->def.stop_func();
