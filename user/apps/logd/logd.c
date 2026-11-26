@@ -69,17 +69,22 @@ static int l_dec(char *d, int cap, int pos, uint32_t v, int width)
     char b[12]; int i = 0;
     if (v == 0) b[i++] = '0';
     while (v && i < 12) { b[i++] = (char)('0' + v % 10); v /= 10; }
-    while (i < width && pos + 1 < cap) { d[pos++] = '0'; i++; } /* 前置宽度补 0 */
+    int digits = i;
+    /* 补零只写输出缓冲，绝不递增 b 的索引；反序阶段只写真实 digits。 */
+    while (digits < width && pos + 1 < cap) { d[pos++] = '0'; digits++; }
     while (i > 0 && pos + 1 < cap) d[pos++] = b[--i];
     return pos;
 }
 
 static int l_hex(char *d, int cap, int pos, uint32_t v)
 {
-    static const char *h = "0123456789abcdef";
+    static const char h[] = "0123456789abcdef";
     char b[8]; int i = 0;
     if (v == 0) b[i++] = '0';
     while (v && i < 8) { b[i++] = h[v & 0xF]; v >>= 4; }
+    int digits = i;
+    /* 定宽 8 位十六进制零填充：补零只写输出，反序只写真实 digits。 */
+    while (digits < 8 && pos + 1 < cap) { d[pos++] = '0'; digits++; }
     while (i > 0 && pos + 1 < cap) d[pos++] = b[--i];
     return pos;
 }
