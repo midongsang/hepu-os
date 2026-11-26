@@ -28,4 +28,7 @@ const char *bootopts_cmdline(void);
 /* 1=cmdline hepu.lock=0, 关闭开机锁屏(默认开启锁屏) */
 int bootopts_lock_disabled(void);
 
+/* 1=cmdline hepu.svcprobe=1, 注册 OPEN-06 验收探针夹具(默认关闭) */
+int bootopts_svcprobe(void);
+
 #endif /* HEPU_BOOTOPTS64_H */

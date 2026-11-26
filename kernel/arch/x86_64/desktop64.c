@@ -267,6 +267,10 @@ void desktop64_run(void)
         extern int dhcp64_poll(void);
         { uint64_t __t = desktop64_rdtsc(); dhcp64_poll(); g_cyc_dhcp += desktop64_rdtsc() - __t; }
 
+        /* OPEN-06: 服务监督节流节拍。退避到期的重试在主循环上下文执行；
+         * 中断上下文不直接调 services_start（它会 vga/event_log/可能落盘）。 */
+        { extern void services_monitor_poll(void); services_monitor_poll(); }
+
         /* V0.13.9: 天气真实数据拉取 (60 帧≈8s 后一次, 阻塞 ~1-3s)
          * V0.56.1: 原来只试一次, 网络(DHCP/DNS)没就绪就永久空白。改为失败重试,
          * 最多 6 次, 每次间隔 60 帧; 成功后不再请求。 */

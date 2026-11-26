@@ -2395,17 +2395,41 @@ static const char *svc_state_name64(int st)
     }
 }
 
+static const char *svc_health_name64(service_health_t h)
+{
+    switch (h) {
+        case HEALTH_STUB: return "stub";
+        case HEALTH_HEALTHY: return "healthy";
+        case HEALTH_FAILED: return "failed";
+        default: return "unknown";
+    }
+}
+
+/* 与 32 位 shell_cmd_system.c 同一口径：health 列 + STUB 备注。
+ * 注意：64 位 vga_printf 只支持裸 %s/%d/%u/%x，不解析宽度/对齐标志，
+ * 这里逐段 puts，避免格式串被原样打到串口。 */
+static void svc_print_one64(const service_t *s)
+{
+    vga_puts("  ");
+    vga_puts(s->def.name);
+    vga_puts("  ");
+    vga_puts(svc_state_name64(s->state));
+    vga_puts("  ");
+    vga_puts(svc_health_name64(s->health));
+    vga_printf("  enabled=%d restarts=%d\n", s->def.enabled, s->restart_count);
+    if (s->health == HEALTH_STUB) {
+        vga_puts("    (stub: no real daemon/process, state machine only)\n");
+    }
+}
+
 static void shell_cmd_service(int argc, char **argv)
 {
     service_t list[SERVICE_MAX];
     if (argc < 2 || strcmp(argv[1], "list") == 0) {
         int n = services_list(list, SERVICE_MAX);
-        vga_printf("[SVC] services=%d active=%d\n", n, services_active_count());
-        for (int i = 0; i < n; i++)
-            vga_printf("  %-12s %-10s enabled=%d pid=%d restarts=%d\n",
-                       list[i].def.name, svc_state_name64(list[i].state),
-                       list[i].def.enabled, list[i].def.pid,
-                       list[i].restart_count);
+        vga_printf("[SVC] services=%d active=%d healthy=%d\n", n,
+                   services_active_count(), services_healthy_count());
+        for (int i = 0; i < n; i++) svc_print_one64(&list[i]);
         return;
     }
     if (strcmp(argv[1], "status") == 0) {
@@ -2415,9 +2439,7 @@ static void shell_cmd_service(int argc, char **argv)
             vga_printf("[SVC] not found: %s\n", argv[2]);
             return;
         }
-        vga_printf("  %-12s %-10s enabled=%d pid=%d restarts=%d\n",
-                   st.def.name, svc_state_name64(st.state),
-                   st.def.enabled, st.def.pid, st.restart_count);
+        svc_print_one64(&st);
         vga_printf("  desc=%s deps=%d\n", st.def.description, st.def.dep_count);
         return;
     }
@@ -3728,6 +3750,9 @@ void shell64_run(void)
             net64_poll();
             dhcp64_poll();
         }
+
+        /* OPEN-06: 服务监督节流节拍（主循环上下文，不在中断里拉起服务）。 */
+        { extern void services_monitor_poll(void); services_monitor_poll(); }
 
         shell_prompt();
         shell_read_line(line, sizeof(line));

@@ -53,6 +53,7 @@ static int s_nographics = 0;
 static int s_nographics_forced = 0;
 static int s_dev = 0;
 static int s_lock_disabled = 0;
+static int s_svcprobe = 0;
 static const char *s_cmdline = 0;
 
 /* desktop64.c 中定义的全局文本模式标志 */
@@ -84,6 +85,7 @@ void bootopts64_init(uint32_t magic, uint64_t mb_info_addr)
     }
     if (has_param(cmdline, "hepu.dev=1")) s_dev = 1;
     if (has_param(cmdline, "hepu.lock=0")) s_lock_disabled = 1;
+    if (has_param(cmdline, "hepu.svcprobe=1")) s_svcprobe = 1;
 
     /* 保护模式标记: 只在 graphics=0 时输出, 正常模式不新增任何日志 */
     if (s_nographics) {
@@ -114,4 +116,9 @@ const char *bootopts_cmdline(void)
 int bootopts_lock_disabled(void)
 {
     return s_lock_disabled;
+}
+
+int bootopts_svcprobe(void)
+{
+    return s_svcprobe;
 }

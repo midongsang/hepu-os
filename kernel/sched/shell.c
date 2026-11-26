@@ -370,6 +370,10 @@ void shell_main(void)
         extern void net_poll(void);
         net_poll();
 
+        /* OPEN-06: 服务监督节流节拍。退避到期的重试在主循环上下文执行；
+         * 不在 PIT/键盘中断里直接调 services_start。 */
+        { extern void services_monitor_poll(void); services_monitor_poll(); }
+
         /* 32 位桌面在这里被驱动。这是主路径: shell 空转时每一圈都会过这里,
          * 不像 keyboard_getchar 那样依赖"键盘缓冲区恰好为空" —— 实测缓冲区
          * 有残留时那个 while 根本不进, 桌面就一直是首帧(死帧)。

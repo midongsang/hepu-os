@@ -49,6 +49,24 @@ static int services_initialized = 0;
 /* 测试钩子：替换单调 tick 来源；0 表示用平台默认时钟。 */
 static uint64_t (*svc_clock_hook)(void) = 0;
 
+/* OPEN-06 验收探针开关：默认不注册。仅当启动参数带 hepu.svcprobe=1
+ * （32 位 multiboot cmdline / 64 位 UEFI cmdline），或构建显式打开
+ * HEPU_SVC_PROBE 宏时才注册。探针是测试夹具，不是产品服务。 */
+static int svc_probe_enabled(void)
+{
+#ifdef HEPU_SVC_PROBE
+    return 1;
+#else
+#ifdef HEPU_KERNEL_64
+    extern int bootopts_svcprobe(void);
+    return bootopts_svcprobe();
+#else
+    extern int multiboot_has_param(const char *key);
+    return multiboot_has_param("hepu.svcprobe=1");
+#endif
+#endif
+}
+
 void services_set_clock_hook(uint64_t (*fn)(void))
 {
     svc_clock_hook = fn;
@@ -462,6 +480,18 @@ static int svc_gui_start(void)
 }
 static int svc_gui_stop(void) { return 0; }
 
+/* OPEN-06 验收探针夹具：前 3 次 start 确定性失败，第 4 次成功。
+ * 仅用于在真实 boot 中观察 失败 → 退避排程 → 退避到期重试 → 成功(healthy)
+ * 的监督链路；不是真实产品服务，不代表具备 daemon/进程拉起能力。 */
+static int svc_probe_start_calls = 0;
+static int svc_probe_start(void)
+{
+    svc_probe_start_calls++;
+    if (svc_probe_start_calls <= 3) return -1;
+    return 0;
+}
+static int svc_probe_stop(void) { return 0; }
+
 /* 全图校验：缺依赖 / 循环依赖均记事件、置 FAILED 并返回 -1；
  * 供启动流程与 KUnit 复用。 */
 int services_validate_graph(void)
@@ -563,6 +593,24 @@ int services_start_boot(void)
     def.stub = 1;
     services_register(&def);
 
+    /* OPEN-06 验收探针：显式开关下才注册；明确标注为测试探针，
+     * 不与内置五项 STUB 混在一起，也不伪造真实 daemon。 */
+    if (svc_probe_enabled()) {
+        memset(&def, 0, sizeof(def));
+        strcpy(def.name, "svc-probe");
+        strcpy(def.description,
+               " TEST PROBE (not a product service): first 3 starts fail, then healthy; switch-gated fixture");
+        def.type = SERVICE_TYPE_DAEMON;
+        def.start_policy = SERVICE_START_BOOT;
+        def.start_func = svc_probe_start;
+        def.stop_func = svc_probe_stop;
+        def.enabled = 1;
+        def.restart_on_failure = 1;
+        def.max_retries = 3;
+        def.stub = 0;
+        services_register(&def);
+    }
+
     /* 1) 全图校验：缺依赖 / 循环依赖明确报出并记事件，不静默跳过。 */
     int bad[SERVICE_MAX];
     for (int i = 0; i < SERVICE_MAX; i++) bad[i] = 0;
@@ -632,6 +680,23 @@ void services_monitor_tick(void)
         vga_printf("[SERVICES] retry after backoff: %s\n", svc->def.name);
         services_start(svc->def.name);
     }
+}
+
+/* 生产调度节流间隔：64 位 tick=1ms，32 位 PIT 100Hz（tick=10ms），
+ * 两侧都收敛到约 250ms 一次，单次轮询只扫表，不构成可感知卡顿。 */
+#ifdef HEPU_KERNEL_64
+#define SVC_POLL_INTERVAL_TICKS 250u
+#else
+#define SVC_POLL_INTERVAL_TICKS 25u
+#endif
+
+void services_monitor_poll(void)
+{
+    static uint64_t last_poll = 0;
+    uint64_t now = svc_now_ticks();
+    if (now - last_poll < SVC_POLL_INTERVAL_TICKS) return;
+    last_poll = now;
+    services_monitor_tick();
 }
 
 int services_count(void)

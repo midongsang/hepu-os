@@ -229,6 +229,10 @@ void x86_64_kernel_main(void)
     {
         extern void services_init(void);
         extern void services_start_boot(void);
+        /* 服务表在下方启动序列里注册探针夹具，其开关取自 cmdline；
+         * 这里提前解析一次（269 行附近的常规解析保留，幂等重复解析）。 */
+        extern void bootopts64_init(uint32_t, uint64_t);
+        bootopts64_init(g_mb_magic, g_mb_info_addr);
         services_init();
         services_start_boot();
     }

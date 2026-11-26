@@ -275,6 +275,12 @@ ifeq ($(MSC_SWEEP_TEST),1)
 CFLAGS += -DHEPU_MSC_SWEEP_TEST
 endif
 
+# OPEN-06 验收探针：默认关闭；仅取证构建用 make SVC_PROBE=1 打开，
+# 注册 svc-probe 夹具（前 3 次启动失败、第 4 次成功）。发布构建不编入。
+ifeq ($(SVC_PROBE),1)
+CFLAGS += -DHEPU_SVC_PROBE
+endif
+
 # Linux 兼容进程的 syscall 跟踪（调试用，默认关）。
 # 打开： make HEPU_TRACE_LINUX_SYSCALL=1
 ifeq ($(HEPU_TRACE_LINUX_SYSCALL),1)

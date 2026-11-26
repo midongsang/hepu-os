@@ -128,6 +128,10 @@ int services_stop_all(void);
 /* 服务管理器主循环 (监控/退避重试) */
 void services_monitor_tick(void);
 
+/* 生产调度入口：主循环/等待点节流调用；内部按间隔收敛到 monitor_tick。
+ * 只能在非中断上下文调用；中断里不得直接拉起 services_start。 */
+void services_monitor_poll(void);
+
 /* 获取服务数量 */
 int services_count(void);
 

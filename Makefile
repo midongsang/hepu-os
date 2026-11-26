@@ -36,6 +36,12 @@ ifneq ($(P2_LONG_STRESS),)
 CFLAGS += -DHEPU_P2_LONG_STRESS=$(P2_LONG_STRESS)
 endif
 
+# OPEN-06 验收探针：默认关闭；仅取证构建用 make SVC_PROBE=1 打开，
+# 注册 svc-probe 夹具（前 3 次启动失败、第 4 次成功）。发布构建不编入。
+ifeq ($(SVC_PROBE),1)
+CFLAGS += -DHEPU_SVC_PROBE
+endif
+
 LDFLAGS = -m elf_i386 -T kernel/linker.ld --gc-sections
 # GAS 汇编文件用 gcc 预处理编译
 ASFLAGS = -m32 -ffreestanding -nostdlib -DHEPU_BOOT_DEBUG -DHEPU_AUTO_FSCK
