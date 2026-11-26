@@ -76,6 +76,7 @@ C_SOURCES = \
     $(ARCH_DIR)/hepua.c \
     $(ARCH_DIR)/hepu_dev.c \
     $(ARCH_DIR)/shell64.c \
+    $(ARCH_DIR)/shell_cmd_admin64.c \
     $(ARCH_DIR)/desktop64.c \
     $(ARCH_DIR)/bootopts64.c \
     $(ARCH_DIR)/user_process.c \

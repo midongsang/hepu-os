@@ -24,6 +24,7 @@
 #include "touch.h"
 #include "touch_hw.h"
 #include "uproc.h"
+#include "shell_admin.h"
 
 int cmd_run_auto(const char *args)
 {
@@ -496,6 +497,9 @@ void shell_execute(char *cmd)
         machine_reboot();
     } else if (strcmp(cmd, "shutdown") == 0 || strcmp(cmd, "poweroff") == 0 || strcmp(cmd, "power") == 0) {
         machine_poweroff();
+    } else if (shell_admin_dispatch(cmd, args)) {
+        /* 系统管理命令集中分派：chmod/chown/chgrp mount/umount fsck/mkfs
+         * useradd/userdel。本块在链尾、unknown 兜底之前，不重排已有分支。 */
     } else {
         vga_printf(" %s: %s (help)\n", i18n_get(I18N_CMD_NOT_FOUND), cmd);
     }

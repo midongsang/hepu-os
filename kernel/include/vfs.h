@@ -120,6 +120,7 @@ int vfs_mount(const char *path, vfs_node_t *root);
 int vfs_bind_stdio(vfs_node_t *node);
 int vfs_open(const char *path, int flags);
 int vfs_close(int fd);
+int vfs_path_busy(const char *path);
 int vfs_read(int fd, void *buf, uint32_t size);
 int vfs_write(int fd, const void *buf, uint32_t size);
 int vfs_lseek(int fd, int32_t offset, int whence);

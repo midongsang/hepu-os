@@ -1,0 +1,7 @@
+  CC  kernel/kunit/kunit_admin.c
+  LD  build_v250/kernel.elf
+  BIN build_v250/hepu-kernel.bin
+
+=== 赫普OS 内核编译完成 ===
+-rwxr-xr-x 1 user user 3.7M Nov 26 12:49 build_v250/hepu-kernel.bin
+
