@@ -1,0 +1,10 @@
+=== 布局审计（audit_layout）===
+32 位源文件: 504  64 位源文件: 157  shared: 13/13
+shared 仅 32 位: 0  仅 64 位: 0
+归属错位: 0  平行实现 INFO: 2
+vpath 缺口: 0  反向依赖: 0
+磁盘缺失: 0  32 位泄漏 x86_64: 0
+  INFO  平行: kernel/boot/acpi.c <> kernel/arch/x86_64/acpi.c
+  INFO  平行: kernel/sched/smp.c <> kernel/arch/x86_64/smp.c
+errors=0
+报告已写入: docs/status/evidence-layout-2026-11-26/layout-audit-report.md

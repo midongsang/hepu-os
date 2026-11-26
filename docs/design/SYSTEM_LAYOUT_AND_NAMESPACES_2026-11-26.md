@@ -35,7 +35,7 @@ supersedes: null
 | `kernel/shared/debug` | 架构无关调试辅助 | 1 个 `.c`（`debug_shared.c`）+ 1 个头 | 符合职责 |
 | `kernel/shared/desktop` | 桌面运行时注册表/表面/注册器等纯软件层，不直接写像素 | 5 个 `.c`（`desk_demo/desk_hpdesk/desk_registry/desk_runtime/desk_surface.c`）+ `desk_api.h` | 符合职责 |
 | `kernel/shared/{ai,capability,domain,mm,net,process,qos,security}` | 仅放跨架构契约头，不放实现 | 均为 0 个 `.c`，1~3 个头 | 符合职责；后续若下沉实现，必须两侧清单同步收录（见红线 R5） |
-| `kernel/include` | 跨架构契约头：两侧共同消费的数据模型、ABI、共享结构 | 311 个头。实测分三类：① 两侧共同消费（如 `event_log.h`、`services.h`、`types.h` 部分）；② 仅 32 侧消费的历史契约头（如 `vfs.h`、`ext2.h`、`process.h`、`shell.h`、`kstdio.h`）；③ 64 位私有头例外 `seccomp64.h`（仅 `arch/x86_64/seccomp64.c`、`syscall64_full.c` 包含） | 混杂：历史 32 位私有头与 64 位私有头未与真跨架构契约分离，登记 OPEN-07 |
+| `kernel/include` | 跨架构契约头：两侧共同消费的数据模型、ABI、共享结构 | 311 个头。实测分三类：① 两侧共同消费（如 `event_log.h`、`services.h`、`types.h` 部分）；② 仅 32 侧消费的历史契约头（如 `vfs.h`、`ext2.h`、`process.h`、`shell.h`、`kstdio.h`）；③ 64 位私有头已在 2026-11-26 阶段 1 把 `seccomp64.h` 归位到 `arch/x86_64/include/` | 32 位历史私有头仍混杂，继续按 OPEN-07 阶段 2 逐头复核 |
 | `kernel/kunit` | 架构无关的 KUnit 测试套件 | 58 个 `.c` | 符合职责 |
 | `kernel/drivers` | 历史顶层 32 位设备驱动树；64 位对应驱动在 `arch/x86_64` | 60 个 `.c`、6 个头，含 `audio/`、`usb/` 子目录 | 32 位驱动集合，属双份实现一侧；后续驱动归集应先经 `shared/drivers` 出 ops 契约 |
 | `kernel/net` | 32 位协议栈 | 44 个 `.c`；64 位对应 `net64_*` 在 `arch/x86_64` | 同上，双份实现一侧 |
@@ -92,7 +92,7 @@ arch/x86_64 ┘        ↑                          │
 |---|---|---|---|
 | 跨架构契约 | 被 `arch/x86`（含 sched/fs/drivers/net）与 `arch/x86_64` 两侧源码共同包含 | `event_log.h`、`services.h`、`types.h`（部分） | 留在 `kernel/include` |
 | 32 位历史私有头 | 仅 32 侧源码包含，64 侧使用自己的 `*64.h` | `vfs.h`、`ext2.h`、`process.h`、`shell.h`、`kstdio.h` | 暂留原位；归集候选，后续随 32 位驱动/文件系统平行件一起评估 |
-| 64 位私有头 | 仅 `arch/x86_64` 源码包含；部分已在 `arch/x86_64/include/`（`kernel_contracts.h`、`pmm64.h`、`vmm64.h`），例外 `seccomp64.h` 仍在 `kernel/include` | `seccomp64.h` | `seccomp64.h` 归位事项登记 OPEN-07 |
+| 64 位私有头 | 仅 `arch/x86_64` 源码包含；已在 `arch/x86_64/include/`（`kernel_contracts.h`、`pmm64.h`、`vmm64.h`、`seccomp64.h`） | `seccomp64.h` 已于 2026-11-26 阶段 1 归位 | 已归位；后续新增 64 私有头沿用 `arch/x86_64/include/` |
 
 ## 5. 本轮审计结论（来自工具实测）
 
@@ -129,6 +129,7 @@ arch/x86_64 ┘        ↑                          │
 
 - 目标：把仅 64 侧消费的私有头从 `kernel/include` 移到 `arch/x86_64/include/`，同步 `-I` 与包含路径。
 - 候选：`seccomp64.h`（OPEN-07）。
+- 状态：2026-11-26 已完成归位；64 位全量构建通过，UEFI 启动到锁屏（`[Hepu Desktop] booting to lock screen`），32 位构建与布局审计 0 error。剩余 32 位历史私有头进入阶段 2。
 - 影响文件：约 1 个头 + 2 个包含方；不动 32 位源码。
 - 验证：64 位构建 0 error；64 位 UEFI 镜像启动取证；32 位构建与冒烟不受影响。
 - 回滚：恢复头文件原位与包含路径，单提交可逆。

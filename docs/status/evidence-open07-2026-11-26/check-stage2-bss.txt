@@ -1,0 +1,25 @@
+=== Stage2 PT vs Kernel BSS ===
+内核 ELF:    /home/user/Doubao/chats/38452875115179010/wt-open07/build_x86_64/hepu-kernel64.elf
+
+--- Stage2 页表配置 ---
+PT_BASE:     0x02e00000 (46.0MB)
+PD entries:  24 × 2MB = 覆盖 0x0 - 0x3000000 (48MB)
+
+--- 内核 BSS ---
+__bss_start: 0x001fa000 (2.0MB)
+__bss_end:   0x028e10a0 (40.9MB)
+BSS size:    38.9MB
+
+--- kheap ---
+kheap_memory base: 0x004cf000 (4.8MB)
+kheap size:        32.0MB
+kheap end:         0x024cf000 (36.8MB)
+
+[✔] 规则 1 PASS: __bss_end 0x028e10a0 (40.9MB) < PT 覆盖 0x3000000
+[✔] 规则 2 PASS: PT_BASE 0x2e00000 >= BSS end 0x028e10a0 (40.9MB)
+[✔] 规则 3 PASS: kheap_end 0x024cf000 < PT 覆盖 0x3000000
+[✔] 规则 4 PASS: PT 自身 (0x2e00000 - 0x2e08000) 落在映射范围内
+[✔] 规则 5 PASS: 内核栈 0x1fa000-0x20a000 与引导器栈 0x8f000-0x90000 不重叠
+[✔] 规则 6 PASS: 入口首指令为 0x2BADB002 魔数，BSS 清零后切 hepu_kstack_top，切栈前无 call
+
+[PASS] 全部安全检查通过 (6 条规则)
