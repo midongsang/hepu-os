@@ -1,0 +1,3 @@
+[PERM] seeded /data/phone/calls.txt
+[PERM] seeded /data/browser/bookmarks.txt
+[KTEST] RESULT: ALL PASS

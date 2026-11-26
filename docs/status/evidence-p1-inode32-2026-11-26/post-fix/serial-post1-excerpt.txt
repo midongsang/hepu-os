@@ -1,0 +1,8 @@
+[PERM] seeded /data/contacts/contacts.txt
+[PERM] seeded /data/sms/sms.txt
+[PERM] seeded /data/phone/calls.txt
+[PERM] seeded /data/photos/photos.txt
+[PERM] seeded /data/browser/bookmarks.txt
+[PERM] seeded /data/music/favorites.txt
+[PERM] seeded /data/clock/alarms.txt
+[KTEST] RESULT: ALL PASS
