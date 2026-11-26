@@ -265,6 +265,13 @@ ifeq ($(ATA_HILBA_TEST),1)
 CFLAGS += -DHEPU_ATA_HILBA_TEST
 endif
 
+# OPEN-02 边界①：usb-storage 分段遍历读校验 + 单扇区写读回环（usb64.c 内
+# #ifdef HEPU_MSC_SWEEP_TEST）。发布构建默认关闭；挂独立 usb-storage 测试盘
+# 复验时： make MSC_SWEEP_TEST=1。
+ifeq ($(MSC_SWEEP_TEST),1)
+CFLAGS += -DHEPU_MSC_SWEEP_TEST
+endif
+
 # Linux 兼容进程的 syscall 跟踪（调试用，默认关）。
 # 打开： make HEPU_TRACE_LINUX_SYSCALL=1
 ifeq ($(HEPU_TRACE_LINUX_SYSCALL),1)
