@@ -1,0 +1,69 @@
+OPEN-05 独立复核（2026-11-26，MainAgent）
+基线与分支
+- 基线：main 87a99e4（含 OPEN-06、OBS-09、OBS-06 登记、OPEN-07 阶段 1）
+- 复核分支：merge/open05-verify-2026-11-26
+- 仅 cherry-pick OPEN-05 五笔：8ae1dac、04d5a2f、cc1e9d9、0549c65、e4219c2
+- 未带入 6dac03b（OPEN-05 WIP 骨架）
+
+一、格式化修复静态核对
+- user/apps/logd/logd.c 的 l_dec()：补零只写输出缓冲、不递增 b 索引；
+  反序阶段只写真实 digits；l_hex() 同口径。
+- 读回文件 docs/status/evidence-open05-2026-11-26/readback/64-dated-file.txt：
+  file 判定 ASCII text；1350 字节；16 行；NUL 计数 0；
+  seq 00000001..00000016 连续；每行 tick 为 16 位十六进制。
+
+二、集成构建（当前 main + OPEN-05）
+命令：
+  make -C user -j2
+  HEPU_EV=/tmp/open05-merge bash tools/regress/build_all.sh
+结果：
+  IMG=/tmp/open05-merge/build/hepu.img
+  kernel64.bin 1023312
+  kernel32.bin 3864141
+  kernel32.elf 4047468
+  bootx64.efi 106844
+  image 268435456
+  BUILD DONE
+- 镜像内 /bin/logd.elf：inode 54，regular 0755，8576 字节。
+- 注意：build_all.sh 不构建 user/ 应用；需先 make -C user，否则镜像 /bin
+  只有 hello_dyn.elf，logd 会在串口报 spawn -> not found。这是取证步骤口径，
+  不是 logd 代码问题。
+
+三、32 位 KUnit 集成回归
+带盘：
+  ktest_result=PASS fail_suites=0 fail_cases=0 skip_cases=0 p3_skip=0
+  p3-security: passed=2 failed=0 skipped=0
+  serial=1 initrd=1 net=1 desk=1 fault=0 lines=755
+无盘：
+  ktest_result=PASS fail_suites=0 fail_cases=0 skip_cases=6 p3_skip=2
+  p3-security: passed=0 failed=0 skipped=2（两条均为 ext2 backend unavailable）
+  serial=1 initrd=1 net=1 desk=1 fault=0 lines=740
+SKIP 未计 PASS，未删除或改写断言。
+
+四、64 位默认桌面 logd 链路（集成镜像实跑）
+串口原文：
+  [DESKTOP64] Desktop running with mouse support
+  [LOGD] spawn /bin/logd.elf
+  [LOGD] consumed=16 wrote=/var/log/hepu/2026-11-26.log bytes=1350 last_seq=16
+  [LOCK] login -> desktop (auth ok)
+  [LOCK] state: login -> desktop (unlocked)
+镜像内读回：
+  /var/log/hepu/2026-11-26.log：1350 字节，16 行，ASCII，无 NUL；
+  seq 00000001..00000016；每行 tick 16 位；首行 64-bit kernel entry，
+  末行 [ACCOUNT] configured, skip OOBE。
+  /var/log/hepu/.cursor：16
+- 与代理证据的 tick 数值不同（本次 0x172，代理证据 0x1bd），属启动时序差异；
+  行数、seq、字节数与 cursor 一致。
+
+五、静态门禁
+- python3 tools/check_docs.py：warns=0 errors=0，当前版本 0.62.1
+- python3 tools/check_stage2_bss.py：6/6 PASS
+- python3 tools/audit_layout.py：errors=0，归属错位 0，平行实现 INFO 2
+  （ACPI/SMP 同名平行件）
+
+结论
+- l_dec/l_hex 的 NUL 写坏已修复，读回恢复为可读 ASCII。
+- OPEN-05 五笔可干净叠到当前 main，32 位带盘/无盘 KUnit 全绿，
+  64 位默认桌面真实拉起 logd 并按日期落盘、游标推进。
+- 本版边界不变：远程 syslog、32 位 logd、常驻 daemon、掉电原子性、
+  256 条环淘汰历史均未做。
