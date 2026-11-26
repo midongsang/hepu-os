@@ -1,0 +1,15 @@
+[LOCK] state: lock -> login (key)
+[LOCK] login -> desktop (no account configured)
+[LOCK] state: login -> desktop (unlocked)
+[P0] cursor-only fast path active (x=984 y=552)
+[P0] frames: redraw=233 skip=1567 skip_pct=87
+[P0] cursor-only frames=82
+[P0] dirty-region frames=0
+--- 后续移动窗口（可选） ---
+[P0] frames: redraw=87 skip=1713 skip_pct=95
+[P0] cursor-only frames=47
+[P0] dirty-region frames=0
+[P0] cursor-only fast path active (x=1752 y=73)
+[P0] frames: redraw=88 skip=1712 skip_pct=95
+[P0] cursor-only frames=14
+[P0] dirty-region frames=0

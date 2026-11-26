@@ -1154,7 +1154,7 @@ serial=1 initrd=1 net=1 desk=1 fault=0 bound=1 lines=870  PASS
 - 证据：`/home/user/Doubao/chats/38452875115179010/evidence-ledger-2026-11-18/64/host-tests/host-tests.log`。
 - 代码位置：`tools/host-tests/run_host_tests.sh:64`；`tools/host-tests/elf_test.c:9-10`。
 
-## OBS-09：x86 桌面局部刷新未生效（cursor-only 恒为 0）
+## OBS-09：x86 桌面局部刷新未生效（cursor-only 恒为 0）—— **2026-11-26 部分关闭（cursor-only 已恢复）**
 
 **现象**（2026-11-18 实测日志 /tmp/vq.log）：
 ```
@@ -1163,21 +1163,31 @@ serial=1 initrd=1 net=1 desk=1 fault=0 bound=1 lines=870  PASS
 [P0] dirty-region frames=0
 ```
 
-**代码现状**：光标脏区快速路径（`hpdesk.c` 第 7231 行起）与脏矩形局部路径都已实现，
-`gfx64_present_region` 后端也在，但两条路径的计数器为 0 —— **说明它们一次都没进过**。
+**代码现状**：光标脏区快速路径与脏矩形局部路径都已实现，`gfx64_present_region`
+后端也在，但两条路径的计数器曾为 0。
 
-**已定位的直接原因**：`g_frame_no % 30 == 0` 的兜底强制 `g_content_dirty = 1`，
-而光标快速路径要求 `!g_content_dirty`。每 30 帧被兜底打断一次，
-窗口期内还要等鼠标真的移动，实际命中率极低（实测为 0）。
+**已定位的直接原因**：`hpdesk_render_inner()` 的状态采样块在每 30 帧调用
+`hs_status_update()` 后无条件置 `g_content_dirty = 1`（CPU/内存/USB 状态刷新），
+并非只有 `g_frame_no % 300` 的兜底。光标快速路径要求 `!g_content_dirty`，
+因此每 30 帧被状态采样打断一次，窗口期内即使鼠标真的移动也进不去。
+`937d9f0` 只放宽了 300 帧兜底，没有处理这条状态采样路径，所以 cursor-only 仍为 0。
 
-**已做**（2026-11-18）：兜底从 30 帧放宽到 300 帧（`937d9f0`）。
-**实测结论：cursor-only 仍为 0**（兜底放宽后重新跑，`[P0] cursor-only frames=0` 依旧）。
-说明 30 帧兜底只是其中一道门，**第二道门未定位**（候选：`mouse_moved` 在真实
-鼠标事件下不成立、`g_ctx.open` 常态为真、或光标路径在主循环前已被 return 拦掉）。
-本条**不标记为已修复**，保留观察，需单独插桩定位。
+**修复**（2026-11-26）：状态采样只在网络连通状态变化时
+`hs_dirty_add(0, 0, screen_width, bar_height + 16)` 标顶栏；CPU/内存数值不再
+无条件触发全屏重绘。`g_frame_no % 300` 的独立兜底保留，用于漏标兜底。
+
+**复核**（`docs/status/evidence-obs09-2026-11-26/`）：
+- 64 位默认 HPET，测试镜像临时把 `/account.conf` 改为无口令 `dev` 仅用于进桌面；
+  串口确认 `[LOCK] login -> desktop (no account configured)`。
+- 连续移动鼠标后的第一个统计窗口：`[P0] cursor-only frames=82`，
+  `[P0] cursor-only fast path active (x=984 y=552)`；停止移动后的下一个窗口回到 0，
+  属预期。
+- **边界**：本次没有成功用 VNC/HMP 拖动窗口（输入注入坐标漂移），
+  `dirty-region frames=0` 不能据此判断脏矩形路径；该项仍未独立验证。
+  `cursor-only` 结论不受影响。
 
 **预期收益**：ARM64 侧 M2S 已量化 —— 24×24 脏区 vs 整屏是 **151.8×**；
 x86 光标 128×128 区域理论也在同一量级（整屏 8.3MB vs 64KB）。
 
-**另一个待跟进**：`dirty-region frames=0` 说明拖动窗口的脏矩形路径同样没走到，
-根因可能不同（需要单独查 `g_dirty_x1` 的置位条件）。
+**另一个待跟进**：`dirty-region frames=0` 说明拖动窗口的脏矩形路径仍未独立验证，
+需要单独查 `g_dirty_x1` 的置位条件或用可定位的输入注入重测。

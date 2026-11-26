@@ -7524,12 +7524,20 @@ static void hpdesk_render_inner(void)
         }
     }
     {
-        /* P0: CPU/内存/USB 等状态数值 0.5s 采样一次, 避免每帧无效重绘 */
+        /* P0: CPU/内存/USB 等状态数值 0.5s 采样一次。
+         * OBS-09: 旧实现每次采样都无条件置 g_content_dirty=1，等于每 30 帧
+         * 强制一次全屏重绘，光标脏区快速路径和拖动脏矩形路径都会被反复打断。
+         * 状态栏真正可见的只有网络图标；仅在连通状态变化时标顶栏矩形，
+         * CPU/内存数值供控制中心按需读取，不参与每帧合成。 */
         static uint32_t last_status_frame = 0;
         if (g_frame_no - last_status_frame >= 30) {
             last_status_frame = g_frame_no;
+            int old_net = g_shell.status.network_connected;
             hs_status_update();
-            g_content_dirty = 1;
+            if (old_net != g_shell.status.network_connected) {
+                int bar_h = hs_sy(g_shell.ui.bar_height) + hs_sy(16);
+                hs_dirty_add(0, 0, g_shell.screen_width, bar_h);
+            }
         }
     }
     hs_notification_render();
