@@ -43,7 +43,14 @@ wait 形态已装载但还没有真实长任务触发点。OBS-04 已闭环（�
 - `obs02-edge-corner.png`：右下角斜向光标。
 - `obs02-corner-resized.png`：斜向拖拽后的 840×750 窗口。
 
-### 1.3 仍未闭环
+### 1.3 工作区边界钳制
+
+把右下角从 (1305,825) 拖到屏幕外 (1900,1070)，窗口没有越界：
+`[RESIZE] end win=0 size=1284x872`，窗口右缘 1899、下缘 1052（顶栏之下），
+没有把标题栏推入顶栏，也没有超出 1920×1080。截图
+`obs02-resize-clamp.png`，串口原始行 `obs02-clamp-serial.txt`。
+
+### 1.4 仍未闭环
 
 - `wait`（kind=7）素材已装载，但当前没有可观测的长任务状态机，未做真实忙态触发。
 - `not-allowed`（kind=8）只在 Files 拖拽非法落点返回；本轮没有做 GUI 拖拽取证，
@@ -92,5 +99,7 @@ wait 形态已装载但还没有真实长任务触发点。OBS-04 已闭环（�
 | `obs02-edge-corner.png` | 右下角 kind=6 光标 |
 | `obs02-corner-resized.png` | 斜向拖拽后 840×750 |
 | `obs02-serial.txt` | `[CURSOR] kind` 与 `[RESIZE]` 原始行 |
+| `obs02-resize-clamp.png` | 拖到屏幕外后的 1284×872 钳制结果 |
+| `obs02-clamp-serial.txt` | 钳制那次的串口原始行 |
 | `obs04-before.png` / `obs04-after.png` | 同位置改前/改后截图 |
 | `obs04-pixel-compare.txt` | 外沿/背景/本体逐点 RGB |

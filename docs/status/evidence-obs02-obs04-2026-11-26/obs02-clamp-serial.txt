@@ -1,0 +1,8 @@
+[CURSOR] kind=0 at 0,0
+[CURSOR] kind=1 at 960,540
+[CURSOR] kind=0 at 1669,929
+[CURSOR] kind=1 at 960,611
+[CURSOR] kind=6 at 1305,824
+[RESIZE] begin win=0 edges=10 at 1305,824 size=690x645
+[RESIZE] end win=0 size=1284x872
+[CURSOR] kind=0 at 1899,1069
