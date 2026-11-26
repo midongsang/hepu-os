@@ -381,6 +381,16 @@ tick 跳过未到期线程）仍未实现，属独立改造。
 
 ## OBS-01 部分启动里 PIT 中断不投递（偶发约 16%）—— **已定位根因并修复，升级为 BUG-49（v0.59.1）**
 
+> **2026-11-26 后续修复（默认 HPET 桌面首帧）**：OBS-01 还有一个独立出口 ——
+> `pit64_get_ms()` 仍直接返回 `pit_ticks`，即使 `pit64_get_ticks()` 已用
+> `g_kernel_tick64` 的 1kHz APIC tick 兜底，毫秒入口仍会冻在 0。默认 HPET
+> 启动时表现为串口已打印 `[DESKTOP64] Desktop initialized` / `Desktop running`，
+> 但桌面主循环的 `now - last_render_ms >= 16` 永不成立，没有 `desktop_frame1`，
+> 画面停在引导加载屏。**修复**：`pit64_get_ms()` 改为复用
+> `pit64_get_ticks()`，与 tick 入口共用同一兜底口径；默认 HPET 连续两次
+> 64 位 UEFI 启动到锁屏，`-d int,cpu_reset` 0 次 triple fault / 0 次
+> `v=0d e=0008`。证据 `docs/status/evidence-obs01-2026-11-26/`。
+
 > **升级记录（v0.59.1）**：根因已定位 —— 不是"PIT 本身不投递"这个笼统现象，
 > 而是**启动期 APIC timer 校准把「等 PIT 中断」当成了时间基准**，而那个时刻
 > IOAPIC 重定向表还没配好，IRQ0 投不进来是必然结果，与概率无关。修复见主表

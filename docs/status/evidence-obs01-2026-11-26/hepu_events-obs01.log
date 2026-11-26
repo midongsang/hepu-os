@@ -1,0 +1,62 @@
+00000001 0000000000000000 INFO  boot64       pid=0 code=1 64-bit kernel entry
+00000002 0000000000000000 INFO  service      pid=0 code=10 registered network (stub)
+00000003 0000000000000000 INFO  service      pid=0 code=10 registered audio (stub)
+00000004 0000000000000000 INFO  service      pid=0 code=10 registered wifi (stub)
+00000005 0000000000000000 INFO  service      pid=0 code=10 registered bluetooth (stub)
+00000006 0000000000000000 INFO  service      pid=0 code=10 registered gui (stub)
+00000007 0000000000000000 INFO  service      pid=0 code=11 started network (stub)
+00000008 0000000000000000 INFO  service      pid=0 code=11 started audio (stub)
+00000009 0000000000000000 INFO  service      pid=0 code=11 started wifi (stub)
+00000010 0000000000000000 INFO  service      pid=0 code=11 started gui (stub)
+00000011 0000000000000000 INFO  service      pid=0 code=11 started bluetooth (stub)
+00000012 0000000000000000 INFO  kernel64     pid=0 code=0 [BOOT] driver framework initialized
+00000013 000000000000009b INFO  kernel64     pid=0 code=0 [BOOT] storage HAL initialized
+00000014 00000000000000ba INFO  kernel64     pid=0 code=0 [BOOT] ext2 root mounted
+00000001 0000000000000000 INFO  boot64       pid=0 code=1 64-bit kernel entry
+00000002 0000000000000000 INFO  service      pid=0 code=10 registered network (stub)
+00000003 0000000000000000 INFO  service      pid=0 code=10 registered audio (stub)
+00000004 0000000000000000 INFO  service      pid=0 code=10 registered wifi (stub)
+00000005 0000000000000000 INFO  service      pid=0 code=10 registered bluetooth (stub)
+00000006 0000000000000000 INFO  service      pid=0 code=10 registered gui (stub)
+00000007 0000000000000000 INFO  service      pid=0 code=11 started network (stub)
+00000008 0000000000000000 INFO  service      pid=0 code=11 started audio (stub)
+00000009 0000000000000000 INFO  service      pid=0 code=11 started wifi (stub)
+00000010 0000000000000000 INFO  service      pid=0 code=11 started gui (stub)
+00000011 0000000000000000 INFO  service      pid=0 code=11 started bluetooth (stub)
+00000012 0000000000000000 INFO  kernel64     pid=0 code=0 [BOOT] driver framework initialized
+00000013 000000000000009b INFO  kernel64     pid=0 code=0 [BOOT] storage HAL initialized
+00000014 00000000000000ba INFO  kernel64     pid=0 code=0 [BOOT] ext2 root mounted
+00000015 0000000000000155 INFO  kernel64     pid=0 code=0 [BOOT] network up (E1000, static IP)
+00000016 0000000000000164 INFO  kernel64     pid=0 code=0 [ACCOUNT] configured, skip OOBE
+00000017 00000000000001ce INFO  kernel64     pid=0 code=0 [GUI] desktop environment ready
+00000001 0000000000000000 INFO  boot64       pid=0 code=1 64-bit kernel entry
+00000002 0000000000000000 INFO  service      pid=0 code=10 registered network (stub)
+00000003 0000000000000000 INFO  service      pid=0 code=10 registered audio (stub)
+00000004 0000000000000000 INFO  service      pid=0 code=10 registered wifi (stub)
+00000005 0000000000000000 INFO  service      pid=0 code=10 registered bluetooth (stub)
+00000006 0000000000000000 INFO  service      pid=0 code=10 registered gui (stub)
+00000007 0000000000000000 INFO  service      pid=0 code=11 started network (stub)
+00000008 0000000000000000 INFO  service      pid=0 code=11 started audio (stub)
+00000009 0000000000000000 INFO  service      pid=0 code=11 started wifi (stub)
+00000010 0000000000000000 INFO  service      pid=0 code=11 started gui (stub)
+00000011 0000000000000000 INFO  service      pid=0 code=11 started bluetooth (stub)
+00000012 0000000000000000 INFO  kernel64     pid=0 code=0 [BOOT] driver framework initialized
+00000013 000000000000002f INFO  kernel64     pid=0 code=0 [BOOT] storage HAL initialized
+00000014 000000000000005e INFO  kernel64     pid=0 code=0 [BOOT] ext2 root mounted
+00000001 0000000000000000 INFO  boot64       pid=0 code=1 64-bit kernel entry
+00000002 0000000000000000 INFO  service      pid=0 code=10 registered network (stub)
+00000003 0000000000000000 INFO  service      pid=0 code=10 registered audio (stub)
+00000004 0000000000000000 INFO  service      pid=0 code=10 registered wifi (stub)
+00000005 0000000000000000 INFO  service      pid=0 code=10 registered bluetooth (stub)
+00000006 0000000000000000 INFO  service      pid=0 code=10 registered gui (stub)
+00000007 0000000000000000 INFO  service      pid=0 code=11 started network (stub)
+00000008 0000000000000000 INFO  service      pid=0 code=11 started audio (stub)
+00000009 0000000000000000 INFO  service      pid=0 code=11 started wifi (stub)
+00000010 0000000000000000 INFO  service      pid=0 code=11 started gui (stub)
+00000011 0000000000000000 INFO  service      pid=0 code=11 started bluetooth (stub)
+00000012 0000000000000000 INFO  kernel64     pid=0 code=0 [BOOT] driver framework initialized
+00000013 000000000000002f INFO  kernel64     pid=0 code=0 [BOOT] storage HAL initialized
+00000014 000000000000005e INFO  kernel64     pid=0 code=0 [BOOT] ext2 root mounted
+00000015 000000000000021b INFO  kernel64     pid=0 code=0 [BOOT] network up (E1000, static IP)
+00000016 0000000000000230 INFO  kernel64     pid=0 code=0 [ACCOUNT] configured, skip OOBE
+00000017 0000000000000330 INFO  kernel64     pid=0 code=0 [GUI] desktop environment ready

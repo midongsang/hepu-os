@@ -134,7 +134,12 @@ uint64_t pit64_get_seconds(void)
 /* 获取毫秒数 */
 uint64_t pit64_get_ms(void)
 {
-    return pit_ticks;  /* 1 tick = 1ms */
+    /* OBS-01: 不能直接返回 pit_ticks。PIT IRQ 在部分启动里不投递
+     * 时 pit_ticks 冻住，桌面主循环的 `now - last_render_ms >= 16` 永远
+     * 不成立，串口已到 Desktop initialized/Desktop running 但首帧不画。
+     * pit64_get_ticks() 已把 g_kernel_tick64 的 1kHz APIC tick 纳入兜底，
+     * 毫秒入口必须走同一口径，不能再绕开它。 */
+    return pit64_get_ticks();
 }
 
 /* 简单延时（毫秒） */
