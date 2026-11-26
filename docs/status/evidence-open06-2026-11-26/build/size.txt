@@ -1,0 +1,6 @@
+IMG=/home/user/Doubao/chats/38452875115179010/wt-open0506/docs/status/evidence-open06-2026-11-26/build/hepu.img
+kernel64.bin 1019344
+kernel32.bin 3863853
+kernel32.elf 4046812
+bootx64.efi 106844
+image 268435456

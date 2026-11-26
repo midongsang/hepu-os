@@ -128,7 +128,9 @@ HEALTH_HEALTHY / HEALTH_FAILED`。
 - `service start` 返回成功只代表状态机接受请求；空壳服务保持 STUB，
   **不得**报 HEALTHY。`services_is_healthy()` 仅认 HEALTHY，STUB/FAILED 均不算健康；
 - `service list/status` 输出健康列；STUB 行附 “no real daemon/process,
-  state machine only” 备注。
+  state machine only” 备注。第三阶段起 64 位 `shell64.c` 的 `shell_cmd_service()`
+  与 32 位 `shell_cmd_system.c` 同一口径：`list`/`status` 都带 health 列与 STUB 备注，
+  `list` 头部打印 `services=/ active=/ healthy=` 计数。
 
 ### 3.3 失败计数与指数退避（第二阶段）
 
@@ -138,6 +140,12 @@ HEALTH_HEALTHY / HEALTH_FAILED`。
   事件 15 记 give up；退避排程记事件 14；
 - 退避判定在 `services_monitor_tick()` 内按单调 tick 评估；KUnit 可通过
   `services_set_clock_hook()` 替换时钟做确定性验证。
+- **生产调度接入口径（第三阶段）**：`services_monitor_poll()` 由两侧真实主循环
+  节流调用——64 位 `desktop64.c` 桌面主循环与 `shell64.c` 文本 shell 循环、
+  32 位 `shell.c` 文本 shell 循环；内部按约 250ms 收敛到一次 `services_monitor_tick()`，
+  单次只扫表，不构成可感知卡顿。退避到期的重试（含 `services_start()` 及其
+  `vga_printf`/`event_log_emit`/可能的落盘）只在主循环上下文执行；PIT/键盘/串口
+  中断里只允许置标志，不得直接调 `services_start()`。
 
 ### 3.4 命名空间收敛（第二阶段）
 
@@ -150,6 +158,13 @@ HEALTH_HEALTHY / HEALTH_FAILED`。
 **边界要说清**：这五项内置服务的 start/stop 仍是打印空壳（64 位音频仅初始化
 后端结构体），健康标 STUB 不代表真实 daemon/进程已被拉起。本轮统一的是
 “服务事实源、启动顺序、健康标注与退避监督框架”，不是真实进程拉起能力。
+
+**验收探针夹具（非产品服务）**：仅当启动参数带 `hepu.svcprobe=1`（32 位
+multiboot cmdline / 64 位 UEFI cmdline）或构建显式打开 `HEPU_SVC_PROBE` 宏时，
+`services_start_boot()` 才额外注册 `svc-probe`。夹具前 3 次 `start_func` 确定性失败、
+第 4 次成功，用于在真实 boot 中观察失败→退避排程→退避到期重试→成功(healthy)链路；
+描述字段明确标注 `TEST PROBE (not a product service)`，不与内置五项 STUB 混在一起，
+默认发布构建不注册该探针。
 
 ## 4. 命令
 
@@ -194,11 +209,16 @@ service start|stop|restart|enable|disable <name>
 落盘事件日志（STUB 标注、拓扑顺序、循环/缺依赖事件、退避链 13/14/15）、平行集合映射表；
 64 位 UEFI 启动顺序与 `boot services started: N/N` 见该目录串口日志。
 
+第三阶段（监督节拍接入与 64 位展示对齐）证据见 `docs/status/evidence-open06-2026-11-26/`：
+32 位无盘/带盘冒烟 `system-manager` 6/0/0；64 位默认 HPET 桌面启动；探针真实 boot
+失败→退避→重试→成功链路串口摘录，以及 `service list` / `service status svc-probe` 的
+health 列输出。
+
 ## 6. 未完成与下一阶段
 
 1. ~~**dmesg 统一**~~（第二阶段已完成）：`dmesg` 默认读 `event_log`，支持 `-l` 级别过滤；legacy `klog`/`klog64` 文本环仅由 `-k` / `--legacy` 显式回退；
 2. **用户态 logd**：内核侧追加写与按大小一级轮转已落地（见 2.2），仍缺用户态守护进程、按日期轮转、远程 syslog（登记 OPEN-05）；
-3. **服务监督**：依赖拓扑顺序、健康状态（STUB/HEALTHY/FAILED）、失败计数与 tick 指数退避、上限放弃已落地；仍缺 `services_monitor_tick()` 的周期调度调用方、真实进程/daemon 拉起、存活探测与崩溃恢复，内置五项仍是空壳（登记 OPEN-06）；
+3. **服务监督**：依赖拓扑顺序、健康状态（STUB/HEALTHY/FAILED）、失败计数与 tick 指数退避、上限放弃已落地；第三阶段已把 `services_monitor_poll()` 接入两侧真实主循环节流节拍，64 位 `service list/status` 展示口径与 32 位对齐。仍未做：真实进程/daemon 拉起、存活探测与崩溃恢复，内置五项仍是空壳（残余登记 OPEN-06）；
 4. **命名空间收敛**：已完成盘点映射并把 64 位音频后端迁入统一表绑定；`microg_service.c`、`distributed_os.c`、IPC 名字表、应用框架组件分属不同抽象层，保留并标注归属；跨层映射与用户态服务化仍待后续；
 5. **管理面扩展**：`mount/umount`、`chmod/chown`、`useradd/userdel`、`fsck/mkfs` 仍是缺口，不能因为加了 `journal`/`service` 就宣称系统管理完整；
 6. ~~**中断安全**~~（第二阶段已完成）：异常/崩溃上下文改走无锁、定长、无变参格式化的 emergency 变体；普通路径仍用自旋锁。遗留：emergency 环目前独立于普通环，尚未并入 `journal` 查询输出，需要时再做合并快照。

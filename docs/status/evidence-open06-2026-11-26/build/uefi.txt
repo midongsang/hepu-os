@@ -1,0 +1,31 @@
+make: Entering directory '/home/user/Doubao/chats/38452875115179010/wt-open0506/tools/hepboot/uefi'
+gcc -fno-stack-protector -fpic -fshort-wchar -mno-red-zone -DEFI_FUNCTION_WRAPPER -I/home/user/Doubao/chats/38452875115179010/wt-open0506/tools/gnu-efi/inc -I/home/user/Doubao/chats/38452875115179010/wt-open0506/tools/gnu-efi/inc/x86_64 -I/home/user/Doubao/chats/38452875115179010/wt-open0506/tools/gnu-efi/inc/protocol -Wall -Wextra -O2 -c hepboot_uefi.c -o hepboot_uefi.o
+gcc -fno-stack-protector -fpic -fshort-wchar -mno-red-zone -DEFI_FUNCTION_WRAPPER -I/home/user/Doubao/chats/38452875115179010/wt-open0506/tools/gnu-efi/inc -I/home/user/Doubao/chats/38452875115179010/wt-open0506/tools/gnu-efi/inc/x86_64 -I/home/user/Doubao/chats/38452875115179010/wt-open0506/tools/gnu-efi/inc/protocol -Wall -Wextra -O2 -c hepboot_gop.c -o hepboot_gop.o
+hepboot_uefi.c: In function ‘init_gop’:
+hepboot_uefi.c:342:30: warning: comparison of integer expressions of different signedness: ‘int’ and ‘UINT32’ {aka ‘unsigned int’} [-Wsign-compare]
+  342 |                 if (off + 17 >= edid->SizeOfEdid) break;
+      |                              ^~
+hepboot_uefi.c: In function ‘efi_main’:
+hepboot_uefi.c:1944:18: warning: cast to pointer from integer of different size [-Wint-to-pointer-cast]
+ 1944 |                 *(volatile UINT32 *)(0x6104 + mi * 8) = g_mode_w[mi];
+      |                  ^
+hepboot_uefi.c:1945:18: warning: cast to pointer from integer of different size [-Wint-to-pointer-cast]
+ 1945 |                 *(volatile UINT32 *)(0x6108 + mi * 8) = g_mode_h[mi];
+      |                  ^
+At top level:
+hepboot_uefi.c:541:13: warning: ‘set_vga_text_mode’ defined but not used [-Wunused-function]
+  541 | static void set_vga_text_mode(void)
+      |             ^~~~~~~~~~~~~~~~~
+hepboot_uefi.c:144:15: warning: ‘boot_timer_elapsed’ defined but not used [-Wunused-function]
+  144 | static UINT64 boot_timer_elapsed(void)
+      |               ^~~~~~~~~~~~~~~~~~
+gcc -fno-stack-protector -fpic -fshort-wchar -mno-red-zone -DEFI_FUNCTION_WRAPPER -I/home/user/Doubao/chats/38452875115179010/wt-open0506/tools/gnu-efi/inc -I/home/user/Doubao/chats/38452875115179010/wt-open0506/tools/gnu-efi/inc/x86_64 -I/home/user/Doubao/chats/38452875115179010/wt-open0506/tools/gnu-efi/inc/protocol -Wall -Wextra -O2 -c hepboot_logo.c -o hepboot_logo.o
+gcc -fno-stack-protector -fpic -fshort-wchar -mno-red-zone -DEFI_FUNCTION_WRAPPER -I/home/user/Doubao/chats/38452875115179010/wt-open0506/tools/gnu-efi/inc -I/home/user/Doubao/chats/38452875115179010/wt-open0506/tools/gnu-efi/inc/x86_64 -I/home/user/Doubao/chats/38452875115179010/wt-open0506/tools/gnu-efi/inc/protocol -Wall -Wextra -O2 -c jump_kernel.S -o jump_kernel.o
+gcc -fno-stack-protector -fpic -fshort-wchar -mno-red-zone -DEFI_FUNCTION_WRAPPER -I/home/user/Doubao/chats/38452875115179010/wt-open0506/tools/gnu-efi/inc -I/home/user/Doubao/chats/38452875115179010/wt-open0506/tools/gnu-efi/inc/x86_64 -I/home/user/Doubao/chats/38452875115179010/wt-open0506/tools/gnu-efi/inc/protocol -Wall -Wextra -O2 -c jump_kernel_64.S -o jump_kernel_64.o
+ld -nostdlib -znocombreloc -T /home/user/Doubao/chats/38452875115179010/wt-open0506/tools/gnu-efi/gnuefi/elf_x86_64_efi.lds -shared -Bsymbolic -L/home/user/Doubao/chats/38452875115179010/wt-open0506/tools/gnu-efi/x86_64/lib -L/home/user/Doubao/chats/38452875115179010/wt-open0506/tools/gnu-efi/x86_64/gnuefi /home/user/Doubao/chats/38452875115179010/wt-open0506/tools/gnu-efi/x86_64/gnuefi/crt0-efi-x86_64.o -o hepboot_uefi.so hepboot_uefi.o hepboot_gop.o hepboot_logo.o jump_kernel.o jump_kernel_64.o -lgnuefi -lefi
+objcopy -j .text -j .sdata -j .data -j .dynamic \
+           -j .dynsym -j .rel -j .rela -j .reloc \
+           --output-target=efi-app-x86_64 hepboot_uefi.so hepboot_uefi.efi
+  [UEFI] Build complete: hepboot_uefi.efi
+-rwxr-xr-x 1 user user 106844 Nov 26 18:14 hepboot_uefi.efi
+make: Leaving directory '/home/user/Doubao/chats/38452875115179010/wt-open0506/tools/hepboot/uefi'
