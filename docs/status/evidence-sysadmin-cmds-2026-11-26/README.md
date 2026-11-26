@@ -9,7 +9,7 @@
 - `kernel/include/shell_admin.h` — 共享命令分派与测试辅助声明。
 - `kernel/sched/shell_cmd_admin.c` — 32 位命令实现（558 行）。
 - `kernel/arch/x86_64/shell_cmd_admin64.c` — 64 位命令实现（537 行）。
-- `kernel/kunit/kunit_admin.c` — KUnit 套件 6 例。
+- `kernel/kunit/kunit_admin.c` — KUnit 套件 7 例。
 
 ### 修改文件
 - `kernel/sched/shell_execute.c` — include + 链尾集中分派块（既有分支未重排）。
@@ -63,7 +63,7 @@
   - `ktest_result=PASS ktest=1 fail_suites=0 fail_cases=0 skip_cases=0 p3_skip=0`
   - `p3-security: passed=2 failed=0 skipped=0`
   - `[KTEST] RESULT: ALL PASS`
-  - `[KUNIT] suite: system admin commands (0x00000006 tests)` → `result: 0x00000006 passed, 0 failed, 0 skipped`。
+  - `[KUNIT] suite: system admin commands (0x00000007 tests)` → `result: 0x00000007 passed, 0 failed, 0 skipped`。
   - 落盘例真实执行：`chmod 640` / `chown 2:2` 写回 inode 并读回断言（mode=0640、uid=2、gid=2），通过后清理测试文件。
 
 ### 64 位 UEFI 启动取证

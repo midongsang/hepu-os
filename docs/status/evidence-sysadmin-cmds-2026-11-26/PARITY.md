@@ -39,7 +39,7 @@
 - 补全数组：两处 `static const char *cmds[]`（Tab 补全表、which 表）均补入上述 9 个命令名。
 
 ### KUnit
-- 套件：`kernel/kunit/kunit_admin.c`（6 例）；注册于 `kernel/kunit/kunit_registry.c`（extern + `kunit_admin_register()` 调用，排在 `kunit_p3_security_register()` 之后、`kunit_system_manager_register()` 之前）。
+- 套件：`kernel/kunit/kunit_admin.c`（7 例）；注册于 `kernel/kunit/kunit_registry.c`（extern + `kunit_admin_register()` 调用，排在 `kunit_p3_security_register()` 之后、`kunit_system_manager_register()` 之前）。
 
 ## 3. 交接项核对：`journal` / `log` / `service`
 

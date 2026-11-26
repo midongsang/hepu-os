@@ -141,11 +141,13 @@ static kunit_result_t test_admin_chmod_chown_persist(void)
     vfs_write(fd, "KT", 2);
     vfs_close(fd);
 
-    /* 走命令分派：chmod 640, chown 2:2 */
+    /* 走命令分派：chmod 640, chown 2:2, chgrp 3 */
     KUNIT_ASSERT(shell_admin_dispatch("chmod", "640 /data/adminkt/prop.txt") == 1,
                  " dispatch chmod ");
     KUNIT_ASSERT(shell_admin_dispatch("chown", "2:2 /data/adminkt/prop.txt") == 1,
                  " dispatch chown ");
+    KUNIT_ASSERT(shell_admin_dispatch("chgrp", "3 /data/adminkt/prop.txt") == 1,
+                 " dispatch chgrp ");
 
     vfs_stat_t st;
     KUNIT_ASSERT(vfs_stat(file, &st) == 0, " stat back ");
@@ -155,11 +157,20 @@ static kunit_result_t test_admin_chmod_chown_persist(void)
     KUNIT_ASSERT(ext2_read_inode(st.inode, &in) == 0, " read disk inode ");
     KUNIT_ASSERT_EQ(in.i_mode & 07777, (uint32_t)0640, " persisted mode 0640 ");
     KUNIT_ASSERT_EQ(in.i_uid, (uint16_t)2, " persisted uid 2 ");
-    KUNIT_ASSERT_EQ(in.i_gid, (uint16_t)2, " persisted gid 2 ");
+    KUNIT_ASSERT_EQ(in.i_gid, (uint16_t)3, " persisted gid 3 (chgrp) ");
 
     /* 清理 */
     vfs_unlink(file);
     vfs_rmdir(dir);
+    return KUNIT_PASS;
+}
+
+/* ---- 拒绝型命令：mkfs / useradd / userdel 显式拒绝路径（不依赖 ext2） ---- */
+static kunit_result_t test_admin_reject_stubs(void)
+{
+    KUNIT_ASSERT(shell_admin_dispatch("mkfs", "/dev/hd0p1") == 1, " dispatch mkfs ");
+    KUNIT_ASSERT(shell_admin_dispatch("useradd", "alice") == 1, " dispatch useradd ");
+    KUNIT_ASSERT(shell_admin_dispatch("userdel", "alice") == 1, " dispatch userdel ");
     return KUNIT_PASS;
 }
 
@@ -170,14 +181,15 @@ static const kunit_test_t admin_tests[] = {
     {"mount root seed/umount", test_admin_mount_root_seed,     "admin"},
     {"mount rejects",          test_admin_mount_rejects,       "admin"},
     {"chmod/chown persist",    test_admin_chmod_chown_persist,  "admin"},
+    {"mkfs/useradd/userdel reject", test_admin_reject_stubs,    "admin"},
 };
 
 static const kunit_suite_t kunit_admin_suite = {
-    " system admin commands ", admin_tests, 6
+    " system admin commands ", admin_tests, 7
 };
 
 void kunit_admin_register(void)
 {
     kunit_register_suite(&kunit_admin_suite);
-    vga_puts("[KUNIT] system admin command suite registered (6 cases)\n");
+    vga_puts("[KUNIT] system admin command suite registered (7 cases)\n");
 }
