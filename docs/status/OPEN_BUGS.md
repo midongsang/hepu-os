@@ -83,6 +83,7 @@ source_of_truth: kernel/arch/x86_64/
 **端到端已复现验证（v0.59.1）**：用编译开关 `HEPU_SEC19_PROBE` 在桌面起来后真跑一次 `/bin/ps.elf`（SEC-19 的原始复现程序），串口完整打印 `PID PPID STATE PRI PAGES NAME` 4 行进程列表，`Process exited with code 0`，全程无 `#PF`、`EXC=0`。（默认不编译该探针，回归不执行）剩余待办：`split_huge_pde` 继承 U=0 的 flags 修正（暂不动，观察是否复现）。**2026-11-17 复核（基线 `2b1cf9f`，`HEPU_SEC19_PROBE` 两轮独立启动）**：每次 exec 的 256 页栈自检均无 `[SEC19] stack pages not user-accessible`、无 `map failed`、无 `stack PD entry STILL a huge page` 告警；探针真跑 `/bin/ps.elf`，串口打印 `PID PPID STATE PRI PAGES NAME` 及 5 行进程列表（`idle`/`idle1`/`kbeat`/`khouse`/`kstat`），`Process exited with code 0`、`probe done ret=0x0`，全程无 `#PF`/`EXC`。结论维持「已修复」，本次复核未改代码 |
 | SEC-13 | **v0.33.0 新开**：**用户态 ABI 约定的三处违背**（均由 v0.33.0 定位并修复，登记备查）：① 入口 GPR 未清零（同 SEC-10）② **用户栈 16 字节对齐**：内核给的初始 RSP 曾为 ≡0(mod16)，而 gcc 生成的 `_start` prologue 固定减少 0x38 字节，随后 `movaps %xmm0,(%rsp)` 要求 RSP≡0 ⇒ 实际落在 ≡8 ⇒ `#GP`（error code bit0=0 = 对齐检查失败）。按 SysV 约定改为 **RSP ≡ 8 (mod 16)** ③ **CR4.OSFXSR/OSXMMEXCPT 从未置位**：用户态执行任何 SSE 指令直接 `#GP`；x86-64 架构要求 SSE2，glibc/gcc 默认生成 SSE 指令 ⇒ 这不是可选加速而是用户态 ABI 硬要求（Linux `start_thread` 同样置位）。现三项均已修，启动打印 `hardware state: SMEP=.. SMAP=.. SSE=..` | user_switch.S、user_stack64.c、x86_64.c | 已关闭 |
 | SEC-09 | ~~进程正常退出后记录仍 active，槽位不回收~~ **已修复（0.14.0）**：user_return_cleanup 正常退出也 release 槽位（active=0、释放内核栈、清 fd 表）；QEMU 连续 10 次 exec 无「No free process」、空闲页 delta=0 | user_process.c:user_return_cleanup | 已关闭 |
+| SB-25 | **跨核调度（每核运行队列、任务亲和与迁移、唤醒 IPI、负载均衡/工作窃取）**。方案与风险评估已出：目标模型、最小闭环（AP 先只跑本核 idle）、S1–S4 路线图与风险清单见 [../planning/SB25_SMP_CROSS_CORE_PLAN_2026-11-26.md](../planning/SB25_SMP_CROSS_CORE_PLAN_2026-11-26.md)。现状基线（HEAD 58d772d，锚点详见方案文档第二章）：单一全局就绪队列 + 调度锁（`process64_full.c:228-229,782`）；`current_user_proc` 仍为全局单值（`user_process.c:137`）；uthread 游标与时间片计数为全局单份（`uthread64.c:41-42,47-50`）；`RESCHEDULE` IPI 仅有接收分发、尚无发送方（`smp.c:387-394`）。前置关联：SEC-02（clone 共享页表边界）、SEC-20（单核内线程闭环，跨核部分属本条） | `docs/planning/SB25_SMP_CROSS_CORE_PLAN_2026-11-26.md`；`process64_full.c`、`user_process.c`、`uthread64.c`、`smp.c`、`vmm64.c` | **方案阶段（方案/风险已出，实现未验证；本轮未做真实验证）** |
 
 ## v0.33.2–v0.33.5 安全修复记录
 
@@ -243,6 +244,11 @@ source_of_truth: kernel/arch/x86_64/
 > `uthread_timer_tick`，因此用户线程只在 BSP 上轮转、AP 只跑 idle —— **单核内并发
 > 已成立，跨核并发未开放**。这正是 SMP 计划里明确「不在本包实现、单独立项」的
 > SB-25（放开 AP 调度、每核运行队列、唤醒 IPI、迁移策略）。
+>
+> **2026-11-26 更新**：SB-25 的方案与风险评估已出，见
+> [../planning/SB25_SMP_CROSS_CORE_PLAN_2026-11-26.md](../planning/SB25_SMP_CROSS_CORE_PLAN_2026-11-26.md)，
+> 状态为**方案阶段，实现未验证**，本轮未做真实验证。上文历史描述（`&& 0` 禁用位等）
+> 为当时记录；现行源码锚点以方案文档第二章为准，本条不改动 SEC-20 的既有结论。
 
 - 现象：`sys_clone` 能创建线程（`[CLONE] created thread pid=0x4`），但子线程
   从不运行；父线程被 `context_switch` 抽走后回来 `rip=0 / CR2=0`。
