@@ -484,11 +484,25 @@ static const char *service_state_name(int st)
     }
 }
 
+static const char *service_health_name(service_health_t h)
+{
+    switch (h) {
+        case HEALTH_STUB: return "stub";
+        case HEALTH_HEALTHY: return "healthy";
+        case HEALTH_FAILED: return "failed";
+        default: return "unknown";
+    }
+}
+
 static void service_print_one(const service_t *s)
 {
-    vga_printf("  %-12s %-10s enabled=%d pid=%d restarts=%d\n",
+    vga_printf("  %-12s %-10s %-8s enabled=%d restarts=%d\n",
                s->def.name, service_state_name(s->state),
-               s->def.enabled, s->def.pid, s->restart_count);
+               service_health_name(s->health),
+               s->def.enabled, s->restart_count);
+    if (s->health == HEALTH_STUB) {
+        vga_puts("    (stub: no real daemon/process, state machine only)\n");
+    }
 }
 
 void cmd_service(char *arg)
@@ -499,7 +513,8 @@ void cmd_service(char *arg)
 
     if (!*arg || strcmp(arg, "list") == 0) {
         int n = services_list(list, SERVICE_MAX);
-        vga_printf("[SVC] services=%d active=%d\n", n, services_active_count());
+        vga_printf("[SVC] services=%d active=%d healthy=%d\n", n,
+                   services_active_count(), services_healthy_count());
         for (int i = 0; i < n; i++) service_print_one(&list[i]);
         return;
     }
