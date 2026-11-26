@@ -1,0 +1,4 @@
+[EXT2] selftest: mounted (ext2 fs on IDE disk)
+[KUNIT] suite: p3-security (0x00000002 tests)
+[KUNIT] result: 0x00000002 passed, 0x00000000 failed, 0x00000000 skipped
+[KTEST] RESULT: ALL PASS

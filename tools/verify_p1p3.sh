@@ -37,9 +37,18 @@ PART=/tmp/vp32part.img
 MWORK=/tmp/vpwork
 LOGW=/tmp/vp_write.log
 LOGR=/tmp/vp_read.log
+PIDFILE=/tmp/vp32-qemu.pid
 rm -rf "$MWORK"; mkdir -p "$MWORK"
 
-cleanup() { pkill -9 -f "qemu-system-i386.*$DISK" 2>/dev/null; }
+# 并行安全：只按自己的 pidfile 精确回收本脚本启动的 QEMU，禁止全局 pkill
+# （同机可能有其他并行任务在用 i386 QEMU，全局 -f qemu-system-i386 会误杀他人实例）。
+cleanup() {
+  if [ -f "$PIDFILE" ]; then
+    P=$(cat "$PIDFILE" 2>/dev/null)
+    [ -n "${P:-}" ] && kill -9 "$P" 2>/dev/null
+  fi
+  rm -f "$PIDFILE"
+}
 trap cleanup EXIT
 
 # ---- 1. 造盘：MBR(0x55AA + 0x83 分区 @ LBA2048) + ext2 分区 ----
@@ -77,10 +86,12 @@ dd if="$PART" of="$DISK" bs=512 seek=2048 conv=notrunc status=none
 
 # ---- 3. 第一次启动：写阶段 ----
 echo "[3/5] 第一次启动（写阶段）"
-pkill -9 -f qemu-system-i386 2>/dev/null; sleep 2
-rm -f "$LOGW"
+rm -f "$PIDFILE" "$LOGW"
 timeout 70 qemu-system-i386 -L "$DD" -kernel "$ELF" -m 256 -display none -no-reboot \
-    -drive file="$DISK",format=raw,if=ide -serial file:"$LOGW" >/dev/null 2>&1
+    -drive file="$DISK",format=raw,if=ide -pidfile "$PIDFILE" \
+    -serial file:"$LOGW" >/dev/null 2>&1 &
+QPID=$!
+wait "$QPID"
 W_RC=$?
 [ -f "$LOGW" ] || { echo "  ✗ 写阶段没产出日志（QEMU 被杀/起不来，rc=$W_RC）"; exit 2; }
 grep -a "VFS-TEST" "$LOGW" | sed 's/^/  /'
@@ -98,10 +109,12 @@ debugfs -w -R "write $MWORK/mark_r /vfs_selftest" "$PART" >/dev/null 2>&1
 dd if="$PART" of="$DISK" bs=512 seek=2048 conv=notrunc status=none
 
 echo "[4/5] 第二次启动（读阶段，同一张盘）"
-pkill -9 -f qemu-system-i386 2>/dev/null; sleep 2
-rm -f "$LOGR"
+rm -f "$PIDFILE" "$LOGR"
 timeout 70 qemu-system-i386 -L "$DD" -kernel "$ELF" -m 256 -display none -no-reboot \
-    -drive file="$DISK",format=raw,if=ide -serial file:"$LOGR" >/dev/null 2>&1
+    -drive file="$DISK",format=raw,if=ide -pidfile "$PIDFILE" \
+    -serial file:"$LOGR" >/dev/null 2>&1 &
+QPID=$!
+wait "$QPID"
 R_RC=$?
 [ -f "$LOGR" ] || { echo "  ✗ 读阶段没产出日志（rc=$R_RC）"; exit 2; }
 grep -a "VFS-TEST" "$LOGR" | sed 's/^/  /'
