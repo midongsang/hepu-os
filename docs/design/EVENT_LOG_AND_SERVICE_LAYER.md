@@ -217,8 +217,8 @@ health 列输出。
 ## 6. 未完成与下一阶段
 
 1. ~~**dmesg 统一**~~（第二阶段已完成）：`dmesg` 默认读 `event_log`，支持 `-l` 级别过滤；legacy `klog`/`klog64` 文本环仅由 `-k` / `--legacy` 显式回退；
-2. **用户态 logd**：内核侧追加写与按大小一级轮转已落地（见 2.2），仍缺用户态守护进程、按日期轮转、远程 syslog（登记 OPEN-05）；
+2. **用户态 logd（形态 B：内核节流拉起的非驻留 worker，第四阶段已落地）**：新增 syscall `SYS_EVENT_LOG_PULL(233)`，用户态按游标批量拉取普通环条目并可读取 RTC 日期；`/bin/logd.elf` 由 64 位桌面主循环按 6s 节流、仅在事件环出现新序号时拉起，单次执行读 `.cursor` → 拉取游标之后条目 → 按日期写 `/var/log/hepu/YYYY-MM-DD.log` → 游标落盘 → `exit(0)`。**这是短命 worker，不是常驻 daemon**：BSP 无可抢占用户调度，常驻进程会冻结桌面主循环。未做：跨午夜日期轮转、远程 syslog（用户态 socket/sendto 为桩）、32 位 logd（32 位分派表不登记该号，返回 -1）；
 3. **服务监督**：依赖拓扑顺序、健康状态（STUB/HEALTHY/FAILED）、失败计数与 tick 指数退避、上限放弃已落地；第三阶段已把 `services_monitor_poll()` 接入两侧真实主循环节流节拍，64 位 `service list/status` 展示口径与 32 位对齐。仍未做：真实进程/daemon 拉起、存活探测与崩溃恢复，内置五项仍是空壳（残余登记 OPEN-06）；
 4. **命名空间收敛**：已完成盘点映射并把 64 位音频后端迁入统一表绑定；`microg_service.c`、`distributed_os.c`、IPC 名字表、应用框架组件分属不同抽象层，保留并标注归属；跨层映射与用户态服务化仍待后续；
 5. **管理面扩展**：`mount/umount`、`chmod/chown`、`useradd/userdel`、`fsck/mkfs` 仍是缺口，不能因为加了 `journal`/`service` 就宣称系统管理完整；
-6. ~~**中断安全**~~（第二阶段已完成）：异常/崩溃上下文改走无锁、定长、无变参格式化的 emergency 变体；普通路径仍用自旋锁。遗留：emergency 环目前独立于普通环，尚未并入 `journal` 查询输出，需要时再做合并快照。
+6. ~~**中断安全**~~（第二阶段已完成）：异常/崩溃上下文改走无锁、定长、无变参格式化的 emergency 变体；普通路径仍用自旋锁。~~遗留：emergency 环目前独立于普通环，尚未并入 `journal` 查询输出~~ —— 第四阶段已并入：`event_log_dump()` 在普通环之后追加 `---------- emergency ring ----------` 段，每条带 `[EMERG]` 前缀，`journal`（`dmesg`）与 64/32 两侧 dump 路径共用。
