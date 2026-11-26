@@ -700,6 +700,16 @@ kernel_gdt64_flush:
     xorq %rax, %rax
     rep stosq
 
+    /* OPEN-09: BSS 清零后再切到内核自有 64KB 栈（0x1FA000-0x20A000）。
+     * 原先一直用引导器留下的 0x8F000-0x90000 这 4KB 低内存栈，而
+     * jump_kernel_64 的临时 GDT 正好落在 0x8F050 —— 就在该栈范围内。
+     * 本轮事件日志/服务初始化把 irq64_init 的栈帧推深后覆盖 GDT[1]，
+     * sti 收到首个 PIT 中断时按选择子 0x08 查门描述符触发 #GP(0x08)，
+     * 紧接着 #DF -> triple fault 复位。必须在 BSS 清零之后切换，
+     * 否则 rep stosq 会把正在使用的内核栈一起清零。 */
+    movq $hepu_kstack_top, %rsp
+    xorq %rbp, %rbp
+
     /* 调用64位C语言入口 */
     call x86_64_kernel_main
 

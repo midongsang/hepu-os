@@ -1,0 +1,23 @@
+[regress] 带盘模式：生成 ext2 测试盘 /tmp/hepu-smoke32-test.img
+[regress] 生成确定性 ext2 测试盘: /tmp/hepu-smoke32-test.img (64MB, ext2 58368 块 @ LBA 2048)
+Creating regular file /tmp/hepu-smoke32-test.part.img
+  MBR + ext2 分区 @ LBA 2048 就绪（116736 扇区）
+-rw-r--r-- 1 user user 67108864 Nov 26 14:16 /tmp/hepu-smoke32-test.img
+[regress] 测试盘就绪: /tmp/hepu-smoke32-test.img
+[regress] 32-bit smoke boot 70s (i386 multiboot, mode=disk)
+tools/regress/smoke32.sh: line 85:  5889 Killed                  qemu-system-i386 -L "$CHAT/.toolchain/pkg/datadir" -kernel "$WT/build_v250/kernel.elf" -m 256 -smp 1 -display none -monitor unix:$MON,server,nowait "${DRIVE[@]}" -serial file:$SER -no-reboot {qfd}>&- > /dev/null 2>&1
+mode=disk disk=/tmp/hepu-smoke32-test.img
+serial=1 initrd=1 net=1 desk=1 fault=0 lines=755
+ext2_mounted=1 ext2_nodisk=0
+ktest_result=PASS ktest=1 fail_suites=0 fail_cases=0 skip_cases=0 p3_skip=0
+p3-security: passed=2 failed=0 skipped=0
+--- p3-security cases ---
+(none)
+--- failed suites ---
+(none)
+--- failed cases ---
+(none)
+--- skipped cases ---
+(none)
+[regress] ✓ 冒烟通过（mode=disk）
+RC=0
