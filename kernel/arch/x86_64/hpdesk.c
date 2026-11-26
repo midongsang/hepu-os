@@ -540,6 +540,11 @@ static struct {
 #define CUR_LINK  1
 #define CUR_TEXT  2
 #define CUR_MOVE  3
+#define CUR_SIZE_H 4
+#define CUR_SIZE_V 5
+#define CUR_SIZE_D 6
+#define CUR_WAIT 7
+#define CUR_NO   8
 
 static int  hs_ctx_hit_item(int x, int y);
 static void hs_ctx_menu_render(void);
@@ -547,10 +552,23 @@ void hs_ctx_close(void);
 void hs_ctx_open(int x, int y, const char *const *labels, const int *ids, int n, int owner);
 void hpdesk_right_click(int x, int y);
 
+static int  hs_window_edge_flags(const hs_window_t *w, int x, int y);
+static void hs_window_resize_begin_at(hs_window_t *w, int x, int y, int edges);
+static void hs_window_resize_move(int x, int y);
+static void hs_window_resize_end(void);
+
 static hs_window_t *g_drag_window;
 static int g_drag_offset_x;
 static int g_drag_offset_y;
 static int g_dragging;
+
+/* OBS-02: 窗口边缘拖拽缩放。g_resize_edges 位: 1=左 2=右 4=上 8=下。 */
+static hs_window_t *g_resize_window;
+static int g_resizing;
+static int g_resize_edges;
+static int g_resize_start_x, g_resize_start_y;
+static int g_resize_start_wx, g_resize_start_wy;
+static int g_resize_start_w, g_resize_start_h;
 
 /* 设置窗口当前页面 */
 static int g_content_dirty;   /* 定义在文件后部, 此处前向声明供设置页使用 */
@@ -2445,6 +2463,7 @@ void hs_window_resize(hs_window_t *win, int w, int h)
     if (!win) return;
     if (w > 50) win->width = w;
     if (h > 50) win->height = h;
+    win->content_dirty = 1;   /* 尺寸变了 surface 要重建 */
 }
 
 /* 获取指定位置的窗口 */
@@ -2877,6 +2896,29 @@ static void hs_stroke_round(int x, int y, int w, int h, int r, uint32_t color)
     }
 }
 
+/* OBS-04: 与 hs_stroke_round 同路径的半透明描边，用于窗口外高光。
+ * 窗口边界只比壁纸亮 7% 左右，深色壁纸下足以把窗口和背景分开，浅色壁纸下也不刺眼。 */
+static void hs_stroke_round_blend(int x, int y, int w, int h, int r,
+                                  uint32_t color, int alpha)
+{
+    if (w <= 0 || h <= 0 || alpha <= 0) return;
+    if (r > w / 2) r = w / 2;
+    if (r > h / 2) r = h / 2;
+    for (int yy = 0; yy < h; yy++) {
+        int dy = 0;
+        if (yy < r)              dy = r - yy;
+        else if (yy > h - 1 - r) dy = yy - (h - 1 - r);
+        int inset = dy ? hs_round_inset(dy, r) : 0;
+        if (w - 2 * inset <= 0) continue;
+        hs_blend_pixel(x + inset, y + yy, color, alpha);
+        hs_blend_pixel(x + w - 1 - inset, y + yy, color, alpha);
+    }
+    for (int xx = r; xx <= w - 1 - r; xx++) {
+        hs_blend_pixel(x + xx, y, color, alpha);
+        hs_blend_pixel(x + xx, y + h - 1, color, alpha);
+    }
+}
+
 static inline uint64_t hs_rdtsc(void);
 static uint64_t g_cyc_shadow, g_cyc_shadow_build, g_cyc_shadow_blit, g_cyc_title, g_cyc_border;
 
@@ -2960,6 +3002,18 @@ static void hs_window_shadow(const hs_window_t *w)
     uint64_t sb3 = hs_rdtsc();
     g_cyc_shadow_blit += sb3 - sb2;
     g_cyc_shadow += sb3 - sb2;
+}
+
+/* OBS-04: 深色壁纸上纯黑投影只剩 2-7% 色阶，窗口边界容易和背景糊在一起。
+ * 在窗口外侧 1px 加一道低透明度高光；不改窗口本体/边框，也不依赖壁纸取色。
+ * 只在投影开启时画，Display 页关阴影时保持原样。 */
+static void hs_window_outer_highlight(const hs_window_t *w)
+{
+    if (!g_shell.ui.window_shadow) return;
+    if (w->width <= 4 || w->height <= 4) return;
+    int rc = hs_window_corner_radius(w) + 1;
+    hs_stroke_round_blend(w->x - 1, w->y - 1, w->width + 2, w->height + 2,
+                          rc, 0xFFFFFF, 20);
 }
 
 /* ===== P0 脏区框架 (V0.59.5) =====
@@ -3120,6 +3174,7 @@ void hs_window_render_all(void)
         /* V0.57.0: 投影(仅浮动窗口, 最大化/面板不画) */
         if (w->type == HS_WINDOW_FLOATING && w->state != HS_WINDOW_STATE_MAXIMIZED) {
             hs_window_shadow(w);
+            hs_window_outer_highlight(w);
         }
 
         /* 窗口背景 */
@@ -3467,6 +3522,12 @@ static void hs_settings_window_render(hs_window_t *w)
     void *fb = hs_get_framebuffer();
     int cx = w->x + SETK(16);
     int cy = w->y + SETK(36);  /* 跳过标题栏 */
+    /* OBS-02 边缘缩放后 Settings 变宽: 内容块保持居中，避免右侧大片空白。 */
+    {
+        int content_w = SETK(460);
+        int xoff = (w->width - content_w) / 2;
+        if (xoff > 0) cx += xoff;
+    }
 
     /* 左侧菜单 —— 由布局容器排列(hs_ui), 这里只给根矩形与尺寸参数 */
     g_nav_win = w;
@@ -6521,6 +6582,8 @@ void hpdesk_update_mouse(int x, int y)
 {
     g_shell.mouse_x = x;
     g_shell.mouse_y = y;
+    /* OBS-02: 边缘缩放优先于移动拖拽 */
+    hs_window_resize_move(x, y);
     /* 窗口拖拽移动 */
     hs_window_drag_move(x, y);
     /* Files 列表项拖拽(越过阈值才真正进入拖拽态) */
@@ -6611,6 +6674,12 @@ void hpdesk_mouse_down(int x, int y)
         if (id < 0 || id >= g_wm.window_count) continue;
         hs_window_t *w = &g_wm.windows[id];
         if (!w->visible || w->type != HS_WINDOW_FLOATING) continue;
+        /* OBS-02: 边缘/四角先于标题栏拖拽，8px 抓取带内启动缩放。 */
+        int ef = hs_window_edge_flags(w, x, y);
+        if (ef) {
+            hs_window_resize_begin_at(w, x, y, ef);
+            return;
+        }
         /* 命中区必须与绘制用同一套缩放, 否则放大后按钮画得大、点得小 */
         if (x >= w->x && x <= w->x + w->width &&
             y >= w->y && y <= w->y + hs_sy(24)) {
@@ -6675,6 +6744,7 @@ void hpdesk_mouse_up(int x, int y)
         extern int hs_files_drag_end(int x, int y);
         if (hs_files_drag_end(x, y)) g_files_drag_consumed = 1;
     }
+    hs_window_resize_end();
     hs_window_drag_end();
 }
 
@@ -6919,8 +6989,36 @@ void hpdesk_right_click(int x, int y)
     }
 }
 
+/* 指针是否落在浮动窗口边缘（含窗口外 4px 的可抓取带）。
+ * 右上角三个窗口按钮占位不与顶边缩放竞争；最大化窗口不参与。 */
+static int hs_window_edge_flags(const hs_window_t *w, int x, int y)
+{
+    if (!w || !w->visible || w->type != HS_WINDOW_FLOATING) return 0;
+    if (w->state == HS_WINDOW_STATE_MAXIMIZED ||
+        w->state == HS_WINDOW_STATE_FULLSCREEN) return 0;
+    int edge = hs_s(4);
+    if (edge < 3) edge = 3;
+    if (x < w->x - edge || x > w->x + w->width + edge) return 0;
+    if (y < w->y - edge || y > w->y + w->height + edge) return 0;
+
+    int f = 0;
+    if (x <= w->x + edge) f |= 1;                          /* 左 */
+    if (x >= w->x + w->width - edge) f |= 2;               /* 右 */
+    if (y <= w->y + hs_sy(3)) {                            /* 上 */
+        /* 右上角最小化/最大化/关闭按钮区交给按钮，不做顶边缩放 */
+        if (x < w->x + w->width - hs_sx(76)) f |= 4;
+    }
+    if (y >= w->y + w->height - edge) f |= 8;              /* 下 */
+    return f;
+}
+
 static int hs_cursor_kind_at(int x, int y)
 {
+    if (g_resizing) {
+        if ((g_resize_edges & 3) && (g_resize_edges & 12)) return CUR_SIZE_D;
+        if (g_resize_edges & 3) return CUR_SIZE_H;
+        return CUR_SIZE_V;
+    }
     if (g_dragging) return CUR_MOVE;
     if (g_ctx.open && hs_ctx_hit_item(x, y) >= 0) return CUR_LINK;
     {
@@ -6938,6 +7036,12 @@ static int hs_cursor_kind_at(int x, int y)
         if (id < 0 || id >= g_wm.window_count) continue;
         hs_window_t *w = &g_wm.windows[id];
         if (!w->visible || w->type != HS_WINDOW_FLOATING) continue;
+        int ef = hs_window_edge_flags(w, x, y);
+        if (ef) {
+            if ((ef & 3) && (ef & 12)) return CUR_SIZE_D;
+            if (ef & 3) return CUR_SIZE_H;
+            return CUR_SIZE_V;
+        }
         if (x < w->x || x > w->x + w->width || y < w->y || y > w->y + w->height) continue;
         if (y <= w->y + hs_sy(26)) return CUR_ARROW;
         return CUR_LINK;
@@ -6961,9 +7065,15 @@ static void hs_cursor_init_once(void)
     int rc1 = cursor64_load_kind(CUR_LINK,  "/usr/share/cursors/link.xcur",    want);
     int rc2 = cursor64_load_kind(CUR_TEXT,  "/usr/share/cursors/text.xcur",    want);
     int rc3 = cursor64_load_kind(CUR_MOVE,  "/usr/share/cursors/move.xcur",    want);
+    int rc4 = cursor64_load_kind(CUR_SIZE_H, "/usr/share/cursors/size-hor.xcur", want);
+    int rc5 = cursor64_load_kind(CUR_SIZE_V, "/usr/share/cursors/size-ver.xcur", want);
+    int rc6 = cursor64_load_kind(CUR_SIZE_D, "/usr/share/cursors/size-diag.xcur", want);
+    int rc7 = cursor64_load_kind(CUR_WAIT,   "/usr/share/cursors/wait.xcur",     want);
+    int rc8 = cursor64_load_kind(CUR_NO,     "/usr/share/cursors/not-allowed.xcur", want);
 
-    vga_printf("[CURSOR] load arrow=%d link=%d text=%d move=%d want=%d ready=%d nominal=%d hot=(%d,%d)\n",
-               rc, rc1, rc2, rc3, want, cursor64_ready(), cursor64_nominal(),
+    vga_printf("[CURSOR] load arrow=%d link=%d text=%d move=%d resize=%d/%d/%d wait=%d no=%d want=%d ready=%d nominal=%d hot=(%d,%d)\n",
+               rc, rc1, rc2, rc3, rc4, rc5, rc6, rc7, rc8, want,
+               cursor64_ready(), cursor64_nominal(),
                cursor64_hotspot_x(), cursor64_hotspot_y());
 }
 
@@ -6978,6 +7088,19 @@ static int hs_anim_active(void)
         if (w->visible && w->anim_dur) return 1;
     }
     return 0;
+}
+
+/* OBS-02: 形态切换点集中在这里，串口只记录变化，不逐帧刷屏。 */
+static void hs_cursor_apply_kind(int mx, int my)
+{
+    int kind = hs_cursor_kind_at(mx, my);
+    static int last_kind = -1;
+    if (kind != last_kind) {
+        last_kind = kind;
+        vga_printf("[CURSOR] kind=%d at %d,%d\n", kind, mx, my);
+    }
+    extern void cursor64_set_kind(int kind);
+    cursor64_set_kind(kind);
 }
 
 /* 提交一帧: 后台内容→前台, 再在前台叠加光标 */
@@ -6995,7 +7118,7 @@ static void hs_present_with_cursor(int mx, int my)
         extern void cursor64_set_scale(int pct);
         cursor64_set_theme(g_shell.ui.cursor_theme);
         cursor64_set_scale(g_ui_scale_pct);
-        cursor64_set_kind(hs_cursor_kind_at(mx, my));
+        hs_cursor_apply_kind(mx, my);
     }
     { uint64_t k0 = hs_rdtsc();
       cursor64_draw(mx, my);
@@ -7263,7 +7386,7 @@ static void hpdesk_render_inner(void)
             extern void cursor64_set_scale(int pct);
             cursor64_set_theme(g_shell.ui.cursor_theme);
             cursor64_set_scale(g_ui_scale_pct);
-            cursor64_set_kind(hs_cursor_kind_at(mx, my));
+            hs_cursor_apply_kind(mx, my);
         }
         cursor64_draw(mx, my);
         g_last_mx = mx; g_last_my = my;
@@ -7313,7 +7436,7 @@ static void hpdesk_render_inner(void)
                 extern void cursor64_set_scale(int pct);
                 cursor64_set_theme(g_shell.ui.cursor_theme);
                 cursor64_set_scale(g_ui_scale_pct);
-                cursor64_set_kind(hs_cursor_kind_at(mx, my));
+                hs_cursor_apply_kind(mx, my);
             }
             cursor64_draw(mx, my);
             g_last_mx = mx; g_last_my = my;
@@ -8804,6 +8927,87 @@ void hs_window_drag_end(void)
 int hs_window_is_dragging(void)
 {
     return g_dragging;
+}
+
+/* ============================================================================
+ * OBS-02: 窗口边缘缩放
+ *
+ * 以前 only drag: 浮动窗口类型注释写着"可拖动/缩放", 但没有任何 resize 入口,
+ * 边缘也不显示 resize 光标。这里补最小闭环: 左/右/上/下四边 + 四角,
+ * 拖拽时只改窗口几何, 内容 surface 按新尺寸重建。
+ * ========================================================================== */
+static void hs_window_resize_begin_at(hs_window_t *w, int x, int y, int edges)
+{
+    if (!w || !edges) return;
+    hs_window_focus(w);
+    g_resize_window = w;
+    g_resize_edges = edges;
+    g_resizing = 1;
+    g_resize_start_x = x;
+    g_resize_start_y = y;
+    g_resize_start_wx = w->x;
+    g_resize_start_wy = w->y;
+    g_resize_start_w = w->width;
+    g_resize_start_h = w->height;
+    vga_printf("[RESIZE] begin win=%d edges=%d at %d,%d size=%dx%d\n",
+               w->id, edges, x, y, w->width, w->height);
+}
+
+static void hs_window_resize_move(int x, int y)
+{
+    if (!g_resizing || !g_resize_window) return;
+    hs_window_t *w = g_resize_window;
+    int minw = hs_sx(320), minh = hs_sy(200);
+    if (minw < 120) minw = 120;
+    if (minh < 90) minh = 90;
+
+    int nx = g_resize_start_wx, ny = g_resize_start_wy;
+    int nw = g_resize_start_w, nh = g_resize_start_h;
+    if (g_resize_edges & 1) {          /* 左 */
+        nx = g_resize_start_wx + (x - g_resize_start_x);
+        nw = g_resize_start_w - (x - g_resize_start_x);
+        if (nw < minw) { nx = g_resize_start_wx + g_resize_start_w - minw; nw = minw; }
+    } else if (g_resize_edges & 2) {   /* 右 */
+        nw = g_resize_start_w + (x - g_resize_start_x);
+        if (nw < minw) nw = minw;
+    }
+    if (g_resize_edges & 4) {          /* 上 */
+        ny = g_resize_start_wy + (y - g_resize_start_y);
+        nh = g_resize_start_h - (y - g_resize_start_y);
+        if (nh < minh) { ny = g_resize_start_wy + g_resize_start_h - minh; nh = minh; }
+    } else if (g_resize_edges & 8) {   /* 下 */
+        nh = g_resize_start_h + (y - g_resize_start_y);
+        if (nh < minh) nh = minh;
+    }
+
+    /* 屏幕边界: 先夹窗口原点, 再夹尺寸。 */
+    if (nx < 0) { nw += nx; nx = 0; }
+    if (ny < HS_PANEL_HEIGHT) { nh += ny - HS_PANEL_HEIGHT; ny = HS_PANEL_HEIGHT; }
+    if (nx + nw > g_shell.screen_width) nw = g_shell.screen_width - nx;
+    if (ny + nh > g_shell.screen_height - HS_PANEL_HEIGHT)
+        nh = g_shell.screen_height - HS_PANEL_HEIGHT - ny;
+    if (nw < minw) nw = minw;
+    if (nh < minh) nh = minh;
+
+    if (nx == w->x && ny == w->y && nw == w->width && nh == w->height) return;
+
+    int pad = hs_s(96);
+    hs_dirty_add(w->x - pad, w->y - pad, w->width + pad * 2, w->height + pad * 2);
+    hs_dirty_add(nx - pad, ny - pad, nw + pad * 2, nh + pad * 2);
+    w->x = nx; w->y = ny;
+    hs_window_resize(w, nw, nh);
+}
+
+static void hs_window_resize_end(void)
+{
+    if (g_resizing)
+        vga_printf("[RESIZE] end win=%d size=%dx%d\n",
+                   g_resize_window ? g_resize_window->id : -1,
+                   g_resize_window ? g_resize_window->width : 0,
+                   g_resize_window ? g_resize_window->height : 0);
+    g_resizing = 0;
+    g_resize_window = NULL;
+    g_resize_edges = 0;
 }
 
 /* ============================================================================

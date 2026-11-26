@@ -3251,7 +3251,10 @@ int hs_files_cursor_kind(int x, int y)
     if (!f_win || !f_win->visible) return -1;
     if (x < f_win->x || x > f_win->x + f_win->width) return -1;
     if (y < f_win->y || y > f_win->y + f_win->height) return -1;
-    if (f_drag_state == 2) return 3;                   /* 拖拽中: 四向移动光标 */
+    if (f_drag_state == 2) {
+        /* OBS-02: 有效落点用 move；没有落点(窗口外/非法目标)用 not-allowed。 */
+        return (f_drop_item >= 0 || f_drop_tree >= 0) ? 3 : 8;
+    }
     if (y <= f_win->y + FS(26)) return 0;              /* 标题栏 */
     int cy0 = f_win->y + FS(26);
     int ch = f_win->height - FS(26) - FS(40);

@@ -24,8 +24,8 @@ extern int ext2_64_read_file(const char *path, uint8_t *buffer, uint32_t max_siz
 
 /* 多形态: 每种形态各留一份已解码位图, 切换形态只切指针, 不重复读盘。
  * 每槽 48x48 上限 —— 实际 want 只可能是 24/32/48(见 cursor64_pick_size),
- * 48*48*4B*4 槽 ≈ 36KB, 对内核体积可接受; 超过 48 的图不装载, 免得撑爆。 */
-#define CUR_KIND_MAX  4
+ * 48*48*4B*9 槽 ≈ 81KB, 对内核体积可接受; 超过 48 的图不装载, 免得撑爆。 */
+#define CUR_KIND_MAX  9
 #define CUR_SLOT_DIM  48
 typedef struct {
     uint32_t px[CUR_SLOT_DIM * CUR_SLOT_DIM];
@@ -40,8 +40,12 @@ static int g_active;
 /* 主题: 0 = 外部 Xcursor 素材包(经典), 1 = 内置 Modern */
 static int g_theme;
 
-/* 内置形态映射: 系统只用到 4 种 kind, 其余形态留在表里供后续扩展 */
-static const int g_modern_map[CUR_KIND_MAX] = { 0, 14, 5, 12 };
+/* 内置形态映射: 4 个基础 + resize 三向 + busy/no-drop */
+static const int g_modern_map[CUR_KIND_MAX] = {
+    0, 14, 5, 12,   /* arrow / hand / text / move */
+    9, 8, 10,       /* size-hor / size-ver / size-diag */
+    1, 7            /* wait / not-allowed */
+};
 
 void cursor64_set_theme(int t) { g_theme = (t == 1) ? 1 : 0; }
 int  cursor64_theme(void)      { return g_theme; }
