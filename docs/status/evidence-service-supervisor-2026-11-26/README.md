@@ -68,7 +68,8 @@ p3-security 两项无 ext2 后端按预期 SKIP（SKIP 不算 PASS）：
 [KUNIT-SKIP] p3-security/posix_error_table (ext2 backend unavailable)
 ```
 
-串口全量：`smoke32-nodisk-serial.txt`。
+串口关键行摘录：`smoke32-nodisk-serial-key.txt`（仅保留 KTEST/KUNIT 套件与结果、
+SKIP、自检结论、事件落盘等关键行；完整原始串口未入库）。
 
 ## 32 位带 ext2 盘
 
@@ -87,7 +88,8 @@ ktest_result=PASS ktest=1 fail_suites=0 fail_cases=0 skip_cases=0 p3_skip=0
 p3-security: passed=2 failed=0 skipped=0
 ```
 
-`system-manager` 套件 6/6 通过；串口全量：`smoke32-disk-serial.txt`。
+`system-manager` 套件 6/6 通过；串口关键行摘录：`smoke32-disk-serial-key.txt`
+（完整原始串口未入库）。
 
 落盘事件日志（debugfs 从带盘镜像 ext2 分区读回 `/hepu_events.log`）：`hepu_events-32disk.txt`。关键片段：
 
@@ -136,7 +138,7 @@ network → audio → wifi → gui → bluetooth。
 
 镜像由 `HEPU_EV=$PWD/ev-64 bash tools/regress/build_all.sh` 生成（UEFI 双内核镜像
 `ev-64/build/hepu.img`，基于本轮新内核）；QEMU 经 OVMF pflash 启动，`snapshot=on`，
-串口日志 `serial64-uefi.txt`。
+启动段串口摘录 `serial64-uefi.txt`（仅服务启动阶段，完整桌面轮询未入库）。
 
 启动顺序为合法拓扑（network/audio 在前，wifi 依赖 network，gui 依赖 network+audio，
 bluetooth 依赖 wifi）：
