@@ -10,6 +10,8 @@
 
 extern void *memset(void *s, int c, unsigned long n);
 extern void vga_puts(const char *s);
+extern void vga_put_hex(uint64_t v);
+extern uint64_t pit64_get_ticks(void);
 extern int ehci64_init(void);
 extern int ehci64_present(void);
 
@@ -610,7 +612,9 @@ int usb_storage_read_sectors(uint32_t lba, uint8_t count, uint8_t *buf)
             uint32_t sec = lba + (uint32_t)i;
             cb[2] = (sec >> 24) & 0xFF; cb[3] = (sec >> 16) & 0xFF;
             cb[4] = (sec >> 8) & 0xFF;  cb[5] = sec & 0xFF;
-            cb[7] = 1;
+            /* 传输长度 BE16：1 扇区 = 0x0001，低字节在 cb[8]。
+             * 旧实现 cb[7]=1 把长度编成 0x0100(256 块)，近末端 LBA 跨出容量被设备拒绝。 */
+            cb[7] = 0; cb[8] = 1;
             rc = usb_bot_cmd(0, cb, 10, buf + i * 512, 512, 1);
             if (rc == 0) break;
         }
@@ -629,7 +633,8 @@ int usb_storage_write_sectors(uint32_t lba, uint8_t count, const uint8_t *buf)
             uint8_t cb[16] = {0x2A, 0, 0, 0, 0, 0, 0, 0, 0, 0};
             cb[2] = (sec >> 24) & 0xFF; cb[3] = (sec >> 16) & 0xFF;
             cb[4] = (sec >> 8) & 0xFF;  cb[5] = sec & 0xFF;
-            cb[7] = 1;
+            /* 传输长度 BE16：1 扇区 = 0x0001，低字节在 cb[8]（同 READ10 修复）。 */
+            cb[7] = 0; cb[8] = 1;
             rc = usb_bot_cmd(0, cb, 10, (uint8_t *)buf + i * 512, 512, 0);
             if (rc == 0) break;
         }
@@ -640,6 +645,122 @@ int usb_storage_write_sectors(uint32_t lba, uint8_t count, const uint8_t *buf)
     }
     return 0;
 }
+
+#ifdef HEPU_MSC_SWEEP_TEST
+/* OPEN-02 边界①取证：usb-storage 分段遍历读校验 + 单扇区写读回环。
+ * 校验图案与宿主机 tools 侧镜像生成器一致：扇区 L 字节 i
+ *   expected = (L & 0xFF) ^ ((L >> 8) & 0xFF) ^ (i & 0xFF)
+ * LBA0 前 8 字节固定签名 "OPEN02-A"（4F 50 45 4E 30 32 2D 41）。
+ * 采样序列：步长 MSC_SWEEP_STRIDE 遍历全盘，另补头部 1..3 与尾部 8 个扇区，
+ * 保证覆盖到最后一个 LBA（blocks-1）。失败计数真实打印，不吞错。 */
+#define MSC_SWEEP_STRIDE 256u
+
+static void sweep_print_dec(uint32_t v)
+{
+    char nb[16]; int p = 0;
+    if (v == 0) { vga_puts("0"); return; }
+    while (v && p < 14) { nb[p++] = (char)('0' + v % 10); v /= 10; }
+    for (int k = 0; k < p / 2; k++) { char c = nb[k]; nb[k] = nb[p-1-k]; nb[p-1-k] = c; }
+    nb[p] = 0; vga_puts(nb);
+}
+
+static uint32_t usb_sweep_pool_mark = 0;
+
+static void usb64_msc_sweep_test(void)
+{
+    if (!g_usb_storage.found || g_storage_blocks == 0) return;
+    static uint8_t rd[512] __attribute__((aligned(32)));
+    static uint8_t wr[512] __attribute__((aligned(32)));
+    uint32_t blocks = g_storage_blocks;
+
+    uint32_t sampled = 0, read_err = 0, mism = 0;
+    uint32_t bad_lba = 0xFFFFFFFFu, bad_off = 0xFFFFFFFFu;
+    uint8_t bad_want = 0, bad_got = 0;
+    uint32_t sum = 0, xors = 0;
+    uint64_t t0 = pit64_get_ticks();
+
+    /* 记录 DMA 池水位：遍历命令复用池内 TD/CBW/CSW，避免 64K 池在长遍历中耗尽。
+     * 上一条批量传输完成后帧列表已恢复到周期 QH，旧 TD 不再被硬件扫描，可安全复用。 */
+    usb_sweep_pool_mark = usb_pool_offset;
+
+    /* 单扇区校验：返回 0 比对通过（含读失败/字节不一致计数）。 */
+    #define SWEEP_CHECK_LBA(LBA) do { \
+        usb_pool_offset = usb_sweep_pool_mark; \
+        if (usb_storage_read_sectors((LBA), 1, rd) != 0) { \
+            read_err++; \
+            if (bad_lba == 0xFFFFFFFFu) { bad_lba = (LBA); bad_off = 0xFFFFFFFEu; } \
+        } else { \
+            uint8_t want; \
+            for (uint32_t i = 0; i < 512; i++) { \
+                if ((LBA) == 0 && i < 8) want = (uint8_t)"OPEN02-A"[i]; \
+                else want = (uint8_t)(((LBA) & 0xFF) ^ (((LBA) >> 8) & 0xFF) ^ (i & 0xFF)); \
+                if (rd[i] != want) { \
+                    mism++; \
+                    if (bad_lba == 0xFFFFFFFFu) { bad_lba = (LBA); bad_off = i; bad_want = want; bad_got = rd[i]; } \
+                } \
+                sum += rd[i]; xors ^= rd[i]; \
+            } \
+            sampled++; \
+        } \
+    } while (0)
+
+    /* 步长遍历全盘（含 LBA0 与末端方向） */
+    for (uint32_t lba = 0; lba < blocks; lba += MSC_SWEEP_STRIDE) {
+        SWEEP_CHECK_LBA(lba);
+    }
+    /* 头部 1..3（步长序列未覆盖） */
+    for (uint32_t lba = 1; lba < 4 && lba < blocks; lba++) {
+        SWEEP_CHECK_LBA(lba);
+    }
+    /* 尾部 8 个扇区：必须覆盖 blocks-1 */
+    {
+        uint32_t tail = (blocks > 8) ? (blocks - 8) : 0;
+        for (uint32_t lba = tail; lba < blocks; lba++) {
+            SWEEP_CHECK_LBA(lba);
+        }
+    }
+    #undef SWEEP_CHECK_LBA
+
+    /* 单扇区写读回环：最后一个扇区（尾部读校验已先完成，不影响读遍历结论）。 */
+    uint32_t wlba = blocks - 1;
+    int wrc = -1, rdrc = -1, wmism = 0;
+    for (uint32_t i = 0; i < 512; i++) wr[i] = (uint8_t)((wlba * 31u + i * 13u + 0x5Au) & 0xFF);
+    usb_pool_offset = usb_sweep_pool_mark;
+    wrc = usb_storage_write_sectors(wlba, 1, wr);
+    if (wrc == 0) {
+        for (uint32_t i = 0; i < 512; i++) rd[i] = 0;
+        usb_pool_offset = usb_sweep_pool_mark;
+        rdrc = usb_storage_read_sectors(wlba, 1, rd);
+        if (rdrc == 0) {
+            for (uint32_t i = 0; i < 512; i++) {
+                if (rd[i] != wr[i]) wmism++;
+            }
+        }
+    }
+
+    uint64_t t1 = pit64_get_ticks();
+    vga_puts("[MSC-SWEEP] blocks="); sweep_print_dec(blocks);
+    vga_puts(" bsize="); sweep_print_dec(g_storage_block_size);
+    vga_puts(" stride="); sweep_print_dec(MSC_SWEEP_STRIDE);
+    vga_puts(" sampled="); sweep_print_dec(sampled);
+    vga_puts(" read_err="); sweep_print_dec(read_err);
+    vga_puts(" mismatch="); sweep_print_dec(mism);
+    vga_puts(" wlba="); vga_put_hex((uint64_t)wlba);
+    vga_puts(" wrc="); vga_put_hex((uint64_t)wrc);
+    vga_puts(" rdrc="); vga_put_hex((uint64_t)rdrc);
+    vga_puts(" wmism="); sweep_print_dec(wmism);
+    vga_puts(" checksum_sum="); vga_put_hex((uint64_t)sum);
+    vga_puts(" checksum_xor="); vga_put_hex((uint64_t)xors);
+    vga_puts(" elapsed_ms="); sweep_print_dec((uint32_t)(t1 - t0));
+    if (bad_lba != 0xFFFFFFFFu) {
+        vga_puts(" first_bad lba="); vga_put_hex(bad_lba);
+        vga_puts(" off="); vga_put_hex(bad_off);
+        vga_puts(" want="); vga_put_hex((uint64_t)bad_want);
+        vga_puts(" got="); vga_put_hex((uint64_t)bad_got);
+    }
+    vga_puts("\n");
+}
+#endif
 
 /* V0.13.41: BOT 恢复: Mass Storage Reset (标准复位CBW发往bulk-out),
  * 设备级状态卡死(CSW超时/数据阶段残留)时的最终兜底 */
@@ -1169,6 +1290,10 @@ static uint8_t usb64_enumerate_one(uint8_t dev_addr, uint8_t port)
                            (uint16_t)(((uint16_t)devbuf[11] << 8) | devbuf[10]),
                            iface_class, iface_proto, dev_addr, bulk_in, "storage");
         usb_storage_probe();
+#ifdef HEPU_MSC_SWEEP_TEST
+        /* OPEN-02 边界①取证：探测到容量后跑分段遍历读校验 + 单扇区写读回环。 */
+        usb64_msc_sweep_test();
+#endif
         return 0;
     }
 
