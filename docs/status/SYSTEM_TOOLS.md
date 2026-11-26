@@ -73,14 +73,13 @@
 | lspci / pci | 有（lspci 为别名） | PCI 枚举 |
 | lsusb / usb | 有（lsusb 为别名） | USB 枚举 |
 | lscpu / cpuinfo | 有（lscpu 为别名） | CPU 型号/核数 |
-| dmesg | 有（第二阶段加固） | 默认读统一事件流 `event_log`（序号/tick/级别/pid/来源/消息），`-l` 过滤；`-k`/`--legacy` 回退 `klog64_snapshot` 文本环 |
 | sensors | 缺 | 无温度/风扇采集（ACPI thermal zone 未接） |
 
 ## 七、日志与调试
 
 | 工具 | 状态 | 说明 |
 |---|---|---|
-| dmesg | 有 | 默认读统一 `event_log`，`-l` 级别过滤；`-k`/`--legacy` 回退 `klog`/`klog64` 文本环 |
+| dmesg | 有（2026-11-26 第二阶段） | 默认读统一事件流 `event_log`（序号/tick/级别/pid/来源/消息），`-l` 级别过滤；`-k`/`--legacy` 回退 32 位 `klog` 文本环 / 64 位 `klog64_snapshot` |
 | journal / log | 有（2026-11-26 基础版） | 32/64 共用 `event_log`；带序号/级别/来源/pid/事件码；`journal stat/save/clear` |
 | journald / syslog | 部分 | 内核事件环 + ext2 落盘 `/hepu_events.log`，跨启动追加、超 8KB 一级轮转 `.1`；缺用户态 logd、按日期轮转、远程 syslog |
 | strace | 缺 | 需内核侧系统调用桩（大工程） |
@@ -99,7 +98,7 @@
 1. ~~kill / killall / renice / taskset~~ 已完成（v0.59.3）。剩 `nice <prio> <cmd>` 的启动前设优先级，等有 spawn 命令后再说。
 2. **ip / ping**：`ip addr`、`ip route` 走现有网卡与路由表；ping 需要 ICMP 发送，可与 e1000 驱动共用。
 3. ~~sha256sum~~ 已完成（V0.59.21）：`auth64_sha256` 已导出，终端命令走 4KB 分块流式读取。
-4. **chmod / chown**：inode 权限位已在，缺 shell 解析。
+4. ~~**chmod / chown**~~ 已完成（2026-11-26）：数字八进制模式可落盘；符号模式（`u+x`）与多属主/组模型仍未做。
 5. **objdump / readelf**：把 elf64 的节表解析暴露成命令。
 
 ## 取证通道（v0.59.3）
