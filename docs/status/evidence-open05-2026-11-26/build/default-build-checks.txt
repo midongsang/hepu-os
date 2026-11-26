@@ -1,0 +1,8 @@
+== strings open05-probe count ==
+0
+== strings svc-probe count ==
+1
+== probe macros in build64.log ==
+0
+== build64.log macro lines (expect none) ==
+(none)
