@@ -1,7 +1,7 @@
 ---
 title: BOOT_FLOW
 status: active
-sys_version: 0.62.1
+sys_version: 0.63.0
 updated: 2026-11-17
 owner: architecture
 source_of_truth: tools/hepboot/uefi/hepboot_uefi.c, kernel/kernel_main_64.c

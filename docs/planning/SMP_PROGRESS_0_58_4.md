@@ -1,7 +1,7 @@
 ---
 title: SMP 硬化包进度对齐与阶段 5（SB-25）前置设计
 status: active
-sys_version: 0.62.1
+sys_version: 0.63.0
 updated: 2026-11-13
 owner: kernel
 source_of_truth: null

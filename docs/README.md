@@ -1,8 +1,8 @@
 ---
 title: 赫普OS 文档索引
 status: active
-sys_version: 0.62.1
-updated: 2026-11-26
+sys_version: 0.63.0
+updated: 2026-11-27
 generator: tools/gen_docs_index.py
 source_of_truth: frontmatter of docs/*
 ---

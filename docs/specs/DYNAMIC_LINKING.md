@@ -1,7 +1,7 @@
 ---
 title: DYNAMIC_LINKING
 status: active
-sys_version: 0.62.1
+sys_version: 0.63.0
 updated: 2026-11-12
 owner: specs
 source_of_truth: null

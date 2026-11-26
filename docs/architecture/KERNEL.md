@@ -1,7 +1,7 @@
 ---
 title: KERNEL
 status: active
-sys_version: 0.62.1
+sys_version: 0.63.0
 updated: 2026-11-12
 owner: architecture
 source_of_truth: kernel/arch/x86_64/Makefile

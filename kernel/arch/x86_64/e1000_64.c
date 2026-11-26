@@ -90,12 +90,31 @@ static uint32_t e1000_tx_rate = 0, e1000_rx_rate = 0;
 static uint64_t e1000_stat_last_sec = 0;
 static uint64_t e1000_tx_prev = 0, e1000_rx_prev = 0;
 
+static uint64_t e1000_mmio_phys = 0;
+static uint64_t e1000_mapped_cr3 = 0;
+
+/* MMIO 只映射在启动时的 CR3；切到用户进程地址空间后，恒等映射不在，
+ * 顶栏状态轮询读 STATUS 就会 #PF。每次读写前按当前 CR3 补映射，命中则零开销。 */
+static void e1000_ensure_mapped(void)
+{
+    if (!e1000_mmio_phys) return;
+    uint64_t cr3;
+    __asm__ volatile("mov %%cr3, %0" : "=r"(cr3));
+    if (cr3 == e1000_mapped_cr3) return;
+    extern int vmm64_map_page(uint64_t pml4_addr, uint64_t virt, uint64_t phys, uint64_t flags);
+    for (uint64_t off = 0; off < 0x20000; off += 0x1000)
+        vmm64_map_page(cr3, e1000_mmio_phys + off, e1000_mmio_phys + off, 0x03 | 0x10);
+    e1000_mapped_cr3 = cr3;
+}
+
 static inline uint32_t e1000_read(uint32_t reg)
 {
+    e1000_ensure_mapped();
     return e1000_regs[reg / 4];
 }
 static inline void e1000_write(uint32_t reg, uint32_t val)
 {
+    e1000_ensure_mapped();
     e1000_regs[reg / 4] = val;
 }
 
@@ -135,6 +154,8 @@ int e1000_init(void)
                         vmm64_map_page(cr3, mmio_phys + off, mmio_phys + off, 0x03 | 0x10);
                     }
                     e1000_regs = (volatile uint32_t *)(uintptr_t)mmio_phys;
+                    e1000_mmio_phys = mmio_phys;
+                    __asm__ volatile("mov %%cr3, %0" : "=r"(e1000_mapped_cr3));
                     found = 1;
                     break;
                 }

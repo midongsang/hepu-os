@@ -11,6 +11,7 @@
 #include <efilib.h>
 #include "hepboot_gop.h"
 #include "hepboot_logo.h"
+#include "version.h"
 
 /* 自定义字符串函数 (UEFI freestanding环境不用标准C库) */
 static int my_strcmp(const char *a, const char *b)
@@ -1006,7 +1007,7 @@ static void boot_menu_render(int avail[MODE_COUNT], int selected, int countdown,
         char ver[64];
         {
             int i = 0;
-            const char *pfx = "Hepu OS 0.60.7   HepuBoot UEFI v";
+            const char *pfx = "Hepu OS " HEPU_OS_VERSION "   HepuBoot UEFI v";
             while (*pfx && i < 60) ver[i++] = *pfx++;
             const char *v = HEPBOOT_UEFI_VERSION;
             while (*v && i < 60) ver[i++] = *v++;
@@ -1190,7 +1191,7 @@ static int ld_begin(int use32, int protect)
 
     gop_fill_rect(((int)g_ld_w - 300) / 2, ly + hepu_logo_h + 66, 300, 1, 0x00302828);
 
-    const char *foot = "Hepu OS 0.60.7    HepuBoot UEFI v0.08";
+    static const char foot[] = "Hepu OS " HEPU_OS_VERSION "    HepuBoot UEFI v" HEPBOOT_UEFI_VERSION;
     gop_draw_string(((int)g_ld_w - gop_string_width_scaled(foot, 1)) / 2,
                     (int)g_ld_h - 36, foot, 0x00706058);
 

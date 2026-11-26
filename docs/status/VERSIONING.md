@@ -1,8 +1,8 @@
 ---
 title: VERSIONING
 status: active
-sys_version: 0.62.1
-updated: 2026-11-25
+sys_version: 0.63.0
+updated: 2026-11-27
 owner: status
 source_of_truth: null
 supersedes: null
@@ -107,12 +107,23 @@ supersedes: null
 
 ## 当前版本
 
-**0.62.1**
+**0.63.0**
 - 重要版本：0
-- 默认版本：62
-- bug版本：1
+- 默认版本：63
+- bug版本：0
 
 > 版本号以本文件 frontmatter `sys_version` 为唯一事实源。以下为历史迭代记录。
+
+**0.63.0 迭代内容（2026-11-27，事件日志 / 服务监督 / 系统管理 / 安全与存储收口）**
+
+1. **事件日志主链路**：新增 64 位 `SYS_EVENT_LOG_PULL(233)`，按 `after_seq` 游标拉取普通环；非驻留 `/bin/logd.elf` worker 按日期写 `/var/log/hepu/YYYY-MM-DD.log` 并维护 `.cursor`；64 位桌面 6s 节流拉起；`journal` 输出并入 emergency 环。修复 `logd.c` 的 `l_dec()`/`l_hex()` 补零写坏未初始化字节，读回恢复 ASCII。
+2. **服务监督**：服务表接入依赖拓扑、健康列与失败指数退避；64 位桌面/文本 shell 主循环接入监督节拍，`service list/status` 与 32 位口径对齐。内置五项仍为 STUB，真实 daemon/存活探测/崩溃恢复未做。
+3. **系统管理命令**：补齐 `mount/umount`、`chmod/chown/fsck` 等命令并对齐 32/64 位集合；`fsck` 接入 inode 检查；第二 ext2、内核 mkfs、64 位 `fsck --fix`、64 位 busy 判定与多用户模型仍按边界登记。
+4. **存储与 USB**：修复 UHCI TD 状态位/帧推进/DataToggle、64 位 MSC READ10/WRITE10 长度编码；usb-storage 整扇区读写与 64 位满盘分段遍历（`sampled=523 read_err=0 mismatch=0`）闭合，登记 BUG-60。
+5. **安全**：SEC-04 进程级凭据与高危能力位、SEC-05 readdir 去全局锁与 2048B 上限、SEC-07 目录项复核；32 位 p3-security 带盘 2/2 真实执行并纳入冒烟门禁。
+6. **网络与 TLS**：TLS 1.2 真实 ClientHello/ServerHello、证书链校验、RSA 密钥交换、AES-128-GCM 记录层与加密 GET E2E；同时修 64 位 FIN 同段数据先入缓冲。
+7. **桌面与布局**：OBS-01 默认 HPET 毫秒时钟、OBS-02 边缘缩放光标、OBS-04 窗口外高光、OBS-09 状态采样不再每 30 帧强制全屏重绘；`seccomp64.h` 归位到 `arch/x86_64/include`，布局审计 0 error。OBS-06 32 位首帧只覆盖顶部 410 行已复现，本版不修。另修复 e1000 MMIO 只映射在启动 CR3、切到用户地址空间后顶栏 `e1000_link_status()` 读 STATUS 触发 #PF 的问题：读写前按当前 CR3 补 0x20000 恒等映射，`Win+M` 任务管理器实拍通过。
+8. **文档与展示**：现行文档 frontmatter 对齐 0.63.0；README 当前版本、徽章、内核体积与展示图同步更新；引导器菜单/加载屏脚注改为引用 `HEPU_OS_VERSION`；展示图重拍至 0.63.0（32 位因 OBS-06 保留 0.60.7 基线并明确标注）；根目录临时构建日志清理。
 
 **0.62.1 迭代内容（2026-11-25，B 线可靠性 + 版本/文档整理）**
 

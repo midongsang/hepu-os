@@ -1,7 +1,7 @@
 ---
 title: Hepu Shell 设计原则
 status: active
-sys_version: 0.62.1
+sys_version: 0.63.0
 updated: 2026-10-29
 owner: architecture
 source_of_truth: null

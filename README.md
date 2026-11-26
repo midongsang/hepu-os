@@ -5,8 +5,8 @@
 [![Build](https://github.com/midongsang/hepu-os/actions/workflows/ci.yml/badge.svg)](https://github.com/midongsang/hepu-os/actions/workflows/ci.yml)
 [![Release](https://github.com/midongsang/hepu-os/actions/workflows/release.yml/badge.svg)](https://github.com/midongsang/hepu-os/actions/workflows/release.yml)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPLv3-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-v0.62.1-brightgreen.svg)](#当前版本)
-[![Kernel size](https://img.shields.io/badge/kernel-969KB-blue.svg)](#当前版本)
+[![Version](https://img.shields.io/badge/version-v0.63.0-brightgreen.svg)](#当前版本)
+[![Kernel size](https://img.shields.io/badge/kernel-1000KB-blue.svg)](#当前版本)
 [![glibc 动态链接](https://img.shields.io/badge/glibc-✓-brightgreen.svg)](#核心特性)
 [![ext2](https://img.shields.io/badge/ext2-✓-brightgreen.svg)](#核心特性)
 [![SMP](https://img.shields.io/badge/SMP-4core-green.svg)](#核心特性)
@@ -23,12 +23,12 @@
 
 <table>
 <tr>
-<td align="center"><img src="docs/assets/boot-menu-0.60.7.jpg" width="400"><br><sub>引导菜单：三个模式 + 倒计时</sub></td>
-<td align="center"><img src="docs/assets/boot-loading-0.60.7.jpg" width="400"><br><sub>加载屏：底圈在转，状态与百分比同步推进</sub></td>
+<td align="center"><img src="docs/assets/boot-menu-0.63.0.jpg" width="400"><br><sub>引导菜单：三个模式 + 倒计时</sub></td>
+<td align="center"><img src="docs/assets/boot-loading-0.63.0.jpg" width="400"><br><sub>加载屏：底圈在转，状态与百分比同步推进</sub></td>
 </tr>
 <tr>
-<td align="center"><img src="docs/assets/lock-screen-0.60.7.jpg" width="400"><br><sub>锁屏：大时钟 + 日期 + 解锁提示</sub></td>
-<td align="center"><img src="docs/assets/desktop-64-0.60.7.jpg" width="400"><br><sub>登录后进入桌面</sub></td>
+<td align="center"><img src="docs/assets/lock-screen-0.63.0.jpg" width="400"><br><sub>锁屏：大时钟 + 日期 + 解锁提示</sub></td>
+<td align="center"><img src="docs/assets/desktop-64-0.63.0.jpg" width="400"><br><sub>登录后进入桌面（Settings）</sub></td>
 </tr>
 </table>
 
@@ -63,9 +63,9 @@
 
 ### 锁屏与登录
 
-开机无条件停在锁屏。设定完成前系统还没有可校验的凭据，登录页直接放行；
-一旦 `/account.conf` 里有账号，就该走 SHA-256 校验 —— `auth64_verify_password` 已经实现，
-把它接进登录路径是下一步。
+开机无条件停在锁屏。未配置账号时，登录页直接放行进入 OOBE 首设；`/account.conf`
+有账号后，锁屏 → 登录页走 SHA-256 校验：空口令被拒绝并留在登录页给错误提示，
+正确口令才切到桌面。
 
 ## 支持平台与硬件
 
@@ -76,7 +76,7 @@
 |---|---|---|
 | 架构 | x86_64，长模式 | i386 兼容（multiboot） |
 | 固件 | **UEFI**（唯一启动路径） | BIOS / Multiboot（GRUB 或 `-kernel` 直载） |
-| 内存 | 实测 1 GB 到桌面；`.bss` 约 38.7 MB | 实测 256 MB 到桌面；`.bss` 约 92.6 MB |
+| 内存 | 实测 1 GB 到桌面；`.bss` 约 38.9 MB | 实测 256 MB 到桌面；`.bss` 约 92.8 MB |
 | 显示 | VBE 线性帧缓冲，1920×1080，显存 ≥ 8 MB | 同左（同一份桌面代码） |
 | 磁盘 | AHCI/SATA → ext2 读写；USB 存储（BOT 批量，可挂 ext2） | IDE PIO → ext2 读写（含 LBA48 读） |
 | 网络 | e1000（DHCP/ARP/ICMP/TCP 端到端验证）；RTL8139 为回退 | e1000 MMIO 已接通（BAR0 页级映射 + volatile/屏障），`RCTL.BSIZE` 位段已修正（原值写在 bit17:16，实际在 bit9:8，接收缓冲只有 256 B，大于 256 B 的帧全被硬件丢弃）；**IP/UDP/DHCP 整数字节序与 IP 校验和已修正，32 位已能收到 DHCP OFFER**；RTL8139 为回退 |
@@ -96,18 +96,37 @@ AHCI 厂商实现差异（ABAR 与端口复位流程）。
 
 ## 当前版本
 
-**0.62.1** — 当前版本（版本号唯一事实源：`docs/status/VERSIONING.md` frontmatter，
+**0.63.0** — 当前版本（版本号唯一事实源：`docs/status/VERSIONING.md` frontmatter，
 代码侧单一来源：`kernel/include/version.h`，32/64 位共用）
 
-本版是**B 线可靠性收口 + 版本/文档整理**：
+本版是**事件日志 / 服务监督 / 系统管理 / 安全与存储收口**：
 
-- **B-1 崩溃自动重启闭环**：同一启动内 `crashsvc` 连续崩溃 3 次，`restarts` 累计到 3，
-  PID 依次 3/4/5；第 3 次后回到 `hepu@os:~`，不再停在 `[PAGING] dir freed`。
-- **B-4 32 位网络修复**：ARP/TCP 收发字节序、TCP 伪首部校验和、ARP 等待与
-  `ping`/`tcp_connect` 握手；QEMU e1000 实测 ping 4/4、TCP established。
-- **P2 内存长稳**：30 分钟压测 975,200 轮、0 skip，`free=0x627D` 全程稳定。
-- **显示版本统一**：32 位 shell/启动画面/品牌头全部引用 `HEPU_OS_VERSION`；
-  50 个 active 文档 frontmatter 对齐 0.62.1，`tools/check_docs.py` 版本错误清零。
+- **事件日志主链路**：64 位 `SYS_EVENT_LOG_PULL(233)` 按游标拉取普通环；非驻留
+  `/bin/logd.elf` 按日期写 `/var/log/hepu/YYYY-MM-DD.log` 并维护 `.cursor`；桌面 6s
+  节流拉起；`journal` 并入 emergency 环。修复 `l_dec()`/`l_hex()` 的 NUL 写坏，
+  读回恢复 ASCII。
+- **服务监督**：服务表接入依赖拓扑、健康列与失败指数退避；32/64 位主循环接入监督
+  节拍，`service list/status` 对齐。内置五项仍为 STUB，真实 daemon/存活探测/崩溃
+  恢复未做。
+- **系统管理**：补齐 `mount/umount`、`chmod/chown/fsck` 并对齐 32/64 位命令集合；
+  `fsck` 接入 inode 检查。第二 ext2、内核 mkfs、64 位 `fsck --fix`、64 位 busy
+  判定与多用户模型仍按边界登记。
+- **存储与 USB**：修复 UHCI TD 状态位/帧推进/DataToggle、64 位 MSC READ10/WRITE10
+  长度编码；usb-storage 整扇区读写与 64 位满盘分段遍历闭合，登记 BUG-60。
+- **安全**：SEC-04 进程级凭据与高危能力位、SEC-05 readdir 去全局锁、SEC-07 目录项
+  复核；32 位 p3-security 带盘 2/2 真实执行并纳入冒烟门禁。
+- **网络与 TLS**：TLS 1.2 真实握手、证书链校验、RSA 密钥交换、AES-GCM 记录层与
+  加密 GET E2E；64 位 FIN 同段数据先入缓冲。
+- **桌面与布局**：OBS-01/02/04/09 修复；`seccomp64.h` 归位到
+  `arch/x86_64/include`，布局审计 0 error；OBS-06 的 32 位首帧 410 行问题已复现，
+  本版不修。
+- **桌面稳定性**：修复 e1000 MMIO 只映射在启动 CR3、切到用户地址空间后顶栏
+  状态轮询触发 #PF 的问题；`Win+M` 打开任务管理器实拍通过，状态栏版本显示 0.63.0。
+- **文档与展示**：现行文档 frontmatter 对齐 0.63.0；README 徽章、内核体积与
+  展示图同步更新；引导器菜单/加载屏脚注改为引用 `HEPU_OS_VERSION`。
+
+**上一版（0.62.1）** —— B 线可靠性收口 + 版本/文档整理：崩溃自动重启 3 次、32 位
+ARP/TCP 字节序与校验和修复、30 分钟内存长稳；50 个 active 文档对齐 0.62.1。
 
 **上一版（0.62.0）** —— 多架构第一程 + 抽象层收口：ARM64 从 UEFI 出图（M0）走到自己的页表接管（M1c）
 与全 RAM 映射（M1d-1）；同时抽出 `arch_port` 抽象层、给能力校验加上"拒绝即审计"。
@@ -165,11 +184,10 @@ TCP/HTTP 栈收发正常。已换源 `t.weather.itboy.net`（又拍云，非常 
 **版本号双源统一**：`kernel/include/hepu_brand.h` 不再维护第二份版本字面量，
 改为引用 `kernel/include/version.h` 的 `HEPU_OS_VERSION`。
 
-体积（默认参数重编，上限 1,048,576 B）：64 位 **992,656 B**（余量约 54.6 KB），
-32 位 **3,817,997 B**；双架构 0 error，32 位冒烟 `serial=1 initrd=1 net=1 desk=1
+**0.61.0 发布验证**：双架构 0 error，32 位冒烟 `serial=1 initrd=1 net=1 desk=1
 fault=0 bound=1` PASS。
 
-### 0.60.7（上一版）
+### 0.60.7（历史基线）
 
 0.60.7 是**内核正确性批次**，把一个长期被误判的崩溃查到了底：32 位只要多加约 1 KB
 静态数据就启动失败，此前结论是"BSS 已贴边界、不能再加"。用
@@ -201,19 +219,23 @@ fault=0 bound=1` PASS。
 
 ### 64 位桌面（1920×1080）
 
-![Hepu OS 64 位桌面](docs/assets/desktop-64-0.60.7.jpg)
+![Hepu OS 64 位桌面](docs/assets/desktop-64-0.63.0.jpg)
+*Hepu OS v0.63.0 桌面（1920×1080）：顶栏、Settings、8 色圆、网络通知*
 
-### 32 位桌面（1920×1080，同一份桌面代码）
+### 32 位桌面（同一份桌面代码，展示图为 0.60.7 基线）
 
 ![Hepu OS 32 位桌面](docs/assets/desktop-32-0.60.7.jpg)
 
 32 位与 64 位共用 `kernel/shared/desktop/` 的注册表与绘制路径，差异只在主题默认值
 （上图 64 位 Light / 32 位 Dark）和系统调用入口（`int $0x80` vs `syscall`）。
 
-*Hepu OS v0.60.7 桌面（1920×1080）：顶栏、Settings、8 色圆、网络通知*
+当前 0.63.0 的 32 位首帧仍受 OBS-06 影响（只有顶部约 410 行上色，下部黑屏），
+因此这张保留可用的 0.60.7 基线图，不用残屏图冒充 0.63.0；修复 OBS-06 后重拍。
 
-![任务管理器：Processes 页](docs/assets/taskmgr-grid-processes-0.59.5.jpg)
-*任务管理器 Processes 页：八列 + 七条列竖线，标签栏固定在顶部*
+### 任务管理器（0.63.0 实拍）
+
+![任务管理器：Processes 页](docs/assets/taskmgr-processes-0.63.0.jpg)
+*任务管理器 Processes 页（0.63.0 实拍）：八列 + 七条列竖线，标签栏固定在顶部*
 
 **线程自检实证**（串口，同一镜像）：
 
@@ -228,9 +250,9 @@ PASS: child ran in shared address space, both counters advanced
 
 ## 核心特性
 
-- **64位长模式内核**：约969KB（992,656字节），-O2优化，114个源码模块
+- **64位长模式内核**：约1000KB（1,023,696字节），-O2优化，114个源码模块
 - **SMP多处理器**：4核并行，per-CPU调度，负载均衡，IPI核间中断
-- **双内核混合引导**：64位内核（992,656 B）+ 32位内核（3,817,997 B），启动菜单选择
+- **双内核混合引导**：64位内核（1,023,696 B）+ 32位内核（3,864,141 B），启动菜单选择
 - **三重引导支持**：BIOS + UEFI + CD-ROM
 - **图形桌面环境**：1920×1080 真彩色，100/125/150/200% 四档 UI 缩放，TrueType 字体，窗口投影与悬停反馈
 - **ext2文件系统**：完整文件/目录操作（创建/读写/删除）
@@ -290,10 +312,10 @@ hepu-os/
 | 项 | 64 位（主线） | 32 位（并行第二套内核） |
 |---|---|---|
 | CPU | x86_64，支持长模式 | i386 兼容，能跑 multiboot |
-| 内存 | **1024 MB**（实测启动到桌面）<br>BSS 约 38.7 MB | **256 MB**（实测启动到桌面）<br>BSS 约 92.6 MB，见下方说明 |
+| 内存 | **1024 MB**（实测启动到桌面）<br>BSS 约 38.9 MB | **256 MB**（实测启动到桌面）<br>BSS 约 92.8 MB，见下方说明 |
 | 显示 | 1920×1080，需要 VBE 线性帧缓冲 | 同左 |
 | 显存 | ≥ 8 MB（1920×1080×4 = 8.3 MB，单缓冲直写） | 同左 |
-| 磁盘 | 镜像 256 MB（GPT + ESP + ext2 根分区 120 MB） | 32 位内核 3.75 MB，可由引导器直接载入 |
+| 磁盘 | 镜像 256 MB（GPT + ESP + ext2 根分区 120 MB） | 32 位内核 3,864,141 B（约 3.69 MiB），可由引导器直接载入 |
 | 固件 | **UEFI**（见下方"启动方式"） | multiboot（GRUB 或 QEMU `-kernel` 直载） |
 | 输入 | PS/2 键盘 + PS/2 鼠标；USB 键鼠经 xHCI 亦可用（见下方"输入设备"） | 同左 |
 | 网络 | 可选；e1000 已端到端验证（DHCP/ARP/ICMP/TCP），RTL8139 为回退路径 | 可选；RTL8139 |
@@ -302,15 +324,15 @@ hepu-os/
 
 **关于 BSS**（这两个数是 `size -A` 实测，不是规格书估算）：
 
-- 64 位：`.text` 620,840 / `.data` 12,272 / `.bss` 40,559,872（约 38.7 MB）
-- 32 位：`.text` 860,676 / `.data` 24,876 / `.bss` 97,078,188（约 92.6 MB）
+- 64 位：`.text` 1,011,152 / `.data` 12,496 / `.bss` 40,807,776（约 38.9 MB）
+- 32 位：`.text` 3,829,931 / `.data` 25,900 / `.bss` 97,356,924（约 92.8 MB）
 
-32 位的 92.6 MB 里排前几位的静态缓冲：`kf_pool` 24 MB（内核帧兜底池）、
+32 位的 92.8 MB 里排前几位的静态缓冲：`kf_pool` 24 MB（内核帧兜底池）、
 `htpl` 8.8 MB、`back_buffer` 7.9 MB（双缓冲绘制目标）、`connections` 4 MB、
 `s_hpd32_pool` 4 MB（桌面对象池）、`ht` 3.3 MB、`art` 2.7 MB、`store` 2.6 MB、
 `eco` 2.5 MB、`queues` 2.1 MB、`wp_raw` 2 MB（壁纸读取缓冲）。
 
-所以 32 位"256 MB 能跑"里，光 BSS 就占掉 92.6 MB —— 真正留给页分配器的
+所以 32 位"256 MB 能跑"里，光 BSS 就占掉 92.8 MB —— 真正留给页分配器的
 没有想象中多。这也是 `N-1`（2560×1600 双缓冲 + 壁纸缓存共需 32 MB）卡在
 内存预算上的原因。**要往上加分辨率，先看这张表，别只看总内存。**
 

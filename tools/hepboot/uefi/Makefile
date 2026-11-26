@@ -17,7 +17,8 @@ EFI_LDS = $(EFI_ROOT)/gnuefi/elf_x86_64_efi.lds
 # 编译选项
 CFLAGS = -fno-stack-protector -fpic -fshort-wchar -mno-red-zone \
          -DEFI_FUNCTION_WRAPPER -I$(EFI_INCLUDE) -I$(EFI_INCLUDE)/x86_64 \
-         -I$(EFI_INCLUDE)/protocol -Wall -Wextra -O2
+         -I$(EFI_INCLUDE)/protocol -I$(abspath $(CURDIR)/../../../kernel/include) \
+         -Wall -Wextra -O2
 
 # 链接选项
 LDFLAGS = -nostdlib -znocombreloc -T $(EFI_LDS) -shared -Bsymbolic \

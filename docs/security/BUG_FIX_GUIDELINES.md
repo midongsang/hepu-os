@@ -1,7 +1,7 @@
 ---
 title: BUG_FIX_GUIDELINES
 status: active
-sys_version: 0.62.1
+sys_version: 0.63.0
 updated: 2026-11-01
 owner: security
 source_of_truth: null

@@ -1,7 +1,7 @@
 ---
 title: 赫普OS 未关闭问题清单
 status: active
-sys_version: 0.62.1
+sys_version: 0.63.0
 updated: 2026-11-26（OPEN-02 运行时闭环；原记录见下）OBS-08 追加取证进展：二分窗口、垃圾指针定性、TCG 数据断点不可用；**2026-11-18 前**（登记 OBS-08 32 位镜像布局位移敏感、OBS-09 x86 桌面局部刷新未生效；OBS-05 撤销为取帧时机问题；登记 OBS-07 linuxhello 崩溃、64 空口令拒登、ASan/UBSan 链接清单失败、32 KUnit 既有基线失败；文末「台账遗留项清理（2026-11-18）」为 32 位 / 64 位与主机侧遗留项复核记录；2026-11-18 桌面 GUI QEMU 实测：电源菜单、屏保、Accounts、tls12 探针四项均 PASS，结论与证据见文末「实测结论（2026-11-18）」表及 `evidence-desktop-gui-2026-11-18/`。历史：驱动层整固 BUG-52~56；BUG-49 更正为不成立；OPEN-02 复现未成功并写明下一步夹具）
 owner: status
 source_of_truth: kernel/arch/x86_64/

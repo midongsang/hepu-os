@@ -1,7 +1,7 @@
 ---
 title: SYSTEM_LAYOUT_AND_NAMESPACES_2026-11-26
 status: active
-sys_version: 0.62.1
+sys_version: 0.63.0
 updated: 2026-11-26
 owner: design
 source_of_truth: tools/audit_layout.py；Makefile；kernel/arch/x86_64/Makefile

@@ -1,7 +1,7 @@
 ---
 title: SB-25 跨核调度：方案与风险评估（未验证方案）
 status: active
-sys_version: 0.62.1
+sys_version: 0.63.0
 updated: 2026-11-26
 owner: kernel
 source_of_truth: null

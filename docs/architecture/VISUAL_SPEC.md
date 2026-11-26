@@ -1,7 +1,7 @@
 ---
 title: VISUAL_SPEC
 status: active
-sys_version: 0.62.1
+sys_version: 0.63.0
 updated: 2026-11-14
 owner: architecture
 source_of_truth: rootfs/etc/hepushell/config.hsqml
