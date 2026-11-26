@@ -1,6 +1,16 @@
 /* ============================================================================
- * 赫普OS - Hepu Desktop 服务集成实现
+ * 赫普OS - Hepu Desktop 后端组件集合
  * V0.10.169
+ *
+ * 归属说明（2026-11-26 服务层收敛）：本文件不是第二套系统服务注册表。
+ * 这里的三个组件是 64 位桌面后端，生命周期不归本文件编排：
+ *   - 音频后端桥接(hs_audio_*)：已迁入统一服务表，由 services.c 的
+ *     `audio` 服务 start_func 调用 hs_audio_init()，本文件不再在
+ *     hs_services_init() 里重复初始化；
+ *   - 进程快照监控(hs_process_monitor_*)：任务管理器数据源，由桌面
+ *     事件循环周期 update，不是常驻 daemon；
+ *   - 文件监听框架(hs_file_monitor_*)：仅 watch 表框架，无本地 daemon。
+ * 系统服务的注册/启动/停止/健康/退避唯一事实源是 kernel/sched/services.c。
  * ========================================================================== */
 
 #include "hsservices.h"
@@ -407,12 +417,13 @@ int hs_services_init(void)
 {
     if (services_initialized) return 0;
 
-    hs_audio_init();
+    /* 音频后端 hs_audio_init() 已迁入统一服务表（services.c `audio`），
+     * 此处不再重复初始化，避免同一后端两条初始化路径。 */
     hs_process_monitor_init();
     hs_file_monitor_init();
 
     services_initialized = 1;
-    vga_puts("[SERVICES] All services initialized\n");
+    vga_puts("[SERVICES] desktop monitor components initialized\n");
     return 0;
 }
 
