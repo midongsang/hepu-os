@@ -670,9 +670,15 @@ x86_64_far_jump:
 .code64
 .global x86_64_entry_64
 x86_64_entry_64:
-    /* V0.54.6: 最简路径 — 直接用正确 magic 值，绕开 Stage2 传递问题 */
-    movl $0x2BADB002, %edi        /* RDI = magic (multiboot 规范值) */
-    movq %rbx, %rsi               /* RSI = mb_info (引导器在 RBX 中传入) */
+    /* V0.54.6: 最简路径 — 直接用正确 magic 值，绕开 Stage2 传递问题。
+     * 注意：UEFI 引导器会校验镜像前 5 字节必须是 BF 02 B0 AD 2B
+     * （movl $0x2BADB002,%edi），所以这条必须保持在 0x100000 首字节。
+     * OPEN-09 后续加固：随后把 magic/mb_info 转存到 callee-saved
+     * 寄存器，等 BSS 清零、切到内核栈后再调用 C 函数，避免在 4KB
+     * 引导栈上调用任何 C 代码。 */
+    movl $0x2BADB002, %edi        /* 首 5 字节，引导器魔数校验依赖 */
+    movl %edi, %r12d              /* R12D = magic */
+    movq %rbx, %r13               /* R13 = mb_info (引导器在 RBX 中传入) */
     jmp kernel_gdt64_flush
 
 kernel_gdt64_flush:
@@ -684,14 +690,9 @@ kernel_gdt64_flush:
     movw %ax, %gs
     movw %ax, %ss
 
-    /* 设置64位内核栈 */
-    movq $0x90000, %rsp
-
-    /* V0.54.6: 保存 Multiboot 信息 (RDI=magic, RSI=mb_info)
-     * 必须在 BSS zeroing 前调用, 因为它会覆盖 RDI */
-    call x86_64_set_boot_info
-
-    /* 清零BSS段（页表在0x600000，不在BSS范围内） */
+    /* 清零BSS段（页表在0x600000，不在BSS范围内）。
+     * 这一段只用 rep stosq，不调用 C、不压栈；真正的 C 调用放到
+     * 切到 hepu_kstack_top 之后。 */
     cld
     movq $__bss_start, %rdi
     movq $__bss_end, %rcx
@@ -709,6 +710,11 @@ kernel_gdt64_flush:
      * 否则 rep stosq 会把正在使用的内核栈一起清零。 */
     movq $hepu_kstack_top, %rsp
     xorq %rbp, %rbp
+
+    /* 现在在内核栈上调用 C：保存 Multiboot 信息。 */
+    movl %r12d, %edi
+    movq %r13, %rsi
+    call x86_64_set_boot_info
 
     /* 调用64位C语言入口 */
     call x86_64_kernel_main

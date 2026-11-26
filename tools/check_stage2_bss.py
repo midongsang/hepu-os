@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
-"""Stage2 页表 vs 内核 BSS 安全检查（4 条硬规则，失败即阻断）
+"""Stage2 页表 vs 内核 BSS 安全检查（6 条硬规则，失败即阻断）
 ===================================================================
 背景：Stage2 早期页表由 Stage2 代码手工构建，CR3 装载后 CPU 依赖它翻译
 物理地址。如果 BSS zeroing 覆盖了页表自身内存，会触发 #PF → #DF → Triple
 Fault → CPU Reset —— 串口只剩 16 行日志，很难定位。
+
+OPEN-09 补充：UEFI 入口曾长期使用引导器留下的低 4KB 栈（0x8F000-0x90000），
+而 jump_kernel_64 的临时 GDT 在 0x8F050，正好落在栈内；栈帧一深就覆盖
+GDT[1]，首个中断按 0x08 取门描述符时 #GP → #DF → triple fault。因此除
+Stage2 页表外，还必须静态断言早期入口的栈边界。
 
 规则：
 1. __bss_end 必须落在 Stage2 低地址页表映射范围内（PD_entry * 2MB）
@@ -11,6 +16,10 @@ Fault → CPU Reset —— 串口只剩 16 行日志，很难定位。
    —— 即 BSS zeroing 的 rep stosq 清不到页表
 3. kheap_memory 结束地址必须落在 Stage2 页表映射范围内
 4. 若未来需要扩大 kheap，必须同步提升 PD entry 数量和 PT_BASE
+5. OPEN-09: hepu_kstack 不得与引导器低 4KB 栈/GDT（0x8F000-0x90000）重叠，
+   且必须落在 BSS 内
+6. OPEN-09: entry_64.S 首条指令必须是引导器魔数 movl $0x2BADB002,%edi；
+   BSS 清零之后才切 hepu_kstack_top，切栈前不得有 C 调用
 
 运行：
   python3 tools/check_stage2_bss.py
@@ -161,6 +170,80 @@ if PT_BASE + 0x8000 > PT_COVERAGE:  # PT 约占 32KB = 8 个页
 else:
     print(f'[{chr(0x2714)}] 规则 4 PASS: PT 自身 (0x{PT_BASE:06x} - 0x{PT_BASE+0x8000:06x}) 落在映射范围内')
 
+# ====== OPEN-09: 早期入口栈边界（引导器低 4KB 栈 vs 内核 64KB 栈）======
+# jump_kernel_64.S 的临时 GDT 固定在 0x8F050，位于引导器 0x8F000-0x90000 栈内。
+# 这两条规则把"入口必须离开该栈"从人工判断变成构建期硬断言。
+BOOT_STACK_BOTTOM = 0x8F000
+BOOT_STACK_TOP    = 0x90000
+TEMP_GDT_ADDR     = 0x8F050
+KSTACK_BOTTOM = sym_addr('hepu_kstack_bottom')
+KSTACK_TOP    = sym_addr('hepu_kstack_top')
+
+if KSTACK_BOTTOM is None or KSTACK_TOP is None:
+    errors.append('规则 5: 未找到 hepu_kstack_bottom / hepu_kstack_top 符号')
+elif KSTACK_TOP <= KSTACK_BOTTOM:
+    errors.append(f'规则 5 FAIL: 内核栈边界非法 bottom=0x{KSTACK_BOTTOM:x} top=0x{KSTACK_TOP:x}')
+elif KSTACK_BOTTOM < BOOT_STACK_TOP and KSTACK_TOP > BOOT_STACK_BOTTOM:
+    errors.append(f'规则 5 FAIL: 内核栈 0x{KSTACK_BOTTOM:x}-0x{KSTACK_TOP:x} 与引导器栈 0x{BOOT_STACK_BOTTOM:x}-0x{BOOT_STACK_TOP:x} 重叠（临时 GDT=0x{TEMP_GDT_ADDR:x}）')
+elif bss_start is not None and bss_end is not None and not (KSTACK_BOTTOM >= bss_start and KSTACK_TOP <= bss_end):
+    errors.append(f'规则 5 FAIL: 内核栈 0x{KSTACK_BOTTOM:x}-0x{KSTACK_TOP:x} 不在 BSS 0x{bss_start:x}-0x{bss_end:x} 内')
+else:
+    print(f'[{chr(0x2714)}] 规则 5 PASS: 内核栈 0x{KSTACK_BOTTOM:x}-0x{KSTACK_TOP:x} 与引导器栈 0x{BOOT_STACK_BOTTOM:x}-0x{BOOT_STACK_TOP:x} 不重叠')
+
+# 规则 6: 入口汇编顺序约束（魔数首指令 + BSS 清零后再切栈 + 切栈前无 call）
+ENTRY_SRC = os.path.join(ROOT, 'kernel/arch/x86_64/entry_64.S')
+try:
+    entry_text = open(ENTRY_SRC, encoding='utf-8', errors='replace').read()
+except OSError as e:
+    errors.append(f'规则 6: 无法读取 {ENTRY_SRC}: {e}')
+    entry_text = ''
+
+def _entry_region(text):
+    """返回 x86_64_entry_64 到 kernel_gdt64_flush 结束（下一个全局符号前）的指令行。"""
+    start = text.find('x86_64_entry_64:')
+    if start < 0:
+        return None
+    flush = text.find('kernel_gdt64_flush:', start)
+    if flush < 0:
+        return None
+    # 到下一个 .global 之前结束（当前函数之后是 koutc）
+    end = text.find('.global', flush)
+    body = text[flush:end if end > 0 else len(text)]
+    # 去掉块注释和行注释，只留指令
+    body = re.sub(r'/\*.*?\*/', '', body, flags=re.S)
+    body = re.sub(r'#.*', '', body)
+    lines = [ln.strip() for ln in body.splitlines()]
+    return [ln for ln in lines if ln and not ln.startswith(';')]
+
+entry_start = entry_text.find('x86_64_entry_64:')
+first_instr = ''
+if entry_start >= 0:
+    after = entry_text[entry_start:].splitlines()[1:]
+    for ln in after:
+        s = ln.strip()
+        if s and not s.startswith('/*') and not s.startswith('*') and not s.startswith('#'):
+            first_instr = s
+            break
+
+body_lines = _entry_region(entry_text)
+if body_lines is None:
+    errors.append('规则 6: 未找到 x86_64_entry_64 / kernel_gdt64_flush 标签')
+else:
+    magic_ok = first_instr.startswith('movl $0x2BADB002, %edi')
+    rep_idx = next((i for i, ln in enumerate(body_lines) if ln.startswith('rep stosq')), None)
+    rsp_idx = next((i for i, ln in enumerate(body_lines) if 'hepu_kstack_top' in ln and '%rsp' in ln), None)
+    call_idx = next((i for i, ln in enumerate(body_lines) if ln.startswith('call')), None)
+    if not magic_ok:
+        errors.append(f'规则 6 FAIL: x86_64_entry_64 首条指令不是引导器魔数 movl $0x2BADB002,%edi（实际: {first_instr!r}）')
+    elif rep_idx is None or rsp_idx is None:
+        errors.append('规则 6 FAIL: 未找到 rep stosq 或 hepu_kstack_top 切栈指令')
+    elif rsp_idx <= rep_idx:
+        errors.append('规则 6 FAIL: hepu_kstack_top 切栈发生在 rep stosq 之前（BSS 清零会清掉正在使用的内核栈）')
+    elif call_idx is not None and call_idx <= rsp_idx:
+        errors.append('规则 6 FAIL: 切到 hepu_kstack_top 之前出现 C call')
+    else:
+        print(f'[{chr(0x2714)}] 规则 6 PASS: 入口首指令为 0x2BADB002 魔数，BSS 清零后切 hepu_kstack_top，切栈前无 call')
+
 # ====== 汇总 ======
 print('')
 if errors:
@@ -171,8 +254,9 @@ if errors:
     print('修复参考:')
     print(f'  - 若 BSS/heap 超出 PT 覆盖: 改 stage2_64.S 中 movl $24, %ecx 为更大值')
     print(f'  - 若 PT_BASE 落入 BSS:      改 .equ PT_BASE, 0x2E00000 为更高地址')
+    print(f'  - 若早期栈越界:             改 entry_64.S 的 hepu_kstack_top 切换点，禁止回到 0x8F000-0x90000')
     print(f'  - 改完 Stage2 后, 同步更新本脚本顶部的 PT_BASE / PD_ENTRIES')
     sys.exit(1)
 else:
-    print(f'[PASS] 全部安全检查通过 ({4 - (1 if kheap_end is None else 0)} 条规则)')
+    print(f'[PASS] 全部安全检查通过 ({6 - (1 if kheap_end is None else 0)} 条规则)')
     sys.exit(0)
