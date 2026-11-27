@@ -195,7 +195,23 @@ SMBIOS 只能回答“厂商说这是什么形状”，不能回答“现在有�
 5. `fix(ui): 电池/充电/低电量与 32 位状态对齐`（M3）
 6. `test: QEMU 合成 SSDT 与真机取证`（M4）
 
-## 7. 时间估算
+## 7. 实施状态（2026-11-27）
+
+- **M0 已完成**：`battery_percent=100` 占位移除；`hs_battery_state_t` 接入
+  `hs_status_init/update`；顶栏按 `ABSENT` 条件绘制；`DECLARED/UNKNOWN` 只画
+  轮廓 + 两道短线；32 位 `device_support.c` 的“no battery(台式机)”改为“ACPI 未探测”。
+- **M1 已完成（仅声明探测）**：新增 `firmware_info.c/.h`，解析 SMBIOS
+  `_SM_`/`_SM3_` Type 3、ACPI RSDP→RSDT/XSDT→FACP→DSDT/SSDT，扫描
+  `PNP0C0A`/`ACPI0003`（ASCII + AML 压缩 EISA ID）。状态只到 `DECLARED/ABSENT/UNKNOWN`，
+  **没有 `VALID`，不读真实百分比**。
+- **证据**：`docs/status/evidence-battery-2026-11-27/`。QEMU 默认
+  `state=absent`、顶栏无电池；注入合成 `PNP0C0A` SSDT 后 `state=declared`、
+  顶栏轮廓 + `--`；宿主 `host_check.py` PASS。64/32 构建通过，host-tests 8/0。
+- **未做**：M2（AML `_STA/_BIX/_BIF/_BST`）、M3（完整 32 位 UI/电源策略）、M4（真机）。
+  本次 QEMU/OVMF 未提供 legacy SMBIOS entry，`form_factor=unknown` 只说明
+  “本夹具没读到”，不等于真机型号判断已验证。
+
+## 8. 时间估算
 
 - M0：0.5 天
 - M1：1–2 天

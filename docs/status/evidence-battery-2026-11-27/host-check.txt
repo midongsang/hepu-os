@@ -1,0 +1,12 @@
+default: state=absent reason=no-acpi-battery
+declared: state=declared reason=acpi-declared
+top-right diff pixels=312 bbox=(275, 31, 343, 47)
+
+default_state_absent         PASS  absent
+default_reason_no_battery    PASS  no-acpi-battery
+declared_state_declared      PASS  declared
+default_size_1920x1080       PASS  (1920, 1080)
+declared_size_1920x1080      PASS  (1920, 1080)
+topright_changed             PASS  pixels=312 bbox=(275, 31, 343, 47)
+
+RESULT: PASS
