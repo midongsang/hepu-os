@@ -1,4 +1,4 @@
-# 电池状态取证（2026-11-27，M0 + M1）
+# 电池状态取证（2026-11-27，M0 + M1 + M1.5 图标 + M1.6 面板）
 
 ## 结论
 
@@ -136,11 +136,70 @@ RESULT: PASS
 
 ![default bar](icon-topbar/default/bar-3x.png)
 
+### 5. 面板与设置页（M1.6，2026-11-27 追加）
+
+用户要求：点顶栏电池图标要展开看剩余电量和状态，面板右下角放“电池和电源计划”
+入口，点它直接进 Settings 的电池页。三件事都在同一轮点击轨迹里验：
+
+1. 点电池图标 → 面板展开。`VALID` 才有数字，`DECLARED` 显示 `--` +
+   “Declared by firmware; no reading yet”；右下角是 accent 实心入口按钮。
+2. 点入口 → Settings 直接落在第 7 项 `Battery`（不是先开首页再手点）。
+3. 导航里第 4 项 About 仍能点（加页没挤掉旧索引），第 7 项 Battery 自己也能进；
+   两条入口得到的页面内容**逐像素相同**。
+
+面板与命中是同一套几何（`hs_battery_icon_rect()` 算槽位，`hs_battery_panel_geom()`
+算面板和入口矩形），绘制用它们、点击也用它们，不存在“画得大点得小”。面板画在
+窗口、控制中心、通知之后——它是顶栏浮层，必须压在最上面。
+
+命令：
+
+```bash
+bash tools/regress/battery_panel_probe.sh .../panel .../fixture/battery-declared.ssdt
+bash tools/regress/battery_panel_probe.sh .../panel/absent
+```
+
+同一轮串口（声明态）：
+
+```text
+[BAT] state=declared form_factor=unknown acpi_battery=declared reason=acpi-declared
+[DESK] battery panel open
+[DESK] battery panel -> settings page=battery
+[SETTINGS] nav page=0x3
+[SETTINGS] nav page=0x6
+```
+
+无电池这一次：`[BAT] state=absent`，点击电池本该在的位置**不产生面板**
+（串口没有 `battery panel open`）——因为那里根本没有电池图标，指针只有 4 个槽。
+
+![panel](panel/02-panel.png)
+
+![settings battery page](panel/03-settings.png)
+
+`python3 panel_check.py`（`panel/check.txt`）：
+
+```text
+A1 声明态 wifi 槽有墨迹          PASS  ink=107
+A2 声明态 电池槽有墨迹           PASS  ink=191
+B1 无电池 wifi 左移后原槽位空白   PASS  ink=0
+B4 无电池点击不产生面板          PASS
+C1 面板矩形内像素发生变化         PASS  changed=70794/73125
+C2 右下角入口是 accent 实心按钮   PASS  accent=0.73
+D1 导航第 7 项 Battery 高亮      PASS  accent=0.84
+E1 About 高亮(旧索引未被挤掉)     PASS  accent=0.85
+F1 两个入口的电池页内容逐像素相同  PASS  diff=0
+
+RESULT: PASS (19 checks, 0 failed)
+```
+
+电源计划一栏写的是“均衡（固定）”。64 位内核没有调度策略引擎（`kopt` 只在 32 位、
+且只是记账，没有真正的频率控制），所以这里不做一个点了没反应的假开关——
+宁可写清楚“固定”，也不给一个假控件。
+
 ## 构建
 
 `bash tools/regress/build_all.sh` 通过：gnu-efi、UEFI 引导器、64 位内核、
-32 位内核、双内核镜像全部成功；产物 `kernel64.bin` 1,027,088 B、
-`kernel32.bin` 3,864,141 B（+512 B 即电池轮廓掩码 64×8）。
+32 位内核、双内核镜像全部成功；产物 `kernel64.bin` 1,032,080 B、
+`kernel32.bin` 3,873,229 B（M1.5 的 +512 B 是电池轮廓掩码 64×8，M1.6 再加上面板/电池页代码）。
 
 - `tools/host-tests/run_host_tests.sh`：`通过 9 / 失败 0`（新增 `battery_ui`）。
 - `tools/regress/smoke32.sh`：`serial=1 initrd=1 net=1 desk=1 fault=0`、
@@ -163,6 +222,11 @@ RESULT: PASS
    “QEMU 默认不再显示假电池”和“声明探测链路可用”，不能写成“真机已修复”。
 6. **`VALID` 的填充只有单测覆盖**：`hs_battery_fill_px()` / `hs_battery_ui_mode()`
    在主机端跑过全部分支，但 QEMU 里造不出 `VALID`——要看到真实百分比填充仍是 M2。
+7. **面板里的数字仍受 M2 限制**：`VALID` 之外一律 `--`，面板没有把 `DECLARED`
+   当 0% 或 100%。点开能看到的“状态”是 ACPI 探测结果，不是电量。
+8. **点击链路是 QEMU 夹具**：取证用 `usb-tablet` + QMP 绝对坐标（相对指针在
+   QEMU 里推不准）。真机鼠标走的是同一条 `hpdesk_mouse_down()`，但没有真机
+   点击取证；`usb-tablet` 之外的绝对指针设备也没测。
 
 ## 复现文件
 
@@ -177,3 +241,7 @@ RESULT: PASS
 | `tools/gen_battery_glyph.py` | 从用户素材重建电池轮廓层，生成 `hs_battery_glyph.h`（`--check` 可校验一致性） |
 | `tools/host-tests/battery_ui_test.c` | 状态→图标映射与填充宽度的主机端单测 |
 | `icon-topbar/` | 图标层取证：两次运行的截图、3× 顶栏、`icon_check.py` / `check.txt` |
+| `tools/regress/battery_panel_probe.sh` | 点电池→面板→入口→电池页 的整条点击轨迹；挂 `usb-tablet` 走 QMP 绝对点击 |
+| `tools/regress/qmp_click.py` | QMP 绝对坐标点击（0..32767 换算），供上面的脚本调用 |
+| `panel/` | 声明态取证：`01-desktop` / `02-panel` / `03-settings` / `04-about` / `05-battery-nav`、`ser.log`、`panel_check.py` / `check.txt` |
+| `panel/absent/` | 默认夹具（无电池）跑同一套点击：证明点不出面板 |

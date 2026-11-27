@@ -584,7 +584,8 @@ static char g_acct_pw_msg[64];
 static int g_screensaver_min = 0;      /* V0.62: 屏保超时分钟数, 0=关闭 */
 static uint64_t g_last_activity_ts = 0; /* V0.62: 最近一次用户输入时间 */
 static int g_screensaver_active = 0;  /* V0.62: 屏保是否已进入 */
-static int g_settings_page = 0;  /* 0=Appearance, 1=Panels, 2=System, 3=About, 4=Display */
+static int g_settings_page = 0;  /* 0=Appearance, 1=Panels, 2=System, 3=About, 4=Display, 5=Accounts, 6=Battery */
+#define HS_SETTINGS_PAGE_BATTERY 6
 /* Display 页缩放按钮的渲染位置: 命中测试直接复用, 不另算一套坐标 */
 static int g_disp_scale_btn_x = 0, g_disp_scale_btn_y = 0;
 /* 分辨率档位(点选后写 ESP 的 HEPBOOT.CFG, 重启生效) */
@@ -3452,6 +3453,15 @@ static hs_ui_box_t *g_nav_root = 0;
 static hs_ui_box_t *g_nav_items = 0;
 static int g_nav_count = 0;
 
+/* 电池面板/电池页的文案跟随系统语言（0=zh, 1=en）。
+ * 没进 l10n64 的字符串表: 这组字只在电池面板和电池页出现, 进表要同步改
+ * ID 枚举 + zh/en 两张数组三处, 对只有本地两处引用的字不划算。 */
+static const char *hs_txt(const char *zh, const char *en)
+{
+    extern int l10n64_get_lang(void);
+    return (l10n64_get_lang() == 0) ? zh : en;
+}
+
 static void hs_settings_nav_paint(hs_ui_box_t *b);
 static void hs_settings_nav_ensure(int count);
 static void hs_settings_nav_layout(int cx, int cy, int w_px, int item_h, int gap);
@@ -3464,9 +3474,9 @@ static void hs_settings_nav_paint(hs_ui_box_t *b)
 {
     hs_window_t *w = g_nav_win;    /* SETK 宏需要名为 w 的局部变量 */
     void *fb = hs_get_framebuffer();
-    static const char *menu[6] = {"Appearance", "Panels", "System", "About", "Display", "Accounts"};
+    static const char *menu[7] = {"Appearance", "Panels", "System", "About", "Display", "Accounts", "Battery"};
     int page = b->tag;
-    if (page < 0 || page > 5) return;
+    if (page < 0 || page > HS_SETTINGS_PAGE_BATTERY) return;
     uint32_t bg = (page == g_settings_page) ? g_shell.colors.accent : g_shell.colors.panel_bg;
     uint32_t fg = (page == g_settings_page) ? hs_on_accent() : g_shell.colors.panel_fg;
     hs_fill_rounded_rect(b->x, b->y, b->w, b->h, SETK(6), bg);
@@ -3535,7 +3545,7 @@ static void hs_settings_window_render(hs_window_t *w)
 
     /* 左侧菜单 —— 由布局容器排列(hs_ui), 这里只给根矩形与尺寸参数 */
     g_nav_win = w;
-    hs_settings_nav_ensure(6);
+    hs_settings_nav_ensure(7);
     hs_settings_nav_layout(cx, cy, SETK(120), SETK(28), SETK(4));
     { static int hit_tested = 0; if (!hit_tested) { hit_tested = 1; hs_settings_nav_hit_selftest(); } }
 
@@ -3979,6 +3989,106 @@ static void hs_settings_window_render(hs_window_t *w)
         ry += SETK(20);
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            rx, ry, "(no EDID/CRTC driver yet)", g_shell.colors.panel_fg, SETK(11));
+    } else if (g_settings_page == HS_SETTINGS_PAGE_BATTERY) {
+        /* 电池和电源计划 —— 数字全部来自 hs_status / firmware_info。
+         * 读不到可信电量就画 "—" 并写明原因: 不填占位百分比, 也不把
+         * DECLARED 当成 100% 或 0%。 */
+        int state = g_shell.status.battery_state;
+#ifdef __x86_64__
+        extern const fi_info_t *fi_get(void);
+        const fi_info_t *fi = fi_get();
+#endif
+
+        font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                           rx, ry, hs_txt("电池和电源计划", "Battery & Power Plan"),
+                           g_shell.colors.panel_fg, SETK(16));
+        ry += SETK(30);
+
+#define HS_BAT_ROW(lab, val)                                                     \
+        do {                                                                     \
+            font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,  \
+                               rx, ry, (lab), g_shell.colors.text_secondary,     \
+                               SETK(11));                                        \
+            font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,  \
+                               rx + SETK(120), ry, (val),                        \
+                               g_shell.colors.panel_fg, SETK(11));               \
+            ry += SETK(24);                                                      \
+        } while (0)
+
+        /* 状态: 直接对应 ACPI 探测结果, 不掺机型判断 */
+        {
+            const char *sv;
+            if (state == HS_BATTERY_VALID)
+                sv = hs_txt("正常（读到可信电量）", "OK (credible reading)");
+            else if (state == HS_BATTERY_DECLARED)
+                sv = hs_txt("固件声明有电池，电量未读取", "Declared; no reading yet");
+            else if (state == HS_BATTERY_ABSENT)
+                sv = hs_txt("未检测到电池", "No battery detected");
+            else
+                sv = hs_txt("未知（ACPI 表未取到）", "Unknown (no ACPI tables)");
+            HS_BAT_ROW(hs_txt("状态", "Status"), sv);
+        }
+        /* 剩余电量: 只有 VALID 有值 */
+        {
+            char pb[8];
+            const char *pv = "--";
+            if (state == HS_BATTERY_VALID) {
+                int p = g_shell.status.battery_percent;
+                if (p < 0) p = 0;
+                if (p > 100) p = 100;
+                int q = 0;
+                if (p >= 100) { pb[q++] = '1'; pb[q++] = '0'; pb[q++] = '0'; }
+                else {
+                    if (p >= 10) pb[q++] = (char)('0' + p / 10);
+                    pb[q++] = (char)('0' + p % 10);
+                }
+                pb[q++] = '%'; pb[q] = 0;
+                pv = pb;
+            }
+            HS_BAT_ROW(hs_txt("剩余电量", "Remaining"), pv);
+        }
+        /* 充电: VALID 才谈得上 */
+        {
+            const char *cv = "--";
+            if (state == HS_BATTERY_VALID)
+                cv = g_shell.status.battery_charging ? hs_txt("是", "Yes") : hs_txt("否", "No");
+            HS_BAT_ROW(hs_txt("充电中", "Charging"), cv);
+        }
+        /* 交流适配器: 只报 ACPI 有没有 ACPI0003 声明, 不猜插没插 */
+        {
+            const char *av;
+#ifdef __x86_64__
+            if (fi && fi->ac_declared) av = hs_txt("已声明（ACPI0003）", "Declared (ACPI0003)");
+            else if (fi && fi->acpi_ok) av = hs_txt("未声明", "Not declared");
+            else av = hs_txt("未探测", "Not probed");
+#else
+            av = hs_txt("未探测（32 位无固件探测）", "Not probed (no firmware probe in 32-bit)");
+#endif
+            HS_BAT_ROW(hs_txt("交流适配器", "AC adapter"), av);
+        }
+        /* 外形: 只作提示, 明确写上不参与电池判定 */
+        {
+            const char *fv = "unknown";
+#ifdef __x86_64__
+            if (fi) fv = fi_form_name(fi->form_factor);
+#endif
+            HS_BAT_ROW(hs_txt("外形（仅提示）", "Chassis hint"), fv);
+        }
+        HS_BAT_ROW(hs_txt("电源计划", "Power plan"),
+                   hs_txt("均衡（固定）", "Balanced (fixed)"));
+#undef HS_BAT_ROW
+
+        ry += SETK(6);
+        font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                           rx, ry,
+                           hs_txt("电量需要 ACPI AML 执行器（M2 未实现）",
+                                  "Capacity needs an ACPI AML interpreter (M2 pending)"),
+                           g_shell.colors.text_secondary, SETK(10));
+        ry += SETK(16);
+        font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                           rx, ry,
+                           hs_txt("电池是否存在由 ACPI PNP0C0A 决定", "Presence comes from ACPI PNP0C0A"),
+                           g_shell.colors.text_secondary, SETK(10));
     } else {
         /* About */
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
@@ -3998,6 +4108,34 @@ static void hs_settings_window_render(hs_window_t *w)
     }
 }
 #undef SETK
+
+/* 打开 Settings 并切到指定页。
+ * 不能走 hpdesk_handle_pending_app(HS_APP_SETTINGS): 那条路径对"已可见"的
+ * Settings 不会复用, 会再建一个窗口 —— 从电池面板的入口点一次就多一个 Settings。
+ * 这里自己扫窗口表, 已存在就恢复/前置, 不存在才新建。 */
+static void hs_settings_show_page(int page)
+{
+    if (page < 0 || page > HS_SETTINGS_PAGE_BATTERY) page = HS_SETTINGS_PAGE_BATTERY;
+    g_settings_page = page;
+
+    for (int i = 0; i < g_wm.window_count; i++) {
+        hs_window_t *w = &g_wm.windows[i];
+        if (!w->visible || w->type != HS_WINDOW_FLOATING) continue;
+        if (w->render != hs_settings_window_render) continue;
+        if (w->state == HS_WINDOW_STATE_MINIMIZED) w->state = HS_WINDOW_STATE_NORMAL;
+        hs_window_focus(w);
+        hpdesk_mark_dirty();
+        return;
+    }
+
+    hs_window_t *nw = hs_window_create(HS_WINDOW_FLOATING, "Settings", -1, -1,
+                                       hs_sx(460), hs_sy(430));
+    if (nw) {
+        nw->render = hs_settings_window_render;
+        hs_window_focus(nw);
+    }
+    hpdesk_mark_dirty();
+}
 
 /* ============================================================================
  * 工作区
@@ -4031,6 +4169,7 @@ void hpdesk_add_app(const char *name, const char *command, const char *icon)
 
 /* 前向声明渲染函数 */
 static int g_power_menu_open = 0;  /* V0.62: 顶栏电源按钮弹出的菜单（注销/重启/关机） */
+static int g_battery_panel_open = 0; /* 顶栏电池图标展开的电量面板 */
 static void hs_top_bar_render(void);
 static void hs_dock_render(void);
 static void hs_sidebar_render(void);
@@ -4654,6 +4793,133 @@ void hs_icon_file(int x, int y, int size, uint32_t color)
     hs_fill_rect(x + size / 3, y + size * 3 / 4, size / 3, size / 8, color);
 }
 
+/* 顶栏右侧图标槽位: 从右往左 power(0) / gear(1) / speaker(2) / battery(3) / wifi。
+ * 绘制和命中都只调这一处 —— 原来两边各写一遍"减 6 减 24"，改间距就得改两处。 */
+static int hs_bar_icon_x(int slot)
+{
+    int size = hs_s(24);
+    return g_shell.screen_width - hs_sx(10) - hs_sx(14) - size
+           - slot * (hs_sx(6) + size);
+}
+
+static int hs_bar_icon_y(void)
+{
+    return hs_sy(8) + (hs_sy(g_shell.ui.bar_height) - hs_s(24)) / 2;
+}
+
+/* 电池图标的矩形（只有 ACPI 探到电池才占位）。ABSENT 时返回 0，调用方不得画也不得命中。 */
+static int hs_battery_icon_rect(int *px, int *py, int *psz)
+{
+    if (g_shell.status.battery_state == HS_BATTERY_ABSENT) return 0;
+    *px = hs_bar_icon_x(3);
+    *py = hs_bar_icon_y();
+    *psz = hs_s(24);
+    return 1;
+}
+
+/* 电池面板几何 —— 绘制与命中共用。
+ * 面板贴在电池图标下方, 右缘对齐图标右缘, 再整体钳进屏幕; 右下角是
+ * "电池和电源计划" 入口的按钮矩形。 */
+typedef struct {
+    int x, y, w, h;
+    int link_x, link_y, link_w, link_h;
+} hs_bat_panel_t;
+
+#define HS_BAT_PANEL_W 250
+#define HS_BAT_PANEL_H 130
+#define HS_BAT_LINK_W 150
+#define HS_BAT_LINK_H 24
+
+static void hs_battery_panel_geom(hs_bat_panel_t *g)
+{
+    int bx, by, bs;
+    g->x = g->y = g->w = g->h = 0;
+    g->link_x = g->link_y = g->link_w = g->link_h = 0;
+    if (!hs_battery_icon_rect(&bx, &by, &bs)) return;
+
+    int margin = hs_sx(10);
+    int w = hs_sx(HS_BAT_PANEL_W);
+    int h = hs_sy(HS_BAT_PANEL_H);
+    int x = bx + bs - w;
+    if (x > g_shell.screen_width - margin - w) x = g_shell.screen_width - margin - w;
+    if (x < margin) x = margin;
+
+    g->x = x;
+    g->y = hs_sy(8) + hs_sy(g_shell.ui.bar_height) + hs_sy(8);
+    g->w = w;
+    g->h = h;
+
+    g->link_w = hs_sx(HS_BAT_LINK_W);
+    g->link_h = hs_sy(HS_BAT_LINK_H);
+    g->link_x = x + w - hs_sx(12) - g->link_w;
+    g->link_y = g->y + h - hs_sy(10) - g->link_h;
+}
+
+/* 展开面板: 剩余电量 + 状态 + 右下角"电池和电源计划"入口。
+ * 没有可信读数就画 "--" 并写明原因, 不把 DECLARED 当 0% 也不当 100%。 */
+static void hs_battery_panel_render(void)
+{
+    hs_bat_panel_t g;
+    hs_battery_panel_geom(&g);
+    if (g.w <= 0 || g.h <= 0) return;
+
+    void *fb = hs_get_framebuffer();
+    int W = g_shell.screen_width, H = g_shell.screen_height;
+    int state = g_shell.status.battery_state;
+
+    hs_fill_rounded_rect(g.x, g.y, g.w, g.h, hs_s(12), g_shell.colors.panel_bg);
+    hs_draw_rounded_rect(g.x, g.y, g.w, g.h, hs_s(12), g_shell.colors.border);
+
+    /* 标题: 电池 */
+    font64_draw_string(fb, W, H, g.x + hs_sx(14), g.y + hs_sy(10),
+                       hs_txt("电池", "Battery"), g_shell.colors.panel_fg, hs_s(14));
+
+    /* 大数字: 只有 VALID 拿 percent, 其余一律 "--" */
+    char pct[8];
+    const char *big = "--";
+    if (state == HS_BATTERY_VALID) {
+        int p = g_shell.status.battery_percent;
+        if (p < 0) p = 0;
+        if (p > 100) p = 100;
+        int q = 0;
+        if (p >= 100) { pct[q++] = '1'; pct[q++] = '0'; pct[q++] = '0'; }
+        else {
+            if (p >= 10) pct[q++] = (char)('0' + p / 10);
+            pct[q++] = (char)('0' + p % 10);
+        }
+        pct[q++] = '%';
+        pct[q] = 0;
+        big = pct;
+    }
+    font64_draw_string(fb, W, H, g.x + hs_sx(14), g.y + hs_sy(34), big,
+                       (state == HS_BATTERY_VALID) ? g_shell.colors.accent
+                                                   : g_shell.colors.text_secondary,
+                       hs_s(26));
+
+    /* 状态行 */
+    const char *st;
+    if (state == HS_BATTERY_VALID) {
+        st = g_shell.status.battery_charging ? hs_txt("充电中", "Charging")
+                                             : hs_txt("已读到可信电量", "Reading available");
+    } else if (state == HS_BATTERY_DECLARED) {
+        st = hs_txt("固件已声明电池，电量未读取", "Declared by firmware; no reading yet");
+    } else {
+        st = hs_txt("未识别到电池状态", "Battery state unknown");
+    }
+    font64_draw_string(fb, W, H, g.x + hs_sx(14), g.y + hs_sy(74), st,
+                       g_shell.colors.text_secondary, hs_s(11));
+
+    /* 右下角入口: 电池和电源计划 */
+    hs_fill_rounded_rect(g.link_x, g.link_y, g.link_w, g.link_h, hs_s(6),
+                         g_shell.colors.accent);
+    font64_draw_string(fb, W, H,
+                       g.link_x + hs_sx(12),
+                       g.link_y + (g.link_h - hs_s(11)) / 2 - hs_sy(1),
+                       hs_txt("电池和电源计划", "Battery & Power Plan"),
+                       hs_on_accent(), hs_s(11));
+}
+
+
 /* 顶栏电池图标。
  *
  * 形状取用户 2026-11-11 图标批次里的线性横版电池（assets/icons-status64/p64_battery64.png），
@@ -4736,22 +5002,24 @@ static void hs_top_bar_render(void)
      * 图标原来线宽/圆角/重心各不相同, 并排放着像拼的。尺寸提到 18px: 32px 源图减半到
      * 16px 时 2.5px 的线条会塌, 18px 能保住笔画。 */
     icon_size = hs_s(24);   /* 状态栏高 36px, 24px 图标上下各留 6px */
-    icon_y = bar_top + (bar_h - icon_size) / 2;
-    icon_x -= icon_size; hs_icon_bmp64(icon_x, icon_y, icon_size, fg, g_shell.colors.panel_bg, hs_ico64_power64);
-    icon_x -= hs_sx(6) + icon_size; hs_icon_bmp64(icon_x, icon_y, icon_size, fg, g_shell.colors.panel_bg, hs_ico64_gear64);
-    icon_x -= hs_sx(6) + icon_size; hs_icon_bmp64(icon_x, icon_y, icon_size, fg, g_shell.colors.panel_bg, hs_ico64_speaker64);
+    icon_y = hs_bar_icon_y();
+    icon_x = hs_bar_icon_x(0); hs_icon_bmp64(icon_x, icon_y, icon_size, fg, g_shell.colors.panel_bg, hs_ico64_power64);
+    icon_x = hs_bar_icon_x(1); hs_icon_bmp64(icon_x, icon_y, icon_size, fg, g_shell.colors.panel_bg, hs_ico64_gear64);
+    icon_x = hs_bar_icon_x(2); hs_icon_bmp64(icon_x, icon_y, icon_size, fg, g_shell.colors.panel_bg, hs_ico64_speaker64);
     /* 电池形状与旁边四个同源（同走 hs_icon_bmp64），是否出现只看 ACPI 探测结果，
      * 不看"台式机/笔记本"。ABSENT 不画也不留位；DECLARED/UNKNOWN 轮廓 + 两道短线；
      * 只有 M2 读到可信电量进入 VALID 后才画填充比例。 */
+    int wifi_slot = 3;
     if (g_shell.status.battery_state != HS_BATTERY_ABSENT) {
-        icon_x -= hs_sx(6) + icon_size;
+        icon_x = hs_bar_icon_x(3);
         hs_battery_icon_state(icon_x, icon_y, icon_size, fg, g_shell.colors.panel_bg,
                               g_shell.status.battery_state);
+        wifi_slot = 4;
     }
     /* wifi 与旁边四个同源: 都走 64x64 那套(hs_icon_bmp64)。
      * 旧实现这里单独用 32px 的 hs_ico_wifi_std, 24px 显示时笔画比邻居细一档,
      * 并排放着像两套图标拼的 —— 与 V0.57.1 修掉的"各自一套手绘矢量"是同一类问题。 */
-    icon_x -= hs_sx(6) + icon_size; hs_icon_bmp64(icon_x, icon_y, icon_size, fg, g_shell.colors.panel_bg, hs_ico64_wifi64);
+    icon_x = hs_bar_icon_x(wifi_slot); hs_icon_bmp64(icon_x, icon_y, icon_size, fg, g_shell.colors.panel_bg, hs_ico64_wifi64);
 
     /* V0.62: 电源按钮弹出的菜单 —— 注销 / 重启 / 关机 */
     if (g_power_menu_open) {
@@ -6193,6 +6461,10 @@ void hpdesk_handle_click(int x, int y)
                 int item = (hit_item && hit_item != g_nav_root) ? hit_item->tag : -1;
                 if (item >= 0 && item < g_nav_count) {
                     g_settings_page = item;
+                    { extern void vga_put_hex(uint64_t);
+                      vga_puts("[SETTINGS] nav page=");
+                      vga_put_hex((uint64_t)item);
+                      vga_puts("\n"); }
                     /* V0.13.39: System tab 内可点击操作 (语言切换 / 驱动刷新) */
                     if (item == 2 && g_settings_page == 2) {
                         int lang_y = w->y + hs_set_k(w, 36) + 6 * hs_set_k(w, 24) +
@@ -6672,15 +6944,16 @@ void hpdesk_mouse_down(int x, int y)
     {
         int margin = hs_sx(10);
         int icon_size = hs_s(24);
-        int power_x = g_shell.screen_width - margin - hs_sx(14) - icon_size;
-        int gear_x = power_x - hs_sx(6) - icon_size;
+        int power_x = hs_bar_icon_x(0);
+        int gear_x = hs_bar_icon_x(1);
         int bar_top = hs_sy(8);
         int bar_h = hs_sy(g_shell.ui.bar_height);
-        int gear_y = bar_top + (bar_h - icon_size) / 2;
+        int gear_y = hs_bar_icon_y();
         /* V0.62: power 图标（最右）→ 弹出注销/重启/关机菜单 */
         if (x >= power_x && x <= power_x + icon_size &&
             y >= gear_y && y <= gear_y + icon_size) {
             g_power_menu_open = !g_power_menu_open;
+            g_battery_panel_open = 0;
             g_content_dirty = 1;
             return;
         }
@@ -6706,8 +6979,45 @@ void hpdesk_mouse_down(int x, int y)
         if (x >= gear_x && x <= gear_x + icon_size &&
             y >= gear_y && y <= gear_y + icon_size) {
             g_cc_open = !g_cc_open;
+            g_battery_panel_open = 0;
             g_content_dirty = 1;
             return;
+        }
+        /* 电池图标 → 展开/收起电量面板。判定用 hs_battery_icon_rect(),
+         * 与绘制同一个槽位; ACPI 没探到电池时它返回 0, 这里整段不生效。 */
+        {
+            int bx, by, bs;
+            if (hs_battery_icon_rect(&bx, &by, &bs) &&
+                x >= bx && x <= bx + bs && y >= by && y <= by + bs) {
+                g_battery_panel_open = !g_battery_panel_open;
+                g_power_menu_open = 0;
+                g_cc_open = 0;
+                g_content_dirty = 1;
+                vga_puts(g_battery_panel_open ? "[DESK] battery panel open\n"
+                                              : "[DESK] battery panel close\n");
+                return;
+            }
+        }
+        /* 电池面板内部: 右下角入口进 Settings 电池页, 其余位置吞掉点击 */
+        if (g_battery_panel_open) {
+            hs_bat_panel_t pg;
+            hs_battery_panel_geom(&pg);
+            if (pg.w > 0 &&
+                x >= pg.link_x && x <= pg.link_x + pg.link_w &&
+                y >= pg.link_y && y <= pg.link_y + pg.link_h) {
+                g_battery_panel_open = 0;
+                g_content_dirty = 1;
+                vga_puts("[DESK] battery panel -> settings page=battery\n");
+                hs_settings_show_page(HS_SETTINGS_PAGE_BATTERY);
+                return;
+            }
+            if (pg.w > 0 && x >= pg.x && x <= pg.x + pg.w &&
+                y >= pg.y && y <= pg.y + pg.h) {
+                return;
+            }
+            /* 点面板外: 收起, 但这次点击继续按普通点击处理 */
+            g_battery_panel_open = 0;
+            g_content_dirty = 1;
         }
         /* 点到菜单外：收起 */
         if (g_power_menu_open) {
@@ -7481,6 +7791,7 @@ static void hpdesk_render_inner(void)
                 hs_layer_draw(&g_ly_notify, g_shell.screen_width - nw, 0, nw, nh,
                               hs_notification_render, !(g_in_partial_frame && g_ly_notify.valid));
             }
+            if (g_battery_panel_open) hs_battery_panel_render();
             g_ts5 = hs_rdtsc() - __rs0;
             hs_present_region(dx_, dy_, dw_, dh_);
             g_ts6 = hs_rdtsc() - __rs0;
@@ -7639,6 +7950,10 @@ static void hpdesk_render_inner(void)
                            g_shell.screen_width, g_shell.screen_height);
         }
     }
+
+    /* 电池面板: 顶栏弹出的浮层, 画在窗口/控制中心/通知之后 —— 菜单必须压在最上面,
+     * 否则启动后那张 "System Update" 通知卡会盖住面板标题和入口按钮。 */
+    if (g_battery_panel_open) hs_battery_panel_render();
 
     } /* end of: 内容层重绘 (dirty/动画时) */
 
@@ -8674,6 +8989,12 @@ void hs_status_update(void)
     if (g_shell.status.battery_state != HS_BATTERY_VALID) {
         g_shell.status.battery_percent = 0;
         g_shell.status.battery_charging = 0;
+    }
+    /* 每次状态采样后自洽: 电池没了就把展开面板收掉(否则会留一张指向
+     * 不存在电池的浮层)。面板只挂在电池图标上, ABSENT 时图标本来就不画。 */
+    if (g_shell.status.battery_state == HS_BATTERY_ABSENT && g_battery_panel_open) {
+        g_battery_panel_open = 0;
+        g_content_dirty = 1;
     }
     /* V0.13.39: 托盘网络图标真实链路状态 (e1000 STATUS bit1) */
     extern int e1000_link_status(void);

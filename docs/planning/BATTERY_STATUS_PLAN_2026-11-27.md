@@ -216,6 +216,12 @@ SMBIOS 只能回答“厂商说这是什么形状”，不能回答“现在有�
   顶栏轮廓 + `--`；宿主 `host_check.py` PASS。图标层另见
   `icon-topbar/`：声明态多出的电池段宽 25px、高 12px，右侧三个图标逐像素未移动，
   `icon_check.py` PASS。64/32 构建通过，host-tests 9/0，32 位冒烟 `fault=0`。
+- **M1.6 面板与设置页已闭环（2026-11-27）**：顶栏电池图标点击展开面板，
+  显示剩余电量（`VALID` 才有数字，否则 `--`）与 ACPI 状态文案；面板右下角是
+  “电池和电源计划”入口，点击直接进 Settings 的 `Battery` 页（第 7 个导航项）。
+  面板/页面几何、命中、状态文案都单一来源（`hs_battery_icon_rect` /
+  `hs_battery_panel_geom`），绘制与点击不会各算一套。电源计划一栏明确写
+  “均衡（固定）”：64 位没有调度策略引擎，不做没有实际效果的开关。
 - **未做**：M2（AML `_STA/_BIX/_BIF/_BST`）、M3（完整 32 位 UI/电源策略）、M4（真机）。
   本次 QEMU/OVMF 未提供 legacy SMBIOS entry，`form_factor=unknown` 只说明
   “本夹具没读到”，不等于真机型号判断已验证。`VALID` 的填充分支目前只有主机端

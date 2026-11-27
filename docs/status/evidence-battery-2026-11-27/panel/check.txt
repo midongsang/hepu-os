@@ -1,0 +1,21 @@
+[PASS] A1 声明态 wifi 槽有墨迹 — ink=107
+[PASS] A2 声明态 电池槽有墨迹 — ink=191
+[PASS] A3 串口 state=declared
+[PASS] B1 无电池 wifi 左移后原槽位空白 — ink=0
+[PASS] B2 无电池 电池槽仍是 wifi — ink=107
+[PASS] B3 无电池串口 state=absent
+[PASS] B4 无电池点击不产生面板
+[PASS] C1 面板矩形内像素发生变化 — changed=70794/73125
+[PASS] C2 右下角入口是 accent 实心按钮 — accent=0.73
+[PASS] C3 串口记录 panel open
+[PASS] D1 导航第 7 项 Battery 高亮 — accent=0.84
+[PASS] D2 Appearance 未高亮 — accent=0.00
+[PASS] D3 串口记录 settings page=battery
+[PASS] E1 About 高亮(旧索引未被第 7 页挤掉) — accent=0.85
+[PASS] E2 About 时 Battery 不高亮 — accent=0.00
+[PASS] E3 串口记录 nav page=0x3
+[PASS] F1 两个入口的电池页内容逐像素相同 — diff=0
+[PASS] F2 串口记录 nav page=0x6
+[PASS] F3 导航点 Battery 时高亮 — accent=0.82
+
+RESULT: PASS (19 checks, 0 failed)
