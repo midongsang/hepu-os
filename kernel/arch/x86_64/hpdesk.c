@@ -181,6 +181,9 @@ extern uint32_t gfx64_get_pixel(int x, int y);
 extern void font64_draw_string(void *fb, int fw, int fh,
                                int x, int y, const char *str,
                                uint32_t color, uint16_t size);
+#ifdef __x86_64__
+extern int gfx64_measure_text(const char *str, int size);
+#endif
 extern void *gfx64_get_framebuffer(void);
 extern int gfx64_get_width(void);
 extern int gfx64_get_height(void);
@@ -4720,22 +4723,59 @@ static void hs_icon_bmp64(int x, int y, int size, uint32_t color, uint32_t bg,
 
 /* V0.57.0: 位图图标绘制。数据是 32x32 1bit(bit31=最左), 按 size 缩放,
  * 目标色由调用方给 —— 这样同一套图标在浅/深主题、选中/未选中状态下都能用。
- * 每像素落成一个矩形块, 缩小时按 >=1px 保证细线不被吃掉。 */
+ * V0.63.1: 放大时双线性取样、缩小时面积取样，边缘按覆盖率混色，不再把每个
+ * 源像素摊成硬边方块。应用抽屉 72px、控制中心 39px 下都能保持细线连续。 */
 static void hs_icon_bmp(int x, int y, int size, uint32_t color, const uint32_t *bits)
 {
     if (!bits || size <= 0) return;
-    for (int py = 0; py < 32; py++) {
-        uint32_t row = bits[py];
-        if (!row) continue;
-        for (int px = 0; px < 32; px++) {
-            if (!(row & (1u << (31 - px)))) continue;
-            int rx0 = x + px * size / 32;
-            int ry0 = y + py * size / 32;
-            int rx1 = x + (px + 1) * size / 32;
-            int ry1 = y + (py + 1) * size / 32;
-            if (rx1 <= rx0) rx1 = rx0 + 1;
-            if (ry1 <= ry0) ry1 = ry0 + 1;
-            hs_fill_rect(rx0, ry0, rx1 - rx0, ry1 - ry0, color);
+
+    if (size < 32) {
+        /* 缩小: 目标像素覆盖多个源像素，取矩形内 ink 比例作为 alpha。 */
+        for (int ty = 0; ty < size; ty++) {
+            int sy0 = ty * 32 / size, sy1 = (ty + 1) * 32 / size;
+            if (sy1 <= sy0) sy1 = sy0 + 1;
+            for (int tx = 0; tx < size; tx++) {
+                int sx0 = tx * 32 / size, sx1 = (tx + 1) * 32 / size;
+                if (sx1 <= sx0) sx1 = sx0 + 1;
+                int ink = 0, tot = 0;
+                for (int py = sy0; py < sy1; py++)
+                    for (int px = sx0; px < sx1; px++) {
+                        tot++;
+                        if ((bits[py] >> (31 - px)) & 1u) ink++;
+                    }
+                int a = (tot > 0) ? ink * 255 / tot : 0;
+                if (a > 0) hs_blend_pixel(x + tx, y + ty, color, a);
+            }
+        }
+        return;
+    }
+
+    /* 放大/原尺寸: 以目标像素中心做双线性取样，alpha 即覆盖率。 */
+    for (int ty = 0; ty < size; ty++) {
+        long u = (long)(2 * ty + 1) * 32 * 256 / (2 * size) - 128;
+        int y0, fy;
+        if (u <= 0) { y0 = 0; fy = 0; }
+        else if (u >= 31 * 256) { y0 = 31; fy = 0; }
+        else { y0 = (int)(u >> 8); fy = (int)(u & 255); }
+        int y1 = (y0 < 31) ? y0 + 1 : 31;
+
+        for (int tx = 0; tx < size; tx++) {
+            long v = (long)(2 * tx + 1) * 32 * 256 / (2 * size) - 128;
+            int x0, fx;
+            if (v <= 0) { x0 = 0; fx = 0; }
+            else if (v >= 31 * 256) { x0 = 31; fx = 0; }
+            else { x0 = (int)(v >> 8); fx = (int)(v & 255); }
+            int x1 = (x0 < 31) ? x0 + 1 : 31;
+
+            int b00 = (int)((bits[y0] >> (31 - x0)) & 1u);
+            int b10 = (int)((bits[y0] >> (31 - x1)) & 1u);
+            int b01 = (int)((bits[y1] >> (31 - x0)) & 1u);
+            int b11 = (int)((bits[y1] >> (31 - x1)) & 1u);
+            int top = b00 * (256 - fx) + b10 * fx;
+            int bot = b01 * (256 - fx) + b11 * fx;
+            int a = (top * (256 - fy) + bot * fy) >> 8;   /* 0..256 */
+            if (a > 255) a = 255;
+            if (a > 0) hs_blend_pixel(x + tx, y + ty, color, a);
         }
     }
 }
@@ -5325,40 +5365,106 @@ static void hs_login_reject(void)
 }
 
 /* 锁屏界面：模糊背景+大时钟 */
+/* 文本宽度: 64 位用 TTF advance, 32 位回退到 font64 的 8x16 度量。 */
+static int hs_text_width(const char *s, int size)
+{
+#ifdef __x86_64__
+    return gfx64_measure_text(s, size);
+#else
+    extern uint32_t font64_get_string_width(const char *str, uint16_t size);
+    return (int)font64_get_string_width(s, (uint16_t)size);
+#endif
+}
+
+/* 锁屏背景: 当前壁纸 + 深色玻璃层。
+ * 没有做真高斯模糊(逐像素模糊在 32 位堆上代价太高), 用 2x2 块取样 + 固定暗色
+ * 混合, 先去掉"纯色挡板"的割裂感; 未来有离屏缓冲再换成真模糊。 */
+static void hs_lock_backdrop_render(void)
+{
+    int w = g_shell.screen_width, h = g_shell.screen_height;
+    uint32_t *fb = (uint32_t *)hs_get_framebuffer();
+    if (!fb) return;
+
+    uint32_t base = 0xFF0A1820u;
+    if (!hs_wallpaper_png()) {
+        hs_fill_rect(0, 0, w, h, g_shell.colors.bg);
+        return;
+    }
+    uint8_t *src = g_wp_is_jpeg ? g_wp_jpg.rgba : g_wp_png.rgba;
+    int sw = (int)(g_wp_is_jpeg ? g_wp_jpg.width : g_wp_png.width);
+    int sh = (int)(g_wp_is_jpeg ? g_wp_jpg.height : g_wp_png.height);
+    if (!src || sw <= 0 || sh <= 0) {
+        hs_fill_rect(0, 0, w, h, g_shell.colors.bg);
+        return;
+    }
+
+    int dw = w, dh = (int)((long)sh * w / (long)sw);
+    if (dh < h) { dh = h; dw = (int)((long)sw * h / (long)sh); }
+    int dx = (w - dw) / 2, dy = (h - dh) / 2;
+
+    for (int y = 0; y < h; y += 2) {
+        int sy = (y - dy) * sh / dh;
+        int bh = (y + 2 <= h) ? 2 : 1;
+        for (int x = 0; x < w; x += 2) {
+            int sx = (x - dx) * sw / dw;
+            int bw = (x + 2 <= w) ? 2 : 1;
+            uint32_t out = base;
+            if (sx >= 0 && sx < sw && sy >= 0 && sy < sh) {
+                const uint8_t *q = src + (uint64_t)sy * sw * 4 + sx * 4;
+                /* 壁纸占 38%, 暗底占 62%: 保留山形和纹理, 但确保锁屏文字有对比度。 */
+                int r = ((int)q[0] * 97 + 10 * 158) / 255;
+                int g = ((int)q[1] * 97 + 24 * 158) / 255;
+                int b = ((int)q[2] * 97 + 32 * 158) / 255;
+                out = 0xFF000000u | ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
+            }
+            uint32_t *row = fb + (uint64_t)y * w + x;
+            for (int yy = 0; yy < bh; yy++)
+                for (int xx = 0; xx < bw; xx++)
+                    row[yy * w + xx] = out;
+        }
+    }
+}
+
 static void hs_lock_screen_render(void)
 {
-    /* 深色半透明背景（模拟模糊效果） */
-    hs_fill_rect(0, 0, g_shell.screen_width, g_shell.screen_height, g_shell.colors.bg);
+    /* 壁纸 + 暗色玻璃层（真模糊留给后续离屏缓冲）。 */
+    hs_lock_backdrop_render();
 
     void *fb = hs_get_framebuffer();
 
-    /* 大时钟 */
-    int clock_x = g_shell.screen_width / 2 - hs_sx(180);
-    int clock_y = hs_sy(200);
-
+    /* 大时钟: 用真实 TTF advance 计算宽度后居中。
+     * gfx64_set_font_size 上限 72(再大被静默拒绝); 150% 下 hs_s(64)=96,
+     * 曾导致锁屏时钟缩成正文大小, 这里封顶到 72。 */
     uint8_t h = rtc64_get_hours();
     uint8_t m = rtc64_get_minutes();
     char time[16];
     time[0] = '0' + h / 10; time[1] = '0' + h % 10; time[2] = ':';
     time[3] = '0' + m / 10; time[4] = '0' + m % 10; time[5] = 0;
-
+    int clock_size = hs_s(64);
+    if (clock_size > 72) clock_size = 72;
+    int clock_y = hs_sy(200);
+    int time_w = hs_text_width(time, clock_size);
+    int clock_x = (g_shell.screen_width - time_w) / 2;
     font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                       clock_x, clock_y, time, g_shell.colors.panel_fg, hs_s(64));
+                       clock_x, clock_y, time, 0xFFF6EA, (uint16_t)clock_size);
 
     /* 日期 */
     char date[40];
     hs_date_label(date, (int)sizeof(date));
-    int date_w = hs_sx(17 * 10);
+    int date_size = hs_s(20);
+    int date_w = hs_text_width(date, date_size);
     font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                       clock_x + (hs_sx(360) - date_w) / 2, clock_y + hs_sy(110), date, g_shell.colors.accent, hs_s(20));
+                       (g_shell.screen_width - date_w) / 2, clock_y + clock_size + hs_sy(22),
+                       date, 0xFFD8A0, (uint16_t)date_size);
 
     /* 底部提示 */
     extern const char *l10n64_tr(int id);
     const char *hint = l10n64_tr(L10N_STR_LOCK_HINT);
-    int hint_w = hs_sx(22 * 8);
+    int hint_size = hs_s(14);
+    int hint_w = hs_text_width(hint, hint_size);
     font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                        (g_shell.screen_width - hint_w) / 2, g_shell.screen_height - hs_sy(80),
-                       hint, 0x888888, hs_s(14));
+                       hint, 0xA8B4BC, (uint16_t)hint_size);
 }
 
 /* 登录界面：头像+用户名+密码 */
@@ -5543,6 +5649,35 @@ static int hs_sidebar_handle_wheel(int wheel)
 /* V0.56.2: Apps 页图标网格的单元位置。
  * 渲染与点击必须用同一套公式 —— 否则会出现"看得见却点不到"的错位。
  * 返回 1 表示该单元完全落在可视区域内(可点击/可绘制)。 */
+/* 应用名: 短名一行; 带空格且总长 >10 时拆两行(如 Task Manager / Device Manager),
+ * 每行按图标 tile 中心对齐, 不再截成 "Task Manag" 或在 120px 单元格里互相压字。 */
+static void hs_app_label_draw(int ax, int ay, const char *name)
+{
+    char l1[16], l2[16];
+    int n1 = 0, n2 = 0, len = 0, sp = -1;
+    while (name[len]) { if (name[len] == ' ') { sp = len; break; } len++; }
+    if (sp >= 0) { while (len < 32 && name[len]) len++; }
+    if (sp > 0 && len > 10) {
+        for (int i = 0; i < sp && n1 < 14; i++) l1[n1++] = name[i];
+        for (int i = sp + 1; name[i] && n2 < 14; i++) l2[n2++] = name[i];
+    } else {
+        for (int i = 0; name[i] && n1 < 14; i++) l1[n1++] = name[i];
+    }
+    l1[n1] = 0; l2[n2] = 0;
+
+    int fs = hs_s(10);
+    int tw = hs_text_width(l1, fs);
+    font64_draw_string(hs_get_framebuffer(), g_shell.screen_width, g_shell.screen_height,
+                       ax + hs_s(24) - tw / 2, ay + hs_sy(54), l1,
+                       g_shell.colors.panel_fg, (uint16_t)fs);
+    if (l2[0]) {
+        tw = hs_text_width(l2, fs);
+        font64_draw_string(hs_get_framebuffer(), g_shell.screen_width, g_shell.screen_height,
+                           ax + hs_s(24) - tw / 2, ay + hs_sy(54) + hs_sy(16), l2,
+                           g_shell.colors.panel_fg, (uint16_t)fs);
+    }
+}
+
 static int hs_apps_cell_pos(int i, int *ax, int *ay)
 {
     int sx = hs_sx(g_shell.ui.sidebar_x);
@@ -5722,13 +5857,7 @@ static void hs_sidebar_render(void)
                 }
                 hs_icon_bmp(ax + hs_s(8), ay + hs_s(8), hs_s(32), ic, ico);
             }
-            /* 名称 (截断至 10 字符, 对齐单元格宽) */
-            char nm[11];
-            int nl = 0;
-            while (g_shell.apps[i].name[nl] && nl < 10) { nm[nl] = g_shell.apps[i].name[nl]; nl++; }
-            nm[nl] = 0;
-            font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                               ax + hs_sx(2), ay + hs_sy(54), nm, g_shell.colors.panel_fg, hs_s(10));
+            hs_app_label_draw(ax, ay, g_shell.apps[i].name);
         }
 
         /* Clavis StyledScrollBar: 内容溢出时右缘细 accent 滑块 */

@@ -1135,6 +1135,23 @@ void gfx64_set_font_size(int size)
     }
 }
 
+/* 文本宽度: 与 gfx64_put_string 同一套 advance, 供锁屏/居中布局使用。 */
+int gfx64_measure_text(const char *str, int size)
+{
+    if (!str || size <= 0) return 0;
+    extern int ttf64_get_char_advance(uint32_t ch, int pixel_size);
+    extern int ttf64_get_cjk_advance(uint32_t ch, int pixel_size);
+    int w = 0;
+    while (*str) {
+        if (*str == '\n') { str++; continue; }
+        if (*str == ' ') { w += size / 2; str++; continue; }
+        uint32_t cp = gfx64_utf8_next(&str);
+        w += (cp < 128) ? ttf64_get_char_advance(cp, size)
+                        : ttf64_get_cjk_advance(cp, size);
+    }
+    return w;
+}
+
 /* 启用/禁用TrueType字体 */
 void gfx64_enable_ttf(int enable)
 {
