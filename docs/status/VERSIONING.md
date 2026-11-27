@@ -122,8 +122,8 @@ supersedes: null
 4. **存储与 USB**：修复 UHCI TD 状态位/帧推进/DataToggle、64 位 MSC READ10/WRITE10 长度编码；usb-storage 整扇区读写与 64 位满盘分段遍历（`sampled=523 read_err=0 mismatch=0`）闭合，登记 BUG-60。
 5. **安全**：SEC-04 进程级凭据与高危能力位、SEC-05 readdir 去全局锁与 2048B 上限、SEC-07 目录项复核；32 位 p3-security 带盘 2/2 真实执行并纳入冒烟门禁。
 6. **网络与 TLS**：TLS 1.2 真实 ClientHello/ServerHello、证书链校验、RSA 密钥交换、AES-128-GCM 记录层与加密 GET E2E；同时修 64 位 FIN 同段数据先入缓冲。
-7. **桌面与布局**：OBS-01 默认 HPET 毫秒时钟、OBS-02 边缘缩放光标、OBS-04 窗口外高光、OBS-09 状态采样不再每 30 帧强制全屏重绘；`seccomp64.h` 归位到 `arch/x86_64/include`，布局审计 0 error。OBS-06 32 位首帧只覆盖顶部 410 行已复现，本版不修。另修复 e1000 MMIO 只映射在启动 CR3、切到用户地址空间后顶栏 `e1000_link_status()` 读 STATUS 触发 #PF 的问题：读写前按当前 CR3 补 0x20000 恒等映射，`Win+M` 任务管理器实拍通过。
-8. **文档与展示**：现行文档 frontmatter 对齐 0.63.0；README 当前版本、徽章、内核体积与展示图同步更新；引导器菜单/加载屏脚注改为引用 `HEPU_OS_VERSION`；展示图重拍至 0.63.0（32 位因 OBS-06 保留 0.60.7 基线并明确标注）；根目录临时构建日志清理。
+7. **桌面与布局**：OBS-01 默认 HPET 毫秒时钟、OBS-02 边缘缩放光标、OBS-04 窗口外高光、OBS-09 状态采样不再每 30 帧强制全屏重绘；`seccomp64.h` 归位到 `arch/x86_64/include`，布局审计 0 error。OBS-06 32 位首帧 410 行问题完成根因闭环：`vbe_detect_from_boot_params()` 把 `vbe_fb_phys` 硬编码成旧 VGA 窗口 `0xFD000000`（仅 3MB 可见），整帧 8.29MB 提交被截断；改为取当前 `gfx_fb_addr`（dispi BAR0 `0x80000000`）后整帧落屏。另修复 e1000 MMIO 只映射在启动 CR3、切到用户地址空间后顶栏 `e1000_link_status()` 读 STATUS 触发 #PF 的问题：读写前按当前 CR3 补 0x20000 恒等映射，`Win+M` 任务管理器实拍通过。
+8. **文档与展示**：现行文档 frontmatter 对齐 0.63.0；README 当前版本、徽章、内核体积与展示图同步更新；引导器菜单/加载屏脚注改为引用 `HEPU_OS_VERSION`；展示图重拍至 0.63.0，32 位图在 OBS-06 修复后实拍 `desktop-32-0.63.0.jpg`（`NONBLACK=2,073,600`，100%），旧 0.60.7 基线图移除；根目录临时构建日志清理。
 
 **0.62.1 迭代内容（2026-11-25，B 线可靠性 + 版本/文档整理）**
 

@@ -2,7 +2,7 @@
 title: 赫普OS 未关闭问题清单
 status: active
 sys_version: 0.63.0
-updated: 2026-11-26（OPEN-02 运行时闭环；原记录见下）OBS-08 追加取证进展：二分窗口、垃圾指针定性、TCG 数据断点不可用；**2026-11-18 前**（登记 OBS-08 32 位镜像布局位移敏感、OBS-09 x86 桌面局部刷新未生效；OBS-05 撤销为取帧时机问题；登记 OBS-07 linuxhello 崩溃、64 空口令拒登、ASan/UBSan 链接清单失败、32 KUnit 既有基线失败；文末「台账遗留项清理（2026-11-18）」为 32 位 / 64 位与主机侧遗留项复核记录；2026-11-18 桌面 GUI QEMU 实测：电源菜单、屏保、Accounts、tls12 探针四项均 PASS，结论与证据见文末「实测结论（2026-11-18）」表及 `evidence-desktop-gui-2026-11-18/`。历史：驱动层整固 BUG-52~56；BUG-49 更正为不成立；OPEN-02 复现未成功并写明下一步夹具）
+updated: 2026-11-27（BUG-61/OBS-06 修复；OPEN-02 运行时闭环；原记录见下）OBS-08 追加取证进展：二分窗口、垃圾指针定性、TCG 数据断点不可用；**2026-11-18 前**（登记 OBS-08 32 位镜像布局位移敏感、OBS-09 x86 桌面局部刷新未生效；OBS-05 撤销为取帧时机问题；登记 OBS-07 linuxhello 崩溃、64 空口令拒登、ASan/UBSan 链接清单失败、32 KUnit 既有基线失败；文末「台账遗留项清理（2026-11-18）」为 32 位 / 64 位与主机侧遗留项复核记录；2026-11-18 桌面 GUI QEMU 实测：电源菜单、屏保、Accounts、tls12 探针四项均 PASS，结论与证据见文末「实测结论（2026-11-18）」表及 `evidence-desktop-gui-2026-11-18/`。历史：驱动层整固 BUG-52~56；BUG-49 更正为不成立；OPEN-02 复现未成功并写明下一步夹具）
 owner: status
 source_of_truth: kernel/arch/x86_64/
 ---
@@ -685,50 +685,36 @@ diag1/diag2/move/sb_up/hand），但系统目前只有 4 个形态场景，映�
 > `tools/regress/` 串行构建/全链路/保护模式/加载屏录像/NONBLACK 度量与报告编排，
 > 以及 `tools/regress/REPORT.md` 三态基线结果；该提交不含产品代码修复，不记为 bug 闭环。
 
-## OBS-06 32 位启动期加载屏被自身早期输出覆盖，只剩上 1/3 深蓝（2026-11-18 登记，2026-11-26 复核：首帧只覆盖顶部 410 行，本版不修）
+## BUG-61 32 位 VBE 整帧提交落在旧 VGA 窗口，桌面只显示顶部约 410 行（由 OBS-06 升级而来，2026-11-27 修复）
 
-**现象（实测确认）**：引导器在 1920×1080 上画好的加载屏（HEPU + 转圈 + 进度条），
-在选 32 位启动后约 4.5 秒变成"上 1/3 深蓝、下 2/3 纯黑"（NONBLACK 786,399），
-加载屏内容完全消失；再往后切一次模式，桌面满屏出现。64 位没有这个问题。
+**现象（实测确认）**：32 位选完后桌面只有顶部约 410 行有内容，下面全黑；
+`NONBLACK=786,391/2,073,600`。串口已打印 `[EDESKTOP] res=0x00000780x0x00000438` 和
+`[EDESKTOP] first frame via registry`，说明不是桌面没画，而是提交没落对地方。
 
-**已排除的三条**（每条都有实测依据，别再重复试）：
+**根因（已定位）**：`kernel/gfx/gfx_vbe.c` 的 `vbe_detect_from_boot_params()` 把
+`vbe_fb_phys` 硬编码成 `0xFD000000`，这是旧 VGA LFB 窗口；QEMU bochs dispi 当前
+1920×1080 的真实 LFB 是 BAR0 `0x80000000`（16MB）。整帧 `0x7E9000`（8,294,400 B）
+的拷贝确实执行了，但目标落在只有约 3MB 可见的旧窗口，后段被截掉：
+`1920×410×4≈3.15MB`，正好对应用户看到的顶部约 410 行。
 
-1. `boot_gfx_init()` 里的无条件 `boot_clear(BOOT_COLOR_BG)` —— 32 位启动日志为
-   `[BOOT] compat level low, disabling boot splash`，该函数根本没被调用，不是它。
-2. `splash_show()`（`kernel/sched/splash.c`）—— 它确实是 80×25 VGA 文本模式
-   （`vga_clear()` + `VGA_COLOR_BLUE` 蓝底），是最接近的嫌疑人；按 magic 跳过它之后
-   画面**仍然**复现，说明还有别的写入者。
-3. `0x6010` 的 HLDY magic —— **32 位进内核主函数时已经读不到了**。实测在
-   `hepu_kernel_main()` 第一行读，得到 `0x00081255`（不是 `0x484C4459`），
-   即这片低内存在内核主函数之前就被别的初始化（页表/内存池一类）覆盖。
+**修复**：`vbe_fb_phys` 改为取当前 `gfx_fb_addr`（dispi BAR0），仅当该地址不在
+LFB 范围（`<0x10000000`）时才回退 `0xFD000000`。同时校正 `vbe_present()` 的注释，
+明确“长度正确”与“基址正确”是两件事。提交见 `2ac2708`（`fix/obs06-32bit-frame`）。
 
-**已验证可用的通道（这次试通、但不足以单独解决）**：引导器把 magic 同时备份到
-`mb_info->color_info[2..5]`（`0x90000` 处，32 位已正常从它取到 framebuffer 参数，
-说明这块没被冲；`color_info` 在标准结构里是偏移 110 起的 6 字节）。按此改造后
-32 位入口读到 `[DIAG] hold_magic=0x484C4459`、并打印
-`[BOOT] bootloader splash on screen, skip VGA splash`，**但画面仍复现**。
+**验证（真实 QEMU，2026-11-27）**：
+- 32 位 UEFI 链路：`NONBLACK=2,073,600/2,073,600`（100%），连续 4 帧一致；
+  `desktop_1.png` 全屏可见顶栏、Settings、时钟、底部 Dock。
+- 提交前取证打印 `dst=0x80000000 phys=0x80000000`，3MB/5MB 偏移
+  `dst3m==src3m`、`dst5m==src5m`；清理临时打印后最终镜像重新构建并复测通过。
+- 64 位 UEFI 回归：锁屏/登录/桌面链路全过，桌面 `NONBLACK=2,073,597/2,073,600`。
+- 构建：64 位 `kernel64.bin=1,023,696 B`；32 位 `kernel32.bin=3,864,141 B`。
 
-**结论**：32 位内核从文本模式起家，早期仍有一串 VGA 文本/自有图形输出，
-与引导器 GOP 加载屏不兼容；要真正保留加载屏，需要系统性改造 32 位早期输出
-（把文本日志整体改走串口，或让引导器加载屏在 32 位路径延长到内核图形初始化完成）。
-**未修。** 上述三处尝试已在 2026-11-18 撤回（`git checkout`），未进 main，
-撤回后 32 位冒烟 `serial=1 initrd=1 net=1 desk=1 fault=0 bound=1` PASS。
+**证据**：`docs/status/evidence-obs06-2026-11-27/`（修复后桌面截图、串口、
+像素统计、修复前后对照；旧证据保留在 `evidence-obs06-2026-11-26/`）。
 
-**2026-11-26 复核（基线 `a5dab29`）**：菜单 `timeout=30` 后按 `2` 选 32 位，
-串口确认 `[BOOT] Mode: 32-bit i386`。选后约 2 s 起连续取帧：`NONBLACK=786,391`，
-y=0..409 为 RGB(26,32,44)，y=410..1079 纯黑；约 20 s 后仍是同一数值，没有恢复满屏。
-串口同时有 `[EDESKTOP] res=0x00000780x0x00000438`、
-`[EDESKTOP] first frame via registry`，说明已经走到 32 位图形首帧，不只是加载屏遮挡。
-顶部 410 行对应 `1920 × 410 × 4 = 3,148,800` 字节，与 `gfx_vbe.c` 旧注释
-“只提交前 3 MB（约 402 行）”同量级；当前源码的 `vbe_present()` 已按
-`gfx_pitch * gfx_height` 提交，但实测仍只覆盖 410 行，根因未闭环。
-**本版不修**：涉及 32 位 VBE/双缓冲提交链路，需要插桩确认 `gfx_draw_target` 的实际
-可写范围与 present 实际提交字节；不在本版宣称已修复。证据见
-`docs/status/evidence-obs06-2026-11-26/`（`partial-frame.png`、`last-frame.png`、
-`serial-32-raw.txt`、`serial-excerpt.txt`）。
-
-**相关**：`fix/g32-holdscreen-2026-11-17`（`beeb571`）未合并 —— 它只解决了
-"magic 读不到"这一层，没解决后续覆盖。
+**历史排除项**（保留备查）：早期怀疑的 `boot_clear`/`splash_show`/HLDY magic
+三条均已实测排除；2026-11-26 复核确认 `vbe_present()` 的提交长度已是
+`gfx_pitch*gfx_height`，真正未闭环的是目标基址。
 
 ---
 
@@ -747,7 +733,7 @@ y=0..409 为 RGB(26,32,44)，y=410..1079 纯黑；约 20 s 后仍是同一数值
 - UEFI 链路那 4 帧 `evidence-regress-2026-11-17/frames32/desktop_1..4.png` 是 `linuxhello`
   崩溃后回灌菜单的残留，**不代表桌面**，不计入任何桌面度量；UEFI 链路 32 位桌面记 **UNVERIFIED**。
 - **2026-11-18 复核（仍不可取证，依赖 `fix/linuxhello32`）**：本轮在 UEFI 链路重新高频采帧 12 帧
-  （`evidence-ledger-2026-11-18/32/frames32-uefi/`，0→17.05s），崩溃前窗口仅见菜单、OBS-06 稀疏
+  （`evidence-ledger-2026-11-18/32/frames32-uefi/`，0→17.05s），崩溃前窗口仅见菜单、OBS-06（现 BUG-61）稀疏
   过渡帧与固件重启早期 GOP 文本帧，`f009–f011` 为回灌菜单残留；崩溃前未抓到可度量的真实桌面帧。
   串口 `desk_start` / `first frame via registry` 在场，但可见表面未出现桌面终态。该链路桌面取证
   **依赖 `fix/linuxhello32` 修复**（已分派，本仓不修）；在修复合入前维持不可取证，不以菜单残留凑数。
@@ -755,7 +741,7 @@ y=0..409 为 RGB(26,32,44)，y=410..1079 纯黑；约 20 s 后仍是同一数值
 **旧记录（保留备查，结论已作废）**：2026-11-17 旧档
 `evidence-regress-2026-11-17/old-3d0bd23/frames32/desktop_1..4.png` NONBLACK 均为
 786,399/2,073,600（≈37.9%），上半深蓝、下半纯黑。该数值来自启动过渡期（选完 32 位
-+4.5 s 前后）的稀疏帧，不是桌面终态；过渡画面本身的问题记录在 OBS-06。
++4.5 s 前后）的稀疏帧，不是桌面终态；过渡画面本身的问题记录在 BUG-61（原 OBS-06）。
 
 ### 测量口径（2026-11-18 复核）
 
@@ -1057,7 +1043,7 @@ serial=1 initrd=1 net=1 desk=1 fault=0 bound=1 lines=870  PASS
 
 - **原文摘要**：旧 4 帧为 linuxhello 崩溃后回灌菜单残留，UEFI 链路 32 位桌面记 UNVERIFIED。
 - **本次结论**：本轮 UEFI 链路 12 帧采帧（0→17.05s；TCG 全帧 dump 阻塞，实测间隔约 1.6–2.1s），
-  崩溃前窗口仅见菜单、OBS-06 稀疏过渡帧（strict≈786,385–786,387）与重启早期 GOP 文本帧；
+  崩溃前窗口仅见菜单、OBS-06（现 BUG-61）稀疏过渡帧（strict≈786,385–786,387）与重启早期 GOP 文本帧；
   `f009–f011` 为回灌菜单残留（中心色 `(232,234,236)`）。崩溃前未抓到可度量的真实桌面帧，
   **不以菜单残留凑数**；该链路桌面取证依赖 `fix/linuxhello32` 修复（已分派，本仓不修）。
 - **证据**：`/home/user/Doubao/chats/38452875115179010/evidence-ledger-2026-11-18/32/frames32-uefi/measure.csv`、

@@ -1,0 +1,6 @@
+[GFX] LFB phys=0x0x80000000
+[BD-VBE] pci 0:2.0 bar0=0x0x80000000
+[BD-VBE] bd_fb_phys=0x0x80000000
+[GFX-VBE] detected from boot params: 0x00000780x0x00000438@0x00000020bpp
+[DESKTOP] elastic free desktop init done
+[EDESKTOP] res=0x00000780x0x00000438 desk_start rc=0x00000000
