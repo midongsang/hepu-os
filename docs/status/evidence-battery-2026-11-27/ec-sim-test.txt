@@ -14,8 +14,9 @@
   [ok]   battery_energy  (battery_energy: 11 checks, 0 fails)
   [ok]   battery_merge  (battery_merge: 13 checks, 0 fails)
   [ok]   battery_fallback  (battery_fallback: 11 checks, 0 fails)
+  [ok]   battery_compat  (battery_compat: 10 checks, 0 fails)
   [ok]   png64 (5 个用例全通过: RGBA/RGB/调色板/灰度8/灰度1bit)
   [ok]   ext2  (ALL EXT2 TESTS PASSED)
 
   [ok]   fsck  (fsck inode checks: ok (5 groups))
-=== 结果: 通过 16 / 失败 0 ===
+=== 结果: 通过 17 / 失败 0 ===

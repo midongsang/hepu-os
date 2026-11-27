@@ -86,6 +86,8 @@ run_one battery_energy "-DAML_HOST_TEST" tools/host-tests/battery_energy_test.c 
 run_one battery_merge "-DAML_HOST_TEST" tools/host-tests/battery_merge_test.c $ARCH/aml64.c $ARCH/acpi_battery.c $ARCH/ec64.c
 # M2-full: 第一个 present 槽位 _BST 失败时回退到第二个
 run_one battery_fallback "-DAML_HOST_TEST" tools/host-tests/battery_fallback_test.c $ARCH/aml64.c $ARCH/acpi_battery.c $ARCH/ec64.c
+# M2-full: 3 元素 _BST + 全 0 _BIX 回退 _BIF
+run_one battery_compat "-DAML_HOST_TEST" tools/host-tests/battery_compat_test.c $ARCH/aml64.c $ARCH/acpi_battery.c $ARCH/ec64.c
 
 # 5b) PNG 解码器（inflate/反滤波/颜色类型/位深，V0.54.13 P0）
 #     夹具：tools/host-tests/data/png_case{1..5}.png + .expect，逐像素比对

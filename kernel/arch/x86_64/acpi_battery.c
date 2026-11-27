@@ -372,7 +372,7 @@ static int poll_slot(const char *path, bat_slot_t *s)
     s->present = 1;
 
     rc_bst = eval_named_child(path, "_BST", &bst);
-    if (rc_bst != 0 || aml_value_count(bst) < 4) {
+    if (rc_bst != 0 || aml_value_count(bst) < 3) {
         vga_puts("[BAT] aml bst failed code=");
         bat_num(rc_bst != 0 ? rc_bst : -6);
         vga_puts("\n");
@@ -387,19 +387,24 @@ static int poll_slot(const char *path, bat_slot_t *s)
 
     rc_bix = eval_named_child(path, "_BIX", &bix);
     rc_bif = eval_named_child(path, "_BIF", &bif);
+    /* _BIX 优先，但固件可能给出全 0 的未初始化 _BIX；这时回退 _BIF，
+     * 而不是因为一个坏包把整块电池判成不可信。 */
     if (rc_bix == 0 && aml_value_count(bix) >= 5) {
         if (aml_value_int(aml_value_at(bix, 1), &s->unit) != 0) s->unit = 0;
         if (aml_value_int(aml_value_at(bix, 2), &s->design) != 0) s->design = 0;
         if (aml_value_int(aml_value_at(bix, 3), &s->full) != 0) s->full = 0;
         if (aml_value_int(aml_value_at(bix, 4), &s->volt) != 0 && s->volt == 0) s->volt = 0;
-        s->used_bix = 1;
-    } else if (rc_bif == 0 && aml_value_count(bif) >= 3) {
-        if (aml_value_int(aml_value_at(bif, 0), &s->unit) != 0) s->unit = 0;
-        if (aml_value_int(aml_value_at(bif, 1), &s->design) != 0) s->design = 0;
-        if (aml_value_int(aml_value_at(bif, 2), &s->full) != 0) s->full = 0;
-    } else {
-        vga_puts("[BAT] aml bif/bix missing\n");
-        return 2;
+        if (s->design > 0 && s->full > 0) s->used_bix = 1;
+    }
+    if (!s->used_bix) {
+        if (rc_bif == 0 && aml_value_count(bif) >= 3) {
+            if (aml_value_int(aml_value_at(bif, 0), &s->unit) != 0) s->unit = 0;
+            if (aml_value_int(aml_value_at(bif, 1), &s->design) != 0) s->design = 0;
+            if (aml_value_int(aml_value_at(bif, 2), &s->full) != 0) s->full = 0;
+        } else {
+            vga_puts("[BAT] aml bif/bix missing\n");
+            return 2;
+        }
     }
     s->ok = 1;
     return 0;

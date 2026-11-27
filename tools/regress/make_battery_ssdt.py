@@ -231,6 +231,30 @@ def make_dual(percent=57):
                        oem_table_id=b"BATDUAL")
 
 
+def make_compat(percent=57, dev="CMP0"):
+    """真实固件缺省字段：_BST 只有 3 个元素，_BIX 全 0，_BIF 可信。"""
+    design = 10000
+    rem = design * percent // 100
+    bst0 = name("BST0", package([int_obj(0), int_obj(0), int_obj(0)]))
+    bst_body = (
+        store(int_obj(2), index("BST0", 0))
+        + store(int_obj(0), index("BST0", 1))
+        + store(int_obj(rem), index("BST0", 2))
+        + ret(b"BST0")
+    )
+    caps = (method("_BIX", ret(package([int_obj(0), int_obj(0), int_obj(0),
+                                          int_obj(0), int_obj(0)])))
+            + method("_BIF", ret(package([int_obj(0), int_obj(design),
+                                            int_obj(design), int_obj(1),
+                                            int_obj(12000)]))))
+    ac = device("AC00", name("_HID", string_obj("ACPI0003"))
+                + method("_PSR", ret(int_obj(1))))
+    body = (name("_HID", string_obj("PNP0C0A"))
+            + method("_STA", ret(int_obj(0x0F)))
+            + bst0 + method("_BST", bst_body) + caps)
+    return build_table(device(dev, body) + ac, oem_table_id=b"BATCOMP")
+
+
 def make_dual_fallback():
     """第一个 present 槽位缺 _BST，第二个槽位可信：验证运行中回退。"""
     broken = device("DUF0", name("_HID", string_obj("PNP0C0A"))
@@ -330,6 +354,7 @@ MODES = {
     "dual": make_dual,
     "dual-both": lambda pct=57: make_dual_both(),
     "dual-fallback": lambda pct=57: make_dual_fallback(),
+    "compat": lambda pct=57: make_compat(),
     "valid-discharge": lambda pct=57: make_valid(pct, dev="DIS0", ac_psr=0,
                                                  bst_state=0, bst_rate=1200),
 }
@@ -356,6 +381,7 @@ def write_header(path):
     discharge = make_valid(57, dev="DIS0", ac_psr=0, bst_state=0, bst_rate=1200)
     dual_both = make_dual_both()
     dual_fallback = make_dual_fallback()
+    compat = make_compat()
     with open(path, "w", encoding="utf-8") as f:
         f.write("/* 由 tools/regress/make_battery_ssdt.py --header 生成，勿手改。 */\n")
         f.write("#ifndef BATTERY_SSDT_BLOBS_H\n#define BATTERY_SSDT_BLOBS_H\n\n")
@@ -370,10 +396,11 @@ def write_header(path):
         write_array(f, "g_battery_discharge_ssdt", discharge)
         write_array(f, "g_battery_dual_both_ssdt", dual_both)
         write_array(f, "g_battery_dual_fallback_ssdt", dual_fallback)
+        write_array(f, "g_battery_compat_ssdt", compat)
         f.write("\n#endif\n")
-    print("wrote %s (valid=%d bix=%d ec=%d ec_read=%d ec_glk=%d absent=%d mutex=%d dual=%d discharge=%d dual_both=%d dual_fallback=%d)" %
+    print("wrote %s (valid=%d bix=%d ec=%d ec_read=%d ec_glk=%d absent=%d mutex=%d dual=%d discharge=%d dual_both=%d dual_fallback=%d compat=%d)" %
           (path, len(valid), len(bix), len(ec), len(ec_read), len(ec_glk),
-           len(absent), len(mutex_tbl), len(dual), len(discharge), len(dual_both), len(dual_fallback)))
+           len(absent), len(mutex_tbl), len(dual), len(discharge), len(dual_both), len(dual_fallback), len(compat)))
 
 
 def main(argv):

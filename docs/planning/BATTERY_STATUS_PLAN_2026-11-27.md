@@ -264,8 +264,9 @@ SMBIOS 只能回答“厂商说这是什么形状”，不能回答“现在有�
   QEMU `m2-discharge`（`DIS0`、1200mW、5700mWh）读出 `pct=57 chg=0 rate=1200
   health=100 min=285 min_full=-1`，Settings 显示 `4h45m`；`m2-valid` 速率 0
   显示 `Time to full --`。主机新增 `battery_energy` 11 checks；本轮主机套件
-  合计 16/0（`aml_eval` 55、`ec_battery` 16、`ec_glk` 12、`multi_battery` 9、
-  `battery_energy` 11、`battery_merge` 13、`battery_fallback` 11）。
+  合计 17/0（`aml_eval` 55、`ec_battery` 16、`ec_glk` 12、`multi_battery` 9、
+  `battery_energy` 11、`battery_merge` 13、`battery_fallback` 11、
+  `battery_compat` 10）。
   **边界（M2-full 剩余）**：EC 写、IndexField/BankField、FACS Global Lock
   （当前用锁死替代）；多电池只合并同 unit，不做充放电功率分配/跨槽均衡，不同
   unit 不混加；`Mutex` 是单线程占位，不是跨 CPU/SMI 真同步；`_OSI` 全 0 不等于
