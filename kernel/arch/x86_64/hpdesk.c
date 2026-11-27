@@ -9,6 +9,7 @@
 #include "spinlock.h"
 #include "arch_port.h"
 #include "hs_icons_data.h"   /* V0.57.0: 系统图标位图集(32x32 1bit) */
+#include "hs_battery_glyph.h" /* 顶栏电池轮廓层: 由用户 2026-11-11 图标批次的线性横版电池生成 */
 #ifdef __x86_64__
 #include "firmware_info.h"
 #endif
@@ -4653,28 +4654,50 @@ void hs_icon_file(int x, int y, int size, uint32_t color)
     hs_fill_rect(x + size / 3, y + size * 3 / 4, size / 3, size / 8, color);
 }
 
-/* 顶部Bar：左侧工作区+右侧状态图标 */
-/* 顶栏电池图标：VALID 才画填充比例；DECLARED/UNKNOWN 只画轮廓 + 两道短线，
- * 不拿静态“满电”位图冒充真实电量。 */
-static void hs_battery_icon_state(int x, int y, int size, uint32_t fg, int state)
+/* 顶栏电池图标。
+ *
+ * 形状取用户 2026-11-11 图标批次里的线性横版电池（assets/icons-status64/p64_battery64.png），
+ * 与旁边 wifi/音量/齿轮/电源 同走 hs_icon_bmp64() 覆盖采样，24/36px 下笔画粗细一致。
+ * 原素材把"约 69% 电量"直接烧进了像素（机身左 2/3 实心），照贴就是一张会撒谎的图；
+ * 所以这里只取它的轮廓层（机身圆角框 + 正极），电量交给 ACPI 状态：
+ *   ABSENT          调用方已跳过，不占位
+ *   DECLARED/UNKNOWN 轮廓 + 两道短线（有电池设备，但读不到可信电量）
+ *   VALID            轮廓 + 按 percent 填充；<=20% 用告警红，其余用前景色保持单色
+ * 机型（台式/笔记本）不参与这里的任何判断。 */
+static void hs_battery_icon_state(int x, int y, int size, uint32_t fg, uint32_t bg, int state)
 {
-    int bx = x + size / 4;
-    int by = y + size * 3 / 8;
-    int bw = size / 2;
-    int bh = size * 5 / 12;
+    hs_icon_bmp64(x, y, size, fg, bg, hs_bat64_outline);
 
-    hs_draw_rect(bx, by, bw, bh, fg);
-    hs_fill_rect(bx + bw, by + bh / 3, size / 12, bh / 3, fg);
+    int mode = hs_battery_ui_mode(state);
+    if (mode == 0) return;
 
-    if (state == HS_BATTERY_VALID) {
-        int fill = ((bw - 2) * g_shell.status.battery_percent) / 100;
-        uint32_t color = g_shell.status.battery_percent > 20 ? 0x4CAF50 : 0xF44336;
-        hs_fill_rect(bx + 1, by + 1, fill, bh - 2, color);
-    } else {
-        int dw = size / 8;
-        hs_fill_rect(bx + bw / 3 - dw / 2, by + bh / 2 - 1, dw, 2, fg);
-        hs_fill_rect(bx + bw * 2 / 3 - dw / 2, by + bh / 2 - 1, dw, 2, fg);
+    /* 可绘制内区（机身内缘），由生成器按素材实测给出，64 网格 → 目标尺寸 */
+    int ix = x + (HS_BAT64_INNER_X * size) / 64;
+    int iy = y + (HS_BAT64_INNER_Y * size) / 64;
+    int iw = (HS_BAT64_INNER_W * size) / 64;
+    int ih = (HS_BAT64_INNER_H * size) / 64;
+    if (iw < 2) iw = 2;
+    if (ih < 1) ih = 1;
+
+    if (mode == 2) {
+        int fill = hs_battery_fill_px(iw, g_shell.status.battery_percent);
+        uint32_t color = (g_shell.status.battery_percent <= HS_BATTERY_LOW_PERCENT)
+                         ? 0xF44336 : fg;
+        if (fill > 0) hs_fill_rect(ix, iy, fill, ih, color);
+        return;
     }
+
+    /* 两道短线居中摆放：意思是"有电池、没读数"，不是 0%。 */
+    int dh = (ih >= 6) ? 2 : 1;
+    int dw = iw / 4;
+    if (dw < 2) dw = 2;
+    int gap = dw;
+    int total = 2 * dw + gap;
+    int sx = ix + (iw - total) / 2;
+    if (sx < ix) sx = ix;
+    int sy = iy + (ih - dh) / 2;
+    hs_fill_rect(sx, sy, dw, dh, fg);
+    hs_fill_rect(sx + dw + gap, sy, dw, dh, fg);
 }
 
 static void hs_top_bar_render(void)
@@ -4717,12 +4740,13 @@ static void hs_top_bar_render(void)
     icon_x -= icon_size; hs_icon_bmp64(icon_x, icon_y, icon_size, fg, g_shell.colors.panel_bg, hs_ico64_power64);
     icon_x -= hs_sx(6) + icon_size; hs_icon_bmp64(icon_x, icon_y, icon_size, fg, g_shell.colors.panel_bg, hs_ico64_gear64);
     icon_x -= hs_sx(6) + icon_size; hs_icon_bmp64(icon_x, icon_y, icon_size, fg, g_shell.colors.panel_bg, hs_ico64_speaker64);
-    /* 电池不是“台式机/笔记本”判断出来的，而是 ACPI PNP0C0A 声明探测出来的。
-     * ABSENT 时不画图标，也不留空位；DECLARED/UNKNOWN 只画轮廓 + 两道短线；
-     * 只有 M2 读到可信电量进入 VALID 后才画百分比。 */
+    /* 电池形状与旁边四个同源（同走 hs_icon_bmp64），是否出现只看 ACPI 探测结果，
+     * 不看"台式机/笔记本"。ABSENT 不画也不留位；DECLARED/UNKNOWN 轮廓 + 两道短线；
+     * 只有 M2 读到可信电量进入 VALID 后才画填充比例。 */
     if (g_shell.status.battery_state != HS_BATTERY_ABSENT) {
         icon_x -= hs_sx(6) + icon_size;
-        hs_battery_icon_state(icon_x, icon_y, icon_size, fg, g_shell.status.battery_state);
+        hs_battery_icon_state(icon_x, icon_y, icon_size, fg, g_shell.colors.panel_bg,
+                              g_shell.status.battery_state);
     }
     /* wifi 与旁边四个同源: 都走 64x64 那套(hs_icon_bmp64)。
      * 旧实现这里单独用 32px 的 hs_ico_wifi_std, 24px 显示时笔画比邻居细一档,

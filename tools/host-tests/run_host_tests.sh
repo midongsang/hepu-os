@@ -68,6 +68,11 @@ run_one elf "" tools/host-tests/elf_test.c $ARCH/elf64.c $ARCH/compat_gate.c
 # 5) hpdesk 窗口槽位分配/回收（回归：反复开关 32 次后槽位耗尽无法再开窗）
 run_one winslot "" tools/host-tests/winslot_test.c
 
+# 5a) 电池图标状态映射（纯函数）
+#     QEMU 夹具只能造出 ABSENT/DECLARED——没有 AML 执行器进不了 VALID。
+#     填充比例这条分支靠这里覆盖，避免它长期是"没人跑过"的死代码。
+run_one battery_ui "" tools/host-tests/battery_ui_test.c
+
 # 5b) PNG 解码器（inflate/反滤波/颜色类型/位深，V0.54.13 P0）
 #     夹具：tools/host-tests/data/png_case{1..5}.png + .expect，逐像素比对
 if $CC $CFLAGS -DPNG64_HOST $INC -o "$OUT/png64" \

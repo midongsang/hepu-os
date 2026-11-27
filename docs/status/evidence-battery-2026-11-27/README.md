@@ -94,14 +94,56 @@ RESULT: PASS
 
 差异只落在顶栏右侧，不是整屏偶然变化。
 
+### 4. 图标层（M1.5，2026-11-27 追加）
+
+用户 2026-11-11 给的图标批次里，电池有两种形态，都留在仓库里：
+
+| 素材 | 形态 | 结论 |
+|---|---|---|
+| `assets/icons-v2/128_battery_std.png` | 128×128 实心竖版 | 24px 下是一块黑砖，不可用（当时已否） |
+| `assets/icons-status64/p64_battery64.png` | 线性横版（机身 + 正极） | 可用；但像素里烧死了“约 69% 电量” |
+
+直接贴第二张就是让图标自己谎报 69%，和 M0 的原则冲突。所以
+`tools/gen_battery_glyph.py` 按素材实测几何（机身 40×20@64、描边 4、正极 3×8）
+重建**轮廓层**，输出 `kernel/arch/x86_64/hs_battery_glyph.h`；顶栏改用它与
+wifi/音量/齿轮/电源同一条 `hs_icon_bmp64()` 覆盖采样管线。差异只有两处：
+去掉烧死的填充；正极由留 2px 间隙改为贴合机身（否则 24px 下正极脱开成孤点）。
+
+电量层由状态驱动，纯函数放在 `hpdesk.h`：`hs_battery_ui_mode()`
+（0 不画 / 1 轮廓+两道短线 / 2 轮廓+填充）与 `hs_battery_fill_px()`。
+`tools/host-tests/battery_ui_test.c` 覆盖四种状态与填充边界——因为 QEMU 里
+`VALID` 不可达，没有这条单测，填充分支就是没人跑过的死代码。
+
+`python3 icon_check.py` 结果（`icon-topbar/check.txt`）：
+
+```text
+default_absent             PASS  state=absent reason=no-acpi-battery
+declared_declared          PASS  state=declared reason=acpi-declared
+size_1920x1080             PASS  (1920, 1080) / (1920, 1080)
+wide_runs_default_2        PASS  [(1720, 1742), (1806, 1836)]
+wide_runs_declared_3       PASS  [(1675, 1697), (1718, 1742), (1806, 1836)]
+battery_width_20_30        PASS  x=[(1718, 1742)]
+battery_height_le_16       PASS  h=12
+right_icons_unmoved        PASS  x 1750..1885 逐像素相同
+
+RESULT: PASS
+```
+
+声明态比默认态多一个 25×12px 的独立墨段（电池），右侧三个图标逐像素未移动——
+说明是“插入了一个图标”，不是把邻居改胖或整排重排。
+
+![declared bar](icon-topbar/declared/bar-3x.png)
+
+![default bar](icon-topbar/default/bar-3x.png)
+
 ## 构建
 
 `bash tools/regress/build_all.sh` 通过：gnu-efi、UEFI 引导器、64 位内核、
-32 位内核、双内核镜像全部成功；产物 `hepu-kernel64.bin` 1,026,576 B，
-`hepu-kernel` 3,863,629 B。
+32 位内核、双内核镜像全部成功；产物 `kernel64.bin` 1,027,088 B、
+`kernel32.bin` 3,864,141 B（+512 B 即电池轮廓掩码 64×8）。
 
-- `tools/host-tests/run_host_tests.sh`：`通过 8 / 失败 0`。
-- `tools/regress/smoke32.sh 70`：`serial=1 initrd=1 net=1 desk=1 fault=0`、
+- `tools/host-tests/run_host_tests.sh`：`通过 9 / 失败 0`（新增 `battery_ui`）。
+- `tools/regress/smoke32.sh`：`serial=1 initrd=1 net=1 desk=1 fault=0`、
   `ktest_result=PASS`、`p3-security: passed=2 failed=0 skipped=0`。
 - 32 位只验证到“构建 + 冒烟不回归”，没有单独截 32 位桌面截图。
 
@@ -119,6 +161,8 @@ RESULT: PASS
    电池 UI 已完整对齐。
 5. **没有真机证据**：没有真笔记本、真台式机或 UPS 的取证；本目录只能支撑
    “QEMU 默认不再显示假电池”和“声明探测链路可用”，不能写成“真机已修复”。
+6. **`VALID` 的填充只有单测覆盖**：`hs_battery_fill_px()` / `hs_battery_ui_mode()`
+   在主机端跑过全部分支，但 QEMU 里造不出 `VALID`——要看到真实百分比填充仍是 M2。
 
 ## 复现文件
 
@@ -130,3 +174,6 @@ RESULT: PASS
 | `default/` | 默认 QEMU 串口、截图、`bat-lines.txt` |
 | `declared/` | 合成 SSDT 串口、截图、`bat-lines.txt` |
 | `host_check.py` / `host-check.txt` | 宿主侧可复算核对 |
+| `tools/gen_battery_glyph.py` | 从用户素材重建电池轮廓层，生成 `hs_battery_glyph.h`（`--check` 可校验一致性） |
+| `tools/host-tests/battery_ui_test.c` | 状态→图标映射与填充宽度的主机端单测 |
+| `icon-topbar/` | 图标层取证：两次运行的截图、3× 顶栏、`icon_check.py` / `check.txt` |

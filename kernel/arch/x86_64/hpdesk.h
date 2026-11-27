@@ -157,6 +157,33 @@ typedef enum {
     HS_BATTERY_UNKNOWN,
 } hs_battery_state_t;
 
+/* 电池图标外观映射（纯函数，主机端可单测）：
+ * 0 = 不画（ABSENT）
+ * 1 = 轮廓 + 两道短线（DECLARED/UNKNOWN：有电池设备，但读不到可信电量）
+ * 2 = 轮廓 + 按比例填充（VALID）
+ * 判据只看状态，不看"台式/笔记本"机型。 */
+static inline int hs_battery_ui_mode(int state)
+{
+    if (state == HS_BATTERY_ABSENT) return 0;
+    if (state == HS_BATTERY_VALID) return 2;
+    return 1;
+}
+
+/* 低电量阈值：低于该百分比用告警色，高于则用前景色（保持图标单色） */
+#define HS_BATTERY_LOW_PERCENT 20
+
+/* VALID 时的填充宽度（像素）。percent 钳到 0..100；
+ * 非零电量至少给 1px —— 整除会把 1~3% 抹成 0，显示成"空电池"比小数点更误导。 */
+static inline int hs_battery_fill_px(int inner_w, int percent)
+{
+    if (inner_w <= 0 || percent <= 0) return 0;
+    if (percent > 100) percent = 100;
+    int fill = (inner_w * percent + 99) / 100;
+    if (fill < 1) fill = 1;
+    if (fill > inner_w) fill = inner_w;
+    return fill;
+}
+
 /* 系统状态 */
 typedef struct {
     int volume;         /* 0-100 */

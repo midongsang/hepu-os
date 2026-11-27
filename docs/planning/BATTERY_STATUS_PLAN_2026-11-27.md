@@ -204,12 +204,22 @@ SMBIOS 只能回答“厂商说这是什么形状”，不能回答“现在有�
   `_SM_`/`_SM3_` Type 3、ACPI RSDP→RSDT/XSDT→FACP→DSDT/SSDT，扫描
   `PNP0C0A`/`ACPI0003`（ASCII + AML 压缩 EISA ID）。状态只到 `DECLARED/ABSENT/UNKNOWN`，
   **没有 `VALID`，不读真实百分比**。
+- **M1.5 图标层已闭环（2026-11-27）**：用户 2026-11-11 图标批次里的横向电池
+  （`assets/icons-status64/p64_battery64.png`）此前被内嵌成 `hs_ico64_battery64`，
+  但那张图把“约 69% 电量”烧进了像素——直接贴顶栏就是一张固定谎报 69% 的图。
+  `tools/gen_battery_glyph.py` 按素材实测几何重建**轮廓层**（`hs_battery_glyph.h`），
+  顶栏改用它与 wifi/音量/齿轮/电源同一条 `hs_icon_bmp64()` 覆盖采样管线；
+  电量由状态驱动（`hs_battery_ui_mode` / `hs_battery_fill_px`，纯函数 + 主机端单测）。
+  同批次的 `assets/icons-v2/128_battery_std.png` 是实心竖版，24px 下成黑砖，确认不可用。
 - **证据**：`docs/status/evidence-battery-2026-11-27/`。QEMU 默认
   `state=absent`、顶栏无电池；注入合成 `PNP0C0A` SSDT 后 `state=declared`、
-  顶栏轮廓 + `--`；宿主 `host_check.py` PASS。64/32 构建通过，host-tests 8/0。
+  顶栏轮廓 + `--`；宿主 `host_check.py` PASS。图标层另见
+  `icon-topbar/`：声明态多出的电池段宽 25px、高 12px，右侧三个图标逐像素未移动，
+  `icon_check.py` PASS。64/32 构建通过，host-tests 9/0，32 位冒烟 `fault=0`。
 - **未做**：M2（AML `_STA/_BIX/_BIF/_BST`）、M3（完整 32 位 UI/电源策略）、M4（真机）。
   本次 QEMU/OVMF 未提供 legacy SMBIOS entry，`form_factor=unknown` 只说明
-  “本夹具没读到”，不等于真机型号判断已验证。
+  “本夹具没读到”，不等于真机型号判断已验证。`VALID` 的填充分支目前只有主机端
+  单测覆盖，QEMU 里仍是不可达状态——这是 M2 的前置条件，不是已实现功能。
 
 ## 8. 时间估算
 

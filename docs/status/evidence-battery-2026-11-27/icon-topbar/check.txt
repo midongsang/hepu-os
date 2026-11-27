@@ -1,0 +1,10 @@
+default_absent             PASS  state=absent reason=no-acpi-battery
+declared_declared          PASS  state=declared reason=acpi-declared
+size_1920x1080             PASS  (1920, 1080) / (1920, 1080)
+wide_runs_default_2        PASS  [(1720, 1742), (1806, 1836)]
+wide_runs_declared_3       PASS  [(1675, 1697), (1718, 1742), (1806, 1836)]
+battery_width_20_30        PASS  x=[(1718, 1742)]
+battery_height_le_16       PASS  h=12
+right_icons_unmoved        PASS  x 1750..1885 逐像素相同
+
+RESULT: PASS
