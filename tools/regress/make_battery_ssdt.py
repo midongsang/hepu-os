@@ -243,6 +243,7 @@ def make_ec_read(percent=57, dev="ECR0"):
     )
     ecdev = device("EC00", name("_HID", string_obj("PNP0C09"))
                    + method("_STA", ret(int_obj(0x0F)))
+                   + method("_GLK", ret(int_obj(1)))
                    + method("_REG", if_then(l_equal(b"\x68", int_obj(3)),
                                             store(b"\x69", b"ECRG")), args=2))
     # ECRG 放在根作用域，EC00._REG 与 ECR0._BST 都能按相对名解析到它。

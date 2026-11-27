@@ -74,6 +74,8 @@ run_one winslot "" tools/host-tests/winslot_test.c
 run_one battery_ui "" tools/host-tests/battery_ui_test.c
 # M2: 极简 AML 解释器 + 电池读数（Phase 2）
 run_one aml_eval "-DAML_HOST_TEST" tools/host-tests/aml_eval_test.c $ARCH/aml64.c $ARCH/acpi_battery.c $ARCH/ec64.c
+# M2-full: 虚拟 EC 电池端到端（init → _REG → _BST → poll），补 QEMU 无 EC 设备
+run_one ec_battery "-DAML_HOST_TEST" tools/host-tests/ec_battery_test.c $ARCH/aml64.c $ARCH/acpi_battery.c $ARCH/ec64.c
 
 # 5b) PNG 解码器（inflate/反滤波/颜色类型/位深，V0.54.13 P0）
 #     夹具：tools/host-tests/data/png_case{1..5}.png + .expect，逐像素比对

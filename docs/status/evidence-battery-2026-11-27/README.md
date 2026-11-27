@@ -256,7 +256,7 @@ QEMU 夹具（`tools/regress/make_battery_ssdt.py` 生成，均在 `fixture/`）
 | `battery-nobst.ssdt` | 有设备但缺 `_BST` | `[BAT] aml bst failed code=-1` |
 | `battery-ec.ssdt` | 有 EC 字段但无 `PNP0C09`，EC 未启用 | `[BAT] ec=0x0` + `bst failed code=-3`（UNSUP） |
 | `battery-valid-acoff.ssdt` | 同 valid，但 `_PSR=0`、`_BST` 报未充电 | `[BAT] ac psr=0`；Settings 显示 `Offline (_PSR=0)` / `Charging: No` |
-| `battery-ec-read.ssdt` | `PNP0C09` + `ECR0` + `_REG` 门控 `_BST` | QEMU：`ec=0x1 reg=0 glk=none`，无 EC 硬件 → `bst failed code=-3`；主机模拟：`_REG` 后 `B0ST=5700`、`_BST` 四元素成立 |
+| `battery-ec-read.ssdt` | `PNP0C09` + `ECR0` + `_GLK=1` + `_REG` 门控 `_BST` | QEMU：`ec=0x1 reg=0 glk=1`，无 EC 硬件 → `bst failed code=-3`；主机虚拟 EC：init→poll 读出 `57%` |
 
 最后三条是重点：没有 EC 控制器时不能盲读端口；EC 超时/缺 `_BST` 必须显式报错并
 停在 `--`，不能猜 0%、也不能沿用上次读数。
@@ -271,7 +271,7 @@ bash tools/regress/battery_state_probe.sh .../m2-nobst  .../fixture/battery-nobs
 bash tools/regress/battery_state_probe.sh .../m2-ec     .../fixture/battery-ec.ssdt
 bash tools/regress/battery_state_probe.sh .../m2-ec-read .../fixture/battery-ec-read.ssdt
 bash tools/regress/battery_panel_probe.sh .../m2-acoff  .../fixture/battery-valid-acoff.ssdt
-bash tools/host-tests/run_host_tests.sh   # aml_eval 内模拟 EC，覆盖 ec-read 正路径
+bash tools/host-tests/run_host_tests.sh   # ec_battery 虚拟 EC 走 init→poll 正路径
 ```
 
 本轮 QEMU 取证统一用**仅取证镜像**跑：复制正式镜像后在 `/system.conf` 追加
@@ -322,8 +322,10 @@ RESULT: PASS (25 checks, 0 failed)
 
 主机端 `aml_eval` 48 项断言覆盖：`PNP0C09` 查找（`EC00`）、`_REG(3,1)` 写
 `ECRG`、EC 16 位字段拼装（`B0ST == 5700`）、`_BST` 返回
-`state=2/rem=5700/volt=12000`，以及 EC 超时和 EC 未启用都返回 `UNSUP`。这套断言用 `ec_host_inb/ec_host_outb` 模拟 EC 状态机，
-不是 QEMU 或真机。
+`state=2/rem=5700/volt=12000`，以及 EC 超时和 EC 未启用都返回 `UNSUP`。
+新增 `ec_battery` 15 项端到端断言：只加载 `battery-ec-read.ssdt`，走真实
+`acpi_battery_init()` → `acpi_battery_poll()`，用 0x62/0x66 虚拟 EC 读出 57%，
+并覆盖 `_GLK=1`、EC 缺失、遗留 OBF 三种情况。两者都**不是 QEMU 或真机**。
 
 **这轮没做的**：EC 写、`IndexField/BankField`、多电池选择、剩余时间、健康度。
 `_GLK` 只检测不上锁，FACS Global Lock 未实现；`_REG` 只支持本解释器能执行的
@@ -337,7 +339,8 @@ RESULT: PASS (25 checks, 0 failed)
 `kernel32.bin` 3,873,165 B（M2 增加 `aml64.c` + `acpi_battery.c` + `ec64.c`，
 并补 `_REG`/`_PSR`，64 位约 +20 KB）。
 
-- `tools/host-tests/run_host_tests.sh`：`通过 10 / 失败 0`（新增 `aml_eval`，含 `battery_ui`）。
+- `tools/host-tests/run_host_tests.sh`：`通过 11 / 失败 0`；`aml_eval` 48 checks，
+  `ec_battery` 15 checks（虚拟 EC 正路径）。
 - `tools/regress/smoke32.sh`：`serial=1 initrd=1 net=1 desk=1 fault=0`、
   `ktest_result=PASS`、`p3-security: passed=2 failed=0 skipped=0`。
 - 32 位只验证到“构建 + 冒烟不回归”，没有单独截 32 位桌面截图。
@@ -388,8 +391,9 @@ RESULT: PASS (25 checks, 0 failed)
 | `kernel/arch/x86_64/acpi_battery.c/.h` | M2 读数层：`_STA/_BIF/_BIX/_BST` + 百分比可信门槛；EC 启用判定 |
 | `kernel/arch/x86_64/ec64.c/.h` | EC 0x62/0x66 只读事务层（RD_EC、超时、host 注入） |
 | `tools/host-tests/aml_eval_test.c` | 解释器/读数层主机端单测（`battery_ssdt_blobs.h` 为生成物） |
-| `fixture/battery-{valid,valid-bix,absent,nobst,ec,ec-read}.ssdt` | M2 六种夹具；前五种跑 QEMU，`ec-read` 供主机模拟 EC 正路径 |
+| `fixture/battery-{valid,valid-bix,absent,nobst,ec,ec-read}.ssdt` | M2 六种夹具；`ec-read` 在 QEMU 走 fail-closed，在 `ec_battery` 走虚拟 EC 正路径 |
 | `m2-valid/` | VALID 取证：桌面/面板/设置页截图、串口摘录、`valid_check.py` |
 | `m2-bix/` `m2-absent/` `m2-nobst/` `m2-ec/` | 四种边界夹具的串口摘录与桌面截图 |
-| `ec-host-test.txt` | `run_host_tests.sh` 全量输出；`aml_eval` 44 checks 含 EC 正路径/超时/未启用 |
+| `ec-host-test.txt` | 上一轮 `run_host_tests.sh` 输出；`aml_eval` 44 checks，作为历史记录 |
+| `ec-sim-test.txt` | 本轮 `run_host_tests.sh` 输出；`aml_eval` 48 + `ec_battery` 15，11/0 |
 | `qemu-ec-absence.txt` | `qemu-system-x86_64 -device help` 无 EC 设备，说明为何没有 QEMU EC 正路径 |
