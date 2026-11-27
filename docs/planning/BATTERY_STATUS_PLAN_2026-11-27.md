@@ -158,7 +158,8 @@ SMBIOS 只能回答“厂商说这是什么形状”，不能回答“现在有�
 | `kernel/arch/x86_64/hpdesk.c` | `hs_status_init/update`、顶栏条件渲染、`hs_battery_render` guard |
 | `kernel/arch/x86_64/firmware_info.c/.h` | 新增：SMBIOS Type 3 + ACPI 表枚举 + `PNP0C0A` 声明扫描 |
 | `kernel/arch/x86_64/acpi.c/.h` | 扩展 FADT/DSDT/SSDT 定位；保留现有 MADT/HPET 路径 |
-| `kernel/arch/x86_64/acpi_battery.c/.h` | M2 新增：最小 AML 执行与 `_STA/_BIX/_BIF/_BST` |
+| `kernel/arch/x86_64/aml64.c/.h` | M2 新增：极简 AML 解释器（命名空间 + 电池方法所需 opcode） |
+| `kernel/arch/x86_64/acpi_battery.c/.h` | M2 新增：`_STA/_BIX/_BIF/_BST` 求值与百分比可信门槛 |
 | `kernel/arch/x86_64/Makefile` | 新源文件；探针/测试开关默认关闭 |
 | `kernel/arch/x86/device_support.c` | 删除硬编码“台式机无电池”，接同一状态源 |
 | `docs/status/evidence-battery-2026-11-27/` | 截图、串口、QEMU SSDT、宿主核对 |
@@ -222,10 +223,16 @@ SMBIOS 只能回答“厂商说这是什么形状”，不能回答“现在有�
   面板/页面几何、命中、状态文案都单一来源（`hs_battery_icon_rect` /
   `hs_battery_panel_geom`），绘制与点击不会各算一套。电源计划一栏明确写
   “均衡（固定）”：64 位没有调度策略引擎，不做没有实际效果的开关。
-- **未做**：M2（AML `_STA/_BIX/_BIF/_BST`）、M3（完整 32 位 UI/电源策略）、M4（真机）。
+- **M2 最小版已闭环（2026-11-27）**：新增 `aml64.c/.h`（极简 AML 解释器）与
+  `acpi_battery.c/.h`，QEMU 注入含 `PNP0C0A` + `_STA/_BIF/_BST` 的合成 SSDT 后，
+  顶栏/面板/Settings 三处都显示真实 `57%` 与 `Charging: Yes`；`_BIX` 夹具同值。
+  读不出时仍 `--`（缺 `_BST` → `bst failed code=-1`，EC 字段 → `-3` UNSUP），
+  没有回退 100%。`m2-valid/valid_check.py` 21 项 PASS。
+  **边界**：EC 事务、IndexField/BankField、写字段、多电池、剩余时间、健康度、
+  `_PSR` 均未实现；真机 EC 型电池仍会停在 `DECLARED`——这是 M2-full 的事。
+- **未做**：M2-full（EC 事务/多电池/健康度等）、M3（完整 32 位 UI/电源策略）、M4（真机）。
   本次 QEMU/OVMF 未提供 legacy SMBIOS entry，`form_factor=unknown` 只说明
-  “本夹具没读到”，不等于真机型号判断已验证。`VALID` 的填充分支目前只有主机端
-  单测覆盖，QEMU 里仍是不可达状态——这是 M2 的前置条件，不是已实现功能。
+  “本夹具没读到”，不等于真机型号判断已验证。
 
 ## 8. 时间估算
 

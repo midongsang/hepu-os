@@ -160,6 +160,8 @@ C_SOURCES = \
     $(ARCH_DIR)/smp.c \
     $(ARCH_DIR)/acpi.c \
     $(ARCH_DIR)/firmware_info.c \
+    $(ARCH_DIR)/aml64.c \
+    $(ARCH_DIR)/acpi_battery.c \
     $(ARCH_DIR)/uart64.c \
     $(ARCH_DIR)/ac9764.c \
     $(ARCH_DIR)/hs_apps.c \

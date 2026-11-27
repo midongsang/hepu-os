@@ -84,6 +84,7 @@ q_stop
 
 log "== [BAT] lines =="
 grep -a '\[BAT\]' "$SER" | tee "$OUT/bat-lines.txt" || true
+grep -aE '\[AML\]|\[BAT\]|\[DESK\]|\[SETTINGS\]' "$SER" | tee "$OUT/desk-lines.txt" || true
 
 log "== ACPI/Power lines =="
 grep -aE 'ACPI|acpi|Battery|battery|BAT' "$SER" | tail -40 | tee "$OUT/acpi-lines.txt" || true

@@ -72,6 +72,19 @@ fi
 q_wait_for "login -> desktop" 30 "$SER" || log "WARN: desktop 迁移未出现"
 q_wait_for "Desktop running" 60 "$SER" || log "WARN: Desktop running 未出现"
 
+# 启动流程偶发停在锁屏(键盘 Enter 未落到锁屏窗口): 显式点一下再输密码
+if ! grep -aq "login -> desktop" "$SER"; then
+  log "still locked after boot; clicking center to wake"
+  python3 "$REGRESS_DIR/qmp_click.py" "$QMP" 960 540 1920 1080 click
+  sleep 2
+  q_wait_for "lock -> login" 10 "$SER" || log "WARN: 锁屏没有进入 login"
+  q_send_text "$FIXTURE_PASSWORD"
+  sleep 2
+  q_sendkey ret
+  q_wait_for "login -> desktop" 20 "$SER" || log "WARN: 补解锁失败"
+  sleep 2
+fi
+
 # 通知卡会盖住顶栏右侧(面板也在这一带), 等它自己超时消失再动鼠标
 sleep 14
 
@@ -119,4 +132,4 @@ q_dump "$OUT/05-battery-nav.ppm" "$OUT/05-battery-nav.png"
 q_stop
 
 log "== [DESK]/[BAT] lines =="
-grep -aE '\[DESK\]|\[BAT\]|\[SETTINGS\]' "$SER" | tee "$OUT/desk-lines.txt" || true
+grep -aE '\[AML\]|\[DESK\]|\[BAT\]|\[SETTINGS\]' "$SER" | tee "$OUT/desk-lines.txt" || true

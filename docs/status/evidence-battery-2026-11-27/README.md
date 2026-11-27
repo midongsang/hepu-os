@@ -1,4 +1,4 @@
-# 电池状态取证（2026-11-27，M0 + M1 + M1.5 图标 + M1.6 面板）
+# 电池状态取证（2026-11-27，M0 + M1 + M1.5 图标 + M1.6 面板 + M2 最小版）
 
 ## 结论
 
@@ -13,9 +13,15 @@
    - ACPI：从 RSDP → RSDT/XSDT 找 `FACP`，取 `DSDT`，并枚举 `SSDT`；
    - 在 DSDT/SSDT 原始字节里查 `PNP0C0A`（电池）和 `ACPI0003`（交流适配器），
      同时识别 ASCII 字符串与 AML 压缩 EISA ID（`0x41D00C0A` / `0x04700003`）。
+3. **M2 最小版**：新增 `aml64.c/.h`（极简 AML 解释器）与 `acpi_battery.c/.h`，
+   在 QEMU 合成表上真实执行 `_STA` / `_BIF` / `_BIX` / `_BST`；读到可信读数才进
+   `VALID`，顶栏、面板、Settings 电池页同步显示 `57%` / `Charging: Yes`。
+   读不出或不可信仍保持 `DECLARED` 的 `--`，绝不回退 100%。
 
-**边界**：M1 只能到 `DECLARED`，因为还没有 AML 执行器，不能读 `_STA`、`_BIX`、
-`_BST`；本轮没有 `VALID`、没有真实百分比、没有真实硬件结论。M2 未开始。
+**边界**：M2 只支持电池读数所需的最小 AML 子集。EC 字段（`EmbeddedControl`）、
+`IndexField/BankField`、写字段、多电池、剩余时间/健康度、`_PSR` 都没做；
+真机上多数 EC 型电池仍会停在 `DECLARED`。本目录所有 `VALID` 结果都来自 QEMU
+合成 SSDT，不是真机证据。
 
 ## 判据
 
@@ -23,7 +29,8 @@
   不参与电池开关。
 - `ABSENT`：不画电池、不参与低电量策略；
 - `DECLARED / UNKNOWN`：画电池轮廓 + `--`，不回退 100%；
-- `VALID`：只有读到可信电量才允许（M2，未实现）。
+- `VALID`：只有 `_STA` 报存在且 `_BST/_BIF(_BIX)` 给出可信电量才允许；读数失败/不可信
+  一律退回 `DECLARED` 的 `--`。
 
 ## QEMU 证据
 
@@ -195,13 +202,84 @@ RESULT: PASS (19 checks, 0 failed)
 且只是记账，没有真正的频率控制），所以这里不做一个点了没反应的假开关——
 宁可写清楚“固定”，也不给一个假控件。
 
+### 6. M2 最小版（2026-11-27）
+
+目标只有一个：能读出真实百分比就显示 `VALID`，读不出仍维持 `--`。判据仍是
+ACPI `PNP0C0A`，不看机箱类型。
+
+实现分两层：
+
+- `kernel/arch/x86_64/aml64.c/.h`：极简 AML 解释器。建命名空间
+  （`Scope/Device/Processor/PowerRes/ThermalZone/Method/Name/OperationRegion/Field`），
+  支持整数/字符串/Buffer/Package、`Store/CopyObject/If/Else/While/Return`、
+  算术/逻辑/比较、`Index/DerefOf/RefOf/SizeOf/ToInteger/CondRefOf`；只读
+  `SystemIO`（`inb`）与 `SystemMemory`（`vmm64_phys_to_ptr`）字段。
+- `kernel/arch/x86_64/acpi_battery.c/.h`：按 `_STA` → `_BST` → `_BIX`/`_BIF`
+  取值；满充容量 ≤0、剩余明显超容、剩余 0 但既不在充电也无 critical 标记，
+  都判不可信，返回 `DECLARED` 而不是编一个数字。
+
+五种 QEMU 夹具（`tools/regress/make_battery_ssdt.py` 生成，均在 `fixture/`）：
+
+| 夹具 | 覆盖点 | 实际串口 |
+|---|---|---|
+| `battery-valid.ssdt` | `_STA=0x0F` + `_BIF` + `_BST` | `sta=0xF bst=1 bif=1 pct=57 chg=1 rem=5700 full=10000 unit=0` |
+| `battery-valid-bix.ssdt` | `_BIX` 优先路径 | `sta=0xF bst=1 bix=1 pct=57 ...` |
+| `battery-absent.ssdt` | `_STA` 明确 present=0 | `[BAT] aml sta=absent`，无 `pct=` |
+| `battery-nobst.ssdt` | 有设备但缺 `_BST` | `[BAT] aml bst failed code=-1` |
+| `battery-ec.ssdt` | `_BST` 读 EC 字段 | `[BAT] aml bst failed code=-3`（UNSUP） |
+
+最后两条是重点：失败必须显式报错并停在 `--`，不能猜 0%、也不能沿用上次读数。
+
+命令：
+
+```bash
+bash tools/regress/battery_panel_probe.sh .../m2-valid .../fixture/battery-valid.ssdt
+bash tools/regress/battery_state_probe.sh .../m2-bix    .../fixture/battery-valid-bix.ssdt
+bash tools/regress/battery_state_probe.sh .../m2-absent .../fixture/battery-absent.ssdt
+bash tools/regress/battery_state_probe.sh .../m2-nobst  .../fixture/battery-nobst.ssdt
+bash tools/regress/battery_state_probe.sh .../m2-ec     .../fixture/battery-ec.ssdt
+```
+
+VALID 面板与设置页：
+
+![valid panel](m2-valid/02-panel.png)
+
+![valid settings battery](m2-valid/03-settings.png)
+
+`python3 m2-valid/valid_check.py`（21 项）：
+
+```text
+A1 串口找到 PNP0C0A 设备 BAT0       PASS
+A2 至少 3 次周期采样                PASS  samples=21
+A3 读数百分比=57 且充电中           PASS  matched=20
+B1..B4 无 no acpi tables/bst failed/untrusted、建表 degraded=0  PASS
+C1 面板大号数字为 accent 色         PASS  accent_px=639
+D1 Battery 导航项高亮               PASS  accent=0.84
+D3/D4 串口记录 panel->settings/page PASS
+E1 _BIX 夹具读出 57%                PASS
+F1/F2 _STA=0 判 absent 且不出读数   PASS
+G1 缺 _BST fail-closed              PASS  code=-1
+H1/H2 EC 字段 UNSUP 且不产生假读数  PASS  code=-3
+
+RESULT: PASS (21 checks, 0 failed)
+```
+
+`hs_battery_apply_firmware()` 每 4 个状态 tick（约 2s）刷新一次；只有
+`battery_state/percent/charging` 三项真变化才置脏重绘。M1 的
+`[BAT] state=declared ... reason=acpi-declared` 仍会先打印一次——那是“声明层”
+日志，最终 UI 以随后 `[BAT] aml ...` 的结果为准。
+
+**M2 最小版没做的**：EC 事务（`EmbeddedControl`）、`IndexField/BankField`、
+写字段、多电池选择、剩余时间、健康度、`_PSR` 交流状态。这些留给 M2-full；
+本轮不宣称“真机电池已闭环”。
+
 ## 构建
 
 `bash tools/regress/build_all.sh` 通过：gnu-efi、UEFI 引导器、64 位内核、
-32 位内核、双内核镜像全部成功；产物 `kernel64.bin` 1,032,080 B、
-`kernel32.bin` 3,873,229 B（M1.5 的 +512 B 是电池轮廓掩码 64×8，M1.6 再加上面板/电池页代码）。
+32 位内核、双内核镜像全部成功；产物 `kernel64.bin` 1,051,600 B、
+`kernel32.bin` 3,873,165 B（M2 增加 `aml64.c` + `acpi_battery.c`，64 位约 +18 KB）。
 
-- `tools/host-tests/run_host_tests.sh`：`通过 9 / 失败 0`（新增 `battery_ui`）。
+- `tools/host-tests/run_host_tests.sh`：`通过 10 / 失败 0`（新增 `aml_eval`，含 `battery_ui`）。
 - `tools/regress/smoke32.sh`：`serial=1 initrd=1 net=1 desk=1 fault=0`、
   `ktest_result=PASS`、`p3-security: passed=2 failed=0 skipped=0`。
 - 32 位只验证到“构建 + 冒烟不回归”，没有单独截 32 位桌面截图。
@@ -220,10 +298,11 @@ RESULT: PASS (19 checks, 0 failed)
    电池 UI 已完整对齐。
 5. **没有真机证据**：没有真笔记本、真台式机或 UPS 的取证；本目录只能支撑
    “QEMU 默认不再显示假电池”和“声明探测链路可用”，不能写成“真机已修复”。
-6. **`VALID` 的填充只有单测覆盖**：`hs_battery_fill_px()` / `hs_battery_ui_mode()`
-   在主机端跑过全部分支，但 QEMU 里造不出 `VALID`——要看到真实百分比填充仍是 M2。
-7. **面板里的数字仍受 M2 限制**：`VALID` 之外一律 `--`，面板没有把 `DECLARED`
-   当 0% 或 100%。点开能看到的“状态”是 ACPI 探测结果，不是电量。
+6. **`VALID` 只来自合成表**：`hs_battery_fill_px()` / `hs_battery_ui_mode()` 的
+   `VALID` 分支已在 QEMU `battery-valid.ssdt` 上跑通（57%），但仍是 QEMU 夹具；
+   没有真笔记本的 `_BST` 原始值，不能写成“真机已验证”。
+7. **面板里的数字仍受读数层限制**：`DECLARED/UNKNOWN` 一律 `--`，面板没有把
+   声明当 0% 或 100%。EC 型电池在真机上大概率仍是 `--`，直到 M2-full。
 8. **点击链路是 QEMU 夹具**：取证用 `usb-tablet` + QMP 绝对坐标（相对指针在
    QEMU 里推不准）。真机鼠标走的是同一条 `hpdesk_mouse_down()`，但没有真机
    点击取证；`usb-tablet` 之外的绝对指针设备也没测。
@@ -245,3 +324,9 @@ RESULT: PASS (19 checks, 0 failed)
 | `tools/regress/qmp_click.py` | QMP 绝对坐标点击（0..32767 换算），供上面的脚本调用 |
 | `panel/` | 声明态取证：`01-desktop` / `02-panel` / `03-settings` / `04-about` / `05-battery-nav`、`ser.log`、`panel_check.py` / `check.txt` |
 | `panel/absent/` | 默认夹具（无电池）跑同一套点击：证明点不出面板 |
+| `kernel/arch/x86_64/aml64.c/.h` | M2 极简 AML 解释器（命名空间 + 电池方法所需 opcode） |
+| `kernel/arch/x86_64/acpi_battery.c/.h` | M2 读数层：`_STA/_BIF/_BIX/_BST` + 百分比可信门槛 |
+| `tools/host-tests/aml_eval_test.c` | 解释器/读数层主机端单测（`battery_ssdt_blobs.h` 为生成物） |
+| `fixture/battery-{valid,valid-bix,absent,nobst,ec}.ssdt` | M2 五种 QEMU 夹具（`make_battery_ssdt.py` 生成） |
+| `m2-valid/` | VALID 取证：桌面/面板/设置页截图、串口摘录、`valid_check.py` |
+| `m2-bix/` `m2-absent/` `m2-nobst/` `m2-ec/` | 四种边界夹具的串口摘录与桌面截图 |

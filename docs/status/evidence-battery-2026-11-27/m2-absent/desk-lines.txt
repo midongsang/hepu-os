@@ -1,0 +1,14 @@
+[SETTINGS] System settings initialized (30 items)
+[BAT] smbios=0x0 chassis=0x0 form=unknown
+[BAT] acpi=0x1 fadt=0x1 dsdt=0x1 ssdt=0x2 battery=declared
+[BAT] state=declared form_factor=unknown acpi_battery=declared reason=acpi-declared
+[AML] tables=0x3 nodes=0x3 degraded=0x0
+[BAT] aml dev=ABS0
+[BAT] aml sta=absent
+[BAT] aml sta=absent
+[BAT] aml sta=absent
+[BAT] aml sta=absent
+[BAT] aml sta=absent
+[BAT] aml sta=absent
+[BAT] aml sta=absent
+[BAT] aml sta=absent

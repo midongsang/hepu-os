@@ -1,0 +1,12 @@
+[BAT] smbios=0x0 chassis=0x0 form=unknown
+[BAT] acpi=0x1 fadt=0x1 dsdt=0x1 ssdt=0x2 battery=declared
+[BAT] state=declared form_factor=unknown acpi_battery=declared reason=acpi-declared
+[BAT] aml dev=ECB0
+[BAT] aml bst failed code=-3
+[BAT] aml bst failed code=-3
+[BAT] aml bst failed code=-3
+[BAT] aml bst failed code=-3
+[BAT] aml bst failed code=-3
+[BAT] aml bst failed code=-3
+[BAT] aml bst failed code=-3
+[BAT] aml bst failed code=-3

@@ -44,6 +44,11 @@ typedef struct {
 void fi_init(void);
 const fi_info_t *fi_get(void);
 
+/* M2: 已校验的 ACPI 表（DSDT 在前，SSDT 随后），供 AML 命名空间使用。
+ * 指针指向物理映射区，生命周期到下次复位；不拷贝表内容。 */
+int fi_table_count(void);
+int fi_table_at(int i, const uint8_t **data, uint32_t *len);
+
 const char *fi_form_name(fi_form_factor_t f);
 const char *fi_battery_name(fi_battery_presence_t b);
 

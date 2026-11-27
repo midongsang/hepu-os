@@ -19,9 +19,31 @@ extern uint64_t vmm64_phys_to_ptr(uint64_t phys);
 #define SMBIOS_SCAN_START 0x000E0000u  /* 规范主区在 F0000-FFFFF；部分固件落在 E0000 */
 #define SMBIOS_SCAN_END   0x00100000u
 #define FI_MAX_SSDT       16
+#define FI_MAX_TABLES     20
 
 static fi_info_t fi;
 static int fi_ready;
+static const uint8_t *fi_tbl[FI_MAX_TABLES];
+static uint32_t fi_tbl_len[FI_MAX_TABLES];
+static int fi_tbl_count;
+
+static void fi_table_add(const uint8_t *data, uint32_t len)
+{
+    if (!data || !len || fi_tbl_count >= FI_MAX_TABLES) return;
+    fi_tbl[fi_tbl_count] = data;
+    fi_tbl_len[fi_tbl_count] = len;
+    fi_tbl_count++;
+}
+
+int fi_table_count(void) { return fi_tbl_count; }
+
+int fi_table_at(int i, const uint8_t **data, uint32_t *len)
+{
+    if (i < 0 || i >= fi_tbl_count) return -1;
+    if (data) *data = fi_tbl[i];
+    if (len) *len = fi_tbl_len[i];
+    return 0;
+}
 
 static uint8_t fi_checksum(const void *ptr, uint32_t len)
 {
@@ -185,6 +207,7 @@ static int fi_scan_dsdt(uint64_t phys)
     if (fi_checksum(h, h->length) != 0) return 0;
     if (fi_memcmp(h->signature, "DSDT", 4) != 0) return 0;
     fi.dsdt_found = 1;
+    fi_table_add((const uint8_t *)h, h->length);
     if (fi_has_id((const uint8_t *)h, h->length, "PNP0C0A")) fi.battery_declared = 1;
     if (fi_has_id((const uint8_t *)h, h->length, "ACPI0003")) fi.ac_declared = 1;
     return 1;
@@ -199,6 +222,7 @@ static void fi_scan_ssdt(uint64_t phys)
     if (fi_memcmp(h->signature, "SSDT", 4) != 0) return;
     if (fi.ssdt_count >= FI_MAX_SSDT) return;
     fi.ssdt_count++;
+    fi_table_add((const uint8_t *)h, h->length);
     if (fi_has_id((const uint8_t *)h, h->length, "PNP0C0A")) fi.battery_declared = 1;
     if (fi_has_id((const uint8_t *)h, h->length, "ACPI0003")) fi.ac_declared = 1;
 }

@@ -1,0 +1,30 @@
+[ACPI] Initializing ACPI...
+[ACPI] RSDP found at 0xFFFF80003FB7D014
+[ACPI] RSDT physical address: 0x3FB7C074
+[ACPI] RSDT found, length=0x3C
+[ACPI] MADT found, length=0x80
+[ACPI] Local APIC address: 0xFEE00000
+[ACPI] CPU: apic_id=0x0, proc_id=0x0
+[ACPI] CPU: apic_id=0x1, proc_id=0x1
+[ACPI] I/O APIC: id=0x0, addr=0xFEC00000
+[ACPI] IRQ override: ISA IRQ0x0 -> GSI0x2
+[ACPI] IRQ override: ISA IRQ0x5 -> GSI0x5
+[ACPI] IRQ override: ISA IRQ0x9 -> GSI0x9
+[ACPI] IRQ override: ISA IRQ0xA -> GSI0xA
+[ACPI] IRQ override: ISA IRQ0xB -> GSI0xB
+[ACPI] Total CPUs found: 0x2
+[ACPI] HPET table present at 0x3FB77000 len=0x38 base=0xFED00000
+[SMP] Using ACPI MADT, CPU count: 0x2[SMP] BSP APIC ID: 0x0[SMP] Copying trampoline...
+[SELFTEST] boot self-test battery disabled (build with BOOT_SELFTEST=1 to enable)
+[BAT] smbios=0x0 chassis=0x0 form=unknown
+[BAT] acpi=0x1 fadt=0x1 dsdt=0x1 ssdt=0x2 battery=declared
+[BAT] state=declared form_factor=unknown acpi_battery=declared reason=acpi-declared
+[BAT] aml dev=BAT0
+[BAT] aml sta=0xF bst=1 bix=1 pct=57 chg=1 rem=5700 full=10000 unit=0
+[BAT] aml sta=0xF bst=1 bix=1 pct=57 chg=1 rem=5700 full=10000 unit=0
+[BAT] aml sta=0xF bst=1 bix=1 pct=57 chg=1 rem=5700 full=10000 unit=0
+[BAT] aml sta=0xF bst=1 bix=1 pct=57 chg=1 rem=5700 full=10000 unit=0
+[BAT] aml sta=0xF bst=1 bix=1 pct=57 chg=1 rem=5700 full=10000 unit=0
+[BAT] aml sta=0xF bst=1 bix=1 pct=57 chg=1 rem=5700 full=10000 unit=0
+[BAT] aml sta=0xF bst=1 bix=1 pct=57 chg=1 rem=5700 full=10000 unit=0
+[BAT] aml sta=0xF bst=1 bix=1 pct=57 chg=1 rem=5700 full=10000 unit=0

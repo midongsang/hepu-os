@@ -12,6 +12,7 @@
 #include "hs_battery_glyph.h" /* 顶栏电池轮廓层: 由用户 2026-11-11 图标批次的线性横版电池生成 */
 #ifdef __x86_64__
 #include "firmware_info.h"
+#include "acpi_battery.h"
 #endif
 #include "png64.h"
 #include "jpeg64.h"
@@ -4059,6 +4060,8 @@ static void hs_settings_window_render(hs_window_t *w)
             const char *av;
 #ifdef __x86_64__
             if (fi && fi->ac_declared) av = hs_txt("已声明（ACPI0003）", "Declared (ACPI0003)");
+            else if (fi && fi->acpi_ok && state == HS_BATTERY_VALID && g_shell.status.battery_charging)
+                av = hs_txt("未声明（_BST 报充电中）", "Not declared (_BST charging)");
             else if (fi && fi->acpi_ok) av = hs_txt("未声明", "Not declared");
             else av = hs_txt("未探测", "Not probed");
 #else
@@ -4081,8 +4084,8 @@ static void hs_settings_window_render(hs_window_t *w)
         ry += SETK(6);
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            rx, ry,
-                           hs_txt("电量需要 ACPI AML 执行器（M2 未实现）",
-                                  "Capacity needs an ACPI AML interpreter (M2 pending)"),
+                           hs_txt("电量来自 ACPI _BST/_BIF（M2 最小 AML）",
+                                  "Capacity from ACPI _BST/_BIF (M2 mini AML)"),
                            g_shell.colors.text_secondary, SETK(10));
         ry += SETK(16);
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
@@ -4899,8 +4902,12 @@ static void hs_battery_panel_render(void)
     /* 状态行 */
     const char *st;
     if (state == HS_BATTERY_VALID) {
-        st = g_shell.status.battery_charging ? hs_txt("充电中", "Charging")
-                                             : hs_txt("已读到可信电量", "Reading available");
+        if (g_shell.status.battery_charging)
+            st = hs_txt("充电中", "Charging");
+        else if (g_shell.status.battery_percent >= 99)
+            st = hs_txt("已充满", "Fully charged");
+        else
+            st = hs_txt("电池供电", "On battery");
     } else if (state == HS_BATTERY_DECLARED) {
         st = hs_txt("固件已声明电池，电量未读取", "Declared by firmware; no reading yet");
     } else {
@@ -8942,6 +8949,57 @@ void hs_media_set_volume(int vol)
  * 系统状态小部件
  * ========================================================================== */
 
+#ifdef __x86_64__
+/* 把固件声明 + M2 读数映射进 UI 状态。
+ * 顺序：ACPI 拿不到 -> UNKNOWN；没有 PNP0C0A -> ABSENT；
+ *       _STA 明确 present=0 -> ABSENT；有设备但读数不可信 -> DECLARED；
+ *       只有通过可信门槛才进 VALID（百分比/充电态才允许上屏）。 */
+static void hs_battery_apply_firmware(void)
+{
+    const fi_info_t *fi;
+    acpi_batt_sample_t sample;
+    int old_state = g_shell.status.battery_state;
+    int old_pct = g_shell.status.battery_percent;
+    int old_chg = g_shell.status.battery_charging;
+    int rc;
+
+    fi_init();
+    fi = fi_get();
+
+    if (fi->battery == FI_BAT_UNKNOWN) {
+        g_shell.status.battery_state = HS_BATTERY_UNKNOWN;
+        g_shell.status.battery_percent = 0;
+        g_shell.status.battery_charging = 0;
+    } else if (fi->battery == FI_BAT_ABSENT) {
+        g_shell.status.battery_state = HS_BATTERY_ABSENT;
+        g_shell.status.battery_percent = 0;
+        g_shell.status.battery_charging = 0;
+    } else {
+        rc = acpi_battery_poll(&sample);
+        if (rc == 0 && sample.present) {
+            g_shell.status.battery_state = HS_BATTERY_VALID;
+            g_shell.status.battery_percent = sample.percent;
+            g_shell.status.battery_charging = sample.charging ? 1 : 0;
+        } else if (rc == 1) {
+            g_shell.status.battery_state = HS_BATTERY_ABSENT;
+            g_shell.status.battery_percent = 0;
+            g_shell.status.battery_charging = 0;
+        } else {
+            g_shell.status.battery_state = HS_BATTERY_DECLARED;
+            g_shell.status.battery_percent = 0;
+            g_shell.status.battery_charging = 0;
+        }
+    }
+
+    if (old_state != g_shell.status.battery_state ||
+        old_pct != g_shell.status.battery_percent ||
+        old_chg != g_shell.status.battery_charging) {
+        /* 顶栏填充与电池面板都靠整屏重绘收敛；变化频率约 2s，可接受。 */
+        g_content_dirty = 1;
+    }
+}
+#endif
+
 void hs_status_init(void)
 {
     g_shell.status.volume = 75;
@@ -8954,13 +9012,12 @@ void hs_status_init(void)
     g_shell.status.cpu_usage = 0;
     g_shell.status.mem_usage = 0;
 
-    /* 固件层只回答“有没有电池设备声明”，不伪造电量；QEMU/台式机默认 ABSENT。 */
+    /* 固件层只回答“有没有电池设备声明”，M2 才尝试读 _STA/_BST/_BIF。
+     * 任何一步读不到都停在 DECLARED，不伪造电量；QEMU 默认应是 ABSENT。 */
 #ifdef __x86_64__
-    fi_init();
-    const fi_info_t *fi = fi_get();
-    if (fi->battery == FI_BAT_DECLARED) g_shell.status.battery_state = HS_BATTERY_DECLARED;
-    else if (fi->battery == FI_BAT_ABSENT) g_shell.status.battery_state = HS_BATTERY_ABSENT;
-    else g_shell.status.battery_state = HS_BATTERY_UNKNOWN;
+    fi_init();              /* 先让 firmware_info 收齐 DSDT/SSDT 指针 */
+    acpi_battery_init();    /* 再建 AML 命名空间 */
+    hs_battery_apply_firmware();
 #else
     /* 32 位暂无 ACPI 电池声明探测；保持 ABSENT，不再写死“台式机无电池”以外的假数值。 */
     g_shell.status.battery_state = HS_BATTERY_ABSENT;
@@ -8979,10 +9036,11 @@ void hs_status_update(void)
     g_shell.status.cpu_usage = process64_cpu_usage();
     /* 固件声明探测是启动期一次性的；后续 M2 才接 _BIX/_BST 动态刷新。 */
 #ifdef __x86_64__
-    fi_init();
-    if (fi_get()->battery == FI_BAT_DECLARED) g_shell.status.battery_state = HS_BATTERY_DECLARED;
-    else if (fi_get()->battery == FI_BAT_ABSENT) g_shell.status.battery_state = HS_BATTERY_ABSENT;
-    else g_shell.status.battery_state = HS_BATTERY_UNKNOWN;
+    /* M2: 每 4 次状态采样（约 2s）读一次 ACPI 电池；只有真读到才进 VALID。 */
+    {
+        static int batt_tick = 0;
+        if ((batt_tick++ & 3) == 0) hs_battery_apply_firmware();
+    }
 #else
     g_shell.status.battery_state = HS_BATTERY_ABSENT;
 #endif
