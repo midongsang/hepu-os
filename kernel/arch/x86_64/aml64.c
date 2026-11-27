@@ -4,6 +4,7 @@
  * ========================================================================== */
 
 #include "aml64.h"
+#include "ec64.h"
 
 extern void vga_puts(const char *s);
 extern void vga_put_hex(uint64_t v);
@@ -890,8 +891,17 @@ static int field_read(exec_t *e, int idx, aml_value_t **out)
         const uint8_t *p = (const uint8_t *)vmm64_phys_to_ptr(phys);
         if (!p) return AML_E_BADCODE;
         for (i = 0; i < bytes; i++) val |= (uint64_t)p[i] << (8 * i);
+    } else if (r->space == 3) {   /* EmbeddedControl：只读，逐字节走 EC 事务 */
+        uint64_t ea = r->io_off + (uint64_t)(f->bit_off / 8);
+        if (ea + bytes > 0x100) return AML_E_UNSUP;
+        if (r->io_len && ea + bytes > r->io_len) return AML_E_UNSUP;
+        for (i = 0; i < bytes; i++) {
+            uint8_t b = 0;
+            if (ec64_read((uint8_t)(ea + i), &b) != 0) return AML_E_UNSUP;
+            val |= (uint64_t)b << (8 * i);
+        }
     } else {
-        return AML_E_UNSUP;   /* EmbeddedControl 等留给 M2-full */
+        return AML_E_UNSUP;
     }
 
     val >>= shift;

@@ -1,0 +1,15 @@
+=== 赫普OS 主机端测试 ===
+编译器: gcc (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0
+
+  [ok]   uaccess  (ALL USER-ACCESS TESTS PASSED)
+  [ok]   aspace  (ALL ADDRESS-SPACE ISOLATION TESTS PASSED)
+  [ok]   heap  (ALL HEAP TESTS PASSED)
+  [ok]   elf  (ALL ELF TESTS PASSED)
+  [ok]   winslot  (ALL PASS: 窗口槽位分配/回收不变量全部成立 (T1)
+  [ok]   battery_ui  (PASS 全部断言)
+  [ok]   aml_eval  (PASS aml_eval (44 checks))
+  [ok]   png64 (5 个用例全通过: RGBA/RGB/调色板/灰度8/灰度1bit)
+  [ok]   ext2  (ALL EXT2 TESTS PASSED)
+
+  [ok]   fsck  (fsck inode checks: ok (5 groups))
+=== 结果: 通过 10 / 失败 0 ===

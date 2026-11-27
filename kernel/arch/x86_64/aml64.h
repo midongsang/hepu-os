@@ -12,9 +12,9 @@
  *   - 运算：Add/Subtract/Multiply/Divide/Mod/And/Or/Xor/Not/ShiftLeft/ShiftRight/
  *     LAnd/LOr/LNot/LEqual/LGreater/LLess/Increment/Decrement
  *   - 引用：Index/DerefOf/RefOf（缓冲与包的只读元素）
- *   - 寄存器：SystemIO 与 SystemMemory 的 Field 读取（EmbeddedControl 不支持）
+ *   - 寄存器：SystemIO、SystemMemory、EmbeddedControl（经 ec64，只读、带超时）的 Field 读取
  *
- * 不支持：EC 事务、IndexField/BankField、Mutex 真同步、方法内动态命名、
+ * 不支持：EC 写事务、IndexField/BankField、Mutex 真同步、方法内动态命名、
  *         条件引用 CondRefOf 之外的扩展对象、_OSI 等控制方法。
  * 这些路径失败时返回明确错误码，调用方保持“未读到”状态，绝不填假数。
  * ========================================================================== */

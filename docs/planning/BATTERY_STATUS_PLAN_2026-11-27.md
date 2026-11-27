@@ -226,11 +226,19 @@ SMBIOS 只能回答“厂商说这是什么形状”，不能回答“现在有�
 - **M2 最小版已闭环（2026-11-27）**：新增 `aml64.c/.h`（极简 AML 解释器）与
   `acpi_battery.c/.h`，QEMU 注入含 `PNP0C0A` + `_STA/_BIF/_BST` 的合成 SSDT 后，
   顶栏/面板/Settings 三处都显示真实 `57%` 与 `Charging: Yes`；`_BIX` 夹具同值。
-  读不出时仍 `--`（缺 `_BST` → `bst failed code=-1`，EC 字段 → `-3` UNSUP），
+  读不出时仍 `--`（缺 `_BST` → `bst failed code=-1`，无 `PNP0C09` 时 EC 字段 → `-3` UNSUP），
   没有回退 100%。`m2-valid/valid_check.py` 21 项 PASS。
-  **边界**：EC 事务、IndexField/BankField、写字段、多电池、剩余时间、健康度、
-  `_PSR` 均未实现；真机 EC 型电池仍会停在 `DECLARED`——这是 M2-full 的事。
-- **未做**：M2-full（EC 事务/多电池/健康度等）、M3（完整 32 位 UI/电源策略）、M4（真机）。
+  **边界**：M2 最小版本身没做 EC 事务、IndexField/BankField、写字段、多电池、
+  剩余时间、健康度、`_PSR`；EC 只读由下一步补上，当时 EC 型电池只能停在 `DECLARED`。
+- **M2-full 第一步：EC 只读已落地（2026-11-27）**：新增 `ec64.c/.h`（0x62/0x66、
+  `RD_EC 0x80`、`EC_SPIN=20000` 超时）与 AML `EmbeddedControl`（space 3）字段读；
+  `acpi_battery_init` 只在命名空间命中 `PNP0C09` 时启用 EC，否则 `[BAT] ec=0x0`，
+  不盲写端口。主机 `aml_eval` 44 项断言覆盖 EC 设备查找、16 位字段拼装、
+  `_BST` 元素、EC 超时/未启用 → `UNSUP`。**QEMU 无 ACPI EC 设备，正路径只有
+  主机模拟，不能写成 QEMU/真机已通过**。
+  **边界（M2-full 剩余）**：EC 写、IndexField/BankField、多电池、剩余时间、
+  健康度、`_PSR`、`_REG`/Global Lock；真机 EC 端口与是否需要 Global Lock 未验证。
+- **未做**：M2-full 剩余（EC 写/BankField/多电池/健康度等）、M3（完整 32 位 UI/电源策略）、M4（真机）。
   本次 QEMU/OVMF 未提供 legacy SMBIOS entry，`form_factor=unknown` 只说明
   “本夹具没读到”，不等于真机型号判断已验证。
 

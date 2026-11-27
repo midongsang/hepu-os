@@ -76,13 +76,20 @@ q_wait_for "Desktop running" 60 "$SER" || log "WARN: Desktop running 未出现"
 if ! grep -aq "login -> desktop" "$SER"; then
   log "still locked after boot; clicking center to wake"
   python3 "$REGRESS_DIR/qmp_click.py" "$QMP" 960 540 1920 1080 click
-  sleep 2
+  sleep 3
   q_wait_for "lock -> login" 10 "$SER" || log "WARN: 锁屏没有进入 login"
+  sleep 3
   q_send_text "$FIXTURE_PASSWORD"
-  sleep 2
+  sleep 3
   q_sendkey ret
-  q_wait_for "login -> desktop" 20 "$SER" || log "WARN: 补解锁失败"
-  sleep 2
+  if ! q_wait_for "login -> desktop" 30 "$SER"; then
+    log "WARN: 补解锁第一次失败，重试"
+    q_send_text "$FIXTURE_PASSWORD"
+    sleep 3
+    q_sendkey ret
+    q_wait_for "login -> desktop" 30 "$SER" || log "WARN: 补解锁仍失败"
+  fi
+  sleep 3
 fi
 
 # 通知卡会盖住顶栏右侧(面板也在这一带), 等它自己超时消失再动鼠标

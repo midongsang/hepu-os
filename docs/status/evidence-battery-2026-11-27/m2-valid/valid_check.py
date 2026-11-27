@@ -127,7 +127,7 @@ def main():
 
     # --- H. EC 字段必须明确 UNSUP ---
     ec = text_ev("m2-ec")
-    check("H1 EC 字段读失败为 UNSUP(-3)", "bst failed code=-3" in ec)
+    check("H1 EC 未启用且字段读为 UNSUP(-3)", "bst failed code=-3" in ec and "ec=0x0" in ec)
     check("H2 EC 不产生假读数", "pct=" not in ec)
 
     print()

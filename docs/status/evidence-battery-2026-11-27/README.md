@@ -1,4 +1,4 @@
-# 电池状态取证（2026-11-27，M0 + M1 + M1.5 图标 + M1.6 面板 + M2 最小版）
+# 电池状态取证（2026-11-27，M0 + M1 + M1.5 图标 + M1.6 面板 + M2 最小版 + EC 只读）
 
 ## 结论
 
@@ -17,11 +17,14 @@
    在 QEMU 合成表上真实执行 `_STA` / `_BIF` / `_BIX` / `_BST`；读到可信读数才进
    `VALID`，顶栏、面板、Settings 电池页同步显示 `57%` / `Charging: Yes`。
    读不出或不可信仍保持 `DECLARED` 的 `--`，绝不回退 100%。
+4. **M2-full 第一步（EC 只读）**：新增 `ec64.c/.h` 与 AML `EmbeddedControl`
+   （space 3）字段读；只有命名空间里存在 `PNP0C09` 才启用 EC。事务只支持
+   `RD_EC 0x80`，超时/状态异常一律 fail-closed，不猜电量。QEMU 没有 ACPI EC
+   设备，EC 正路径由主机端模拟状态机覆盖；真实 EC 机器尚未验证。
 
-**边界**：M2 只支持电池读数所需的最小 AML 子集。EC 字段（`EmbeddedControl`）、
-`IndexField/BankField`、写字段、多电池、剩余时间/健康度、`_PSR` 都没做；
-真机上多数 EC 型电池仍会停在 `DECLARED`。本目录所有 `VALID` 结果都来自 QEMU
-合成 SSDT，不是真机证据。
+**边界**：EC 只读，不写 EC；`IndexField/BankField`、多电池、剩余时间/健康度、
+`_PSR`、`_REG`/Global Lock 都还没做。EC 型电池现在有只读路径，但 QEMU 无法
+注入 EC 设备，本目录的 `VALID` 仍全部来自合成 SSDT；真机未验证。
 
 ## 判据
 
@@ -202,7 +205,7 @@ RESULT: PASS (19 checks, 0 failed)
 且只是记账，没有真正的频率控制），所以这里不做一个点了没反应的假开关——
 宁可写清楚“固定”，也不给一个假控件。
 
-### 6. M2 最小版（2026-11-27）
+### 6. M2 最小版 + EC 只读（2026-11-27）
 
 目标只有一个：能读出真实百分比就显示 `VALID`，读不出仍维持 `--`。判据仍是
 ACPI `PNP0C0A`，不看机箱类型。
@@ -217,8 +220,16 @@ ACPI `PNP0C0A`，不看机箱类型。
 - `kernel/arch/x86_64/acpi_battery.c/.h`：按 `_STA` → `_BST` → `_BIX`/`_BIF`
   取值；满充容量 ≤0、剩余明显超容、剩余 0 但既不在充电也无 critical 标记，
   都判不可信，返回 `DECLARED` 而不是编一个数字。
+- `kernel/arch/x86_64/ec64.c/.h`：EC 事务层。端口 `0x62/0x66`，等 `IBF` 清、
+  写命令/偏移、等 `OBF` 置位后读数，`EC_SPIN=20000` 超时；只实现 `RD_EC 0x80`，
+  写 EC 明确不支持。返回值：成功 `0`、未启用 `-2`、超时/状态异常 `-3`。
+- AML `field_read` 的 `space == 3`（`EmbeddedControl`）：按字段字节偏移逐字节
+  `ec64_read`，偏移越界或超过 region 长度判 `UNSUP`；任一字节失败即失败，
+  不拿部分字节拼一个假值。`acpi_battery_init` 只在命名空间命中 `PNP0C09` 时
+  `ec64_set_present(1)` 并打印 `[BAT] ec=0x1 dev=<path>`，否则打印
+  `[BAT] ec=0x0`，避免在没有 EC 的机器上盲写 `0x66`。
 
-五种 QEMU 夹具（`tools/regress/make_battery_ssdt.py` 生成，均在 `fixture/`）：
+QEMU 夹具（`tools/regress/make_battery_ssdt.py` 生成，均在 `fixture/`）：
 
 | 夹具 | 覆盖点 | 实际串口 |
 |---|---|---|
@@ -226,9 +237,11 @@ ACPI `PNP0C0A`，不看机箱类型。
 | `battery-valid-bix.ssdt` | `_BIX` 优先路径 | `sta=0xF bst=1 bix=1 pct=57 ...` |
 | `battery-absent.ssdt` | `_STA` 明确 present=0 | `[BAT] aml sta=absent`，无 `pct=` |
 | `battery-nobst.ssdt` | 有设备但缺 `_BST` | `[BAT] aml bst failed code=-1` |
-| `battery-ec.ssdt` | `_BST` 读 EC 字段 | `[BAT] aml bst failed code=-3`（UNSUP） |
+| `battery-ec.ssdt` | 有 EC 字段但无 `PNP0C09`，EC 未启用 | `[BAT] ec=0x0` + `bst failed code=-3`（UNSUP） |
+| `battery-ec-read.ssdt` | `PNP0C09` + `ECR0`，`_BST` 读 16 位 EC 字段 | 主机模拟：`ECR0.B0ST == 5700`，`_BST` 四元素成立（QEMU 无 EC 设备，不跑正路径） |
 
-最后两条是重点：失败必须显式报错并停在 `--`，不能猜 0%、也不能沿用上次读数。
+最后三条是重点：没有 EC 控制器时不能盲读端口；EC 超时/缺 `_BST` 必须显式报错并
+停在 `--`，不能猜 0%、也不能沿用上次读数。
 
 命令：
 
@@ -238,6 +251,7 @@ bash tools/regress/battery_state_probe.sh .../m2-bix    .../fixture/battery-vali
 bash tools/regress/battery_state_probe.sh .../m2-absent .../fixture/battery-absent.ssdt
 bash tools/regress/battery_state_probe.sh .../m2-nobst  .../fixture/battery-nobst.ssdt
 bash tools/regress/battery_state_probe.sh .../m2-ec     .../fixture/battery-ec.ssdt
+bash tools/host-tests/run_host_tests.sh   # aml_eval 内模拟 EC，覆盖 ec-read 正路径
 ```
 
 VALID 面板与设置页：
@@ -250,8 +264,8 @@ VALID 面板与设置页：
 
 ```text
 A1 串口找到 PNP0C0A 设备 BAT0       PASS
-A2 至少 3 次周期采样                PASS  samples=21
-A3 读数百分比=57 且充电中           PASS  matched=20
+A2 至少 3 次周期采样                PASS  samples=23
+A3 读数百分比=57 且充电中           PASS  matched=22
 B1..B4 无 no acpi tables/bst failed/untrusted、建表 degraded=0  PASS
 C1 面板大号数字为 accent 色         PASS  accent_px=639
 D1 Battery 导航项高亮               PASS  accent=0.84
@@ -259,7 +273,7 @@ D3/D4 串口记录 panel->settings/page PASS
 E1 _BIX 夹具读出 57%                PASS
 F1/F2 _STA=0 判 absent 且不出读数   PASS
 G1 缺 _BST fail-closed              PASS  code=-1
-H1/H2 EC 字段 UNSUP 且不产生假读数  PASS  code=-3
+H1/H2 EC 未启用/超时为 UNSUP 且不产生假读数 PASS  code=-3
 
 RESULT: PASS (21 checks, 0 failed)
 ```
@@ -269,8 +283,13 @@ RESULT: PASS (21 checks, 0 failed)
 `[BAT] state=declared ... reason=acpi-declared` 仍会先打印一次——那是“声明层”
 日志，最终 UI 以随后 `[BAT] aml ...` 的结果为准。
 
-**M2 最小版没做的**：EC 事务（`EmbeddedControl`）、`IndexField/BankField`、
-写字段、多电池选择、剩余时间、健康度、`_PSR` 交流状态。这些留给 M2-full；
+主机端 `aml_eval` 44 项断言覆盖：`PNP0C09` 查找（`EC00`）、EC 16 位字段拼装
+（`B0ST == 5700`）、`_BST` 返回 `state=2/rem=5700/volt=12000`，以及 EC 超时和
+EC 未启用都返回 `UNSUP`。这套断言用 `ec_host_inb/ec_host_outb` 模拟 EC 状态机，
+不是 QEMU 或真机。
+
+**M2-full 第一步没做的**：EC 写、`IndexField/BankField`、多电池选择、剩余时间、
+健康度、`_PSR` 交流状态、`_REG`/Global Lock。EC 只读路径在真机上尚未验证；
 本轮不宣称“真机电池已闭环”。
 
 ## 构建
@@ -302,7 +321,9 @@ RESULT: PASS (21 checks, 0 failed)
    `VALID` 分支已在 QEMU `battery-valid.ssdt` 上跑通（57%），但仍是 QEMU 夹具；
    没有真笔记本的 `_BST` 原始值，不能写成“真机已验证”。
 7. **面板里的数字仍受读数层限制**：`DECLARED/UNKNOWN` 一律 `--`，面板没有把
-   声明当 0% 或 100%。EC 型电池在真机上大概率仍是 `--`，直到 M2-full。
+   声明当 0% 或 100%。EC 型电池现在有只读路径，但 QEMU 无 ACPI EC 设备，
+   正路径只有主机模拟；真机 EC 是否在 `0x62/0x66`、是否需要 `_REG`/Global Lock
+   都未验证，不能宣称真机 EC 已闭环。
 8. **点击链路是 QEMU 夹具**：取证用 `usb-tablet` + QMP 绝对坐标（相对指针在
    QEMU 里推不准）。真机鼠标走的是同一条 `hpdesk_mouse_down()`，但没有真机
    点击取证；`usb-tablet` 之外的绝对指针设备也没测。
@@ -325,8 +346,11 @@ RESULT: PASS (21 checks, 0 failed)
 | `panel/` | 声明态取证：`01-desktop` / `02-panel` / `03-settings` / `04-about` / `05-battery-nav`、`ser.log`、`panel_check.py` / `check.txt` |
 | `panel/absent/` | 默认夹具（无电池）跑同一套点击：证明点不出面板 |
 | `kernel/arch/x86_64/aml64.c/.h` | M2 极简 AML 解释器（命名空间 + 电池方法所需 opcode） |
-| `kernel/arch/x86_64/acpi_battery.c/.h` | M2 读数层：`_STA/_BIF/_BIX/_BST` + 百分比可信门槛 |
+| `kernel/arch/x86_64/acpi_battery.c/.h` | M2 读数层：`_STA/_BIF/_BIX/_BST` + 百分比可信门槛；EC 启用判定 |
+| `kernel/arch/x86_64/ec64.c/.h` | EC 0x62/0x66 只读事务层（RD_EC、超时、host 注入） |
 | `tools/host-tests/aml_eval_test.c` | 解释器/读数层主机端单测（`battery_ssdt_blobs.h` 为生成物） |
-| `fixture/battery-{valid,valid-bix,absent,nobst,ec}.ssdt` | M2 五种 QEMU 夹具（`make_battery_ssdt.py` 生成） |
+| `fixture/battery-{valid,valid-bix,absent,nobst,ec,ec-read}.ssdt` | M2 六种夹具；前五种跑 QEMU，`ec-read` 供主机模拟 EC 正路径 |
 | `m2-valid/` | VALID 取证：桌面/面板/设置页截图、串口摘录、`valid_check.py` |
 | `m2-bix/` `m2-absent/` `m2-nobst/` `m2-ec/` | 四种边界夹具的串口摘录与桌面截图 |
+| `ec-host-test.txt` | `run_host_tests.sh` 全量输出；`aml_eval` 44 checks 含 EC 正路径/超时/未启用 |
+| `qemu-ec-absence.txt` | `qemu-system-x86_64 -device help` 无 EC 设备，说明为何没有 QEMU EC 正路径 |

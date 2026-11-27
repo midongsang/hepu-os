@@ -4,7 +4,7 @@
 [BAT] state=declared form_factor=unknown acpi_battery=declared reason=acpi-declared
 [AML] tables=0x3 nodes=0x3 degraded=0x0
 [BAT] aml dev=ABS0
-[BAT] aml sta=absent
+[BAT] ec=0x0
 [BAT] aml sta=absent
 [BAT] aml sta=absent
 [BAT] aml sta=absent

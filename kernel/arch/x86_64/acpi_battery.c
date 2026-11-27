@@ -14,6 +14,7 @@
 
 #include "acpi_battery.h"
 #include "aml64.h"
+#include "ec64.h"
 #include "firmware_info.h"
 
 extern void vga_puts(const char *s);
@@ -87,6 +88,19 @@ int acpi_battery_init(void)
     vga_puts("[BAT] aml dev=");
     vga_puts(g_bat_path);
     vga_puts("\n");
+    /* EC 型电池：命名空间里有 PNP0C09 才允许碰 0x62/0x66，避免无 EC 机器盲写 */
+    {
+        char ecpath[96];
+        if (aml_find_device(0x41D00C09u, "PNP0C09", ecpath, sizeof(ecpath)) == 0) {
+            ec64_set_present(1);
+            vga_puts("[BAT] ec=0x1 dev=");
+            vga_puts(ecpath);
+            vga_puts("\n");
+        } else {
+            ec64_set_present(0);
+            vga_puts("[BAT] ec=0x0\n");
+        }
+    }
     g_bat_ready = 1;
     return 0;
 }

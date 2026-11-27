@@ -40,7 +40,7 @@ q_start_probe() {
     -m 1024 -smp 2 -vnc 127.0.0.1:$VNCPORT \
     -monitor unix:$MON,server,nowait \
     -serial file:"$SER_PATH" \
-    -device qemu-xhci -device usb-kbd -device usb-mouse -vga std \
+    -device qemu-xhci -device usb-kbd -device usb-mouse -device usb-tablet -vga std \
     -nic user,model=e1000 "${extra[@]}" -daemonize -pidfile "$PID" 2>&1 | head -2
   sleep 1
 }
@@ -52,25 +52,18 @@ sleep 5
 q_sendkey 1
 q_wait_for "step1 done" 30 "$SER" || log "WARN: step1 未出现"
 q_wait_for "booting to lock" 60 "$SER" || log "WARN: lock 未出现"
-sleep 5
+sleep 3
+python3 "$REGRESS_DIR/qmp_click.py" "$MON" 960 540 1920 1080 click
+q_wait_for "lock -> login" 15 "$SER" || log "WARN: login 未出现"
+sleep 3
+q_send_text "$FIXTURE_PASSWORD"
+sleep 3
 q_sendkey ret
-q_wait_for "lock -> login" 20 "$SER" || log "WARN: login 未出现"
-sleep 2
-q_sendkey ret
-if q_wait_for "login: auth failed" 10 "$SER"; then
-  log "empty Enter rejected; typing fixture password"
-  sleep 2
+if ! q_wait_for "login -> desktop" 30 "$SER"; then
+  log "WARN: first password attempt failed; retry"
   q_send_text "$FIXTURE_PASSWORD"
-  sleep 2
+  sleep 3
   q_sendkey ret
-  if ! q_wait_for "login -> desktop" 30 "$SER"; then
-    log "WARN: first password attempt failed; retry"
-    q_send_text "$FIXTURE_PASSWORD"
-    sleep 2
-    q_sendkey ret
-  fi
-else
-  log "WARN: 空 Enter 未触发 auth failed"
 fi
 q_wait_for "login -> desktop" 30 "$SER" || log "WARN: desktop 迁移未出现"
 q_wait_for "Desktop running" 60 "$SER" || log "WARN: Desktop running 未出现"

@@ -17,12 +17,15 @@
 #include <string.h>
 #include "aml64.h"
 #include "acpi_battery.h"
+#include "ec64.h"
 #include "battery_ssdt_blobs.h"
 
 static int fails;
+static int checks;
 
 static void check(int cond, const char *what)
 {
+    checks++;
     if (!cond) {
         printf("  FAIL: %s\n", what);
         fails++;
@@ -35,8 +38,33 @@ void vga_put_hex(uint64_t v) { (void)v; }
 void *kmalloc(uint32_t size) { return calloc(1, size ? size : 1); }
 uint64_t vmm64_phys_to_ptr(uint64_t phys) { return phys; }
 
-static const unsigned char *g_tables[4];
-static uint32_t g_lens[4];
+/* 主机侧模拟 EC：0x66 状态、0x62 数据；内存 256 字节。 */
+static uint8_t ec_mem[256];
+static int ec_host_present = 1;
+static uint8_t ec_host_status;
+static uint8_t ec_host_data;
+
+uint8_t ec_host_inb(uint16_t port)
+{
+    if (!ec_host_present) return 0xFF;   /* 无 EC：IBF 永远为 1 -> 超时 */
+    if (port == 0x66) return ec_host_status;
+    if (port == 0x62) { ec_host_status &= (uint8_t)~0x01u; return ec_host_data; }
+    return 0xFF;
+}
+
+void ec_host_outb(uint16_t port, uint8_t val)
+{
+    if (!ec_host_present) return;
+    if (port == 0x66) {
+        if (val == 0x80) ec_host_status = 0;   /* RD_EC */
+    } else if (port == 0x62) {
+        ec_host_data = ec_mem[val];
+        ec_host_status |= 0x01;                /* OBF */
+    }
+}
+
+static const unsigned char *g_tables[8];
+static uint32_t g_lens[8];
 static int g_ntab;
 
 int fi_table_count(void) { return g_ntab; }
@@ -80,7 +108,9 @@ int main(void)
     g_lens[2] = (uint32_t)sizeof(g_battery_ec_ssdt);
     g_tables[3] = g_battery_absent_ssdt;
     g_lens[3] = (uint32_t)sizeof(g_battery_absent_ssdt);
-    g_ntab = 4;
+    g_tables[4] = g_battery_ec_read_ssdt;
+    g_lens[4] = (uint32_t)sizeof(g_battery_ec_read_ssdt);
+    g_ntab = 5;
 
     /* 1) 命名空间 */
     check(aml_ns_build(g_tables, g_lens, g_ntab) == 0, "命名空间建表成功");
@@ -145,7 +175,33 @@ int main(void)
         check(s.used_bix == 0, "poll 走 _BIF");
     }
 
-    /* 9) 百分比可信门槛 */
+    /* 9) EC 字段读取：主机模拟 EC 状态机（16 位跨字节拼装） */
+    {
+        aml_value_t *p;
+        ec_mem[0] = 0x44;   /* 5700 = 0x1644，低字节在前 */
+        ec_mem[1] = 0x16;
+        ec_host_present = 1;
+        ec64_set_present(1);
+        check(aml_find_device(0x41D00C09u, "PNP0C09", dev, sizeof(dev)) == 0, "找到 PNP0C09 EC 设备");
+        check(strcmp(dev, "EC00") == 0, "EC 设备路径 EC00");
+        check(eval_int("ECR0.B0ST", &x) == 0 && x == 5700, "EC 16 位字段拼装=5700");
+        p = eval_pkg("ECR0._BST", &rc);
+        check(p && aml_value_count(p) == 4, "EC _BST 包有 4 个元素");
+        if (p) {
+            aml_value_int(aml_value_at(p, 0), &x);
+            check(x == 2, "EC _BST 状态位=充电中");
+            aml_value_int(aml_value_at(p, 2), &x);
+            check(x == 5700, "EC _BST 剩余 5700");
+            aml_value_int(aml_value_at(p, 3), &x);
+            check(x == 12000, "EC _BST 电压 12000mV");
+        }
+        ec_host_present = 0;
+        check(eval_int("ECR0._BST", &x) == AML_E_UNSUP, "EC 超时 fail-closed(UNSUP)");
+        ec64_set_present(0);
+        check(eval_int("ECR0._BST", &x) == AML_E_UNSUP, "EC 未启用 fail-closed(UNSUP)");
+    }
+
+    /* 10) 百分比可信门槛 */
     {
         int pct = -1;
         check(acpi_battery_make_percent(5700, 10000, 1, &pct) == 0 && pct == 57, "57% 可信");
@@ -162,6 +218,6 @@ int main(void)
         printf("FAIL %d 项\n", fails);
         return 1;
     }
-    printf("PASS aml_eval (30 checks)\n");
+    printf("PASS aml_eval (%d checks)\n", checks);
     return 0;
 }

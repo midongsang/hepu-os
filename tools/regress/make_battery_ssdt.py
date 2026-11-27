@@ -69,17 +69,24 @@ def package(items):
     return b"\x12" + pkg(bytes([len(items)]) + b"".join(items))
 
 
+def seg(n):
+    b = n.encode()
+    if len(b) > 4:
+        raise ValueError("name seg too long: %s" % n)
+    return b.ljust(4, b"_")
+
+
 def name(n, value):
-    return b"\x08" + n.encode() + value
+    return b"\x08" + seg(n) + value
 
 
 def method(n, body, args=0, serialized=False):
     flags = args | (0x08 if serialized else 0)
-    return b"\x14" + pkg(n.encode() + bytes([flags]) + body)
+    return b"\x14" + pkg(seg(n) + bytes([flags]) + body)
 
 
 def device(n, body):
-    return b"\x5b\x82" + pkg(n.encode() + body)
+    return b"\x5b\x82" + pkg(seg(n) + body)
 
 
 def ret(expr):
@@ -206,6 +213,33 @@ def make_ec(percent=57, dev="ECB0"):
     return build_table(device(dev, body), oem_table_id=b"BATEC")
 
 
+def make_ec_read(percent=57, dev="ECR0"):
+    """EC 型电池：Field 16 位来自 EmbeddedControl，值由主机模拟 EC 提供。"""
+    design = 10000
+    rem = design * percent // 100
+    bst0 = name("BST0", package([int_obj(0), int_obj(0), int_obj(0), int_obj(0)]))
+    bst_body = (
+        store(int_obj(2), index("BST0", 0))
+        + store(b"B0ST", index("BST0", 2))     # 16 位 EC 字段，应拼成 0x1644=5700
+        + store(int_obj(12000), index("BST0", 3))
+        + ret(b"BST0")
+    )
+    caps = method("_BIF", ret(package([int_obj(0), int_obj(design), int_obj(design),
+                                       int_obj(1), int_obj(12000)])))
+    body = (
+        name("_HID", string_obj("PNP0C0A"))
+        + method("_STA", ret(int_obj(0x0F)))
+        + bst0
+        + method("_BST", bst_body)
+        + caps
+        + operation_region("ECOR", 3, 0, 0x100)
+        + field("ECOR", [("B0ST", 16)])
+    )
+    ecdev = device("EC00", name("_HID", string_obj("PNP0C09"))
+                   + method("_STA", ret(int_obj(0x0F))))
+    return build_table(ecdev + device(dev, body), oem_table_id=b"BATECR")
+
+
 MODES = {
     "declared": lambda pct=57: make_declared(),
     "valid": make_valid,
@@ -213,6 +247,7 @@ MODES = {
     "absent": lambda pct=57: make_absent(),
     "nobst": lambda pct=57: make_nobst(),
     "ec": make_ec,
+    "ec-read": make_ec_read,
 }
 
 
@@ -229,6 +264,7 @@ def write_header(path):
     valid = make_valid(57, dev="BAT0")
     bix = make_valid(57, use_bix=True, dev="BIX0")
     ec = make_ec(57, dev="ECB0")
+    ec_read = make_ec_read(57, dev="ECR0")
     absent = make_absent("ABS0")
     with open(path, "w", encoding="utf-8") as f:
         f.write("/* 由 tools/regress/make_battery_ssdt.py --header 生成，勿手改。 */\n")
@@ -236,9 +272,11 @@ def write_header(path):
         write_array(f, "g_battery_valid_ssdt", valid)
         write_array(f, "g_battery_bix_ssdt", bix)
         write_array(f, "g_battery_ec_ssdt", ec)
+        write_array(f, "g_battery_ec_read_ssdt", ec_read)
         write_array(f, "g_battery_absent_ssdt", absent)
         f.write("\n#endif\n")
-    print("wrote %s (valid=%d bix=%d ec=%d absent=%d)" % (path, len(valid), len(bix), len(ec), len(absent)))
+    print("wrote %s (valid=%d bix=%d ec=%d ec_read=%d absent=%d)" %
+          (path, len(valid), len(bix), len(ec), len(ec_read), len(absent)))
 
 
 def main(argv):
