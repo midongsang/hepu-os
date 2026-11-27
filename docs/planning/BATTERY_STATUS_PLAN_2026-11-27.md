@@ -250,7 +250,11 @@ SMBIOS 只能回答“厂商说这是什么形状”，不能回答“现在有�
   `PNP0C0A`，init 按 `_STA` 选第一个 present 槽位，`DUA0` 空槽不再遮住 `DUA1`；
   AML 增加 `Mutex` 占位、`Acquire/Release`，`_OSI` 统一返回 0（不冒充 Windows）。
   QEMU 双槽位夹具 `candidates=2 / selected DUA1 / pct=57`；Mutex 夹具
-  `selected MTX0 / pct=57`。主机新增 `multi_battery` 9 checks，总计 13/0。
+  `selected MTX0 / pct=57`。poll 对同一 power unit 的 present 槽位相加容量/速率，
+  百分比由总量重算；第一个 present 槽位 `_BST` 失败时继续尝试后续槽位并在运行中
+  切到可用槽位。QEMU `dual-both`（30%+70%）合并为 `pct=50 slots=2`；
+  `dual-fallback`（首槽缺 `_BST`）记录 `selected DUF0 / active=DUF1 / pct=57`。
+  主机新增 `multi_battery` 9、`battery_merge` 13、`battery_fallback` 11 checks。
 - **M2-full 第三步：健康度与剩余时间（2026-11-27 追加）**：`_BST` 元素 1
   （rate）不再被元素 2 覆盖，`acpi_batt_sample_t` 保留 `rate/health/minutes/
   minutes_full`。健康度 = `full/design`，满充在设计 5% 容差内封顶 100%，
@@ -259,11 +263,14 @@ SMBIOS 只能回答“厂商说这是什么形状”，不能回答“现在有�
   新增 `Health (full/design)` 与 `Time to empty/Time to full` 两行，未知显示 `--`。
   QEMU `m2-discharge`（`DIS0`、1200mW、5700mWh）读出 `pct=57 chg=0 rate=1200
   health=100 min=285 min_full=-1`，Settings 显示 `4h45m`；`m2-valid` 速率 0
-  显示 `Time to full --`。主机新增 `battery_energy` 11 checks，总计 14/0。
-  **边界（M2-full 剩余）**：EC 写、IndexField/BankField、多电池容量合并/运行中切换、
-  FACS Global Lock（当前用锁死替代）；`Mutex` 是单线程占位，不是跨 CPU/SMI 真同步；
-  `_OSI` 全 0 不等于 Windows 兼容层；真机 EC 端口、`_REG` 重放副作用仍未验证；
-  健康度不展示原始 mWh，只展示百分比。
+  显示 `Time to full --`。主机新增 `battery_energy` 11 checks；本轮主机套件
+  合计 16/0（`aml_eval` 55、`ec_battery` 16、`ec_glk` 12、`multi_battery` 9、
+  `battery_energy` 11、`battery_merge` 13、`battery_fallback` 11）。
+  **边界（M2-full 剩余）**：EC 写、IndexField/BankField、FACS Global Lock
+  （当前用锁死替代）；多电池只合并同 unit，不做充放电功率分配/跨槽均衡，不同
+  unit 不混加；`Mutex` 是单线程占位，不是跨 CPU/SMI 真同步；`_OSI` 全 0 不等于
+  Windows 兼容层；真机 EC 端口、`_REG` 重放副作用仍未验证；健康度不展示原始
+  mWh，只展示百分比。
 - **未做**：M2-full 剩余（EC 写/IndexField/BankField/Global Lock）、M3（完整 32 位 UI/电源策略）、M4（真机）。
   本次 QEMU/OVMF 未提供 legacy SMBIOS entry，`form_factor=unknown` 只说明
   “本夹具没读到”，不等于真机型号判断已验证。

@@ -23,9 +23,12 @@ extern void vga_put_hex(uint64_t v);
 #define BAT_HID_EISA 0x41D00C0Au   /* PNP0C0A 的压缩 EISA ID */
 #define EC_HID_EISA  0x41D00C09u   /* PNP0C09 */
 #define AC_HID_EISA  0x04700003u   /* ACPI0003 */
+#define BAT_MAX_SLOTS 4
 
 static int g_bat_ready;
 static char g_bat_path[96];
+static char g_bat_cands[BAT_MAX_SLOTS][96];
+static int g_bat_ncand;
 static char g_ac_path[96];
 static int g_ac_found;
 static char g_ec_reg_path[128];
@@ -94,7 +97,7 @@ int acpi_battery_init(void)
      * 明确 present 的槽位；全都 absent 时保留第一个，交给 poll 报 ABSENT。
      * 不能只取命名空间里的第一个，否则 BAT0 空槽会把 BAT1 的真电池遮掉。 */
     {
-        char cand[4][96];
+        char cand[BAT_MAX_SLOTS][96];
         int ncand = 0, cursor = 0;
         int chosen = -1, fallback = -1, any = -1;
         while (ncand < 4 &&
@@ -136,6 +139,15 @@ int acpi_battery_init(void)
         }
         if (chosen < 0) chosen = (fallback >= 0) ? fallback : any;
         if (chosen < 0) chosen = 0;
+        g_bat_ncand = ncand;
+        for (int ci = 0; ci < ncand; ci++) {
+            int k = 0;
+            while (cand[ci][k] && k < (int)sizeof(g_bat_cands[0]) - 1) {
+                g_bat_cands[ci][k] = cand[ci][k];
+                k++;
+            }
+            g_bat_cands[ci][k] = 0;
+        }
         {
             int k = 0;
             while (cand[chosen][k] && k < (int)sizeof(g_bat_path) - 1) {
@@ -252,11 +264,6 @@ static int eval_named_child(const char *base, const char *obj, aml_value_t **out
     return aml_eval_path(path, out);
 }
 
-static int eval_child(const char *obj, aml_value_t **out)
-{
-    return eval_named_child(g_bat_path, obj, out);
-}
-
 /* _REG(3,1)：声明 EmbeddedControl 的 OS 处理器已安装。
  * 必须在当前 sample 的 overlay 内执行，_BST 才能看到 _REG 写入的标志。 */
 static int ec_call_reg(void)
@@ -311,11 +318,118 @@ int acpi_ac_poll(acpi_ac_sample_t *out)
     return out->known ? 0 : 2;
 }
 
-int acpi_battery_poll(acpi_batt_sample_t *out)
+typedef struct {
+    int present;
+    int ok;
+    int64_t sta;
+    int64_t state;
+    int64_t rate;
+    int64_t rem;
+    int64_t full;
+    int64_t design;
+    int64_t unit;
+    int64_t volt;
+    int used_bix;
+} bat_slot_t;
+
+static void bat_slot_zero(bat_slot_t *s)
+{
+    s->present = 0;
+    s->ok = 0;
+    s->sta = 0;
+    s->state = 0;
+    s->rate = 0;
+    s->rem = 0;
+    s->full = 0;
+    s->design = 0;
+    s->unit = 0;
+    s->volt = 0;
+    s->used_bix = 0;
+}
+
+static int poll_slot(const char *path, bat_slot_t *s)
 {
     aml_value_t *sta = 0, *bst = 0, *bif = 0, *bix = 0;
-    int64_t sta_i = 0, state = 0, rate = 0, rem = 0, full = 0, design = 0, unit = 0, volt = 0;
     int rc_sta, rc_bst, rc_bix, rc_bif;
+    int64_t sta_i = 0;
+
+    bat_slot_zero(s);
+
+    rc_sta = eval_named_child(path, "_STA", &sta);
+    if (rc_sta == 0) {
+        if (aml_value_int(sta, &sta_i) != 0) return 2;
+        if ((sta_i & 1) == 0) {
+            vga_puts("[BAT] aml sta=absent\n");
+            return 1;
+        }
+        s->sta = sta_i;
+    } else if (rc_sta != AML_E_NOTFOUND) {
+        vga_puts("[BAT] aml sta failed code=");
+        bat_num(rc_sta);
+        vga_puts("\n");
+        return 2;
+    }
+    s->present = 1;
+
+    rc_bst = eval_named_child(path, "_BST", &bst);
+    if (rc_bst != 0 || aml_value_count(bst) < 4) {
+        vga_puts("[BAT] aml bst failed code=");
+        bat_num(rc_bst != 0 ? rc_bst : -6);
+        vga_puts("\n");
+        return 2;
+    }
+    if (aml_value_int(aml_value_at(bst, 0), &s->state) != 0 ||
+        aml_value_int(aml_value_at(bst, 1), &s->rate) != 0) {
+        return 2;
+    }
+    if (aml_value_int(aml_value_at(bst, 2), &s->rem) != 0) s->rem = 0;
+    if (aml_value_int(aml_value_at(bst, 3), &s->volt) != 0) s->volt = 0;
+
+    rc_bix = eval_named_child(path, "_BIX", &bix);
+    rc_bif = eval_named_child(path, "_BIF", &bif);
+    if (rc_bix == 0 && aml_value_count(bix) >= 5) {
+        if (aml_value_int(aml_value_at(bix, 1), &s->unit) != 0) s->unit = 0;
+        if (aml_value_int(aml_value_at(bix, 2), &s->design) != 0) s->design = 0;
+        if (aml_value_int(aml_value_at(bix, 3), &s->full) != 0) s->full = 0;
+        if (aml_value_int(aml_value_at(bix, 4), &s->volt) != 0 && s->volt == 0) s->volt = 0;
+        s->used_bix = 1;
+    } else if (rc_bif == 0 && aml_value_count(bif) >= 3) {
+        if (aml_value_int(aml_value_at(bif, 0), &s->unit) != 0) s->unit = 0;
+        if (aml_value_int(aml_value_at(bif, 1), &s->design) != 0) s->design = 0;
+        if (aml_value_int(aml_value_at(bif, 2), &s->full) != 0) s->full = 0;
+    } else {
+        vga_puts("[BAT] aml bif/bix missing\n");
+        return 2;
+    }
+    s->ok = 1;
+    return 0;
+}
+
+static int bat_path_same(const char *a, const char *b)
+{
+    int i = 0;
+    while (a[i] && b[i] && a[i] == b[i]) i++;
+    return a[i] == b[i];
+}
+
+static void bat_path_set(const char *src)
+{
+    int i = 0;
+    while (src[i] && i < (int)sizeof(g_bat_path) - 1) {
+        g_bat_path[i] = src[i];
+        i++;
+    }
+    g_bat_path[i] = 0;
+}
+
+int acpi_battery_poll(acpi_batt_sample_t *out)
+{
+    bat_slot_t slots[BAT_MAX_SLOTS];
+    int nslots = 0, nvalid = 0, nmixed = 0, any_present = 0;
+    int effective = -1;
+    int64_t sta_bits = 0, first_unit = 0;
+    int64_t state = 0, rate = 0, rem = 0, full = 0, design = 0, unit = 0, volt = 0;
+    int used_bix = 0, any_chg = 0, any_dis = 0, any_crit = 0;
     int percent;
 
     if (!out) return -1;
@@ -358,74 +472,82 @@ int acpi_battery_poll(acpi_batt_sample_t *out)
         }
     }
 
-    rc_sta = eval_child("_STA", &sta);
-    if (rc_sta == 0) {
-        if (aml_value_int(sta, &sta_i) != 0) { aml_sample_end(); return 2; }
-        if ((sta_i & 1) == 0) {
-            /* 固件把槽位声明出来但明确 present=0：这是“没有电池”，不是故障 */
-            vga_puts("[BAT] aml sta=absent\n");
-            out->present = 0;
-            g_bat_last_rc = 1;
-            aml_sample_end();
-            return 1;
+    /* 逐个槽位求值：absent 跳过；可信槽位按同一 power unit 合并容量/速率。
+     * 第一个 present 槽位若 _BST 失败，后面的槽位仍然会被尝试，不再被它遮住。
+     * 不同 unit (mWh/mAh) 不混加，只取第一个可信槽位，避免把量纲加错。 */
+    for (int i = 0; i < g_bat_ncand && nslots < BAT_MAX_SLOTS; i++) {
+        int rc = poll_slot(g_bat_cands[i], &slots[nslots]);
+        if (rc == 1) { nslots++; continue; }
+        any_present = 1;
+        if (rc != 0) { nslots++; continue; }
+        nslots++;
+    }
+
+    if (!any_present) {
+        aml_sample_end();
+        g_bat_last_rc = 1;
+        return 1;
+    }
+
+    for (int i = 0; i < nslots; i++) {
+        bat_slot_t *s = &slots[i];
+        if (!s->ok) continue;
+        if (effective < 0) {
+            effective = i;
+            first_unit = s->unit;
+            state = s->state;
+            rate = s->rate;
+            rem = s->rem;
+            full = s->full;
+            design = s->design;
+            unit = s->unit;
+            volt = s->volt;
+            used_bix = s->used_bix;
+            sta_bits = s->sta;
+            nvalid = 1;
+        } else if (s->unit == first_unit) {
+            state |= s->state;
+            rate += s->rate;
+            rem += s->rem;
+            full += s->full;
+            design += s->design;
+            if (s->volt > volt) volt = s->volt;
+            if (s->used_bix) used_bix = 1;
+            sta_bits |= s->sta;
+            nvalid++;
+        } else {
+            nmixed++;
         }
-    } else if (rc_sta != AML_E_NOTFOUND) {
-        vga_puts("[BAT] aml sta failed code=");
-        bat_num(rc_sta);
-        vga_puts("\n");
+    }
+
+    if (effective < 0 || nvalid == 0) {
         aml_sample_end();
         g_bat_last_rc = 2;
         return 2;
+    }
+
+    any_chg = (int)(state & 2);
+    any_dis = (int)(state & 1);
+    any_crit = (int)(state & 4);
+    state = (any_crit ? 4 : 0) | (any_chg ? 2 : (any_dis ? 1 : 0));
+
+    if (!bat_path_same(g_bat_path, g_bat_cands[effective])) {
+        bat_path_set(g_bat_cands[effective]);
+        vga_puts("[BAT] aml active=");
+        vga_puts(g_bat_path);
+        vga_puts("\n");
     }
 
     out->present = 1;
-
-    rc_bst = eval_child("_BST", &bst);
-    if (rc_bst != 0 || aml_value_count(bst) < 4) {
-        vga_puts("[BAT] aml bst failed code=");
-        bat_num(rc_bst != 0 ? rc_bst : -6);
-        vga_puts("\n");
-        aml_sample_end();
-        g_bat_last_rc = 2;
-        return 2;
-    }
-    if (aml_value_int(aml_value_at(bst, 0), &state) != 0 ||
-        aml_value_int(aml_value_at(bst, 1), &rate) != 0) {
-        aml_sample_end();
-        g_bat_last_rc = 2;
-        return 2;
-    }
-    /* 元素 2 才是剩余容量，元素 1 是放电/充电速率 */
-    if (aml_value_int(aml_value_at(bst, 2), &rem) != 0) rem = 0;
-    if (aml_value_int(aml_value_at(bst, 3), &volt) != 0) volt = 0;
-
-    rc_bix = eval_child("_BIX", &bix);
-    rc_bif = eval_child("_BIF", &bif);
-    if (rc_bix == 0 && aml_value_count(bix) >= 4) {
-        if (aml_value_int(aml_value_at(bix, 1), &unit) != 0) unit = 0;
-        if (aml_value_int(aml_value_at(bix, 2), &design) != 0) design = 0;
-        if (aml_value_int(aml_value_at(bix, 3), &full) != 0) full = 0;
-        if (aml_value_int(aml_value_at(bix, 4), &volt) != 0 && volt == 0) volt = 0;
-        out->used_bix = 1;
-    } else if (rc_bif == 0 && aml_value_count(bif) >= 3) {
-        if (aml_value_int(aml_value_at(bif, 0), &unit) != 0) unit = 0;
-        if (aml_value_int(aml_value_at(bif, 1), &design) != 0) design = 0;
-        if (aml_value_int(aml_value_at(bif, 2), &full) != 0) full = 0;
-    } else {
-        vga_puts("[BAT] aml bif/bix missing\n");
-        aml_sample_end();
-        g_bat_last_rc = 2;
-        return 2;
-    }
-
     out->state_bits = (int)state;
-    out->charging = (state & 2) ? 1 : 0;
+    out->charging = any_chg ? 1 : 0;
     out->power_unit = (int)unit;
     out->remaining = rem;
     out->rate = rate;
     out->full = full;
     out->design = design;
     out->voltage_mv = volt;
+    out->used_bix = used_bix;
 
     /* 健康度与时间只做“固件原始值的换算”，不参与 VALID 判定：
      * - full/design 都 >0 才算健康度；full 明显大于 design 时标 -1，不硬压成 100%；
@@ -471,7 +593,7 @@ int acpi_battery_poll(acpi_batt_sample_t *out)
     out->percent = percent;
 
     vga_puts("[BAT] aml sta=");
-    vga_put_hex((uint64_t)(sta_i & 0xFF));
+    vga_put_hex((uint64_t)(sta_bits & 0xFF));
     vga_puts(" bst=1 ");
     vga_puts(out->used_bix ? "bix=1 " : "bif=1 ");
     vga_puts("pct=");
@@ -492,6 +614,12 @@ int acpi_battery_poll(acpi_batt_sample_t *out)
     bat_num(out->minutes);
     vga_puts(" min_full=");
     bat_num(out->minutes_full);
+    vga_puts(" slots=");
+    bat_num(nvalid);
+    if (nmixed) {
+        vga_puts(" mixed=");
+        bat_num(nmixed);
+    }
     vga_puts("\n");
 
     aml_sample_end();

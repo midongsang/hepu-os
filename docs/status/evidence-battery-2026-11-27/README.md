@@ -28,6 +28,9 @@
    读不到 `_PSR` 时才退回“已声明 / 未声明”。AC 离线夹具同时验证 `Charging: No`。
 6. **多槽位与真实 DSDT 兼容**：`aml_find_device_next` 枚举所有 `PNP0C0A`，init
    逐个看 `_STA`，跳过明确 absent 的槽位；`BAT0` 空槽不再遮住 `BAT1`。
+   poll 对同一 power unit 的 present 槽位做容量/速率相加，百分比由总量重算；
+   第一个 present 槽位 `_BST` 失败时继续尝试后续槽位，并在运行中切到可用槽位。
+   不同 unit（mWh/mAh）不混加，宁可只报第一块可信电池，也不把量纲加错。
    AML 增加 `Mutex` 占位与 `Acquire/Release`，`_OSI` 预定义调用统一返回 0
    （不冒充 Windows，让固件走通用分支），避免真实 `_BST` 因这些常见前缀整体失败。
 7. **健康度与剩余时间**：`_BST` 元素 1（放电/充电速率）不再丢弃；`full/design`
@@ -354,7 +357,7 @@ bash tools/regress/battery_panel_probe.sh .../m2-dual .../fixture/battery-dual.s
 [BAT] aml dev=DUA0
 [BAT] aml dev=DUA1
 [BAT] aml dev=selected DUA1
-[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=1 rem=5700 full=10000 unit=0
+[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=1 rem=5700 full=10000 unit=0 health=100 min=-1 min_full=-1 slots=1
 ```
 
 面板与 Settings 仍显示 57% / Charging Yes：
@@ -364,6 +367,34 @@ bash tools/regress/battery_panel_probe.sh .../m2-dual .../fixture/battery-dual.s
 ![dual settings](m2-dual/05-battery-nav.png)
 
 `python3 m2-dual/dual_check.py`：`RESULT: PASS (7 checks, 0 failed)`。
+
+两块都 present 时不再"只取第一块"：`fixture/battery-dual-both.ssdt` 的
+`DUB0=30%`、`DUB1=70%`，同 unit，容量相加为 `rem=10000 / full=20000`，
+百分比重算为 `50%`。QEMU 串口：
+
+```text
+[BAT] aml candidates=2
+[BAT] aml dev=selected DUB0
+[BAT] aml sta=0xF bst=1 bif=1 pct=50 chg=1 rem=10000 full=20000 unit=0 rate=0 health=100 min=-1 min_full=-1 slots=2
+```
+
+![dual both settings](m2-dual-both/03-settings.png)
+
+`python3 m2-dual-both/merge_check.py`：`RESULT: PASS (7 checks, 0 failed)`。
+
+第一个 present 槽位坏、第二块可用时也要能回退：`fixture/battery-dual-fallback.ssdt`
+的 `DUF0` 有 `_STA=0x0F` 但缺 `_BST`，`DUF1` 可信。init 先选 `DUF0`，poll 记录
+`bst failed code=-1` 后继续尝试，最终 `active=DUF1`、`pct=57`。QEMU 串口：
+
+```text
+[BAT] aml candidates=2
+[BAT] aml dev=selected DUF0
+[BAT] aml bst failed code=-1
+[BAT] aml active=DUF1
+[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=1 rem=5700 full=10000 unit=0 rate=0 health=100 min=-1 min_full=-1 slots=1
+```
+
+`python3 m2-fallback/fallback_check.py`：`RESULT: PASS (7 checks, 0 failed)`。
 
 ### 6.2 真实 DSDT 常见前缀：Mutex / Acquire / Release / _OSI（2026-11-27 追加）
 
@@ -382,7 +413,7 @@ bash tools/regress/battery_state_probe.sh .../m2-mutex .../fixture/battery-mutex
 
 ```text
 [BAT] aml dev=selected MTX0
-[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=1 rem=5700 full=10000 unit=0
+[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=1 rem=5700 full=10000 unit=0 health=100 min=-1 min_full=-1 slots=1
 ```
 
 ![mutex desktop](m2-mutex/desktop_2.png)
@@ -418,7 +449,7 @@ bash tools/regress/battery_state_probe.sh .../m2-mutex .../fixture/battery-mutex
 主机 `battery_energy` 11 项覆盖 `health=100`、`minutes=285`、`minutes_full=-1`、
 AC 离线，以及 `rate=0` 时两项时间都不给。
 
-主机端 `aml_eval` 53 项断言覆盖：`PNP0C09` 查找（`EC00`）、`_REG(3,1)` 写
+主机端 `aml_eval` 55 项断言覆盖：`PNP0C09` 查找（`EC00`）、`_REG(3,1)` 写
 `ECRG`、EC 16 位字段拼装（`B0ST == 5700`）、`_BST` 返回
 `state=2/rem=5700/volt=12000`，以及 EC 超时和 EC 未启用都返回 `UNSUP`。
 新增 `ec_battery` 16 项端到端断言：只加载 `battery-ec-read.ssdt`，走真实
@@ -431,22 +462,23 @@ AC 离线，以及 `rate=0` 时两项时间都不给。
 以上都是**主机模拟，不是真机**。
 
 **这轮没做的**：EC 写、`IndexField/BankField`。
-多电池已能选第一个 present 槽位，但不会把两块电池的容量合并，也不会在运行中
-切换槽位；`Mutex` 只是单线程占位，`_OSI` 全部返回 0，不等于 Windows 兼容层。
+多电池已做同 unit 容量合并和运行中回退；不同 unit 不混加，也不做充放电功率
+分配或跨槽均衡；`Mutex` 只是单线程占位，`_OSI` 全部返回 0，不等于 Windows 兼容层。
 `_GLK=1` 直接锁死 EC，FACS Global Lock 仍未实现。EC 只读路径在真机上尚未验证；
 本轮不宣称“真机电池已闭环”。
 
 ## 构建
 
 `bash tools/regress/build_all.sh` 通过：gnu-efi、UEFI 引导器、64 位内核、
-32 位内核、双内核镜像全部成功；产物 `kernel64.bin` 1,056,400 B、
+32 位内核、双内核镜像全部成功；产物 `kernel64.bin` 1,057,040 B、
 `kernel32.bin` 3,873,293 B（M2 增加 `aml64.c` + `acpi_battery.c` + `ec64.c`，
 并补 `_REG`/`_PSR`，64 位约 +20 KB）。
 
-- `tools/host-tests/run_host_tests.sh`：`通过 14 / 失败 0`；`aml_eval` 53 checks、
+- `tools/host-tests/run_host_tests.sh`：`通过 16 / 失败 0`；`aml_eval` 55 checks、
   `ec_battery` 16 checks（虚拟 EC 正路径）、`ec_glk` 12 checks（GLK 锁死）、
   `multi_battery` 9 checks（双槽位选择）、`battery_energy` 11 checks
-  （速率→健康度/剩余时间）。
+  （速率→健康度/剩余时间）、`battery_merge` 13 checks（30%+70%→50%）、
+  `battery_fallback` 11 checks（首槽坏、次槽回退）。
 - `tools/regress/smoke32.sh`：`serial=1 initrd=1 net=1 desk=1 fault=0`、
   `ktest_result=PASS`、`p3-security: passed=2 failed=0 skipped=0`。
 - 32 位只验证到“构建 + 冒烟不回归”，没有单独截 32 位桌面截图。
@@ -497,15 +529,19 @@ AC 离线，以及 `rate=0` 时两项时间都不给。
 | `kernel/arch/x86_64/acpi_battery.c/.h` | M2 读数层：`_STA/_BIF/_BIX/_BST` + 百分比可信门槛；EC 启用判定 |
 | `kernel/arch/x86_64/ec64.c/.h` | EC 0x62/0x66 只读事务层（RD_EC、超时、host 注入） |
 | `tools/host-tests/aml_eval_test.c` | 解释器/读数层主机端单测（`battery_ssdt_blobs.h` 为生成物） |
-| `fixture/battery-{valid,valid-bix,absent,nobst,ec,ec-read,ec-glk,dual,mutex,discharge}.ssdt` | M2 夹具；`ec-read` 在 QEMU 走 fail-closed，在 `ec_battery` 走虚拟 EC 正路径；`ec-glk` 验锁死；`discharge` 验健康度/剩余时间 |
+| `fixture/battery-{valid,valid-bix,absent,nobst,ec,ec-read,ec-glk,dual,dual-both,dual-fallback,mutex,discharge}.ssdt` | M2 夹具；`ec-read` 在 QEMU 走 fail-closed，在 `ec_battery` 走虚拟 EC 正路径；`ec-glk` 验锁死；`discharge` 验健康度/剩余时间 |
 | `m2-valid/` | VALID 取证：桌面/面板/设置页截图、串口摘录、`valid_check.py` |
 | `m2-bix/` `m2-absent/` `m2-nobst/` `m2-ec/` | 四种边界夹具的串口摘录与桌面截图 |
 | `m2-ec-read/` | `_GLK=0` EC 夹具：`_REG` 执行、无 EC 硬件时 `bst=-3` |
 | `m2-ec-glk/` | `_GLK=1` 锁死夹具：`lockout=1`、`reg=skip-glk`、`untrusted rc=-4` |
 | `ec-host-test.txt` | 上一轮 `run_host_tests.sh` 输出；`aml_eval` 44 checks，作为历史记录 |
-| `ec-sim-test.txt` | 本轮 `run_host_tests.sh` 输出；`aml_eval` 53 + `ec_battery` 16 + `ec_glk` 12 + `multi_battery` 9 + `battery_energy` 11，14/0 |
+| `ec-sim-test.txt` | 本轮 `run_host_tests.sh` 输出；`aml_eval` 55 + `ec_battery` 16 + `ec_glk` 12 + `multi_battery` 9 + `battery_energy` 11 + `battery_merge` 13 + `battery_fallback` 11，16/0 |
 | `m2-dual/` | 双槽位：`DUA0` absent 时选中 `DUA1`，面板 57%、`dual_check.py` |
 | `m2-mutex/` | `Mutex`/`Acquire/Release`/`_OSI` 夹具仍读出 57%，`mutex_check.py` |
 | `m2-discharge/` | 放电夹具 `DIS0`：1200mW → 285 分钟、健康度 100%，`discharge_check.py` 8 项 |
+| `m2-dual-both/` | 双满槽 `DUB0=30%` + `DUB1=70%` → 合并 50%，`merge_check.py` 7 项 |
+| `m2-fallback/` | `DUF0` 缺 `_BST`、`DUF1` 可用：运行中 `active=DUF1`，`fallback_check.py` 7 项 |
 | `tools/host-tests/battery_energy_test.c` | 速率→健康度/时间的主机端 11 项断言，覆盖速率 0 与超容边界 |
+| `tools/host-tests/battery_merge_test.c` | 两块同 unit 电池容量合并的 13 项断言 |
+| `tools/host-tests/battery_fallback_test.c` | 首槽 `_BST` 失败、次槽回退的 11 项断言 |
 | `qemu-ec-absence.txt` | `qemu-system-x86_64 -device help` 无 EC 设备，说明为何没有 QEMU EC 正路径 |

@@ -9,25 +9,25 @@
 [BAT] ec=0x0
 [BAT] ac dev=AC00
 [BAT] ac psr=1
-[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=1 rem=5700 full=10000 unit=0
-[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=1 rem=5700 full=10000 unit=0
-[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=1 rem=5700 full=10000 unit=0
-[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=1 rem=5700 full=10000 unit=0
-[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=1 rem=5700 full=10000 unit=0
-[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=1 rem=5700 full=10000 unit=0
-[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=1 rem=5700 full=10000 unit=0
+[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=1 rem=5700 full=10000 unit=0 rate=0 health=100 min=-1 min_full=-1 slots=1
+[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=1 rem=5700 full=10000 unit=0 rate=0 health=100 min=-1 min_full=-1 slots=1
+[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=1 rem=5700 full=10000 unit=0 rate=0 health=100 min=-1 min_full=-1 slots=1
+[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=1 rem=5700 full=10000 unit=0 rate=0 health=100 min=-1 min_full=-1 slots=1
+[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=1 rem=5700 full=10000 unit=0 rate=0 health=100 min=-1 min_full=-1 slots=1
+[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=1 rem=5700 full=10000 unit=0 rate=0 health=100 min=-1 min_full=-1 slots=1
+[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=1 rem=5700 full=10000 unit=0 rate=0 health=100 min=-1 min_full=-1 slots=1
 [DESK] battery panel open
-[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=1 rem=5700 full=10000 unit=0
-[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=1 rem=5700 full=10000 unit=0
-[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=1 rem=5700 full=10000 unit=0
+[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=1 rem=5700 full=10000 unit=0 rate=0 health=100 min=-1 min_full=-1 slots=1
+[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=1 rem=5700 full=10000 unit=0 rate=0 health=100 min=-1 min_full=-1 slots=1
 [DESK] battery panel -> settings page=battery
-[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=1 rem=5700 full=10000 unit=0
-[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=1 rem=5700 full=10000 unit=0
+[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=1 rem=5700 full=10000 unit=0 rate=0 health=100 min=-1 min_full=-1 slots=1
+[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=1 rem=5700 full=10000 unit=0 rate=0 health=100 min=-1 min_full=-1 slots=1
+[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=1 rem=5700 full=10000 unit=0 rate=0 health=100 min=-1 min_full=-1 slots=1
 [SETTINGS] nav page=0x3
-[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=1 rem=5700 full=10000 unit=0
-[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=1 rem=5700 full=10000 unit=0
-[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=1 rem=5700 full=10000 unit=0
+[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=1 rem=5700 full=10000 unit=0 rate=0 health=100 min=-1 min_full=-1 slots=1
+[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=1 rem=5700 full=10000 unit=0 rate=0 health=100 min=-1 min_full=-1 slots=1
+[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=1 rem=5700 full=10000 unit=0 rate=0 health=100 min=-1 min_full=-1 slots=1
 [SETTINGS] nav page=0x6
-[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=1 rem=5700 full=10000 unit=0
-[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=1 rem=5700 full=10000 unit=0
-[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=1 rem=5700 full=10000 unit=0
+[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=1 rem=5700 full=10000 unit=0 rate=0 health=100 min=-1 min_full=-1 slots=1
+[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=1 rem=5700 full=10000 unit=0 rate=0 health=100 min=-1 min_full=-1 slots=1
+[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=1 rem=5700 full=10000 unit=0 rate=0 health=100 min=-1 min_full=-1 slots=1

@@ -82,6 +82,10 @@ run_one ec_glk "-DAML_HOST_TEST" tools/host-tests/ec_glk_test.c $ARCH/aml64.c $A
 run_one multi_battery "-DAML_HOST_TEST" tools/host-tests/multi_battery_test.c $ARCH/aml64.c $ARCH/acpi_battery.c $ARCH/ec64.c
 # M2-full: 健康度/剩余时间换算（1200mW 放电 -> 285 分钟）
 run_one battery_energy "-DAML_HOST_TEST" tools/host-tests/battery_energy_test.c $ARCH/aml64.c $ARCH/acpi_battery.c $ARCH/ec64.c
+# M2-full: 两块都 present 时的容量合并（30% + 70% -> 50%）
+run_one battery_merge "-DAML_HOST_TEST" tools/host-tests/battery_merge_test.c $ARCH/aml64.c $ARCH/acpi_battery.c $ARCH/ec64.c
+# M2-full: 第一个 present 槽位 _BST 失败时回退到第二个
+run_one battery_fallback "-DAML_HOST_TEST" tools/host-tests/battery_fallback_test.c $ARCH/aml64.c $ARCH/acpi_battery.c $ARCH/ec64.c
 
 # 5b) PNG 解码器（inflate/反滤波/颜色类型/位深，V0.54.13 P0）
 #     夹具：tools/host-tests/data/png_case{1..5}.png + .expect，逐像素比对

@@ -53,6 +53,11 @@ struct aml_value {
 #define AML_E_ARG      -5   /* 参数/类型不匹配 */
 
 /* 建命名空间。返回 0 成功；-1 没有任何表；-2 分配失败。 */
+#ifdef AML_HOST_TEST
+/* 主机测试专用：清空命名空间，允许重新建表。 */
+void aml_ns_reset(void);
+#endif
+
 int aml_ns_build(const uint8_t *const *tables, const uint32_t *lens, int count);
 int aml_ns_ready(void);
 int aml_ns_nodes(void);

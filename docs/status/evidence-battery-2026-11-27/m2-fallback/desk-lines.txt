@@ -1,0 +1,53 @@
+[SETTINGS] System settings initialized (30 items)
+[BAT] smbios=0x0 chassis=0x0 form=unknown
+[BAT] acpi=0x1 fadt=0x1 dsdt=0x1 ssdt=0x2 battery=declared
+[BAT] state=declared form_factor=unknown acpi_battery=declared reason=acpi-declared
+[AML] tables=0x3 nodes=0xE degraded=0x0
+[BAT] aml candidates=2
+[BAT] aml dev=DUF0
+[BAT] aml dev=DUF1
+[BAT] aml dev=selected DUF0
+[BAT] ec=0x0
+[BAT] ac dev=AC00
+[BAT] ac psr=1
+[BAT] aml bst failed code=-1
+[BAT] aml active=DUF1
+[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=1 rem=5700 full=10000 unit=0 rate=0 health=100 min=-1 min_full=-1 slots=1
+[BAT] aml bst failed code=-1
+[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=1 rem=5700 full=10000 unit=0 rate=0 health=100 min=-1 min_full=-1 slots=1
+[BAT] aml bst failed code=-1
+[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=1 rem=5700 full=10000 unit=0 rate=0 health=100 min=-1 min_full=-1 slots=1
+[BAT] aml bst failed code=-1
+[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=1 rem=5700 full=10000 unit=0 rate=0 health=100 min=-1 min_full=-1 slots=1
+[BAT] aml bst failed code=-1
+[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=1 rem=5700 full=10000 unit=0 rate=0 health=100 min=-1 min_full=-1 slots=1
+[BAT] aml bst failed code=-1
+[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=1 rem=5700 full=10000 unit=0 rate=0 health=100 min=-1 min_full=-1 slots=1
+[BAT] aml bst failed code=-1
+[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=1 rem=5700 full=10000 unit=0 rate=0 health=100 min=-1 min_full=-1 slots=1
+[DESK] battery panel open
+[BAT] aml bst failed code=-1
+[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=1 rem=5700 full=10000 unit=0 rate=0 health=100 min=-1 min_full=-1 slots=1
+[BAT] aml bst failed code=-1
+[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=1 rem=5700 full=10000 unit=0 rate=0 health=100 min=-1 min_full=-1 slots=1
+[BAT] aml bst failed code=-1
+[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=1 rem=5700 full=10000 unit=0 rate=0 health=100 min=-1 min_full=-1 slots=1
+[DESK] battery panel -> settings page=battery
+[BAT] aml bst failed code=-1
+[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=1 rem=5700 full=10000 unit=0 rate=0 health=100 min=-1 min_full=-1 slots=1
+[BAT] aml bst failed code=-1
+[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=1 rem=5700 full=10000 unit=0 rate=0 health=100 min=-1 min_full=-1 slots=1
+[SETTINGS] nav page=0x3
+[BAT] aml bst failed code=-1
+[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=1 rem=5700 full=10000 unit=0 rate=0 health=100 min=-1 min_full=-1 slots=1
+[BAT] aml bst failed code=-1
+[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=1 rem=5700 full=10000 unit=0 rate=0 health=100 min=-1 min_full=-1 slots=1
+[BAT] aml bst failed code=-1
+[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=1 rem=5700 full=10000 unit=0 rate=0 health=100 min=-1 min_full=-1 slots=1
+[SETTINGS] nav page=0x6
+[BAT] aml bst failed code=-1
+[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=1 rem=5700 full=10000 unit=0 rate=0 health=100 min=-1 min_full=-1 slots=1
+[BAT] aml bst failed code=-1
+[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=1 rem=5700 full=10000 unit=0 rate=0 health=100 min=-1 min_full=-1 slots=1
+[BAT] aml bst failed code=-1
+[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=1 rem=5700 full=10000 unit=0 rate=0 health=100 min=-1 min_full=-1 slots=1

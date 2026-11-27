@@ -231,6 +231,24 @@ def make_dual(percent=57):
                        oem_table_id=b"BATDUAL")
 
 
+def make_dual_fallback():
+    """第一个 present 槽位缺 _BST，第二个槽位可信：验证运行中回退。"""
+    broken = device("DUF0", name("_HID", string_obj("PNP0C0A"))
+                    + method("_STA", ret(int_obj(0x0F))))
+    ac = device("AC00", name("_HID", string_obj("ACPI0003"))
+                + method("_PSR", ret(int_obj(1))))
+    return build_table(broken + valid_device(57, dev="DUF1") + ac,
+                       oem_table_id=b"BATFALL")
+
+
+def make_dual_both():
+    """两块都 present、都可信：验证容量/速率合并，而不是只取第一块。"""
+    ac = device("AC00", name("_HID", string_obj("ACPI0003"))
+                + method("_PSR", ret(int_obj(1))))
+    return build_table(valid_device(30, dev="DUB0") + valid_device(70, dev="DUB1") + ac,
+                       oem_table_id=b"BATMERGE")
+
+
 def make_absent(dev="ABS0"):
     return build_table(
         device(dev, name("_HID", string_obj("PNP0C0A")) + method("_STA", ret(int_obj(0)))),
@@ -310,6 +328,8 @@ MODES = {
     "ec-glk": lambda pct=57: make_ec_read(pct, glk=1),
     "mutex": make_mutex,
     "dual": make_dual,
+    "dual-both": lambda pct=57: make_dual_both(),
+    "dual-fallback": lambda pct=57: make_dual_fallback(),
     "valid-discharge": lambda pct=57: make_valid(pct, dev="DIS0", ac_psr=0,
                                                  bst_state=0, bst_rate=1200),
 }
@@ -334,6 +354,8 @@ def write_header(path):
     mutex_tbl = make_mutex(57, dev="MTX0")
     dual = make_dual(57)
     discharge = make_valid(57, dev="DIS0", ac_psr=0, bst_state=0, bst_rate=1200)
+    dual_both = make_dual_both()
+    dual_fallback = make_dual_fallback()
     with open(path, "w", encoding="utf-8") as f:
         f.write("/* 由 tools/regress/make_battery_ssdt.py --header 生成，勿手改。 */\n")
         f.write("#ifndef BATTERY_SSDT_BLOBS_H\n#define BATTERY_SSDT_BLOBS_H\n\n")
@@ -346,10 +368,12 @@ def write_header(path):
         write_array(f, "g_battery_mutex_ssdt", mutex_tbl)
         write_array(f, "g_battery_dual_ssdt", dual)
         write_array(f, "g_battery_discharge_ssdt", discharge)
+        write_array(f, "g_battery_dual_both_ssdt", dual_both)
+        write_array(f, "g_battery_dual_fallback_ssdt", dual_fallback)
         f.write("\n#endif\n")
-    print("wrote %s (valid=%d bix=%d ec=%d ec_read=%d ec_glk=%d absent=%d mutex=%d dual=%d discharge=%d)" %
+    print("wrote %s (valid=%d bix=%d ec=%d ec_read=%d ec_glk=%d absent=%d mutex=%d dual=%d discharge=%d dual_both=%d dual_fallback=%d)" %
           (path, len(valid), len(bix), len(ec), len(ec_read), len(ec_glk),
-           len(absent), len(mutex_tbl), len(dual), len(discharge)))
+           len(absent), len(mutex_tbl), len(dual), len(discharge), len(dual_both), len(dual_fallback)))
 
 
 def main(argv):

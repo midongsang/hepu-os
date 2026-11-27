@@ -1574,6 +1574,28 @@ static int exec_terms(exec_t *e, const uint8_t *p, const uint8_t *end)
 /* 公共 API                                                                   */
 /* ----------------------------------------------------------------- */
 
+#ifdef AML_HOST_TEST
+/* 仅主机测试：允许在同一进程里重建命名空间，验证不同夹具组合。
+ * 生产内核只建一次表，不暴露这个入口。 */
+extern void free(void *ptr);
+
+void aml_ns_reset(void)
+{
+    if (g_nodes) free(g_nodes);
+    if (g_persist.mem) free(g_persist.mem);
+    if (g_eval.mem) free(g_eval.mem);
+    g_ready = 0;
+    g_nnodes = 0;
+    g_nodes = 0;
+    g_persist.mem = 0;
+    g_persist.size = 0;
+    g_persist.used = 0;
+    g_eval.mem = 0;
+    g_eval.size = 0;
+    g_eval.used = 0;
+}
+#endif
+
 int aml_ns_build(const uint8_t *const *tables, const uint32_t *lens, int count)
 {
     int i;

@@ -183,7 +183,14 @@ int main(void)
     check(eval_int("BAT0._NOPE", &x) != 0, "不存在的对象返回错误");
     check(eval_int("ABS0._STA", &x) == 0 && x == 0, "ABS0._STA 返回 0");
 
-    /* 8) 端到端：poll 走 BAT0 -> 57% 充电中 */
+    /* 8) 端到端：poll 走 BAT0 -> 57% 充电中
+     * 这里只加载 valid 表：主机测试把多个夹具放在同一命名空间，
+     * 若全量建表，多槽位聚合会把 BIX0/MTX0 等夹具一起加进来。 */
+    g_ntab = 1;
+    g_tables[0] = g_battery_valid_ssdt;
+    g_lens[0] = (uint32_t)sizeof(g_battery_valid_ssdt);
+    aml_ns_reset();
+    check(aml_ns_build(g_tables, g_lens, g_ntab) == 0, "单槽位命名空间重建");
     {
         acpi_batt_sample_t s;
         memset(&s, 0, sizeof(s));
@@ -203,6 +210,10 @@ int main(void)
                   "独立 AC 查询 _PSR=1");
         }
     }
+    /* 恢复全量命名空间，后续 EC/多实例用例还要用 */
+    g_ntab = 7;
+    aml_ns_reset();
+    check(aml_ns_build(g_tables, g_lens, g_ntab) == 0, "恢复全量命名空间");
 
     /* 9) EC 字段读取：主机模拟 EC 状态机（16 位跨字节拼装） */
     {
