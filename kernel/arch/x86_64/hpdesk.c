@@ -3532,6 +3532,27 @@ static void hs_settings_nav_hit_selftest(void)
     vga_puts("\n");
 }
 
+static void hs_bat_hm(int minutes, char *out, int cap)
+{
+    char tmp[16];
+    int q = 0, i = 0, h, m;
+    if (!out || cap <= 0) return;
+    if (minutes < 0) { out[0] = '-'; out[1] = '-'; out[2] = 0; return; }
+    h = minutes / 60;
+    m = minutes % 60;
+    if (h > 0) {
+        itoa_hs(h, tmp);
+        while (tmp[i] && q < cap - 1) out[q++] = tmp[i++];
+        if (q < cap - 1) out[q++] = 'h';
+        i = 0;
+        if (m < 10 && q < cap - 1) out[q++] = '0';
+    }
+    itoa_hs(m, tmp);
+    while (tmp[i] && q < cap - 1) out[q++] = tmp[i++];
+    if (q < cap - 1) out[q++] = 'm';
+    out[q] = 0;
+}
+
 static void hs_settings_window_render(hs_window_t *w)
 {
     void *fb = hs_get_framebuffer();
@@ -4054,6 +4075,38 @@ static void hs_settings_window_render(hs_window_t *w)
             if (state == HS_BATTERY_VALID)
                 cv = g_shell.status.battery_charging ? hs_txt("是", "Yes") : hs_txt("否", "No");
             HS_BAT_ROW(hs_txt("充电中", "Charging"), cv);
+        }
+        /* 健康度: full/design，只在固件两个值都可信时给百分比 */
+        {
+            char hb[8];
+            const char *hv = "--";
+            if (state == HS_BATTERY_VALID && g_shell.status.battery_health >= 0 &&
+                g_shell.status.battery_health <= 100) {
+                int q = 0, h = g_shell.status.battery_health;
+                if (h >= 100) { hb[q++] = '1'; hb[q++] = '0'; hb[q++] = '0'; }
+                else {
+                    if (h >= 10) hb[q++] = (char)('0' + h / 10);
+                    hb[q++] = (char)('0' + h % 10);
+                }
+                hb[q++] = '%'; hb[q] = 0;
+                hv = hb;
+            }
+            HS_BAT_ROW(hs_txt("健康度（满充/设计）", "Health (full/design)"), hv);
+        }
+        /* 时间: 放电看剩余，充电看充满；速率 0 就 --，不按容量瞎算 */
+        {
+            int mins = g_shell.status.battery_charging
+                       ? g_shell.status.battery_minutes_full
+                       : g_shell.status.battery_minutes;
+            char tb[16];
+            const char *tv = "--";
+            if (state == HS_BATTERY_VALID) {
+                hs_bat_hm(mins, tb, (int)sizeof(tb));
+                tv = tb;
+            }
+            HS_BAT_ROW(g_shell.status.battery_charging
+                       ? hs_txt("预计充满", "Time to full")
+                       : hs_txt("预计可用", "Time to empty"), tv);
         }
         /* 交流适配器: ACPI0003._PSR 优先; 没有 _PSR 才退回声明/充电推断 */
         {
@@ -8967,6 +9020,9 @@ static void hs_battery_apply_firmware(void)
     int old_pct = g_shell.status.battery_percent;
     int old_chg = g_shell.status.battery_charging;
     int old_ac = g_shell.status.ac_present * 4 + g_shell.status.ac_known * 2 + g_shell.status.ac_online;
+    int old_health = g_shell.status.battery_health;
+    int old_min = g_shell.status.battery_minutes;
+    int old_min_full = g_shell.status.battery_minutes_full;
     int rc;
 
     memset(&sample, 0, sizeof(sample));
@@ -8977,6 +9033,9 @@ static void hs_battery_apply_firmware(void)
         g_shell.status.battery_state = HS_BATTERY_UNKNOWN;
         g_shell.status.battery_percent = 0;
         g_shell.status.battery_charging = 0;
+        g_shell.status.battery_health = -1;
+        g_shell.status.battery_minutes = -1;
+        g_shell.status.battery_minutes_full = -1;
         g_shell.status.ac_present = 0;
         g_shell.status.ac_known = 0;
         g_shell.status.ac_online = 0;
@@ -8984,6 +9043,9 @@ static void hs_battery_apply_firmware(void)
         g_shell.status.battery_state = HS_BATTERY_ABSENT;
         g_shell.status.battery_percent = 0;
         g_shell.status.battery_charging = 0;
+        g_shell.status.battery_health = -1;
+        g_shell.status.battery_minutes = -1;
+        g_shell.status.battery_minutes_full = -1;
         g_shell.status.ac_present = 0;
         g_shell.status.ac_known = 0;
         g_shell.status.ac_online = 0;
@@ -8996,20 +9058,32 @@ static void hs_battery_apply_firmware(void)
             g_shell.status.battery_state = HS_BATTERY_VALID;
             g_shell.status.battery_percent = sample.percent;
             g_shell.status.battery_charging = sample.charging ? 1 : 0;
+            g_shell.status.battery_health = sample.health;
+            g_shell.status.battery_minutes = sample.minutes;
+            g_shell.status.battery_minutes_full = sample.minutes_full;
         } else if (rc == 1) {
             g_shell.status.battery_state = HS_BATTERY_ABSENT;
             g_shell.status.battery_percent = 0;
             g_shell.status.battery_charging = 0;
+            g_shell.status.battery_health = -1;
+            g_shell.status.battery_minutes = -1;
+            g_shell.status.battery_minutes_full = -1;
         } else {
             g_shell.status.battery_state = HS_BATTERY_DECLARED;
             g_shell.status.battery_percent = 0;
             g_shell.status.battery_charging = 0;
+            g_shell.status.battery_health = -1;
+            g_shell.status.battery_minutes = -1;
+            g_shell.status.battery_minutes_full = -1;
         }
     }
 
     if (old_state != g_shell.status.battery_state ||
         old_pct != g_shell.status.battery_percent ||
         old_chg != g_shell.status.battery_charging ||
+        old_health != g_shell.status.battery_health ||
+        old_min != g_shell.status.battery_minutes ||
+        old_min_full != g_shell.status.battery_minutes_full ||
         old_ac != g_shell.status.ac_present * 4 + g_shell.status.ac_known * 2 + g_shell.status.ac_online) {
         /* 顶栏填充与电池面板都靠整屏重绘收敛；变化频率约 2s，可接受。 */
         g_content_dirty = 1;
@@ -9024,6 +9098,9 @@ void hs_status_init(void)
     g_shell.status.battery_state = HS_BATTERY_ABSENT;
     g_shell.status.battery_percent = 0;
     g_shell.status.battery_charging = 0;
+    g_shell.status.battery_health = -1;
+    g_shell.status.battery_minutes = -1;
+    g_shell.status.battery_minutes_full = -1;
     g_shell.status.ac_present = 0;
     g_shell.status.ac_known = 0;
     g_shell.status.ac_online = 0;
@@ -9067,6 +9144,9 @@ void hs_status_update(void)
     if (g_shell.status.battery_state != HS_BATTERY_VALID) {
         g_shell.status.battery_percent = 0;
         g_shell.status.battery_charging = 0;
+        g_shell.status.battery_health = -1;
+        g_shell.status.battery_minutes = -1;
+        g_shell.status.battery_minutes_full = -1;
     }
     /* 每次状态采样后自洽: 电池没了就把展开面板收掉(否则会留一张指向
      * 不存在电池的浮层)。面板只挂在电池图标上, ABSENT 时图标本来就不画。 */

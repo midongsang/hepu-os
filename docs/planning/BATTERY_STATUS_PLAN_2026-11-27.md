@@ -251,11 +251,20 @@ SMBIOS 只能回答“厂商说这是什么形状”，不能回答“现在有�
   AML 增加 `Mutex` 占位、`Acquire/Release`，`_OSI` 统一返回 0（不冒充 Windows）。
   QEMU 双槽位夹具 `candidates=2 / selected DUA1 / pct=57`；Mutex 夹具
   `selected MTX0 / pct=57`。主机新增 `multi_battery` 9 checks，总计 13/0。
+- **M2-full 第三步：健康度与剩余时间（2026-11-27 追加）**：`_BST` 元素 1
+  （rate）不再被元素 2 覆盖，`acpi_batt_sample_t` 保留 `rate/health/minutes/
+  minutes_full`。健康度 = `full/design`，满充在设计 5% 容差内封顶 100%，
+  明显超设计则 `--`；时间仅在 `rate>0` 时算（放电 `rem*60/rate`、充电
+  `(full-rem)*60/rate`），超过 1440 分钟或速率 0 一律 `--`。Settings 电池页
+  新增 `Health (full/design)` 与 `Time to empty/Time to full` 两行，未知显示 `--`。
+  QEMU `m2-discharge`（`DIS0`、1200mW、5700mWh）读出 `pct=57 chg=0 rate=1200
+  health=100 min=285 min_full=-1`，Settings 显示 `4h45m`；`m2-valid` 速率 0
+  显示 `Time to full --`。主机新增 `battery_energy` 11 checks，总计 14/0。
   **边界（M2-full 剩余）**：EC 写、IndexField/BankField、多电池容量合并/运行中切换、
-  剩余时间、健康度、FACS Global Lock（当前用锁死替代）；`Mutex` 是单线程占位，
-  不是跨 CPU/SMI 真同步；`_OSI` 全 0 不等于 Windows 兼容层；真机 EC 端口、
-  `_REG` 重放副作用仍未验证。
-- **未做**：M2-full 剩余（EC 写/IndexField/BankField/健康度/Global Lock）、M3（完整 32 位 UI/电源策略）、M4（真机）。
+  FACS Global Lock（当前用锁死替代）；`Mutex` 是单线程占位，不是跨 CPU/SMI 真同步；
+  `_OSI` 全 0 不等于 Windows 兼容层；真机 EC 端口、`_REG` 重放副作用仍未验证；
+  健康度不展示原始 mWh，只展示百分比。
+- **未做**：M2-full 剩余（EC 写/IndexField/BankField/Global Lock）、M3（完整 32 位 UI/电源策略）、M4（真机）。
   本次 QEMU/OVMF 未提供 legacy SMBIOS entry，`form_factor=unknown` 只说明
   “本夹具没读到”，不等于真机型号判断已验证。
 

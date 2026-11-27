@@ -314,7 +314,7 @@ int acpi_ac_poll(acpi_ac_sample_t *out)
 int acpi_battery_poll(acpi_batt_sample_t *out)
 {
     aml_value_t *sta = 0, *bst = 0, *bif = 0, *bix = 0;
-    int64_t sta_i = 0, state = 0, rem = 0, full = 0, design = 0, unit = 0, volt = 0;
+    int64_t sta_i = 0, state = 0, rate = 0, rem = 0, full = 0, design = 0, unit = 0, volt = 0;
     int rc_sta, rc_bst, rc_bix, rc_bif;
     int percent;
 
@@ -325,9 +325,13 @@ int acpi_battery_poll(acpi_batt_sample_t *out)
     out->state_bits = 0;
     out->power_unit = 0;
     out->remaining = 0;
+    out->rate = 0;
     out->full = 0;
     out->design = 0;
     out->voltage_mv = 0;
+    out->health = -1;
+    out->minutes = -1;
+    out->minutes_full = -1;
     out->used_bix = 0;
     out->ac_present = 0;
     out->ac_known = 0;
@@ -386,12 +390,12 @@ int acpi_battery_poll(acpi_batt_sample_t *out)
         return 2;
     }
     if (aml_value_int(aml_value_at(bst, 0), &state) != 0 ||
-        aml_value_int(aml_value_at(bst, 1), &rem) != 0) {
+        aml_value_int(aml_value_at(bst, 1), &rate) != 0) {
         aml_sample_end();
         g_bat_last_rc = 2;
         return 2;
     }
-    /* 元素 2 才是剩余容量，元素 1 是放电速率 */
+    /* 元素 2 才是剩余容量，元素 1 是放电/充电速率 */
     if (aml_value_int(aml_value_at(bst, 2), &rem) != 0) rem = 0;
     if (aml_value_int(aml_value_at(bst, 3), &volt) != 0) volt = 0;
 
@@ -418,9 +422,34 @@ int acpi_battery_poll(acpi_batt_sample_t *out)
     out->charging = (state & 2) ? 1 : 0;
     out->power_unit = (int)unit;
     out->remaining = rem;
+    out->rate = rate;
     out->full = full;
     out->design = design;
     out->voltage_mv = volt;
+
+    /* 健康度与时间只做“固件原始值的换算”，不参与 VALID 判定：
+     * - full/design 都 >0 才算健康度；full 明显大于 design 时标 -1，不硬压成 100%；
+     * - 时间只在速率 >0 时算，0 速率显示 --，不猜。 */
+    if (design > 0 && full > 0) {
+        if (full <= design + design / 20) {
+            int hp = (int)((full * 100 + design / 2) / design);
+            if (hp > 100) hp = 100;
+            out->health = hp;
+        } else {
+            out->health = -1;
+        }
+    }
+    if (rate > 0) {
+        if (state & 2) {
+            if (full > rem) {
+                int64_t m = ((full - rem) * 60 + rate / 2) / rate;
+                if (m >= 0 && m < 1440) out->minutes_full = (int)m;
+            }
+        } else if (rem > 0) {
+            int64_t m = (rem * 60 + rate / 2) / rate;
+            if (m >= 0 && m < 1440) out->minutes = (int)m;
+        }
+    }
 
     {
         int rc = acpi_battery_make_percent(rem, full, (int)state, &percent);
@@ -455,6 +484,14 @@ int acpi_battery_poll(acpi_batt_sample_t *out)
     bat_num(full);
     vga_puts(" unit=");
     bat_num(unit);
+    vga_puts(" rate=");
+    bat_num(out->rate);
+    vga_puts(" health=");
+    bat_num(out->health);
+    vga_puts(" min=");
+    bat_num(out->minutes);
+    vga_puts(" min_full=");
+    bat_num(out->minutes_full);
     vga_puts("\n");
 
     aml_sample_end();

@@ -193,6 +193,8 @@ int main(void)
         check(s.charging == 1, "poll 充电中");
         check(s.full == 10000 && s.remaining == 5700, "poll 容量字段正确");
         check(s.used_bix == 0, "poll 走 _BIF");
+        check(s.health == 100, "健康度 100%");
+        check(s.minutes == -1 && s.minutes_full == -1, "速率 0 不报时间");
         check(s.ac_present == 1 && s.ac_known == 1 && s.ac_online == 1,
               "poll ACPI0003._PSR=1");
         {

@@ -172,7 +172,7 @@ def make_declared(dev="BAT0"):
 
 
 def valid_device(percent=57, use_bix=False, dev="BAT0", bst_state=2,
-                 with_mutex=False):
+                 with_mutex=False, bst_rate=0):
     design = 10000
     full = 10000
     rem = design * percent // 100
@@ -182,7 +182,7 @@ def valid_device(percent=57, use_bix=False, dev="BAT0", bst_state=2,
         bst_body += acquire("MUT0") + store(osi("Linux"), b"\x60")
     bst_body += (
         store(int_obj(bst_state), index("BST0", 0))
-        + store(int_obj(0), index("BST0", 1))
+        + store(int_obj(bst_rate), index("BST0", 1))
         + store(int_obj(rem), index("BST0", 2))
         + store(int_obj(12000), index("BST0", 3))
     )
@@ -205,10 +205,12 @@ def valid_device(percent=57, use_bix=False, dev="BAT0", bst_state=2,
     return device(dev, body)
 
 
-def make_valid(percent=57, use_bix=False, dev="BAT0", ac_psr=1, bst_state=2):
+def make_valid(percent=57, use_bix=False, dev="BAT0", ac_psr=1, bst_state=2,
+               bst_rate=0):
     ac = device("AC00", name("_HID", string_obj("ACPI0003"))
                 + method("_PSR", ret(int_obj(ac_psr))))
-    return build_table(valid_device(percent, use_bix, dev, bst_state) + ac,
+    return build_table(valid_device(percent, use_bix, dev, bst_state,
+                                    bst_rate=bst_rate) + ac,
                        oem_table_id=b"BATVALID")
 
 
@@ -308,6 +310,8 @@ MODES = {
     "ec-glk": lambda pct=57: make_ec_read(pct, glk=1),
     "mutex": make_mutex,
     "dual": make_dual,
+    "valid-discharge": lambda pct=57: make_valid(pct, dev="DIS0", ac_psr=0,
+                                                 bst_state=0, bst_rate=1200),
 }
 
 
@@ -329,6 +333,7 @@ def write_header(path):
     absent = make_absent("ABS0")
     mutex_tbl = make_mutex(57, dev="MTX0")
     dual = make_dual(57)
+    discharge = make_valid(57, dev="DIS0", ac_psr=0, bst_state=0, bst_rate=1200)
     with open(path, "w", encoding="utf-8") as f:
         f.write("/* 由 tools/regress/make_battery_ssdt.py --header 生成，勿手改。 */\n")
         f.write("#ifndef BATTERY_SSDT_BLOBS_H\n#define BATTERY_SSDT_BLOBS_H\n\n")
@@ -340,10 +345,11 @@ def write_header(path):
         write_array(f, "g_battery_absent_ssdt", absent)
         write_array(f, "g_battery_mutex_ssdt", mutex_tbl)
         write_array(f, "g_battery_dual_ssdt", dual)
+        write_array(f, "g_battery_discharge_ssdt", discharge)
         f.write("\n#endif\n")
-    print("wrote %s (valid=%d bix=%d ec=%d ec_read=%d ec_glk=%d absent=%d mutex=%d dual=%d)" %
+    print("wrote %s (valid=%d bix=%d ec=%d ec_read=%d ec_glk=%d absent=%d mutex=%d dual=%d discharge=%d)" %
           (path, len(valid), len(bix), len(ec), len(ec_read), len(ec_glk),
-           len(absent), len(mutex_tbl), len(dual)))
+           len(absent), len(mutex_tbl), len(dual), len(discharge)))
 
 
 def main(argv):

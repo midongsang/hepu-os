@@ -15,9 +15,13 @@ typedef struct {
     int state_bits;
     int power_unit;     /* 0=mWh/0x80000000 表示 mAh 的 _BIF 约定；统一按原值回报 */
     int64_t remaining;
+    int64_t rate;       /* _BST 元素1：放电/充电速率，0 表示固件没给 */
     int64_t full;
     int64_t design;
     int64_t voltage_mv;
+    int health;         /* full/design 的百分比；design=0 时为 -1（不可算） */
+    int minutes;        /* 放电剩余分钟；充电或速率未知时为 -1 */
+    int minutes_full;   /* 充电到满分钟；放电或速率未知时为 -1 */
     int used_bix;
     int ac_present;     /* 命名空间里有 ACPI0003 */
     int ac_known;       /* _PSR 求值成功 */

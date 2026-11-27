@@ -3,7 +3,9 @@
 [BAT] acpi=0x1 fadt=0x1 dsdt=0x1 ssdt=0x2 battery=declared
 [BAT] state=declared form_factor=unknown acpi_battery=declared reason=acpi-declared
 [AML] tables=0x3 nodes=0xB degraded=0x0
+[BAT] aml candidates=1
 [BAT] aml dev=BAT0
+[BAT] aml dev=selected BAT0
 [BAT] ec=0x0
 [BAT] ac dev=AC00
 [BAT] ac psr=1

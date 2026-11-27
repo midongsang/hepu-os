@@ -1,9 +1,9 @@
-# 电池状态取证（2026-11-27，M0 + M1 + M1.5 图标 + M1.6 面板 + M2 最小版 + EC 只读 + _REG/_PSR + 多槽位/Mutex）
+# 电池状态取证（2026-11-27，M0 + M1 + M1.5 图标 + M1.6 面板 + M2 最小版 + EC 只读 + _REG/_PSR + 多槽位/Mutex + 健康度/剩余时间）
 
 ## 结论
 
 赫普之前的“电池 100%”不是检测结果，是 `hs_status_init` 里写死的
-`battery_percent = 100`。本轮分五步推进：前两步只搭状态骨架，后三步才读真实电量：
+`battery_percent = 100`。本轮分七步推进：前两步只搭状态骨架，后五步才读真实电量与派生信息：
 
 1. **M0**：移除假 100%；新增 `HS_BATTERY_ABSENT / DECLARED / VALID / UNKNOWN`
    状态；顶栏只在非 `ABSENT` 时绘制电池；`DECLARED / UNKNOWN` 只画轮廓和两道短线，
@@ -30,8 +30,13 @@
    逐个看 `_STA`，跳过明确 absent 的槽位；`BAT0` 空槽不再遮住 `BAT1`。
    AML 增加 `Mutex` 占位与 `Acquire/Release`，`_OSI` 预定义调用统一返回 0
    （不冒充 Windows，让固件走通用分支），避免真实 `_BST` 因这些常见前缀整体失败。
+7. **健康度与剩余时间**：`_BST` 元素 1（放电/充电速率）不再丢弃；`full/design`
+   给出健康度（满充在设计的 5% 容差内封顶 100%，明显超设计则 `--`）；速率 >0 时
+   放电算 `rem*60/rate`、充电算 `(full-rem)*60/rate`，只在 `<1440` 分钟时显示，
+   否则 `--`。速率 0 不估算，不拿设计容量编时间。
 
-**边界**：EC 只读，不写 EC；`IndexField/BankField`、剩余时间/健康度仍未做；
+**边界**：EC 只读，不写 EC；`IndexField/BankField` 仍未做；健康度/剩余时间只在
+`_BST` 速率可信时给出，速率 0 或超过 1440 分钟一律 `--`；
 `_GLK=1` 会直接锁死 EC（不碰端口、不调 `_REG`），**FACS Global Lock 仍未实现**。
 `Mutex` 是单线程采样路径的占位，不是跨 CPU/SMI 的真同步；`_OSI` 全部返回 0，
 不代表 Windows 兼容层。本目录的 `VALID` 仍全部来自合成 SSDT，真机未验证。
@@ -385,11 +390,35 @@ bash tools/regress/battery_state_probe.sh .../m2-mutex .../fixture/battery-mutex
 `python3 m2-mutex/mutex_check.py`：`RESULT: PASS (5 checks, 0 failed)`。
 
 `hs_battery_apply_firmware()` 每 4 个状态 tick（约 2s）刷新一次；只有
-`battery_state/percent/charging` 三项真变化才置脏重绘。M1 的
+`battery_state/percent/charging/health/minutes/minutes_full` 六项真变化才置脏重绘。M1 的
 `[BAT] state=declared ... reason=acpi-declared` 仍会先打印一次——那是“声明层”
 日志，最终 UI 以随后 `[BAT] aml ...` 的结果为准。
 
-主机端 `aml_eval` 51 项断言覆盖：`PNP0C09` 查找（`EC00`）、`_REG(3,1)` 写
+### 6.3 健康度与剩余时间（2026-11-27 追加）
+
+夹具 `fixture/battery-discharge.ssdt`：`DIS0._PSR=0`、`_BST state=0`、
+`rate=1200`、`rem=5700`、`full=10000`。旧实现把 `_BST` 元素 1 读进临时变量后
+被元素 2 覆盖，等于把速率丢掉；现在 `rate` 保留，健康度与时间都由它派生。
+
+串口关键行：
+
+```text
+[BAT] aml dev=selected DIS0
+[BAT] ac psr=0
+[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=0 rem=5700 full=10000 unit=0 rate=1200 health=100 min=285 min_full=-1
+```
+
+`5700*60/1200 = 285` 分钟（4h45m）；放电时不给“充满时间”，所以
+`min_full=-1`。`m2-valid` 的充电夹具 `rate=0`，Settings 显示
+`Time to full --`，没有拿 `full-rem` 硬算——速率不可信就不估算。
+
+![discharge settings](m2-discharge/03-settings.png)
+
+`python3 m2-discharge/discharge_check.py`：`RESULT: PASS (8 checks, 0 failed)`。
+主机 `battery_energy` 11 项覆盖 `health=100`、`minutes=285`、`minutes_full=-1`、
+AC 离线，以及 `rate=0` 时两项时间都不给。
+
+主机端 `aml_eval` 53 项断言覆盖：`PNP0C09` 查找（`EC00`）、`_REG(3,1)` 写
 `ECRG`、EC 16 位字段拼装（`B0ST == 5700`）、`_BST` 返回
 `state=2/rem=5700/volt=12000`，以及 EC 超时和 EC 未启用都返回 `UNSUP`。
 新增 `ec_battery` 16 项端到端断言：只加载 `battery-ec-read.ssdt`，走真实
@@ -397,9 +426,11 @@ bash tools/regress/battery_state_probe.sh .../m2-mutex .../fixture/battery-mutex
 并覆盖 `_GLK=0`、EC 缺失、遗留 OBF 三种情况。新增 `ec_glk` 12 项断言覆盖
 `_GLK=1` 锁死：`ec64_read` 返回 -4、poll 保持 `--`、零次 0x62/0x66 访问。
 新增 `multi_battery` 9 项：`DUA0._STA=0` 时 init 选 `DUA1`，poll 读 57%。
+新增 `battery_energy` 11 项：放电 1200mW/5700mWh → 285 分钟，`health=100`，
+`minutes_full=-1`，充电速率 0 时两项时间都保持 `--`。
 以上都是**主机模拟，不是真机**。
 
-**这轮没做的**：EC 写、`IndexField/BankField`、剩余时间、健康度。
+**这轮没做的**：EC 写、`IndexField/BankField`。
 多电池已能选第一个 present 槽位，但不会把两块电池的容量合并，也不会在运行中
 切换槽位；`Mutex` 只是单线程占位，`_OSI` 全部返回 0，不等于 Windows 兼容层。
 `_GLK=1` 直接锁死 EC，FACS Global Lock 仍未实现。EC 只读路径在真机上尚未验证；
@@ -408,13 +439,14 @@ bash tools/regress/battery_state_probe.sh .../m2-mutex .../fixture/battery-mutex
 ## 构建
 
 `bash tools/regress/build_all.sh` 通过：gnu-efi、UEFI 引导器、64 位内核、
-32 位内核、双内核镜像全部成功；产物 `kernel64.bin` 1,054,992 B、
-`kernel32.bin` 3,873,165 B（M2 增加 `aml64.c` + `acpi_battery.c` + `ec64.c`，
+32 位内核、双内核镜像全部成功；产物 `kernel64.bin` 1,056,400 B、
+`kernel32.bin` 3,873,293 B（M2 增加 `aml64.c` + `acpi_battery.c` + `ec64.c`，
 并补 `_REG`/`_PSR`，64 位约 +20 KB）。
 
-- `tools/host-tests/run_host_tests.sh`：`通过 13 / 失败 0`；`aml_eval` 51 checks，
+- `tools/host-tests/run_host_tests.sh`：`通过 14 / 失败 0`；`aml_eval` 53 checks、
   `ec_battery` 16 checks（虚拟 EC 正路径）、`ec_glk` 12 checks（GLK 锁死）、
-  `multi_battery` 9 checks（双槽位选择）。
+  `multi_battery` 9 checks（双槽位选择）、`battery_energy` 11 checks
+  （速率→健康度/剩余时间）。
 - `tools/regress/smoke32.sh`：`serial=1 initrd=1 net=1 desk=1 fault=0`、
   `ktest_result=PASS`、`p3-security: passed=2 failed=0 skipped=0`。
 - 32 位只验证到“构建 + 冒烟不回归”，没有单独截 32 位桌面截图。
@@ -465,13 +497,15 @@ bash tools/regress/battery_state_probe.sh .../m2-mutex .../fixture/battery-mutex
 | `kernel/arch/x86_64/acpi_battery.c/.h` | M2 读数层：`_STA/_BIF/_BIX/_BST` + 百分比可信门槛；EC 启用判定 |
 | `kernel/arch/x86_64/ec64.c/.h` | EC 0x62/0x66 只读事务层（RD_EC、超时、host 注入） |
 | `tools/host-tests/aml_eval_test.c` | 解释器/读数层主机端单测（`battery_ssdt_blobs.h` 为生成物） |
-| `fixture/battery-{valid,valid-bix,absent,nobst,ec,ec-read,ec-glk}.ssdt` | M2 七种夹具；`ec-read` 在 QEMU 走 fail-closed，在 `ec_battery` 走虚拟 EC 正路径；`ec-glk` 验锁死 |
+| `fixture/battery-{valid,valid-bix,absent,nobst,ec,ec-read,ec-glk,dual,mutex,discharge}.ssdt` | M2 夹具；`ec-read` 在 QEMU 走 fail-closed，在 `ec_battery` 走虚拟 EC 正路径；`ec-glk` 验锁死；`discharge` 验健康度/剩余时间 |
 | `m2-valid/` | VALID 取证：桌面/面板/设置页截图、串口摘录、`valid_check.py` |
 | `m2-bix/` `m2-absent/` `m2-nobst/` `m2-ec/` | 四种边界夹具的串口摘录与桌面截图 |
 | `m2-ec-read/` | `_GLK=0` EC 夹具：`_REG` 执行、无 EC 硬件时 `bst=-3` |
 | `m2-ec-glk/` | `_GLK=1` 锁死夹具：`lockout=1`、`reg=skip-glk`、`untrusted rc=-4` |
 | `ec-host-test.txt` | 上一轮 `run_host_tests.sh` 输出；`aml_eval` 44 checks，作为历史记录 |
-| `ec-sim-test.txt` | 本轮 `run_host_tests.sh` 输出；`aml_eval` 51 + `ec_battery` 16 + `ec_glk` 12 + `multi_battery` 9，13/0 |
+| `ec-sim-test.txt` | 本轮 `run_host_tests.sh` 输出；`aml_eval` 53 + `ec_battery` 16 + `ec_glk` 12 + `multi_battery` 9 + `battery_energy` 11，14/0 |
 | `m2-dual/` | 双槽位：`DUA0` absent 时选中 `DUA1`，面板 57%、`dual_check.py` |
 | `m2-mutex/` | `Mutex`/`Acquire/Release`/`_OSI` 夹具仍读出 57%，`mutex_check.py` |
+| `m2-discharge/` | 放电夹具 `DIS0`：1200mW → 285 分钟、健康度 100%，`discharge_check.py` 8 项 |
+| `tools/host-tests/battery_energy_test.c` | 速率→健康度/时间的主机端 11 项断言，覆盖速率 0 与超容边界 |
 | `qemu-ec-absence.txt` | `qemu-system-x86_64 -device help` 无 EC 设备，说明为何没有 QEMU EC 正路径 |

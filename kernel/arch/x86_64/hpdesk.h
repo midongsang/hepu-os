@@ -191,6 +191,9 @@ typedef struct {
     int battery_state;  /* hs_battery_state_t */
     int battery_percent; /* 仅 VALID 时可信 */
     int battery_charging;
+    int battery_health;  /* full/design 百分比；仅 VALID 且固件给出时 >=0 */
+    int battery_minutes; /* 放电剩余分钟；充电/未知为 -1 */
+    int battery_minutes_full; /* 充电到满分钟；放电/未知为 -1 */
     int ac_present;      /* ACPI0003 声明 */
     int ac_known;        /* _PSR 读到 */
     int ac_online;       /* 仅 ac_known=1 时有效 */

@@ -80,6 +80,8 @@ run_one ec_battery "-DAML_HOST_TEST" tools/host-tests/ec_battery_test.c $ARCH/am
 run_one ec_glk "-DAML_HOST_TEST" tools/host-tests/ec_glk_test.c $ARCH/aml64.c $ARCH/acpi_battery.c $ARCH/ec64.c
 # M2-full: 双电池槽位选择（BAT0 absent 时不遮住 BAT1）
 run_one multi_battery "-DAML_HOST_TEST" tools/host-tests/multi_battery_test.c $ARCH/aml64.c $ARCH/acpi_battery.c $ARCH/ec64.c
+# M2-full: 健康度/剩余时间换算（1200mW 放电 -> 285 分钟）
+run_one battery_energy "-DAML_HOST_TEST" tools/host-tests/battery_energy_test.c $ARCH/aml64.c $ARCH/acpi_battery.c $ARCH/ec64.c
 
 # 5b) PNG 解码器（inflate/反滤波/颜色类型/位深，V0.54.13 P0）
 #     夹具：tools/host-tests/data/png_case{1..5}.png + .expect，逐像素比对
