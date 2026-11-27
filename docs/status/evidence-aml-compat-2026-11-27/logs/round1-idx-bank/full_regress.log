@@ -1,0 +1,23 @@
+=== 赫普OS 主机端测试 ===
+编译器: gcc (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0
+
+  [ok]   uaccess  (ALL USER-ACCESS TESTS PASSED)
+  [ok]   aspace  (ALL ADDRESS-SPACE ISOLATION TESTS PASSED)
+  [ok]   heap  (ALL HEAP TESTS PASSED)
+  [ok]   elf  (ALL ELF TESTS PASSED)
+  [ok]   winslot  (ALL PASS: 窗口槽位分配/回收不变量全部成立 (T1)
+  [ok]   battery_ui  (PASS 全部断言)
+  [ok]   aml_eval  (PASS aml_eval (55 checks))
+  [ok]   ec_battery  (RESULT: PASS (16 checks, 0 failed))
+  [ok]   ec_glk  (RESULT: PASS (12 checks, 0 failed))
+  [ok]   multi_battery  (多电池槽位: 9 checks, 0 fails)
+  [ok]   battery_energy  (battery_energy: 11 checks, 0 fails)
+  [ok]   battery_merge  (battery_merge: 13 checks, 0 fails)
+  [ok]   battery_fallback  (battery_fallback: 11 checks, 0 fails)
+  [ok]   battery_compat  (battery_compat: 10 checks, 0 fails)
+  [ok]   idx_bank_field  (PASS idx_bank_field (31 checks))
+  [ok]   png64 (5 个用例全通过: RGBA/RGB/调色板/灰度8/灰度1bit)
+  [ok]   ext2  (ALL EXT2 TESTS PASSED)
+
+  [ok]   fsck  (fsck inode checks: ok (5 groups))
+=== 结果: 通过 18 / 失败 0 ===

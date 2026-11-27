@@ -264,17 +264,28 @@ SMBIOS 只能回答“厂商说这是什么形状”，不能回答“现在有�
   QEMU `m2-discharge`（`DIS0`、1200mW、5700mWh）读出 `pct=57 chg=0 rate=1200
   health=100 min=285 min_full=-1`，Settings 显示 `4h45m`；`m2-valid` 速率 0
   显示 `Time to full --`。主机新增 `battery_energy` 11 checks；本轮主机套件
-  合计 17/0（`aml_eval` 55、`ec_battery` 16、`ec_glk` 12、`multi_battery` 9、
+  合计 19/0（`aml_eval` 55、`ec_battery` 16、`ec_glk` 12、`multi_battery` 9、
   `battery_energy` 11、`battery_merge` 13、`battery_fallback` 11、
-  `battery_compat` 10）。
-  **边界（M2-full 剩余）**：EC 写、IndexField/BankField、FACS Global Lock
+  `battery_compat` 10、`idx_bank_field` 31、`create_field` 24）。
+  **边界（当前剩余）**：EC 写事务未实现——IndexField/BankField 的 index/data/bank 寄存器
+  落在 EmbeddedControl 上仍 `AML_E_UNSUP`，不写旧值/0 假装成功；FACS Global Lock
   （当前用锁死替代）；多电池只合并同 unit，不做充放电功率分配/跨槽均衡，不同
   unit 不混加；`Mutex` 是单线程占位，不是跨 CPU/SMI 真同步；`_OSI` 全 0 不等于
   Windows 兼容层；真机 EC 端口、`_REG` 重放副作用仍未验证；健康度不展示原始
   mWh，只展示百分比。
-- **未做**：M2-full 剩余（EC 写/IndexField/BankField/Global Lock）、M3（完整 32 位 UI/电源策略）、M4（真机）。
+  **已支持（2026-11-27 第二轮追加）**：IndexField/BankField 在 SystemIO/SystemMemory 上的
+  索引/数据（region/bank）通路，按 bit 偏移/宽度抽取，跨 granule 逐段拼装，总位宽 >64 拒绝；
+  CreateDWord/Word/Byte/Bit/QWordField 与 CreateField 缓冲位段引用（读按位抽取、Store 回写
+  Buffer 对应位）；建库期对未识别外层对象按合法 PkgLength 跳过并记降级，诊断计数经
+  `aml_ns_diag` 透出；跳过未知对象不产生假成功，缺字段仍 NOTFOUND → DECLARED/UNKNOWN。
+  **仍未支持**：Wait/Signal 事件同步、Concatenate/Mid/ObjectType/RefOf/CondRefOf 目标写入、
+  Divide 余商分派、Match、字符串转换（ToString/ToBuffer/ToHexString）等 P1 表达式；
+  Stall/Sleep 仅解析参数的有界占位，不做真实墙钟等待。
+- **未做**：M2-full 剩余（EC 写/FACS Global Lock/Wait/Signal 与上述 P1 表达式）、M3（完整 32 位 UI/电源策略）、M4（真机）。
   本次 QEMU/OVMF 未提供 legacy SMBIOS entry，`form_factor=unknown` 只说明
   “本夹具没读到”，不等于真机型号判断已验证。
+  语料兼容性证据：基线审计 [evidence-aml-corpus-2026-11-27](../status/evidence-aml-corpus-2026-11-27/README.md)；
+  第二轮 before/after 对比 [evidence-aml-compat-2026-11-27](../status/evidence-aml-compat-2026-11-27/README.md)。
 
 ## 8. 时间估算
 

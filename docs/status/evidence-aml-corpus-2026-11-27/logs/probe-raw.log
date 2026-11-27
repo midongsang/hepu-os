@@ -1,0 +1,210 @@
+=== TABLE /home/user/.doubao/agent_mode/workspace/.sessions/38452875115179010/agents/s_000K1zmR5nS/scratch/dl/a16-11m-dsdt.dat
+  sig=DSDT size=279633 build_rc=0(OK) ready=1 nodes=4
+  devices: PNP0C0A=0 ACPI0003=0 PNP0C09=0
+
+PROBE DONE tables=1
+=== TABLE /home/user/.doubao/agent_mode/workspace/.sessions/38452875115179010/agents/s_000K1zmR5nS/scratch/dl/a16-11m-ssdt.dat
+  sig=SSDT size=304 build_rc=0(OK) ready=1 nodes=2
+  devices: PNP0C0A=0 ACPI0003=0 PNP0C09=0
+
+PROBE DONE tables=1
+=== TABLE /home/user/.doubao/agent_mode/workspace/.sessions/38452875115179010/agents/s_000K1zmR5nS/scratch/dl/acer-ec471g-dsdt.aml
+  sig=DSDT size=45759 build_rc=0(OK) ready=1 nodes=97
+  devices: PNP0C0A=0 ACPI0003=0 PNP0C09=0
+
+PROBE DONE tables=1
+=== TABLE /home/user/.doubao/agent_mode/workspace/.sessions/38452875115179010/agents/s_000K1zmR5nS/scratch/dl/acer-ec471g-ssdt1.aml
+  sig=SSDT size=2408 build_rc=0(OK) ready=1 nodes=5
+  devices: PNP0C0A=0 ACPI0003=0 PNP0C09=0
+
+PROBE DONE tables=1
+=== TABLE /home/user/.doubao/agent_mode/workspace/.sessions/38452875115179010/agents/s_000K1zmR5nS/scratch/dl/acer-ec471g-ssdt2.aml
+  sig=SSDT size=2706 build_rc=0(OK) ready=1 nodes=0
+  devices: PNP0C0A=0 ACPI0003=0 PNP0C09=0
+
+PROBE DONE tables=1
+=== TABLE /home/user/.doubao/agent_mode/workspace/.sessions/38452875115179010/agents/s_000K1zmR5nS/scratch/dl/asus-gl552jx-dsdt.aml
+  sig=DSDT size=81441 build_rc=0(OK) ready=1 nodes=85
+  devices: PNP0C0A=0 ACPI0003=0 PNP0C09=0
+
+PROBE DONE tables=1
+=== TABLE /home/user/.doubao/agent_mode/workspace/.sessions/38452875115179010/agents/s_000K1zmR5nS/scratch/dl/asus-gl552jx-ssdt-cpupm.aml
+  sig=SSDT size=2776 build_rc=0(OK) ready=1 nodes=0
+  devices: PNP0C0A=0 ACPI0003=0 PNP0C09=0
+
+PROBE DONE tables=1
+=== TABLE /home/user/.doubao/agent_mode/workspace/.sessions/38452875115179010/agents/s_000K1zmR5nS/scratch/dl/dell-xps9350-ssdt-cpupm.aml
+  sig=SSDT size=1761 build_rc=0(OK) ready=1 nodes=0
+  devices: PNP0C0A=0 ACPI0003=0 PNP0C09=0
+
+PROBE DONE tables=1
+=== TABLE /home/user/.doubao/agent_mode/workspace/.sessions/38452875115179010/agents/s_000K1zmR5nS/scratch/dl/lenovo-14asp10-dsdt.dat
+  sig=DSDT size=37773 build_rc=0(OK) ready=1 nodes=3
+  devices: PNP0C0A=0 ACPI0003=0 PNP0C09=0
+
+PROBE DONE tables=1
+=== TABLE /home/user/.doubao/agent_mode/workspace/.sessions/38452875115179010/agents/s_000K1zmR5nS/scratch/dl/lenovo-14asp10-ssdt1.dat
+  sig=SSDT size=259 build_rc=0(OK) ready=1 nodes=0
+  devices: PNP0C0A=0 ACPI0003=0 PNP0C09=0
+
+PROBE DONE tables=1
+=== TABLE /home/user/.doubao/agent_mode/workspace/.sessions/38452875115179010/agents/s_000K1zmR5nS/scratch/dl/lenovo-16afr10h-dsdt.dat
+  sig=DSDT size=114523 build_rc=0(OK) ready=1 nodes=3
+  devices: PNP0C0A=0 ACPI0003=0 PNP0C09=0
+
+PROBE DONE tables=1
+=== TABLE /home/user/.doubao/agent_mode/workspace/.sessions/38452875115179010/agents/s_000K1zmR5nS/scratch/dl/lenovo-16afr10h-ssdt1.dat
+  sig=SSDT size=1975 build_rc=0(OK) ready=1 nodes=0
+  devices: PNP0C0A=0 ACPI0003=0 PNP0C09=0
+
+PROBE DONE tables=1
+=== TABLE /home/user/.doubao/agent_mode/workspace/.sessions/38452875115179010/agents/s_000K1zmR5nS/scratch/dl/lenovo-16afr10h-ssdt2.dat
+  sig=SSDT size=33133 build_rc=0(OK) ready=1 nodes=5
+  devices: PNP0C0A=0 ACPI0003=0 PNP0C09=0
+
+PROBE DONE tables=1
+=== TABLE /home/user/.doubao/agent_mode/workspace/.sessions/38452875115179010/agents/s_000K1zmR5nS/scratch/dl/surface-book2-dsdt.aml
+  sig=DSDT size=102989 build_rc=0(OK) ready=1 nodes=0
+  devices: PNP0C0A=0 ACPI0003=0 PNP0C09=0
+
+PROBE DONE tables=1
+=== TABLE /home/user/.doubao/agent_mode/workspace/.sessions/38452875115179010/agents/s_000K1zmR5nS/scratch/dl/surface-book2-ssdt1.aml
+  sig=SSDT size=9448 build_rc=0(OK) ready=1 nodes=0
+  devices: PNP0C0A=0 ACPI0003=0 PNP0C09=0
+
+PROBE DONE tables=1
+=== TABLE /home/user/.doubao/agent_mode/workspace/.sessions/38452875115179010/agents/s_000K1zmR5nS/scratch/dl/surface-laptop5-dsdt.aml
+  sig=DSDT size=171439 build_rc=0(OK) ready=1 nodes=0
+  devices: PNP0C0A=0 ACPI0003=0 PNP0C09=0
+
+PROBE DONE tables=1
+=== TABLE /home/user/.doubao/agent_mode/workspace/.sessions/38452875115179010/agents/s_000K1zmR5nS/scratch/dl/surface-laptop5-ssdt1.aml
+  sig=SSDT size=14810 build_rc=0(OK) ready=1 nodes=0
+  devices: PNP0C0A=0 ACPI0003=0 PNP0C09=0
+
+PROBE DONE tables=1
+=== TABLE /home/user/.doubao/agent_mode/workspace/.sessions/38452875115179010/agents/s_000K1zmR5nS/scratch/dl/surface-pro7-dsdt.aml
+  sig=DSDT size=114974 build_rc=0(OK) ready=1 nodes=0
+  devices: PNP0C0A=0 ACPI0003=0 PNP0C09=0
+
+PROBE DONE tables=1
+=== TABLE /home/user/.doubao/agent_mode/workspace/.sessions/38452875115179010/agents/s_000K1zmR5nS/scratch/dl/surface-pro7-ssdt1.aml
+  sig=SSDT size=45690 build_rc=0(OK) ready=1 nodes=0
+  devices: PNP0C0A=0 ACPI0003=0 PNP0C09=0
+
+PROBE DONE tables=1
+=== TABLE /home/user/.doubao/agent_mode/workspace/.sessions/38452875115179010/agents/s_000K1zmR5nS/scratch/dl/t450s-ssdt-batx.aml
+  sig=SSDT size=7580 build_rc=0(OK) ready=1 nodes=0
+  devices: PNP0C0A=0 ACPI0003=0 PNP0C09=0
+
+PROBE DONE tables=1
+=== TABLE /home/user/.doubao/agent_mode/workspace/.sessions/38452875115179010/agents/s_000K1zmR5nS/scratch/dl/t450s-ssdt-ocbatt.aml
+  sig=SSDT size=3866 build_rc=0(OK) ready=1 nodes=0
+  devices: PNP0C0A=0 ACPI0003=0 PNP0C09=0
+
+PROBE DONE tables=1
+=== TABLE /home/user/.doubao/agent_mode/workspace/.sessions/38452875115179010/agents/s_000K1zmR5nS/scratch/dl/x1c6-ssdt-battery.aml
+  sig=SSDT size=2559 build_rc=0(OK) ready=1 nodes=0
+  devices: PNP0C0A=0 ACPI0003=0 PNP0C09=0
+
+PROBE DONE tables=1
+=== TABLE /home/user/.doubao/agent_mode/workspace/.sessions/38452875115179010/agents/s_000K1zmR5nS/scratch/dl/firmware/SeaBIOS-bios.bin.dsdt@0x13f2d.aml
+  sig=DSDT size=4585 build_rc=0(OK) ready=1 nodes=0
+  devices: PNP0C0A=0 ACPI0003=0 PNP0C09=0
+
+PROBE DONE tables=1
+=== TABLE /home/user/.doubao/agent_mode/workspace/.sessions/38452875115179010/agents/s_000K1zmR5nS/scratch/dl/firmware/SeaBIOS-bios.bin.ssdt@0x13da9.aml
+  sig=SSDT size=388 build_rc=0(OK) ready=1 nodes=0
+  devices: PNP0C0A=0 ACPI0003=0 PNP0C09=0
+
+PROBE DONE tables=1
+=== TABLE /home/user/.doubao/agent_mode/workspace/.sessions/38452875115179010/agents/s_000K1zmR5nS/scratch/dl/firmware/SeaBIOS-bios.bin.ssdt@0xf280.aml
+  sig=SSDT size=121 build_rc=0(OK) ready=1 nodes=0
+  devices: PNP0C0A=0 ACPI0003=0 PNP0C09=0
+
+PROBE DONE tables=1
+=== TABLE /home/user/.doubao/agent_mode/workspace/.sessions/38452875115179010/agents/s_000K1zmR5nS/scratch/dl/firmware/SeaBIOS-bios.bin.ssdt@0xf300.aml
+  sig=SSDT size=162 build_rc=0(OK) ready=1 nodes=0
+  devices: PNP0C0A=0 ACPI0003=0 PNP0C09=0
+
+PROBE DONE tables=1
+=== TABLE /home/user/Doubao/chats/38452875115179010/hepu-os/docs/status/evidence-aml-corpus-2026-11-27/fixtures/syn-bankfield.aml
+  sig=SSDT size=134 build_rc=0(OK) ready=1 nodes=6
+  devices: PNP0C0A=1 ACPI0003=0 PNP0C09=0
+    bat[0]=BAT0
+  BAT0._STA rc=0(OK)  rc-val type=INT val=15
+  BAT0._BIF rc=-1(NOTFOUND)
+  BAT0._BIX rc=-1(NOTFOUND)
+  BAT0._BST rc=-1(NOTFOUND)
+
+PROBE DONE tables=1
+=== TABLE /home/user/Doubao/chats/38452875115179010/hepu-os/docs/status/evidence-aml-corpus-2026-11-27/fixtures/syn-baseline.aml
+  sig=SSDT size=115 build_rc=0(OK) ready=1 nodes=6
+  devices: PNP0C0A=1 ACPI0003=0 PNP0C09=0
+    bat[0]=BAT0
+  BAT0._STA rc=0(OK)  rc-val type=INT val=15
+  BAT0._BIF rc=0(OK)  rc-val type=PKG count=5 elems=[1,10000,10000,1,12000]
+  BAT0._BIX rc=-1(NOTFOUND)
+  BAT0._BST rc=0(OK)  rc-val type=PKG count=4 elems=[0,0,0,0]
+
+PROBE DONE tables=1
+=== TABLE /home/user/Doubao/chats/38452875115179010/hepu-os/docs/status/evidence-aml-corpus-2026-11-27/fixtures/syn-condrefof.aml
+  sig=SSDT size=113 build_rc=0(OK) ready=1 nodes=4
+  devices: PNP0C0A=1 ACPI0003=0 PNP0C09=0
+    bat[0]=BAT0
+  BAT0._STA rc=-2(BADCODE)
+  BAT0._BIF rc=0(OK)  rc-val type=PKG count=5 elems=[1,10000,10000,1,12000]
+  BAT0._BIX rc=-1(NOTFOUND)
+  BAT0._BST rc=-1(NOTFOUND)
+
+PROBE DONE tables=1
+=== TABLE /home/user/Doubao/chats/38452875115179010/hepu-os/docs/status/evidence-aml-corpus-2026-11-27/fixtures/syn-create-dword.aml
+  sig=SSDT size=122 build_rc=0(OK) ready=1 nodes=5
+  devices: PNP0C0A=1 ACPI0003=0 PNP0C09=0
+    bat[0]=BAT0
+  BAT0._STA rc=0(OK)  rc-val type=INT val=15
+  BAT0._BIF rc=0(OK)  rc-val type=PKG count=5 elems=[1,10000,10000,1,12000]
+  BAT0._BIX rc=-1(NOTFOUND)
+  BAT0._BST rc=-3(UNSUP)
+
+PROBE DONE tables=1
+=== TABLE /home/user/Doubao/chats/38452875115179010/hepu-os/docs/status/evidence-aml-corpus-2026-11-27/fixtures/syn-ec-region.aml
+  sig=SSDT size=152 build_rc=0(OK) ready=1 nodes=8
+  devices: PNP0C0A=1 ACPI0003=0 PNP0C09=0
+    bat[0]=BAT0
+  BAT0._STA rc=0(OK)  rc-val type=INT val=15
+  BAT0._BIF rc=0(OK)  rc-val type=PKG count=5 elems=[1,10000,10000,1,12000]
+  BAT0._BIX rc=-1(NOTFOUND)
+  BAT0._BST rc=-3(UNSUP)
+
+PROBE DONE tables=1
+=== TABLE /home/user/Doubao/chats/38452875115179010/hepu-os/docs/status/evidence-aml-corpus-2026-11-27/fixtures/syn-extfield.aml
+  sig=SSDT size=118 build_rc=0(OK) ready=1 nodes=4
+  devices: PNP0C0A=1 ACPI0003=0 PNP0C09=0
+    bat[0]=BAT0
+  BAT0._STA rc=0(OK)  rc-val type=INT val=15
+  BAT0._BIF rc=-1(NOTFOUND)
+  BAT0._BIX rc=-1(NOTFOUND)
+  BAT0._BST rc=-1(NOTFOUND)
+
+PROBE DONE tables=1
+=== TABLE /home/user/Doubao/chats/38452875115179010/hepu-os/docs/status/evidence-aml-corpus-2026-11-27/fixtures/syn-indexfield.aml
+  sig=SSDT size=146 build_rc=0(OK) ready=1 nodes=7
+  devices: PNP0C0A=1 ACPI0003=0 PNP0C09=0
+    bat[0]=BAT0
+  BAT0._STA rc=0(OK)  rc-val type=INT val=15
+  BAT0._BIF rc=-1(NOTFOUND)
+  BAT0._BIX rc=-1(NOTFOUND)
+  BAT0._BST rc=-1(NOTFOUND)
+
+PROBE DONE tables=1
+=== TABLE /home/user/Doubao/chats/38452875115179010/hepu-os/docs/status/evidence-aml-corpus-2026-11-27/fixtures/syn-osi-branch.aml
+  sig=SSDT size=116 build_rc=0(OK) ready=1 nodes=4
+  devices: PNP0C0A=1 ACPI0003=0 PNP0C09=0
+    bat[0]=BAT0
+  BAT0._STA rc=0(OK)  rc-val type=INT val=15
+  BAT0._BIF rc=0(OK)  rc-val type=PKG count=5 elems=[1,10000,10000,1,12000]
+  BAT0._BIX rc=-1(NOTFOUND)
+  BAT0._BST rc=-1(NOTFOUND)
+
+PROBE DONE tables=1

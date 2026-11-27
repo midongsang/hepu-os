@@ -80,6 +80,7 @@ source_of_truth: frontmatter of docs/*
 ## planning
 
 - [Android HAL 移植方案（ANDROID_HAL_PORTING）](planning/ANDROID_HAL_PORTING.md)
+- [BATTERY_STATUS_PLAN_2026-11-27](planning/BATTERY_STATUS_PLAN_2026-11-27.md)
 - [COMPATIBILITY_LAYER](planning/COMPATIBILITY_LAYER.md)
 - [兼容层落地路线（COMPAT_ROADMAP）](planning/COMPAT_ROADMAP.md)
 - [EPOLL_REGRESSION_2026-11-18](planning/EPOLL_REGRESSION_2026-11-18.md)

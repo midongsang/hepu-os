@@ -41,7 +41,9 @@
    `_BIX` 存在但 `design/full` 为 0（固件未初始化）时回退 `_BIF`，不把整块电池
    判成不可信。日志用 `bix=1` / `bif=1` 明确实际用了哪一包。
 
-**边界**：EC 只读，不写 EC；`IndexField/BankField` 仍未做；健康度/剩余时间只在
+**边界**：EC 写事务未实现（EC 上的 index/data/bank 寄存器仍 `AML_E_UNSUP` fail-closed，
+不写旧值/0 假装成功）；`IndexField/BankField` 已支持 SystemIO/SystemMemory 通路；
+CreateDWord/Word/Byte/Bit/QWordField 与 CreateField 缓冲拆包已支持；健康度/剩余时间只在
 `_BST` 速率可信时给出，速率 0 或超过 1440 分钟一律 `--`；
 `_GLK=1` 会直接锁死 EC（不碰端口、不调 `_REG`），**FACS Global Lock 仍未实现**。
 `Mutex` 是单线程采样路径的占位，不是跨 CPU/SMI 的真同步；`_OSI` 全部返回 0，
@@ -465,11 +467,18 @@ AC 离线，以及 `rate=0` 时两项时间都不给。
 `minutes_full=-1`，充电速率 0 时两项时间都保持 `--`。
 以上都是**主机模拟，不是真机**。
 
-**这轮没做的**：EC 写、`IndexField/BankField`。
+**这轮没做的**：EC 写事务；`Wait/Signal` 事件同步；Concatenate/Mid/ObjectType/RefOf/
+CondRefOf 目标写入、Divide 余商分派、Match、字符串转换（ToString/ToBuffer/ToHexString）等
+P1 表达式。
 多电池已做同 unit 容量合并和运行中回退；不同 unit 不混加，也不做充放电功率
 分配或跨槽均衡；`Mutex` 只是单线程占位，`_OSI` 全部返回 0，不等于 Windows 兼容层。
 `_GLK=1` 直接锁死 EC，FACS Global Lock 仍未实现。EC 只读路径在真机上尚未验证；
 本轮不宣称“真机电池已闭环”。
+**已补（第二轮，2026-11-27）**：`IndexField/BankField`（SystemIO/SystemMemory 的
+index/data/bank 通路）与 CreateDWord/Word/Byte/Bit/QWordField、CreateField 缓冲位段读写；
+建库期未识别外层对象按合法 PkgLength 跳过并记降级，诊断计数经 `aml_ns_diag` 透出。
+语料 before/after 对比见 [evidence-aml-compat-2026-11-27](../evidence-aml-compat-2026-11-27/README.md)，
+基线审计见 [evidence-aml-corpus-2026-11-27](../evidence-aml-corpus-2026-11-27/README.md)。
 
 ## 构建
 
@@ -478,12 +487,14 @@ AC 离线，以及 `rate=0` 时两项时间都不给。
 `kernel32.bin` 3,873,293 B（M2 增加 `aml64.c` + `acpi_battery.c` + `ec64.c`，
 并补 `_REG`/`_PSR`，64 位约 +20 KB）。
 
-- `tools/host-tests/run_host_tests.sh`：`通过 17 / 失败 0`；`aml_eval` 55 checks、
+- `tools/host-tests/run_host_tests.sh`：`通过 19 / 失败 0`；`aml_eval` 55 checks、
   `ec_battery` 16 checks（虚拟 EC 正路径）、`ec_glk` 12 checks（GLK 锁死）、
   `multi_battery` 9 checks（双槽位选择）、`battery_energy` 11 checks
   （速率→健康度/剩余时间）、`battery_merge` 13 checks（30%+70%→50%）、
   `battery_fallback` 11 checks（首槽坏、次槽回退）、`battery_compat` 10 checks
-  （3 元素 `_BST` + 坏 `_BIX` 回退 `_BIF`）。
+  （3 元素 `_BST` + 坏 `_BIX` 回退 `_BIF`）、`idx_bank_field` 31 checks
+  （IndexField/BankField 读写与 EC fail-closed）、`create_field` 24 checks
+  （Create*Field 缓冲拆包、建库容错、端到端 VALID）。
 - `tools/regress/smoke32.sh`：`serial=1 initrd=1 net=1 desk=1 fault=0`、
   `ktest_result=PASS`、`p3-security: passed=2 failed=0 skipped=0`。
 - 32 位只验证到“构建 + 冒烟不回归”，没有单独截 32 位桌面截图。
@@ -540,7 +551,7 @@ AC 离线，以及 `rate=0` 时两项时间都不给。
 | `m2-ec-read/` | `_GLK=0` EC 夹具：`_REG` 执行、无 EC 硬件时 `bst=-3` |
 | `m2-ec-glk/` | `_GLK=1` 锁死夹具：`lockout=1`、`reg=skip-glk`、`untrusted rc=-4` |
 | `ec-host-test.txt` | 上一轮 `run_host_tests.sh` 输出；`aml_eval` 44 checks，作为历史记录 |
-| `ec-sim-test.txt` | 本轮 `run_host_tests.sh` 输出；`aml_eval` 55 + `ec_battery` 16 + `ec_glk` 12 + `multi_battery` 9 + `battery_energy` 11 + `battery_merge` 13 + `battery_fallback` 11，`battery_compat` 10，17/0 |
+| `ec-sim-test.txt` | 本轮 `run_host_tests.sh` 输出；`aml_eval` 55 + `ec_battery` 16 + `ec_glk` 12 + `multi_battery` 9 + `battery_energy` 11 + `battery_merge` 13 + `battery_fallback` 11 + `battery_compat` 10 + `idx_bank_field` 31 + `create_field` 24，19/0 |
 | `m2-dual/` | 双槽位：`DUA0` absent 时选中 `DUA1`，面板 57%、`dual_check.py` |
 | `m2-mutex/` | `Mutex`/`Acquire/Release`/`_OSI` 夹具仍读出 57%，`mutex_check.py` |
 | `m2-discharge/` | 放电夹具 `DIS0`：1200mW → 285 分钟、健康度 100%，`discharge_check.py` 8 项 |

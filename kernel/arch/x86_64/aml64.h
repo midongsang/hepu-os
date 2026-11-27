@@ -6,17 +6,26 @@
  *
  * 支持子集（有明确边界，越界一律失败，不猜）：
  *   - 命名空间：Scope/Device/Processor/PowerRes/ThermalZone/Name/Method/Field/
- *     OperationRegion/Mutex（单线程占位）/Alias（忽略）/External（忽略）
- *   - 常见方法前缀：Acquire/Release（单线程占位）、_OSI（统一返回 0）
+ *     OperationRegion/Mutex（单线程占位）/Alias/External；建库期遇到未识别外层对象，
+ *     若带合法 PkgLength 则按长度跳过并记降级：If/Else 递归登记 then/else 两分支声明、
+ *     While 跳过 body（建库期不求值条件）；无法定位长度才硬中止，偏移/原因经 aml_ns_diag 透出。
+ *   - 方法前缀：Acquire/Release（单线程占位）、Stall/Sleep（有界占位，不做真实墙钟等待）、
+ *     _OSI（统一返回 0）
  *   - 值：整数、字符串、Buffer、Package/VarPackage
+ *   - 缓冲拆包：CreateDWord/Word/Byte/Bit/QWordField、CreateField 绑定 Buffer 位段引用，
+ *     读按位抽取、Store 回写 Buffer 对应位；越界/非 Buffer/位宽>64/负索引明确错误。
  *   - 语句：Store/CopyObject/If/Else/While/Return/Noop，Local0-7、Arg0-6
  *   - 运算：Add/Subtract/Multiply/Divide/Mod/And/Or/Xor/Not/ShiftLeft/ShiftRight/
  *     LAnd/LOr/LNot/LEqual/LGreater/LLess/Increment/Decrement
  *   - 引用：Index/DerefOf/RefOf（缓冲与包的只读元素）
- *   - 寄存器：SystemIO、SystemMemory、EmbeddedControl（经 ec64，只读、带超时）的 Field 读取
+ *   - 寄存器：SystemIO、SystemMemory、EmbeddedControl（经 ec64，只读、带超时）普通 Field 读取；
+ *     IndexField / BankField：支持 SystemIO、SystemMemory 上的索引/数据（或 region/bank）通路，
+ *     按 bit 偏移/宽度抽取，跨 granule 逐段拼装；总位宽 >64 位拒绝。
  *
- * 不支持：EC 写事务、IndexField/BankField、Mutex 跨 CPU/SMI 真同步、方法内动态命名、
- *         条件引用 CondRefOf 之外的扩展对象、Windows 兼容层（_OSI 恒 0）。
+ * 不支持：EC 写事务（因此 IndexField/BankField 的 index/data/bank 寄存器落在 EmbeddedControl 上
+ *         一律返回 AML_E_UNSUP，不写旧值/0 假装成功）、Wait/Signal 事件同步、Mutex 跨 CPU/SMI
+ *         真同步、方法内动态命名、Concatenate/Mid/ObjectType 等部分 P1 表达式、Windows 兼容层。
+ * 跳过未知对象只扩大建库覆盖面，不会让电池“看起来成功”：缺字段仍 NOTFOUND → DECLARED/UNKNOWN。
  * 这些路径失败时返回明确错误码，调用方保持“未读到”状态，绝不填假数。
  * ========================================================================== */
 
@@ -61,6 +70,13 @@ void aml_ns_reset(void);
 int aml_ns_build(const uint8_t *const *tables, const uint32_t *lens, int count);
 int aml_ns_ready(void);
 int aml_ns_nodes(void);
+
+/* 建库诊断（只读，不改 aml_ns_build 签名与调用方行为）：
+ *   degraded         建库期降级计数（跳过/容错处理的对象）；
+ *   unknown_skipped  带合法 PkgLength 按长度跳过的未识别外层对象数；
+ *   stop_off         首个无法定位长度而硬中止的偏移（相对表体，-1=未中止）。
+ * 三个指针均可为空。 */
+int aml_ns_diag(int *degraded, int *unknown_skipped, int *stop_off);
 
 /* 找 _HID 等于 eisa_id（压缩 EISA ID）或字符串 hid_str 的设备。
  * 成功返回 0 并写入设备路径（不带前导反斜杠）。

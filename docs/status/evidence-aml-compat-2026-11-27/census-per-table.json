@@ -1,0 +1,390 @@
+[
+ {
+  "table": "a16-11m-dsdt.dat",
+  "kind": "raw-binary",
+  "size": 279633,
+  "first_build": [
+   0,
+   "ObjectType"
+  ],
+  "first_eval": [
+   37,
+   "CreateByteField"
+  ]
+ },
+ {
+  "table": "a16-11m-ssdt.dat",
+  "kind": "raw-binary",
+  "size": 304,
+  "first_build": [
+   0,
+   "CreateDWordField"
+  ],
+  "first_eval": null
+ },
+ {
+  "table": "acer-ec471g-dsdt.aml",
+  "kind": "raw-binary",
+  "size": 45759,
+  "first_build": [
+   0,
+   "CreateBitField"
+  ],
+  "first_eval": [
+   761,
+   "ToHexString"
+  ]
+ },
+ {
+  "table": "acer-ec471g-ssdt1.aml",
+  "kind": "raw-binary",
+  "size": 2408,
+  "first_build": [
+   0,
+   "ConcatenateTemplate"
+  ],
+  "first_eval": [
+   114,
+   "FindSetRightBit"
+  ]
+ },
+ {
+  "table": "acer-ec471g-ssdt2.aml",
+  "kind": "raw-binary",
+  "size": 2706,
+  "first_build": null,
+  "first_eval": [
+   81,
+   "ToHexString"
+  ]
+ },
+ {
+  "table": "asus-gl552jx-dsdt.aml",
+  "kind": "raw-binary",
+  "size": 81441,
+  "first_build": [
+   0,
+   "CreateDWordField"
+  ],
+  "first_eval": [
+   4607,
+   "CreateWordField"
+  ]
+ },
+ {
+  "table": "asus-gl552jx-ssdt-cpupm.aml",
+  "kind": "raw-binary",
+  "size": 2776,
+  "first_build": null,
+  "first_eval": [
+   61,
+   "ToHexString"
+  ]
+ },
+ {
+  "table": "dell-xps9350-ssdt-cpupm.aml",
+  "kind": "raw-binary",
+  "size": 1761,
+  "first_build": [
+   0,
+   "ToBuffer"
+  ],
+  "first_eval": [
+   114,
+   "Concatenate"
+  ]
+ },
+ {
+  "table": "lenovo-14asp10-dsdt.dat",
+  "kind": "raw-binary",
+  "size": 37773,
+  "first_build": [
+   0,
+   "CreateBitField"
+  ],
+  "first_eval": [
+   3628,
+   "ObjectType"
+  ]
+ },
+ {
+  "table": "lenovo-14asp10-ssdt1.dat",
+  "kind": "raw-binary",
+  "size": 259,
+  "first_build": null,
+  "first_eval": null
+ },
+ {
+  "table": "lenovo-16afr10h-dsdt.dat",
+  "kind": "raw-binary",
+  "size": 114523,
+  "first_build": [
+   4,
+   "UnknownExtBF"
+  ],
+  "first_eval": [
+   38,
+   "ToString"
+  ]
+ },
+ {
+  "table": "lenovo-16afr10h-ssdt1.dat",
+  "kind": "raw-binary",
+  "size": 1975,
+  "first_build": [
+   1270,
+   "Sleep"
+  ],
+  "first_eval": [
+   125,
+   "Concatenate"
+  ]
+ },
+ {
+  "table": "lenovo-16afr10h-ssdt2.dat",
+  "kind": "raw-binary",
+  "size": 33133,
+  "first_build": [
+   0,
+   "FindSetLeftBit"
+  ],
+  "first_eval": [
+   1526,
+   "CreateWordField"
+  ]
+ },
+ {
+  "table": "surface-book2-dsdt.aml",
+  "kind": "reassembled",
+  "size": 102989,
+  "first_build": [
+   0,
+   "CreateDWordField"
+  ],
+  "first_eval": [
+   2094,
+   "CreateWordField"
+  ]
+ },
+ {
+  "table": "surface-book2-ssdt1.aml",
+  "kind": "reassembled",
+  "size": 9448,
+  "first_build": null,
+  "first_eval": [
+   37,
+   "Match"
+  ]
+ },
+ {
+  "table": "surface-laptop5-dsdt.aml",
+  "kind": "reassembled",
+  "size": 171439,
+  "first_build": [
+   0,
+   "Notify"
+  ],
+  "first_eval": [
+   37,
+   "ObjectType"
+  ]
+ },
+ {
+  "table": "surface-laptop5-ssdt1.aml",
+  "kind": "reassembled",
+  "size": 14810,
+  "first_build": null,
+  "first_eval": [
+   37,
+   "FindSetRightBit"
+  ]
+ },
+ {
+  "table": "surface-pro7-dsdt.aml",
+  "kind": "reassembled",
+  "size": 114974,
+  "first_build": [
+   0,
+   "CreateDWordField"
+  ],
+  "first_eval": [
+   37,
+   "CreateDWordField"
+  ]
+ },
+ {
+  "table": "surface-pro7-ssdt1.aml",
+  "kind": "reassembled",
+  "size": 45690,
+  "first_build": [
+   0,
+   "Concatenate"
+  ],
+  "first_eval": [
+   727,
+   "Concatenate"
+  ]
+ },
+ {
+  "table": "t450s-ssdt-batx.aml",
+  "kind": "raw-binary",
+  "size": 7580,
+  "first_build": [
+   0,
+   "ToString"
+  ],
+  "first_eval": [
+   480,
+   "CreateByteField"
+  ]
+ },
+ {
+  "table": "t450s-ssdt-ocbatt.aml",
+  "kind": "raw-binary",
+  "size": 3866,
+  "first_build": null,
+  "first_eval": [
+   1509,
+   "Divide"
+  ]
+ },
+ {
+  "table": "x1c6-ssdt-battery.aml",
+  "kind": "raw-binary",
+  "size": 2559,
+  "first_build": null,
+  "first_eval": [
+   982,
+   "Divide"
+  ]
+ },
+ {
+  "table": "SeaBIOS-bios.bin.dsdt@0x13f2d.aml",
+  "kind": "firmware",
+  "size": 4585,
+  "first_build": null,
+  "first_eval": [
+   252,
+   "ToHexString"
+  ]
+ },
+ {
+  "table": "SeaBIOS-bios.bin.ssdt@0x13da9.aml",
+  "kind": "firmware",
+  "size": 388,
+  "first_build": [
+   0,
+   "ConcatenateTemplate"
+  ],
+  "first_eval": [
+   81,
+   "Divide"
+  ]
+ },
+ {
+  "table": "SeaBIOS-bios.bin.ssdt@0xf280.aml",
+  "kind": "firmware",
+  "size": 121,
+  "first_build": null,
+  "first_eval": null
+ },
+ {
+  "table": "SeaBIOS-bios.bin.ssdt@0xf300.aml",
+  "kind": "firmware",
+  "size": 162,
+  "first_build": null,
+  "first_eval": null
+ },
+ {
+  "table": "syn-bankfield.aml",
+  "kind": "synthetic",
+  "size": 134,
+  "first_build": [
+   0,
+   "Notify"
+  ],
+  "first_eval": [
+   81,
+   "BankField"
+  ]
+ },
+ {
+  "table": "syn-baseline.aml",
+  "kind": "synthetic",
+  "size": 115,
+  "first_build": [
+   0,
+   "Concatenate"
+  ],
+  "first_eval": null
+ },
+ {
+  "table": "syn-condrefof.aml",
+  "kind": "synthetic",
+  "size": 113,
+  "first_build": [
+   0,
+   "RefOf"
+  ],
+  "first_eval": [
+   66,
+   "CondRefOf"
+  ]
+ },
+ {
+  "table": "syn-create-dword.aml",
+  "kind": "synthetic",
+  "size": 122,
+  "first_build": null,
+  "first_eval": [
+   76,
+   "CreateDWordField"
+  ]
+ },
+ {
+  "table": "syn-ec-region.aml",
+  "kind": "synthetic",
+  "size": 152,
+  "first_build": [
+   0,
+   "ToHexString"
+  ],
+  "first_eval": null
+ },
+ {
+  "table": "syn-extfield.aml",
+  "kind": "synthetic",
+  "size": 118,
+  "first_build": [
+   81,
+   "DataRegion"
+  ],
+  "first_eval": [
+   81,
+   "DataRegion"
+  ]
+ },
+ {
+  "table": "syn-indexfield.aml",
+  "kind": "synthetic",
+  "size": 146,
+  "first_build": [
+   0,
+   "Mid"
+  ],
+  "first_eval": [
+   93,
+   "IndexField"
+  ]
+ },
+ {
+  "table": "syn-osi-branch.aml",
+  "kind": "synthetic",
+  "size": 116,
+  "first_build": null,
+  "first_eval": [
+   80,
+   "Concatenate"
+  ]
+ }
+]

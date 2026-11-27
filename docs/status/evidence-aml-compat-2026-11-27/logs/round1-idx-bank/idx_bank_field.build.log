@@ -1,0 +1,5 @@
+idx_bank_field 编译日志（ASan+UBSan）
+命令: gcc -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -fno-common -w -DAML_HOST_TEST
+      -I$ARCH -I$ARCH/include -Ikernel/include -Ikernel/shared -Ikernel/shared/fs
+      tools/host-tests/idx_bank_field_test.c $ARCH/aml64.c $ARCH/acpi_battery.c $ARCH/ec64.c
+结果: 退出码 0，无 warning / error（原始 build.log 为空，与既有主机测试一致）。

@@ -1,0 +1,5 @@
+field_op	count	<=8	9-16	17-32	33-64	>64	tables
+BankField	1	0	1	0	0	0	syn-bankfield.aml
+DataRegion	1	0	1	0	0	0	syn-extfield.aml
+Field	15	3	1	2	3	6	SeaBIOS-bios.bin.dsdt@0x13f2d.aml,a16-11m-dsdt.dat,asus-gl552jx-dsdt.aml,surface-pro7-dsdt.aml,syn-ec-region.aml
+IndexField	1	0	1	0	0	0	syn-indexfield.aml

@@ -1,0 +1,19 @@
+ M kernel/arch/x86_64/aml64.c
+ M kernel/arch/x86_64/aml64.h
+ M kernel/arch/x86_64/hpdesk.c
+ M tools/host-tests/battery_ssdt_blobs.h
+ M tools/host-tests/run_host_tests.sh
+ M tools/regress/make_battery_ssdt.py
+?? docs/status/evidence-aml-compat-2026-11-27/
+?? docs/status/evidence-aml-corpus-2026-11-27/
+?? tools/host-tests/aml_corpus_probe.c
+?? tools/host-tests/create_field_test.c
+?? tools/host-tests/idx_bank_field_test.c
+?? tools/regress/aml_census.py
+?? tools/regress/appearance_hit_probe.sh
+?? tools/regress/build_stop_check.py
+?? tools/regress/make_corpus_fixtures.py
+?? tools/regress/prepare_aml_corpus.py
+?? tools/regress/run_aml_compat_probe.sh
+?? tools/regress/run_aml_corpus_probe.sh
+?? tools/regress/summarize_probe.py
