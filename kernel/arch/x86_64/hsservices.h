@@ -81,6 +81,7 @@ typedef struct {
 int hs_audio_init(void);
 void hs_audio_set_volume(int vol);
 int hs_audio_get_volume(void);
+int hs_audio_is_ready(void);
 void hs_audio_mute(void);
 void hs_audio_unmute(void);
 int hs_audio_is_muted(void);

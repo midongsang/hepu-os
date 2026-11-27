@@ -28,6 +28,38 @@ extern void vga_printf(const char *fmt, ...);
 /* 内核堆释放: 文件内壁纸回滚路径先于局部 extern 声明调用, 顶部前置原型消除隐式声明 */
 extern void kfree(void *ptr);
 
+/* ----------------------------------------------------------------------------
+ * 桌面视觉 token（1024x768 逻辑坐标）
+ *
+ * 只做“新代码/热点区域”的统一入口，不在这轮做全文件替换。目的很具体：
+ * 现在同一个 12px 圆角在 Settings、控制中心、通知里各写一遍，改一处就会漂；
+ * 顶栏高度也同时存在 32/36 两个口径。后续视觉批次一律先来这里取值。
+ * -------------------------------------------------------------------------- */
+#define HS_SP_XS     2
+#define HS_SP_S      4
+#define HS_SP_M      8
+#define HS_SP_L      12
+#define HS_SP_XL     16
+#define HS_SP_2XL    24
+
+#define HS_RADIUS_XS 4
+#define HS_RADIUS_S  12
+#define HS_RADIUS_M  17
+#define HS_RADIUS_L  23
+#define HS_RADIUS_XL 28
+
+#define HS_ICON_S    16
+#define HS_ICON_M    24
+#define HS_ICON_L    32
+
+#define HS_CONTROL_S 32
+#define HS_CONTROL_M 40
+#define HS_CONTROL_L 48
+#define HS_CONTROL_XL 56
+
+#define HS_BAR_HEIGHT_DEFAULT 32
+#define HS_WEATHER_PAD 24
+
 /* V0.13.10: 缺失接口恢复 — 切换器渲染前向声明 */
 static void hs_switcher_render(void);
 
@@ -646,10 +678,9 @@ static const char *default_config =
 "    cc_width: 280\n"
 "    ui_scale: 100\n"
 "    cc_height: 440\n"
-"    bar_height: 36\n"
+"    bar_height: 32\n"
 "    island_width: 120\n"
 "    island_height: 28\n"
-"    island_y: 12\n"
 "    island_font_size: 20\n"
 "    dock_width: 400\n"
 "    dock_height: 64\n"
@@ -747,10 +778,9 @@ static void load_ui_from_config(hsqml_node_t *ui)
     if (g_ui_scale_pct < 100) g_ui_scale_pct = 100;
     if (g_ui_scale_pct > 250) g_ui_scale_pct = 250;
     g_shell.ui.cc_height = hsqml_get_number(ui, "cc_height", 440);
-    g_shell.ui.bar_height = hsqml_get_number(ui, "bar_height", 36);
+    g_shell.ui.bar_height = hsqml_get_number(ui, "bar_height", HS_BAR_HEIGHT_DEFAULT);
     g_shell.ui.island_width = hsqml_get_number(ui, "island_width", 120);
     g_shell.ui.island_height = hsqml_get_number(ui, "island_height", 28);
-    g_shell.ui.island_y = hsqml_get_number(ui, "island_y", 6);
     g_shell.ui.island_font_size = hsqml_get_number(ui, "island_font_size", 20);
     g_shell.ui.dock_width = hsqml_get_number(ui, "dock_width", 400);
     g_shell.ui.dock_height = hsqml_get_number(ui, "dock_height", 64);
@@ -4332,6 +4362,27 @@ int hs_panel_is_enabled(const char *name)
     return 0;
 }
 
+/* 灵动岛矩形: 绘制、阴影和面板包围盒必须共用这一处。
+ * 旧实现 render 按顶栏居中算 y，panel_bounds 却读 config 的 island_y，
+ * 两者在 150% 下相差十几像素，胶囊层会被静默裁掉一边。 */
+static void hs_island_rect(int *ox, int *oy, int *ow, int *oh)
+{
+    int ww = hs_sx(g_shell.ui.island_width);
+    int hh = hs_sy(g_shell.ui.island_height);
+    int e = hs_ease_out_cubic(g_island_t);
+    int tw = hs_sx(360), th = hs_sy(120);
+    int w = ww + (tw - ww) * e / 100;
+    int h = hh + (th - hh) * e / 100;
+    int x = (g_shell.screen_width - w) / 2;
+    int bar_top = hs_sy(8);
+    int bar_h = hs_sy(g_shell.ui.bar_height);
+    int y = bar_top + (bar_h - h) / 2;
+    if (y < bar_top) y = bar_top;
+    int max_h = g_shell.screen_height - y - hs_sy(8);
+    if (max_h > 0 && h > max_h) h = max_h;
+    *ox = x; *oy = y; *ow = w; *oh = h;
+}
+
 /* V0.59.17 面板包围盒: 局部脏区帧只重画与脏区相交的面板。
  * 矩形一律取"比实际绘制区域略大"的保守值 —— 多画一像素只是浪费, 少画就是残影。 */
 static int hs_panel_bounds(int idx, int *ox, int *oy, int *ow, int *oh)
@@ -4353,9 +4404,10 @@ static int hs_panel_bounds(int idx, int *ox, int *oy, int *ow, int *oh)
         }
         return 1;
     case HS_PANEL_DYNAMIC_ISLAND: {
-        int iw = hs_sx(g_shell.ui.island_width), ih = hs_sy(g_shell.ui.island_height);
-        *ox = (sw - iw) / 2 - hs_sx(8);
-        *oy = hs_sy(g_shell.ui.island_y) - hs_sy(8);
+        int iw, ih, ix, iy;
+        hs_island_rect(&ix, &iy, &iw, &ih);
+        *ox = ix - hs_sx(8);
+        *oy = iy - hs_sy(8);
         *ow = iw + hs_sx(16); *oh = ih + hs_sy(16);
         return 1;
     }
@@ -4561,34 +4613,8 @@ void hs_panel_render_all(void)
 /* 灵动岛：顶部中央胶囊，显示时间 */
 static void hs_dynamic_island_render(void)
 {
-    int island_w = hs_sx(g_shell.ui.island_width);
-    int island_h = hs_sy(g_shell.ui.island_height);
-    int island_x = (g_shell.screen_width - island_w) / 2;
-    /* V0.59.29: 胶囊垂直居中于顶栏。原来 y 直接取 config 的 island_y(12),
-     * 实测胶囊 12..52 / 顶栏 12..70 —— 贴上沿, 下面空 18px, 偏上 9px。
-     * 居中口径: bar_top + (bar_h - island_h)/2; 展开时 island_h 超过 bar_h,
-     * 钳到 bar_top 让它往下长, 而不是上下同时超出。 */
-    int bar_top = hs_sy(8);
-    int bar_h = hs_sy(g_shell.ui.bar_height);
-    int island_y = bar_top + (bar_h - island_h) / 2;
-    if (island_y < bar_top) island_y = bar_top;
-    {
-        int max_h = g_shell.screen_height - island_y - hs_sy(8);
-        if (max_h > 0 && island_h > max_h) island_h = max_h;
-    }
-
-    {
-        /* P0: 展开/收起尺寸连续插值(缓动), 不再是瞬跳 */
-        int e = hs_ease_out_cubic(g_island_t);
-        int ww = hs_sx(g_shell.ui.island_width), hh = hs_sy(g_shell.ui.island_height);
-        int tw = hs_sx(360), th = hs_sy(120);
-        island_w = ww + (tw - ww) * e / 100;
-        island_h = hh + (th - hh) * e / 100;
-        island_x = (g_shell.screen_width - island_w) / 2;
-        /* 高度变了, y 跟着重算, 保证动画过程中也始终居中 */
-        island_y = bar_top + (bar_h - island_h) / 2;
-        if (island_y < bar_top) island_y = bar_top;
-    }
+    int island_x, island_y, island_w, island_h;
+    hs_island_rect(&island_x, &island_y, &island_w, &island_h);
 
     hs_fill_rounded_rect(island_x, island_y, island_w, island_h, hs_s(15),
                             g_shell.colors.titlebar_bg);
@@ -5266,8 +5292,18 @@ static void hs_weather_widget_render(void)
      * 卡片只剩一块纯色方块, 看不出是"没数据"还是"渲染坏了"。 */
     /* V0.57.0: 取到响应但字段没解析出来时, g_weather_ok 已是 1 而两个字符串还是空串,
      * 卡片就退化成一块纯色方块 —— 看起来像"没接数据"或"渲染坏了"。按字段回退占位。 */
-    const char *tstr = (g_weather_ok && g_weather_temp[0]) ? g_weather_temp : "--";
-    const char *dstr = (g_weather_ok && g_weather_desc[0]) ? g_weather_desc : "N/A";
+    if (!g_weather_ok || !g_weather_temp[0]) {
+        font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                           wx + hs_sx(18), wy + hs_sy(16), "Weather",
+                           hs_on_accent(), hs_s(16));
+        font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                           wx + hs_sx(18), wy + hs_sy(46), "No network",
+                           hs_on_accent(), hs_s(14));
+        return;
+    }
+
+    const char *tstr = g_weather_temp;
+    const char *dstr = g_weather_desc[0] ? g_weather_desc : "Current";
 
     font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                        wx + hs_sx(20), wy + hs_sy(15), (char *)tstr, hs_on_accent(), hs_s(g_shell.ui.weather_temp_font));
@@ -5874,37 +5910,44 @@ static void hs_sidebar_render(void)
             }
         }
     } else {
-        /* 天气标签 */
+        /* 天气标签：只渲染真实抓取到的温度/天气现象。
+         * 旧实现硬编码 26C / Cloudy / Humidity 65% / Wind 12km/h / 五天预报，
+         * 在无网络时也照常显示，等于假数据；现改为无数据即明确空状态。 */
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            sx + hs_sx(20), content_y, "Weather", g_shell.colors.panel_fg, hs_s(18));
-        content_y += hs_sy(40);
+        content_y += hs_sy(42);
 
-        /* 大温度 */
-        font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           sx + hs_sx(20), content_y, "26", g_shell.colors.accent, hs_s(64));
-        font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           sx + hs_sx(90), content_y + hs_sy(10), "C", g_shell.colors.panel_fg, hs_s(24));
-        content_y += hs_sy(70);
-
-        font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           sx + hs_sx(20), content_y, "Cloudy", g_shell.colors.panel_fg, hs_s(16));
-        content_y += hs_sy(24);
-        font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           sx + hs_sx(20), content_y, "Humidity: 65%", g_shell.colors.panel_fg, hs_s(12));
-        content_y += hs_sy(18);
-        font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           sx + hs_sx(20), content_y, "Wind: 12 km/h", g_shell.colors.panel_fg, hs_s(12));
-        content_y += hs_sy(30);
-
-        /* 5天预报 */
-        const char *days[] = {"Mon", "Tue", "Wed", "Thu", "Fri"};
-        const char *temps[] = {"26", "28", "25", "27", "24"};
-        for (int i = 0; i < 5; i++) {
-            int dx = sx + hs_sx(20) + i * hs_sx(48);
+        if (g_weather_ok && g_weather_temp[0]) {
             font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                               dx, content_y, days[i], g_shell.colors.panel_fg, hs_s(10));
+                               sx + hs_sx(20), content_y, g_weather_temp,
+                               g_shell.colors.accent, hs_s(64));
+            int tw = 0;
+            while (g_weather_temp[tw]) tw++;
             font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                               dx + hs_sx(8), content_y + hs_sy(16), temps[i], g_shell.colors.accent, hs_s(14));
+                               sx + hs_sx(20) + hs_sx(30) + tw * hs_sx(34),
+                               content_y + hs_sy(10), "C",
+                               g_shell.colors.panel_fg, hs_s(24));
+            content_y += hs_sy(78);
+            font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                               sx + hs_sx(20), content_y,
+                               g_weather_desc[0] ? g_weather_desc : "Current conditions",
+                               g_shell.colors.panel_fg, hs_s(16));
+            content_y += hs_sy(30);
+            font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                               sx + hs_sx(20), content_y, "Source: t.weather.itboy.net",
+                               g_shell.colors.text_secondary, hs_s(10));
+        } else {
+            font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                               sx + hs_sx(20), content_y, "No current reading",
+                               g_shell.colors.panel_fg, hs_s(20));
+            content_y += hs_sy(32);
+            font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                               sx + hs_sx(20), content_y, "Weather service unavailable.",
+                               g_shell.colors.text_secondary, hs_s(12));
+            content_y += hs_sy(20);
+            font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                               sx + hs_sx(20), content_y, "Check network and retry.",
+                               g_shell.colors.text_secondary, hs_s(12));
         }
     }
 }
@@ -5968,8 +6011,10 @@ static void cc_geometry(int *cx, int *cy, int *cw, int *ch)
      * (150% 实测: 通知区 65~195, QC 顶 162)。 */
     {
         int nvis = 0;
-        for (int i = 0; i < g_shell.notifications.count; i++)
-            if (g_shell.notifications.notifications[i].visible) nvis++;
+        if (!g_shell.cc.toggles[3]) {
+            for (int i = 0; i < g_shell.notifications.count; i++)
+                if (g_shell.notifications.notifications[i].visible) nvis++;
+        }
         if (nvis > 3) nvis = 3;
         /* 只有右上通知(0)会和 QC 顶部抢位置; 右下(2)通知在屏幕底部, 不影响 */
         int top_side = (g_notif_pos == 0);
@@ -5983,6 +6028,102 @@ static void cc_geometry(int *cx, int *cy, int *cw, int *ch)
             }
         }
     }
+}
+
+/* 控制中心布局: 绘制与命中共用一套矩形。旧代码 render 用 cy+38 / 42 步长,
+ * 点击却用 cy+48 / 46 步长, 150% 下卡片和命中区差十几像素, 点了没反应。 */
+typedef struct {
+    int cx, cy, cw, ch;
+    int rail_w, pad, rx, rw;
+    int nav_x, nav_y0, nav_w, nav_h, nav_step;
+    int cards_x, cards_y, gap, card_w, card_h;
+    int volume_y, brightness_y, slider_h;
+    int devices_y0, device_h, device_step;
+    int audio_vol_y, audio_bright_y, note_y, audio_toggle_y, audio_toggle_size;
+} hs_cc_layout_t;
+
+static void cc_layout_get(hs_cc_layout_t *L)
+{
+    cc_geometry(&L->cx, &L->cy, &L->cw, &L->ch);
+    L->rail_w = hs_sx(CC_RAIL_W);
+    L->pad = hs_sx(CC_PAD);
+    L->nav_x = L->cx + hs_sx(8);
+    L->nav_y0 = L->cy + hs_sy(10);
+    L->nav_w = L->rail_w - hs_sx(16);
+    L->nav_h = hs_sy(34);
+    L->nav_step = hs_sy(42);
+    L->rx = L->cx + L->rail_w + L->pad;
+    L->rw = L->cw - L->rail_w - L->pad * 2;
+    L->gap = hs_sx(8);
+    L->card_w = (L->rw - 2 * L->gap) / 3;
+    L->card_h = L->card_w;
+    L->cards_x = L->rx;
+    L->cards_y = L->cy + hs_sy(38);
+    L->slider_h = hs_sy(52);
+    L->volume_y = L->cards_y + 2 * L->card_h + L->gap + hs_sy(6);
+    L->brightness_y = L->volume_y + hs_sy(58);
+    L->devices_y0 = L->cy + hs_sy(38);
+    L->device_h = hs_sy(44);
+    L->device_step = hs_sy(50);
+    L->audio_vol_y = L->cy + hs_sy(52);
+    L->audio_bright_y = L->cy + hs_sy(160);
+    L->note_y = L->cy + hs_sy(276);
+    L->audio_toggle_y = L->cy + hs_sy(300);
+    L->audio_toggle_size = hs_sy(80);
+}
+
+#ifdef __x86_64__
+extern int hs_audio_is_ready(void);
+extern void hs_audio_set_volume(int vol);
+extern int e1000_available(void);
+extern int e1000_link_status(void);
+#else
+static int hs_audio_is_ready(void) { return 0; }
+static void hs_audio_set_volume(int vol) { (void)vol; }
+#endif
+
+/* 当前只有一个开关有真实后端: DND 直接抑制通知弹窗。
+ * 其余五项没有驱动, UI 必须显示 N/A 并拒绝点击, 而不是翻一个内存变量。 */
+static int cc_toggle_available(int i)
+{
+    return i == 3;
+}
+
+static const char *cc_toggle_reason(int i)
+{
+    switch (i) {
+    case 0: return "No WiFi adapter";
+    case 1: return "No Bluetooth adapter";
+    case 2: return "No radio backend";
+    case 4: return "No location provider";
+    case 5: return "No torch device";
+    default: return "";
+    }
+}
+
+static int cc_audio_available(void)
+{
+#ifdef __x86_64__
+    return hs_audio_is_ready();
+#else
+    return 0;
+#endif
+}
+
+static int cc_brightness_available(void)
+{
+    /* 当前没有任何面板背光驱动；亮度条只能显示 N/A。 */
+    return 0;
+}
+
+static const char *cc_eth_status(void)
+{
+#ifdef __x86_64__
+    if (!e1000_available()) return "No driver";
+    return e1000_link_status() ? "Up" : "Down";
+#else
+    return "No driver";
+#endif
 }
 
 /* 开关卡片：开启态用强调色填充，关闭态用次要表面 */
@@ -6052,20 +6193,24 @@ static __attribute__((unused)) void cc_icon_draw(int kind, int cx, int cy, int r
     }
 }
 
-/* 方形开关卡片: 图标居中, 名称在下 */
+/* 方形开关卡片: 图标居中, 名称在下。不可用项降亮度并标 N/A。 */
 static void cc_toggle_card(void *fb, int x, int y, int w, int h,
-                           int on, const char *label, int icon_kind)
+                           int on, const char *label, int icon_kind,
+                           int available)
 {
+    if (!available) on = 0;
     uint32_t bg = on ? g_shell.colors.accent : g_shell.colors.titlebar_bg;
     uint32_t fg = on ? hs_on_accent() : g_shell.colors.panel_fg;
-    hs_fill_rounded_rect(x, y, w, h, hs_s(12), bg);
-    if (!on) hs_draw_rounded_rect(x, y, w, h, hs_s(12), g_shell.colors.border);
+    if (!available) fg = g_shell.colors.text_secondary;
+    hs_fill_rounded_rect(x, y, w, h, hs_s(HS_RADIUS_S), bg);
+    if (!on) hs_draw_rounded_rect(x, y, w, h, hs_s(HS_RADIUS_S),
+                                  available ? g_shell.colors.border
+                                            : g_shell.colors.text_secondary);
 
     int icx = x + w / 2;
     int icy = y + h / 2 - hs_sy(12);
     {
-        /* 图标全部取系统现成位图(hs_icons_data.h 里那套 32x32 单色图标),
-         * 不再手绘 —— 手绘的 BT 像字母、Torch 像杯子, 和顶栏那套图标风格不统一。 */
+        /* 图标全部取系统现成位图(32x32 单色图标), 和顶栏同一套线条。 */
         const uint32_t *bm = hs_ico_wifi;      /* 0 WiFi */
         if (icon_kind == 1) bm = hs_ico_share;      /* BT */
         else if (icon_kind == 2) bm = hs_ico_cast;  /* Air */
@@ -6082,30 +6227,44 @@ static void cc_toggle_card(void *fb, int x, int y, int w, int h,
     if (lx < x + hs_sx(4)) lx = x + hs_sx(4);
     font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                        lx, y + h - hs_sy(30), label, fg, fs);
+
+    if (!available) {
+        font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                           x + hs_sx(6), y + hs_sy(6), "N/A",
+                           g_shell.colors.text_secondary, hs_s(9));
+    }
 }
 
-/* 滑块卡片：标题 + 百分比 + 轨道 */
+/* 滑块卡片: 标题 + 百分比 + 轨道。没有后端的滑块显示 N/A 且不可拖动。 */
 static void cc_slider_card(void *fb, int x, int y, int w, int h,
-                           const char *label, int val)
+                           const char *label, int val, int available,
+                           const char *na_reason)
 {
+    uint32_t title_fg = available ? g_shell.colors.panel_fg
+                                  : g_shell.colors.text_secondary;
     hs_fill_rounded_rect(x, y, w, h, hs_s(10), g_shell.colors.titlebar_bg);
-    hs_draw_rounded_rect(x, y, w, h, hs_s(10), g_shell.colors.border);
+    hs_draw_rounded_rect(x, y, w, h, hs_s(10),
+                         available ? g_shell.colors.border
+                                   : g_shell.colors.text_secondary);
 
     char vb[8];
-    int p = 0;
-    if (val >= 100) {
-        vb[p++] = '1'; vb[p++] = '0'; vb[p++] = '0';
-    } else if (val >= 10) {
-        vb[p++] = '0' + val / 10; vb[p++] = '0' + val % 10;
+    if (!available) {
+        vb[0] = 'N'; vb[1] = '/'; vb[2] = 'A'; vb[3] = 0;
     } else {
-        vb[p++] = '0' + val;
+        int p = 0;
+        if (val >= 100) {
+            vb[p++] = '1'; vb[p++] = '0'; vb[p++] = '0';
+        } else if (val >= 10) {
+            vb[p++] = '0' + val / 10; vb[p++] = '0' + val % 10;
+        } else {
+            vb[p++] = '0' + val;
+        }
+        vb[p++] = '%';
+        vb[p] = 0;
     }
-    vb[p++] = '%';
-    vb[p] = 0;
 
     font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                       x + hs_sx(14), y + hs_sy(12), label,
-                       g_shell.colors.panel_fg, hs_s(13));
+                       x + hs_sx(14), y + hs_sy(12), label, title_fg, hs_s(13));
     font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                        x + w - hs_sx(52), y + hs_sy(12), vb,
                        g_shell.colors.text_secondary, hs_s(12));
@@ -6113,13 +6272,19 @@ static void cc_slider_card(void *fb, int x, int y, int w, int h,
     int tx = x + hs_sx(14);
     int tw = w - hs_sx(28);
     int ty = y + h - hs_sy(22);
-    int fill = tw * val / 100;
+    int fill = available ? tw * val / 100 : 0;
     int barh = hs_sy(8);
-    hs_fill_rounded_rect(tx, ty, tw, barh, hs_s(4), g_shell.colors.border);
-    if (fill > hs_sx(8))
-        hs_fill_rounded_rect(tx, ty, fill, barh, hs_s(4), g_shell.colors.accent);
-    hs_fill_circle(tx + fill - hs_sx(8), ty + barh / 2, hs_s(7),
-                      g_shell.colors.accent);
+    if (available) {
+        hs_fill_rounded_rect(tx, ty, tw, barh, hs_s(4), g_shell.colors.border);
+        if (fill > hs_sx(8))
+            hs_fill_rounded_rect(tx, ty, fill, barh, hs_s(4), g_shell.colors.accent);
+        hs_fill_circle(tx + fill - hs_sx(8), ty + barh / 2, hs_s(7),
+                       g_shell.colors.accent);
+    } else if (na_reason && na_reason[0]) {
+        font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                           x + hs_sx(14), ty, na_reason,
+                           g_shell.colors.text_secondary, hs_s(9));
+    }
 }
 
 /* 把颜色按比例压暗(保留 k%, 用于绘制浮层投影的阶梯暗边)。
@@ -6249,106 +6414,120 @@ void hs_cc_shadow_paint(void)
     hs_sh_paint(0, cx, cy, cw, ch, hs_s(12), 30);
 }
 
+static void cc_device_row(void *fb, int x, int y, int w, int h,
+                          const char *label, const char *status, int active)
+{
+    hs_fill_rounded_rect(x, y, w, h, hs_s(10), g_shell.colors.titlebar_bg);
+    hs_draw_rounded_rect(x, y, w, h, hs_s(10), g_shell.colors.border);
+    font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                       x + hs_sx(14), y + (h - hs_s(12)) / 2, label,
+                       g_shell.colors.panel_fg, hs_s(12));
+    int sw = hs_text_width(status, hs_s(10));
+    uint32_t sc = active ? g_shell.colors.accent : g_shell.colors.text_secondary;
+    font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                       x + w - hs_sx(14) - sw, y + (h - hs_s(10)) / 2,
+                       status, sc, hs_s(10));
+    hs_fill_circle(x + w - hs_sx(7), y + h / 2, hs_s(3),
+                   active ? g_shell.colors.accent : g_shell.colors.border);
+}
+
 static void hs_control_center_render(void)
 {
     if (!g_cc_open) return;
-    int cx, cy, cw, ch;
-    cc_geometry(&cx, &cy, &cw, &ch);
+    hs_cc_layout_t L;
+    cc_layout_get(&L);
 
-    /* 浮层层次: QC 会压住天气卡(设计稿里两者纵向本就叠 60 逻辑像素),
-     * 之前两块同色卡片叠在一起像"画错了"。这里加两层阶梯暗边做投影,
-     * 让被压住的组件自然退到后面 —— 不改任何几何, 只改观感。 */
-    /* 同心微扩散替代原来的"右下偏移暗块": 旧做法偏移 +6/+8 且压到 22%,
-     * 在浅色壁纸上是一条生硬的深色厚边。改为零偏移、每级 2px 外扩,
-     * 亮度逐级加深, 视觉上是柔和的边缘渐变而不是投影块。 */
-    /* 阴影由 hs_cc_shadow_paint() 在层合成前画到主 fb(和窗口阴影同一套模糊),
-     * 这里不再自己叠暗边, 只保留面板本体 + border。 */
-    hs_fill_rounded_rect(cx, cy, cw, ch, hs_s(12), g_shell.colors.window_bg);
-    hs_draw_rounded_rect(cx, cy, cw, ch, hs_s(12), g_shell.colors.border);
+    /* 面板本体: 阴影由 hs_cc_shadow_paint() 在层合成前画到主 fb。 */
+    hs_fill_rounded_rect(L.cx, L.cy, L.cw, L.ch, hs_s(12), g_shell.colors.window_bg);
+    hs_draw_rounded_rect(L.cx, L.cy, L.cw, L.ch, hs_s(12), g_shell.colors.border);
 
     void *fb = hs_get_framebuffer();
-    int rail_w = hs_sx(CC_RAIL_W);
-    int pad = hs_sx(CC_PAD);
 
     /* 导航栏（Clavis NavigationRail） */
     const char *nav[] = {"Quick", "Devices", "Audio"};
     for (int i = 0; i < 3; i++) {
-        int nx = cx + hs_sx(8);
-        int ny = cy + hs_sy(10) + i * hs_sy(42);
-        int nw = rail_w - hs_sx(16);
-        int nh = hs_sy(34);
+        int nx = L.nav_x;
+        int ny = L.nav_y0 + i * L.nav_step;
         uint32_t bg = (i == g_cc_page) ? g_shell.colors.accent : g_shell.colors.window_bg;
         uint32_t fg = (i == g_cc_page) ? hs_on_accent() : g_shell.colors.panel_fg;
         if (i != g_cc_page)
-            hs_fill_rounded_rect(nx, ny, nw, nh, hs_s(8), g_shell.colors.titlebar_bg);
+            hs_fill_rounded_rect(nx, ny, L.nav_w, L.nav_h, hs_s(8), g_shell.colors.titlebar_bg);
         else
-            hs_fill_rounded_rect(nx, ny, nw, nh, hs_s(8), bg);
+            hs_fill_rounded_rect(nx, ny, L.nav_w, L.nav_h, hs_s(8), bg);
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            nx + hs_sx(12), ny + hs_sy(12), nav[i], fg, hs_s(13));
     }
 
-    int rx = cx + rail_w + pad;
-    int rw = cw - rail_w - pad * 2;
     const char *toggles[] = {"WiFi", "BT", "Air", "DND", "Loc", "Torch"};
 
     if (g_cc_page == 0) {
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           rx, cy + hs_sy(12), "Quick Controls",
+                           L.rx, L.cy + hs_sy(12), "Quick Controls",
                            g_shell.colors.panel_fg, hs_s(15));
-        /* 3 列 2 行正方形: 图标 + 名称, 不再是六个文字长条。
-         * 间距 10->8、标题 y 18->12、卡片区 48->38, 滑块紧接卡片底部往下排,
-         * 面板高度随内容收(390), 不再留一大片空白。 */
-        int gap = hs_sx(8);
-        int card_w = (rw - 2 * gap) / 3;
-        int card_h = card_w;
-        int cards_y = cy + hs_sy(38);
         for (int i = 0; i < 6; i++) {
-            int tx = rx + (i % 3) * (card_w + gap);
-            int ty = cards_y + (i / 3) * (card_h + gap);
-            cc_toggle_card(fb, tx, ty, card_w, card_h, g_shell.cc.toggles[i],
-                           toggles[i], i);
+            int tx = L.cards_x + (i % 3) * (L.card_w + L.gap);
+            int ty = L.cards_y + (i / 3) * (L.card_h + L.gap);
+            cc_toggle_card(fb, tx, ty, L.card_w, L.card_h,
+                           g_shell.cc.toggles[i], toggles[i], i,
+                           cc_toggle_available(i));
         }
-        int sl_y = cards_y + 2 * card_h + gap + hs_sy(6);
-        cc_slider_card(fb, rx, sl_y, rw, hs_sy(52), "Volume", g_shell.cc.volume);
-        cc_slider_card(fb, rx, sl_y + hs_sy(58), rw, hs_sy(52), "Brightness",
-                       g_shell.cc.brightness);
+        cc_slider_card(fb, L.rx, L.volume_y, L.rw, L.slider_h,
+                       "Volume", g_shell.cc.volume, cc_audio_available(),
+                       "No AC'97 device");
+        cc_slider_card(fb, L.rx, L.brightness_y, L.rw, L.slider_h,
+                       "Brightness", g_shell.cc.brightness, cc_brightness_available(),
+                       "No backlight driver");
     } else if (g_cc_page == 1) {
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           rx, cy + hs_sy(18), "Devices",
-                           g_shell.colors.panel_fg, hs_s(16));
+                           L.rx, L.cy + hs_sy(12), "Devices",
+                           g_shell.colors.panel_fg, hs_s(15));
+        const char *labels[] = {"Ethernet", "Audio", "DND", "WiFi", "Bluetooth", "Backlight"};
+        const char *stats[6];
+        int act[6];
+        stats[0] = cc_eth_status();
+        act[0] = (stats[0][0] == 'U');
+        stats[1] = cc_audio_available() ? "Ready" : "No AC'97";
+        act[1] = cc_audio_available();
+        stats[2] = g_shell.cc.toggles[3] ? "On" : "Off";
+        act[2] = g_shell.cc.toggles[3];
+        stats[3] = "No adapter";
+        act[3] = 0;
+        stats[4] = "No adapter";
+        act[4] = 0;
+        stats[5] = "No driver";
+        act[5] = 0;
         for (int i = 0; i < 6; i++) {
-            int ry = cy + hs_sy(38) + i * hs_sy(50);
-            hs_fill_rounded_rect(rx, ry, rw, hs_sy(44), hs_s(10),
-                                    g_shell.colors.titlebar_bg);
-            hs_draw_rounded_rect(rx, ry, rw, hs_sy(44), hs_s(10),
-                                    g_shell.colors.border);
-            font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                               rx + hs_sx(14), ry + hs_sy(16), toggles[i],
-                               g_shell.colors.panel_fg, hs_s(13));
-            const char *stt = g_shell.cc.toggles[i] ? "On" : "Off";
-            uint32_t stc = g_shell.cc.toggles[i] ? g_shell.colors.accent
-                                                : g_shell.colors.text_secondary;
-            font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                               rx + rw - hs_sx(44), ry + hs_sy(16), stt, stc,
-                               hs_s(12));
-            hs_fill_circle(rx + rw - hs_sx(16), ry + hs_sy(24), hs_s(5), stc);
+            int ry = L.devices_y0 + i * L.device_step;
+            cc_device_row(fb, L.rx, ry, L.rw, L.device_h,
+                          labels[i], stats[i], act[i]);
         }
     } else {
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           rx, cy + hs_sy(18), "Audio & Display",
-                           g_shell.colors.panel_fg, hs_s(16));
-        cc_slider_card(fb, rx, cy + hs_sy(52), rw, hs_sy(96), "Volume",
-                       g_shell.cc.volume);
-        cc_slider_card(fb, rx, cy + hs_sy(160), rw, hs_sy(96), "Brightness",
-                       g_shell.cc.brightness);
-        const char *note = "Adjust output level and panel backlight.";
+                           L.rx, L.cy + hs_sy(12), "Audio & Display",
+                           g_shell.colors.panel_fg, hs_s(15));
+        cc_slider_card(fb, L.rx, L.audio_vol_y, L.rw, hs_sy(96),
+                       "Volume", g_shell.cc.volume, cc_audio_available(),
+                       "No AC'97 device");
+        cc_slider_card(fb, L.rx, L.audio_bright_y, L.rw, hs_sy(96),
+                       "Brightness", g_shell.cc.brightness, cc_brightness_available(),
+                       "No backlight driver");
+        const char *note;
+        if (!cc_audio_available() && !cc_brightness_available())
+            note = "No audio or backlight hardware.";
+        else if (!cc_audio_available())
+            note = "No AC'97 audio device.";
+        else if (!cc_brightness_available())
+            note = "No backlight controller.";
+        else
+            note = "Volume writes AC'97 master attenuation.";
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           rx, cy + hs_sy(276), note,
-                           g_shell.colors.text_secondary, hs_s(11));
-        cc_toggle_card(fb, rx, cy + hs_sy(300), hs_sy(80), hs_sy(80),
-                       g_shell.cc.toggles[3], "DND", 3);
-        cc_toggle_card(fb, rx + hs_sy(90), cy + hs_sy(300), hs_sy(80), hs_sy(80),
-                       g_shell.cc.toggles[5], "Torch", 5);
+                           L.rx, L.note_y, note,
+                           g_shell.colors.text_secondary, hs_s(10));
+        cc_toggle_card(fb, L.rx, L.audio_toggle_y, L.audio_toggle_size,
+                       L.audio_toggle_size, g_shell.cc.toggles[3], "DND", 3, 1);
+        cc_toggle_card(fb, L.rx + hs_sy(90), L.audio_toggle_y, L.audio_toggle_size,
+                       L.audio_toggle_size, g_shell.cc.toggles[5], "Torch", 5,
+                       cc_toggle_available(5));
     }
 }
 
@@ -6361,84 +6540,96 @@ static void cc_slider_set(int x, int tx, int tw, int *dst)
     *dst = v;
 }
 
-/* 控制中心点击处理；命中面板区域即消费点击（面板绘制在窗口之上） */
+/* 控制中心点击处理；命中面板区域即消费点击（面板绘制在窗口之上）。
+ * 所有矩形都从 cc_layout_get() 取，和 render 共用一套几何。 */
 static int hs_control_center_handle_click(int x, int y)
 {
-    int cx, cy, cw, ch;
-    cc_geometry(&cx, &cy, &cw, &ch);
-    if (x < cx || x > cx + cw || y < cy || y > cy + ch) return 0;
-
-    int rail_w = hs_sx(CC_RAIL_W);
-    int pad = hs_sx(CC_PAD);
+    hs_cc_layout_t L;
+    cc_layout_get(&L);
+    if (x < L.cx || x > L.cx + L.cw || y < L.cy || y > L.cy + L.ch) return 0;
 
     /* 导航栏切页 */
     for (int i = 0; i < 3; i++) {
-        int nx = cx + hs_sx(8);
-        int ny = cy + hs_sy(14) + i * hs_sy(46);
-        if (x >= nx && x <= nx + rail_w - hs_sx(16) &&
-            y >= ny && y <= ny + hs_sy(38)) {
+        int ny = L.nav_y0 + i * L.nav_step;
+        if (x >= L.nav_x && x <= L.nav_x + L.nav_w &&
+            y >= ny && y <= ny + L.nav_h) {
             g_cc_page = i;
             return 1;
         }
     }
 
-    int rx = cx + rail_w + pad;
-    int rw = cw - rail_w - pad * 2;
-    int gap = hs_sx(10);
-    int card_w = (rw - 2 * gap) / 3;
-
     if (g_cc_page == 0) {
         for (int i = 0; i < 6; i++) {
-            int tx = rx + (i % 3) * (card_w + gap);
-            int ty = cy + hs_sy(48) + (i / 3) * (card_w + gap);
-            if (x >= tx && x <= tx + card_w && y >= ty && y <= ty + card_w) {
+            int tx = L.cards_x + (i % 3) * (L.card_w + L.gap);
+            int ty = L.cards_y + (i / 3) * (L.card_h + L.gap);
+            if (x >= tx && x <= tx + L.card_w && y >= ty && y <= ty + L.card_h) {
+                if (!cc_toggle_available(i)) {
+                    vga_printf("[CC] %s unavailable: %s\n", "toggle", cc_toggle_reason(i));
+                    return 1;
+                }
                 g_shell.cc.toggles[i] = !g_shell.cc.toggles[i];
+                vga_printf("[CC] dnd=%s\n", g_shell.cc.toggles[i] ? "on" : "off");
                 return 1;
             }
         }
-        {
-            int ty = cy + hs_sy(258) + hs_sy(58) - hs_sy(22);
-            if (y >= ty - hs_sy(10) && y <= ty + hs_sy(20)) {
-                cc_slider_set(x, rx + hs_sx(14), rw - hs_sx(28), &g_shell.cc.volume);
+        int vol_ty = L.volume_y + L.slider_h - hs_sy(22);
+        if (y >= vol_ty - hs_sy(12) && y <= vol_ty + hs_sy(20)) {
+            if (!cc_audio_available()) {
+                vga_puts("[CC] volume unavailable: No AC'97 device\n");
                 return 1;
             }
-        }
-        {
-            int ty = cy + hs_sy(322) + hs_sy(58) - hs_sy(22);
-            if (y >= ty - hs_sy(10) && y <= ty + hs_sy(20)) {
-                cc_slider_set(x, rx + hs_sx(14), rw - hs_sx(28), &g_shell.cc.brightness);
-                return 1;
-            }
-        }
-    } else if (g_cc_page == 1) {
-        for (int i = 0; i < 6; i++) {
-            int ry = cy + hs_sy(48) + i * hs_sy(54);
-            if (x >= rx && x <= rx + rw && y >= ry && y <= ry + hs_sy(48)) {
-                g_shell.cc.toggles[i] = !g_shell.cc.toggles[i];
-                return 1;
-            }
-        }
-    } else {
-        {
-            int ty = cy + hs_sy(52) + hs_sy(96) - hs_sy(22);
-            if (y >= ty - hs_sy(12) && y <= ty + hs_sy(24)) {
-                cc_slider_set(x, rx + hs_sx(14), rw - hs_sx(28), &g_shell.cc.volume);
-                return 1;
-            }
-        }
-        {
-            int ty = cy + hs_sy(160) + hs_sy(96) - hs_sy(22);
-            if (y >= ty - hs_sy(12) && y <= ty + hs_sy(24)) {
-                cc_slider_set(x, rx + hs_sx(14), rw - hs_sx(28), &g_shell.cc.brightness);
-                return 1;
-            }
-        }
-        if (y >= cy + hs_sy(300) && y <= cy + hs_sy(360)) {
-            g_shell.cc.toggles[3] = !g_shell.cc.toggles[3];
+            cc_slider_set(x, L.rx + hs_sx(14), L.rw - hs_sx(28),
+                          &g_shell.cc.volume);
+#ifdef __x86_64__
+            hs_audio_set_volume(g_shell.cc.volume);
+#endif
+            vga_printf("[CC] volume=%d\n", g_shell.cc.volume);
             return 1;
         }
-        if (y >= cy + hs_sy(368) && y <= cy + hs_sy(428)) {
-            g_shell.cc.toggles[5] = !g_shell.cc.toggles[5];
+        int bright_ty = L.brightness_y + L.slider_h - hs_sy(22);
+        if (y >= bright_ty - hs_sy(12) && y <= bright_ty + hs_sy(20)) {
+            vga_puts("[CC] brightness unavailable: No backlight driver\n");
+            return 1;
+        }
+    } else if (g_cc_page == 1) {
+        /* Devices 页只做真实状态清单；只有 DND 这一行有可操作后端。 */
+        int dnd_y = L.devices_y0 + 2 * L.device_step;
+        if (x >= L.rx && x <= L.rx + L.rw &&
+            y >= dnd_y && y <= dnd_y + L.device_h) {
+            g_shell.cc.toggles[3] = !g_shell.cc.toggles[3];
+            vga_printf("[CC] dnd=%s\n", g_shell.cc.toggles[3] ? "on" : "off");
+        }
+        return 1;
+    } else {
+        int vol_ty = L.audio_vol_y + hs_sy(96) - hs_sy(22);
+        if (y >= vol_ty - hs_sy(12) && y <= vol_ty + hs_sy(24)) {
+            if (!cc_audio_available()) {
+                vga_puts("[CC] volume unavailable: No AC'97 device\n");
+                return 1;
+            }
+            cc_slider_set(x, L.rx + hs_sx(14), L.rw - hs_sx(28),
+                          &g_shell.cc.volume);
+#ifdef __x86_64__
+            hs_audio_set_volume(g_shell.cc.volume);
+#endif
+            vga_printf("[CC] volume=%d\n", g_shell.cc.volume);
+            return 1;
+        }
+        int bright_ty = L.audio_bright_y + hs_sy(96) - hs_sy(22);
+        if (y >= bright_ty - hs_sy(12) && y <= bright_ty + hs_sy(24)) {
+            vga_puts("[CC] brightness unavailable: No backlight driver\n");
+            return 1;
+        }
+        if (x >= L.rx && x <= L.rx + L.audio_toggle_size &&
+            y >= L.audio_toggle_y && y <= L.audio_toggle_y + L.audio_toggle_size) {
+            g_shell.cc.toggles[3] = !g_shell.cc.toggles[3];
+            vga_printf("[CC] dnd=%s\n", g_shell.cc.toggles[3] ? "on" : "off");
+            return 1;
+        }
+        if (x >= L.rx + hs_sy(90) &&
+            x <= L.rx + hs_sy(90) + L.audio_toggle_size &&
+            y >= L.audio_toggle_y && y <= L.audio_toggle_y + L.audio_toggle_size) {
+            vga_puts("[CC] torch unavailable: No torch device\n");
             return 1;
         }
     }
@@ -6938,11 +7129,9 @@ void hpdesk_handle_click(int x, int y)
             }
         }
     }
-    /* 灵动岛点击切换展开/收起 */
-    int island_w = g_island_expanded ? hs_sx(360) : hs_sx(g_shell.ui.island_width);
-    int island_h = g_island_expanded ? hs_sy(120) : hs_sy(g_shell.ui.island_height);
-    int island_x = (g_shell.screen_width - island_w) / 2;
-    int island_y = hs_sy(g_shell.ui.island_y);
+    /* 灵动岛点击切换展开/收起: 命中用与绘制同一套动画矩形。 */
+    int island_x, island_y, island_w, island_h;
+    hs_island_rect(&island_x, &island_y, &island_w, &island_h);
     if (x >= island_x && x <= island_x + island_w && y >= island_y && y <= island_y + island_h) {
         g_island_expanded = !g_island_expanded;
         g_island_target = g_island_expanded ? 100 : 0;   /* P0: 触发缓动 */
@@ -7101,8 +7290,12 @@ static void hs_dock_render(void)
 
     void *fb = hs_get_framebuffer();
 
-    /* 应用图标 (对齐 Clavis DockSurface: 悬停放大, 线性衰减, 底边对齐) */
-    const char *icons[] = {"T", "F", "B", "S", "E", "C", "N", "A"};
+    /* 应用图标 (对齐 Clavis DockSurface: 悬停放大, 线性衰减, 底边对齐)。
+     * 图标与应用抽屉同一套语义映射，禁止再用字母占位。 */
+    const uint32_t *icons[] = {
+        hs_ico_menu_bar, hs_ico_home_v2, hs_ico_search, hs_ico_settings,
+        hs_ico_mail, hs_ico_add, hs_ico_doc_list, hs_ico_grid_all
+    };
     int baseline = dock_y + dock_h - hs_sy(8);
 
     for (int i = 0; i < icon_count; i++) {
@@ -7117,12 +7310,9 @@ static void hs_dock_render(void)
         /* 图标背景 */
         hs_fill_rounded_rect(ix, iy, sz, sz, hs_s(10), g_shell.colors.accent);
 
-        /* 图标符号 (字号随放大) */
-        int fs = hs_s(20) * sz / base_size;
-        int gw = hs_sx(12) * sz / base_size;
-        font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           ix + (sz - gw) / 2, iy + (sz - fs) / 2 + hs_sy(2),
-                           icons[i], hs_on_accent(), fs);
+        int icon_sz = sz * 3 / 4;
+        hs_icon_bmp(ix + (sz - icon_sz) / 2, iy + (sz - icon_sz) / 2,
+                    icon_sz, hs_on_accent(), icons[i]);
     }
 }
 
@@ -8564,13 +8754,15 @@ int hpdesk_init(int width, int height)
     g_shell.mouse_x = 0;
     g_shell.mouse_y = 0;
 
-    /* 初始化控制中心状态 */
-    g_shell.cc.toggles[0] = 1;  /* WiFi on */
-    g_shell.cc.toggles[1] = 0;  /* BT off */
-    g_shell.cc.toggles[2] = 0;  /* Air off */
-    g_shell.cc.toggles[3] = 1;  /* DND on */
-    g_shell.cc.toggles[4] = 1;  /* Loc on */
-    g_shell.cc.toggles[5] = 0;  /* Torch off */
+    /* 初始化控制中心状态: 只有真有后端的项才是 On。
+     * WiFi/BT/Air/Loc/Torch 当前没有对应驱动，先按 Off/N/A 起步，不再
+     * 用“默认打开”伪装能力。 */
+    g_shell.cc.toggles[0] = 0;  /* WiFi: no adapter */
+    g_shell.cc.toggles[1] = 0;  /* BT: no adapter */
+    g_shell.cc.toggles[2] = 0;  /* Air: no radio backend */
+    g_shell.cc.toggles[3] = 1;  /* DND: notification service, real */
+    g_shell.cc.toggles[4] = 0;  /* Loc: no location provider */
+    g_shell.cc.toggles[5] = 0;  /* Torch: no device */
     g_shell.cc.volume = 70;
     g_shell.cc.brightness = 85;
 
@@ -8600,14 +8792,12 @@ int hpdesk_init(int width, int height)
     g_shell.ui.cc_y = 108;
     g_shell.ui.cc_width = 280;
     g_shell.ui.cc_height = 440;
-    /* bar_height 的唯一真源是 UI 配置串（默认 36，见 hs_ui 默认配置里的
-     * "bar_height: 36"）与 hsqml_get_number(..., "bar_height", 36)。
-     * 这里原来写 40，是第二个默认值：配置缺这个键时两边各给一个数，
-     * 顶栏高度就取决于哪条路径先跑。统一成 36，只留一处真源。 */
-    g_shell.ui.bar_height = 36;
+    /* bar_height 的唯一真源是 HS_BAR_HEIGHT_DEFAULT：内置配置串、配置解析
+     * 兜底和初始化默认值都从这里取。旧代码三处分别写 32/36/40，配置缺键时
+     * 顶栏高度取决于哪条路径先跑，D-4 审计已把它列为视觉漂移根因之一。 */
+    g_shell.ui.bar_height = HS_BAR_HEIGHT_DEFAULT;
     g_shell.ui.island_width = 120;
     g_shell.ui.island_height = 28;
-    g_shell.ui.island_y = 6;
     g_shell.ui.island_font_size = 20;
     g_shell.ui.dock_width = 400;
     g_shell.ui.dock_height = 64;
@@ -8952,7 +9142,20 @@ void hs_notification_render(void)
 
     int popup_count = 0;
 
-    for (int i = g_shell.notifications.count - 1; i >= 0 && popup_count < 3; i--) {
+    /* DND 打开时只抑制弹窗，不丢弃历史；通知中心仍能看到。
+     * 这里先单独跑一遍超时清理，否则跳过弹窗循环后通知永远不会过期。 */
+    if (g_shell.cc.toggles[3]) {
+        for (int i = 0; i < g_shell.notifications.count; i++) {
+            hs_notification_t *n = &g_shell.notifications.notifications[i];
+            if (!n->visible) continue;
+            uint32_t age = g_frame_no - n->born_frame;
+            uint32_t life = (uint32_t)n->timeout * 60 / 1000;
+            if (n->timeout > 0 && age > life) n->visible = 0;
+        }
+    }
+
+    for (int i = g_shell.notifications.count - 1;
+         i >= 0 && !g_shell.cc.toggles[3] && popup_count < 3; i--) {
         hs_notification_t *n = &g_shell.notifications.notifications[i];
         if (!n->visible) continue;
 

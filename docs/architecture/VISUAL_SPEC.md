@@ -2,7 +2,7 @@
 title: VISUAL_SPEC
 status: active
 sys_version: 0.63.0
-updated: 2026-11-14
+updated: 2026-11-27
 owner: architecture
 source_of_truth: rootfs/etc/hepushell/config.hsqml
 supersedes: null
@@ -64,6 +64,19 @@ hs_s(v)  = v * g_ui_scale_pct / 100     // 圆形/图标/圆角
 2. 胶囊高度小于顶栏高度时，纵向按上式居中；算出的 y 小于 `bar_top` 时钳到 `bar_top`。
 3. 面板（控制中心 / 侧栏 / 天气卡）的纵向起点一律跟着顶栏底边走（`bar_top + bar_h + 间距`），不写死绝对值。
 
+### 1.1 设计令牌（2026-11-27 新增）
+
+`hpdesk.c` 顶部已登记成套逻辑值；本轮只在新代码和新命中区引用，尚未做全文件替换。
+
+| 类别 | 令牌 |
+|---|---|
+| 间距 | `HS_SP_XS=2` / `S=4` / `M=8` / `L=12` / `XL=16` / `2XL=24` |
+| 圆角 | `HS_RADIUS_XS=4` / `S=12` / `M=17` / `L=23` / `XL=28` |
+| 图标 | `HS_ICON_S=16` / `M=24` / `L=32` |
+| 控件高 | `HS_CONTROL_S=32` / `M=40` / `L=48` / `XL=56` |
+| 顶栏 | `HS_BAR_HEIGHT_DEFAULT=32`（配置、解析兜底、`hpdesk_init` 三处同源） |
+| 天气内边距 | `HS_WEATHER_PAD=24` |
+
 ---
 
 ## 2. 颜色与半透明
@@ -106,13 +119,24 @@ hs_s(v)  = v * g_ui_scale_pct / 100     // 圆形/图标/圆角
 
 ---
 
-## 4. 已知不一致（待收口，改动前必读）
+## 4. 一致性状态（2026-11-27）
+
+已收口：
+
+| 项 | 状态 |
+|---|---|
+| `bar_height` | 内置配置串、`hsqml_get_number` 兜底、`hpdesk_init` 默认值统一为 32；`HS_BAR_HEIGHT_DEFAULT` 是唯一常量 |
+| `island_y` | 已从 `hpdesk.h`、内置配置与 `config.hsqml` 删除；灵动岛绘制、阴影包围盒与点击命中共用 `hs_island_rect()` |
+| 天气卡 bounds | `hs_panel_bounds` 已与 render / shadow 对齐为“卡片矩形 + `HS_WEATHER_PAD`”；无网络时改为紧凑空状态，不再画巨号 `-- / N/A` |
+| 控制中心几何 | 导航 / 卡片 / 滑块 / 设备行 / Audio 页共用 `hs_cc_layout_t`，render 与 click 不再各算一套坐标 |
+
+仍存欠账（不影响本基线判定，但不应被当作已完成）：
 
 | 项 | 现状 | 目标 |
 |---|---|---|
-| `bar_height` | config = 32 / `hpdesk.c` 内嵌默认串 = 36 / `hsqml_get_number` 兜底 = 40 | 三处收敛到 32，兜底引用同一常量 |
-| `island_y` | config 写 6，**代码已不读**（改由顶栏高度推导） | 从 config 移除或标 deprecated |
-| 天气卡 bounds 口径 | `hs_panel_bounds` 用 `- margin_right - 24`，`hs_weather_widget_render` 用 `- margin_right` | 统一到 render 口径 |
+| 控制中心 DND 图标 | 仍用沙漏位图 `hs_ico_hour_empty` | 换成月牙等语义明确的图形 |
+| 图标体系 | `hs_icons_data.h` 位图 + `hs_icon_bmp` 缩放 | 矢量图标字体，见 `DESKTOP_SHELL.md` 1.2 |
+| 全文件令牌替换 | 仅新代码 / 新命中区引用 | 逐模块替换裸数值 |
 
 ---
 
@@ -139,7 +163,8 @@ hs_s(v)  = v * g_ui_scale_pct / 100     // 圆形/图标/圆角
 
 ---
 
-## 7. 未落地（P0 剩余）
+## 7. P0 剩余与已接入
 
 - **图标字体引擎**：`DESKTOP_SHELL.md` 1.2 要求矢量图标字体（`hs_draw_icon(x,y,glyph_id,size,color)`），替代 `hs_icons_data.h` 的固定尺寸位图。当前控制中心用的正是位图（`hs_icon_bmp`），与文档方向相反，属已知欠账。
-- 视觉基线回归：固定态截图 + 像素 diff + 阈值判定，尚未接入 `regress.sh`。
+
+**视觉基线已接入**：`tools/regress/desktop_visual.sh` 固定 RTC / 无网络 / 1920×1080 / UI 150%，采集 9 个状态；`tools/regress/compare_visual.py` 屏蔽时钟与天气动态文本后做阈值比较。基线在 `docs/status/desktop-visual-baseline-2026-11-27/`。

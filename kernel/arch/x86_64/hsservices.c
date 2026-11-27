@@ -60,7 +60,11 @@ static int services_initialized = 0;
 
 int hs_audio_init(void)
 {
-    g_audio.initialized = 1;
+    /* AC'97 不是每台机器都有: 之前无条件把 initialized 置 1, 控制中心会把
+     * "没有声卡"当成"音量可用"。这里改成以 PCI 探测结果为准。 */
+    extern int ac97_get_info(uint16_t *vendor, uint16_t *device,
+                             uint32_t *mixer_base, uint32_t *bm_base, uint8_t *irq);
+    g_audio.initialized = (ac97_get_info(0, 0, 0, 0, 0) == 0);
     g_audio.master_volume = 75;
     g_audio.muted = 0;
     g_audio.stream_count = 0;
@@ -69,8 +73,19 @@ int hs_audio_init(void)
         g_audio.streams[i].active = 0;
     }
 
-    vga_puts("[AUDIO] Service initialized (AC97)\n");
+    vga_puts(g_audio.initialized ? "[AUDIO] Service initialized (AC97 ready)\n"
+                                 : "[AUDIO] Service initialized (no AC97 device)\n");
     return 0;
+}
+
+/* UI 0..100 -> AC'97 衰减 63..0 (AC'97 的 0 是最大音量, 63 是最小)。
+ * 旧实现把 0..100 直接写进 6bit 寄存器, 100 被截成 36、0 反而变成最大声,
+ * 音量条和实际输出是反的。 */
+static uint8_t hs_audio_ac97_att(int vol)
+{
+    if (vol < 0) vol = 0;
+    if (vol > 100) vol = 100;
+    return (uint8_t)((100 - vol) * 0x3F / 100);
 }
 
 void hs_audio_set_volume(int vol)
@@ -79,14 +94,19 @@ void hs_audio_set_volume(int vol)
     if (vol > 100) vol = 100;
     g_audio.master_volume = vol;
 
-    /* TODO: 写入AC97主音量寄存器 */
     extern void ac97_set_master_volume(int left, int right);
-    ac97_set_master_volume(vol, vol);
+    uint8_t att = hs_audio_ac97_att(vol);
+    ac97_set_master_volume(att, att);
 }
 
 int hs_audio_get_volume(void)
 {
     return g_audio.master_volume;
+}
+
+int hs_audio_is_ready(void)
+{
+    return g_audio.initialized;
 }
 
 void hs_audio_mute(void)
@@ -100,7 +120,8 @@ void hs_audio_unmute(void)
 {
     g_audio.muted = 0;
     extern void ac97_set_master_volume(int left, int right);
-    ac97_set_master_volume(g_audio.master_volume, g_audio.master_volume);
+    uint8_t att = hs_audio_ac97_att(g_audio.master_volume);
+    ac97_set_master_volume(att, att);
 }
 
 int hs_audio_is_muted(void)

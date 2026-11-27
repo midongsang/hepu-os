@@ -342,7 +342,7 @@ typedef struct {
         int sidebar_x, sidebar_y, sidebar_width, sidebar_height;
         int cc_margin_right, cc_y, cc_width, cc_height;
         int bar_height;
-        int island_width, island_height, island_y, island_font_size;
+        int island_width, island_height, island_font_size;
         int dock_width, dock_height, dock_margin_bottom, dock_icon_size;
         int corner_radius;
         int window_shadow;   /* 窗口投影开关(Display 页可关) */

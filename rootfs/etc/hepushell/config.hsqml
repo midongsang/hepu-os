@@ -34,7 +34,6 @@ UI {
     bar_height: 32
     island_width: 120
     island_height: 28
-    island_y: 6
     island_font_size: 20
     dock_width: 400
     dock_height: 64

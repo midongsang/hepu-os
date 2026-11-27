@@ -2,7 +2,7 @@
 title: DESKTOP_SHELL
 status: active
 sys_version: 0.63.0
-updated: 2026-11-01
+updated: 2026-11-27
 owner: architecture
 source_of_truth: null
 supersedes: null
@@ -137,6 +137,20 @@ Clavis `Modules/Lock/`：冻结桌面快照（Screencopy）→ 模糊背景 → 
 视频中多窗口（Discord/浏览器/终端）并行、深色/浅色主题下窗口圆角与背景质感统一。
 **Hepu 落地**：window64.c 窗口装饰统一走令牌圆角（2.1 的 tokens）；窗口背景分层（内容层 + 装饰层）；
 毛玻璃效果 = 窗口背景对桌面帧做降采样模糊（软件实现，限激活窗口，性能优先时先做"半透明+噪点"近似）。
+
+### 2.7 控制中心：能力矩阵与空状态（2026-11-27）
+
+控制中心不接受“开关看起来能点、实际没驱动”的实现。当前规则：
+
+| 控件 | 可用判定 | 不可用时 |
+|---|---|---|
+| Wi‑Fi / Bluetooth / AirDrop / Location / Torch | 无对应驱动，固定不可用 | 卡片降亮度、左上角标 `N/A`，点击只写串口 `unavailable`，不改变状态 |
+| 亮度 | 无背光控制器，固定不可用 | 不画滑轨/滑块，理由文字占原滑轨位置 |
+| 音量 | 仅 AC'97 真实在位时可用 | 无 AC'97 时显示 `No AC'97 device`，不画滑轨 |
+| DND | 始终可切换，真实抑制通知弹窗 | 开启时通知仍入库并按超时清理，只是不弹窗 |
+| Ethernet / Audio | Devices 页按 `e1000` / `hs_audio_is_ready()` 实时给出 `Up/Down/No driver`、`Ready/No AC'97` | 只读展示，不可点击伪造状态 |
+
+几何统一由 `hs_cc_layout_t` 提供，render 与 click 共用；Devices / Audio 页不是装饰页，列出的是当前设备树与驱动状态。
 
 ---
 
