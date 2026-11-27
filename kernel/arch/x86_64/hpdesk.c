@@ -3553,6 +3553,15 @@ static void hs_bat_hm(int minutes, char *out, int cap)
     out[q] = 0;
 }
 
+/* Settings 内容分组卡：给 Appearance 页一个稳定的视觉容器。
+ * 只负责画底和描边，不改变任何 hitbox；颜色全部走主题令牌。 */
+static void hs_settings_card(int x, int y, int w, int h)
+{
+    if (w <= 0 || h <= 0) return;
+    hs_fill_rounded_rect(x, y, w, h, hs_s(10), g_shell.colors.titlebar_bg);
+    hs_draw_rounded_rect(x, y, w, h, hs_s(10), g_shell.colors.border);
+}
+
 static void hs_settings_window_render(hs_window_t *w)
 {
     void *fb = hs_get_framebuffer();
@@ -3576,7 +3585,15 @@ static void hs_settings_window_render(hs_window_t *w)
     int ry = cy;
 
     if (g_settings_page == 0) {
-        /* Appearance */
+        /* Appearance：参考 Clavis 的分组卡，而不是整页裸文字。
+         * 卡片只做视觉分组，点击仍走原有坐标（Accent/Wallpaper/Desktop 的命中区同步在下方更新）。 */
+        int card_x = rx - SETK(12);
+        int card_w = SETK(300);
+        hs_settings_card(card_x, cy + SETK(18), card_w, SETK(28));
+        hs_settings_card(card_x, cy + SETK(50), card_w, SETK(58));
+        hs_settings_card(card_x, cy + SETK(110), card_w, SETK(50));
+        hs_settings_card(card_x, cy + SETK(160), card_w, SETK(110));
+
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            rx, ry, "Appearance", g_shell.colors.panel_fg, SETK(16));
         ry += SETK(30);
@@ -3618,7 +3635,7 @@ static void hs_settings_window_render(hs_window_t *w)
                 hs_draw_rounded_rect(sx - SETK(2), sy - SETK(2), SETK(24), SETK(24), SETK(12), g_shell.colors.panel_fg);
             }
         }
-        ry += SETK(28);
+        ry += SETK(40);   /* 给 Accent 卡与 Typography 卡留 4px 间隔 */
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            rx, ry, "Font: DejaVu Sans", g_shell.colors.panel_fg, SETK(12));
         ry += SETK(24);
@@ -3636,7 +3653,7 @@ static void hs_settings_window_render(hs_window_t *w)
             font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                                rx, ry, cs, g_shell.colors.panel_fg, SETK(12));
         }
-        ry += SETK(24);
+        ry += SETK(36);   /* 给 Typography 卡与 Wallpaper 卡留 4px 间隔 */
         /* V0.56: 壁纸切换行 (点击循环 Classic/Dusk/Ocean) */
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            rx, ry, "Wallpaper:", g_shell.colors.panel_fg, SETK(12));
@@ -3657,6 +3674,25 @@ static void hs_settings_window_render(hs_window_t *w)
             uint32_t bc = (g_shell.colors.bg == g_color_presets[i])
                         ? g_shell.colors.panel_fg : g_shell.colors.border;
             hs_draw_rounded_rect(bx, by, SETK(16), SETK(16), SETK(3), bc);
+        }
+        /* 真实显示参数，填掉卡片下方的空白，也避免 Settings 看起来“只有半页”。 */
+        {
+            char foot[64], scbuf[8], wbuf[8], hbuf[8];
+            int n = 0;
+            const char *pre = "UI scale ";
+            for (const char *q = pre; *q; q++) foot[n++] = *q;
+            hs_itoa(g_ui_scale_pct, scbuf);
+            for (int i = 0; scbuf[i]; i++) foot[n++] = scbuf[i];
+            foot[n++] = '%'; foot[n++] = ' '; foot[n++] = '/'; foot[n++] = ' ';
+            hs_itoa(g_shell.screen_width, wbuf);
+            hs_itoa(g_shell.screen_height, hbuf);
+            for (int i = 0; wbuf[i]; i++) foot[n++] = wbuf[i];
+            foot[n++] = 'x';
+            for (int i = 0; hbuf[i]; i++) foot[n++] = hbuf[i];
+            foot[n] = 0;
+            font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                               rx, cy + SETK(292), foot,
+                               g_shell.colors.text_secondary, SETK(11));
         }
     } else if (g_settings_page == 1) {
         /* Panels */
@@ -5033,6 +5069,7 @@ static void hs_battery_icon_state(int x, int y, int size, uint32_t fg, uint32_t 
 
 static void hs_top_bar_render(void)
 {
+    void *fb = hs_get_framebuffer();
     /* 对齐 Clavis: 悬浮圆角胶囊顶栏(外边距 10, 高 36, 圆角 18) */
     int margin = hs_sx(10);
     int bar_top = hs_sy(8);
@@ -5085,6 +5122,25 @@ static void hs_top_bar_render(void)
      * 旧实现这里单独用 32px 的 hs_ico_wifi_std, 24px 显示时笔画比邻居细一档,
      * 并排放着像两套图标拼的 —— 与 V0.57.1 修掉的"各自一套手绘矢量"是同一类问题。 */
     icon_x = hs_bar_icon_x(wifi_slot); hs_icon_bmp64(icon_x, icon_y, icon_size, fg, g_shell.colors.panel_bg, hs_ico64_wifi64);
+
+#ifdef __x86_64__
+    /* 参考顶栏的天气温度：只在真实取到温度且屏幕有空间时显示，不用占位符充数。 */
+    if (g_weather_ok && g_weather_temp[0] && g_shell.screen_width >= 900) {
+        char wt[16];
+        int n = 0;
+        for (int i = 0; g_weather_temp[i] && n < 10; i++) wt[n++] = g_weather_temp[i];
+        wt[n] = 0;
+        int wx = hs_bar_icon_x(wifi_slot) - hs_sx(48);
+        {
+            int wy = bar_top + (bar_h - hs_s(14)) / 2;
+            font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                               wx, wy, wt, fg, hs_s(14));
+            /* DejaVu 的 ° 在部分 TTF 子集里缺字形；用同样色的小圆点补，避免只剩数字。 */
+            int dot_x = wx + (int)strlen(wt) * hs_sx(8) + hs_sx(2);
+            hs_fill_circle(dot_x, wy + hs_s(4), hs_s(2), fg);
+        }
+    }
+#endif
 
     /* V0.62: 电源按钮弹出的菜单 —— 注销 / 重启 / 关机 */
     if (g_power_menu_open) {
@@ -6714,11 +6770,11 @@ void hpdesk_handle_click(int x, int y)
 
             /* V0.54.7: Appearance 页色板点击 — 取色器应用源色 */
             if (g_settings_page == 0) {
-                int sw_x = w->x + 156;       /* rx = cx+140 = w->x+16+140 */
-                int sw_y = w->y + 112;       /* cy+30+24+22 = w->y+36+76 */
+                int sw_x = w->x + hs_set_k(w, 156);  /* rx = cx+140 = w->x+16+140 */
+                int sw_y = w->y + hs_set_k(w, 112);  /* cy+30+24+22 = w->y+36+76 */
                 for (int i = 0; i < HS_THEME_PRESET_COUNT; i++) {
-                    int bx = sw_x + i * 28;
-                    if (x >= bx && x <= bx + 20 && y >= sw_y && y <= sw_y + 20) {
+                    int bx = sw_x + i * hs_set_k(w, 28);
+                    if (x >= bx && x <= bx + hs_set_k(w, 20) && y >= sw_y && y <= sw_y + hs_set_k(w, 20)) {
                         hpdesk_set_theme(g_shell.theme);  /* 重置为当前主题默认色板 */
                         hs_theme_apply_source_color(g_theme_presets[i]);
                         g_shell.theme_source = g_theme_presets[i];
@@ -6727,19 +6783,19 @@ void hpdesk_handle_click(int x, int y)
                         return;
                     }
                 }
-                /* V0.56: Wallpaper 行点击循环壁纸 (Clock Size 后 ry = w->y+188) */
+                /* V0.56: Wallpaper 行点击循环壁纸 (Clock Size 后 ry = w->y+212, 已按 UI scale 缩放) */
                 {
-                    int wp_y = w->y + 188;
-                    if (x >= sw_x && x <= sw_x + 150 && y >= wp_y && y <= wp_y + 20) {
+                    int wp_y = w->y + hs_set_k(w, 212);
+                    if (x >= sw_x && x <= sw_x + hs_set_k(w, 150) && y >= wp_y && y <= wp_y + hs_set_k(w, 20)) {
                         hs_wallpaper_cycle();
                         return;
                     }
                 }
                 /* V0.55.0: 桌面背景色 3x3 色板点击 */
                 for (int i = 0; i < 9; i++) {
-                    int bx = sw_x + 76 + (i % 3) * 22;
-                    int by = w->y + 208 + (i / 3) * 22;
-                    if (x >= bx && x <= bx + 16 && y >= by && y <= by + 16) {
+                    int bx = sw_x + hs_set_k(w, 76) + (i % 3) * hs_set_k(w, 22);
+                    int by = w->y + hs_set_k(w, 242) + (i / 3) * hs_set_k(w, 22);
+                    if (x >= bx && x <= bx + hs_set_k(w, 16) && y >= by && y <= by + hs_set_k(w, 16)) {
                         g_shell.colors.bg = g_color_presets[i];
                         g_wp_sel = 5;
                         hs_save_bg_color(g_color_presets[i]);
