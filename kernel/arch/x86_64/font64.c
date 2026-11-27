@@ -23,6 +23,17 @@ typedef struct {
 static font_cache_entry_t font_cache[FONT_CACHE_SIZE];
 static uint16_t current_size = 16;
 static uint8_t  current_aa = 0;
+static int font64_text_alpha = 255;
+
+/* 锁屏时钟/认证 UI 溶解用; 默认 255 保持所有既有调用不变。 */
+void font64_set_alpha(int alpha)
+{
+    if (alpha < 0) alpha = 0;
+    if (alpha > 255) alpha = 255;
+    font64_text_alpha = alpha;
+    extern void gfx64_set_text_alpha(int alpha);
+    gfx64_set_text_alpha(alpha);
+}
 
 /* 抗锯齿alpha计算（基于2x2超采样） */
 static uint8_t aa_calc_alpha(uint32_t codepoint, int col, int row)
@@ -159,6 +170,9 @@ void font64_draw_char(void *framebuffer, int fb_width, int fb_height,
     for (int row = 0; row < glyph_h && y + row < fb_height; row++) {
         for (int col = 0; col < glyph_w && x + col < fb_width; col++) {
             uint8_t alpha = entry->bitmap[row * glyph_w + col];
+            if (alpha == 0) continue;
+            if (font64_text_alpha != 255)
+                alpha = (uint8_t)((int)alpha * font64_text_alpha / 255);
             if (alpha == 0) continue;
 
             int idx = (y + row) * fb_width + (x + col);

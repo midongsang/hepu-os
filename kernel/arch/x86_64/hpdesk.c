@@ -213,6 +213,8 @@ extern uint32_t gfx64_get_pixel(int x, int y);
 extern void font64_draw_string(void *fb, int fw, int fh,
                                int x, int y, const char *str,
                                uint32_t color, uint16_t size);
+/* 锁屏溶解: 字体层临时 alpha, 调用后必须恢复 255。 */
+extern void font64_set_alpha(int alpha);
 #ifdef __x86_64__
 extern int gfx64_measure_text(const char *str, int size);
 #endif
@@ -397,6 +399,16 @@ int g_pending_app;
 /* V0.55: 侧栏滚动 (对齐 Clavis SidebarFlickable: 垂直滚动+细滚动条)
  * 基准单位(1024x768), 渲染时经 hs_sy 缩放; 仅内容溢出的标签页生效 */
 static int g_sidebar_scroll = 0;
+
+/* niri 式横向滚动列: 每工作区独立记录当前/目标横向偏移。 */
+static int g_col_scroll[HS_MAX_WORKSPACES];
+static int g_snapshot_hide_clock = 0;
+static int g_col_scroll_target[HS_MAX_WORKSPACES];
+static void hs_columns_ensure_visible(hs_window_t *w);
+static int hs_work_top(void);
+static int hs_work_bottom(void);
+static int hs_columns_tick(void);
+static void hs_columns_cycle_focus(int dir);
 
 /* V0.56: 程序化壁纸 (对齐 Clavis Wallpaper 切换 + matugen 壁纸取色)
  * 0=Classic 纯色(默认, 保回归稳定) 1=Dusk 紫橙落日 2=Ocean 青蓝渐变;
@@ -2447,6 +2459,12 @@ hs_window_t *hs_window_create(hs_window_type_t type, const char *title,
     uint64_t wf = wm_lock();
     hs_window_t *r = hs_window_create_inner(type, title, x, y, w, h);
     wm_unlock(wf);
+    /* 列布局下新窗口立即进入列, 不再先落在级联位置再等下一次布局。 */
+    if (r && r->type == HS_WINDOW_FLOATING &&
+        g_shell.workspaces[g_shell.current_workspace].layout == HS_LAYOUT_COLUMNS) {
+        hs_layout_apply();
+        hs_columns_ensure_visible(r);
+    }
     return r;
 }
 
@@ -2486,6 +2504,8 @@ void hs_window_focus(hs_window_t *win)
     win->focus = 1;
     g_wm.focus_window = win->id;
     hs_window_raise(win);
+    /* 列布局下, 焦点切换要把目标列滚进视口。 */
+    hs_columns_ensure_visible(win);
 }
 
 /* 显示/隐藏窗口 (重新显示的窗口需置顶并接管键盘焦点, 否则会藏在其它窗口后面) */
@@ -2637,6 +2657,12 @@ hs_window_t *hs_window_get_focused(void)
 
 void hs_window_tile(void)
 {
+    /* 列布局必须走自己的横向排列, 否则工作区切换会把列压回左右分屏。 */
+    if (g_shell.workspaces[g_shell.current_workspace].layout == HS_LAYOUT_COLUMNS) {
+        hs_layout_columns();
+        hs_columns_ensure_visible(hs_window_get_focused());
+        return;
+    }
     /* 简单平铺：当前工作区的浮动窗口左右分屏 */
     int visible = 0;
     int indices[HS_MAX_WINDOWS];
@@ -2650,9 +2676,10 @@ void hs_window_tile(void)
         }
     }
 
-    int panel_h = HS_PANEL_HEIGHT;
-    int avail_h = g_shell.screen_height - panel_h * 2;
-    int avail_y = panel_h;
+    int top = hs_work_top();
+    int bottom = hs_work_bottom();
+    int avail_h = g_shell.screen_height - top - bottom;
+    int avail_y = top;
 
     if (visible == 1) {
         hs_window_t *w = &g_wm.windows[indices[0]];
@@ -4673,6 +4700,7 @@ void hs_panel_render_all(void)
     };
     for (int i = 0; i < 6; i++) {
         int idx = order[i];
+        if (idx == HS_PANEL_DESKTOP_CLOCK && g_snapshot_hide_clock) continue;
         if (!g_shell.panel_registry[idx].enabled || !g_shell.panel_registry[idx].render) continue;
         int px = 0, py = 0, pw = 0, ph = 0;
         if (!hs_panel_bounds(idx, &px, &py, &pw, &ph) || pw <= 0 || ph <= 0) {
@@ -4948,6 +4976,128 @@ void hs_file_type_icon(int x, int y, int size, uint32_t color, int kind)
     case 0: hs_icon_folder(x, y, size, color); return;
     case 3: hs_icon_media(x, y, size, color);  return;
     default: hs_icon_file(x, y, size, color);  return;
+    }
+}
+
+
+/* ============================================================================
+ * 系统单色矢量图标 (顶栏 / 控制中心)
+ *
+ * 不是把 32x32 位图放大: 每个 glyph 都按传入 size 用线段/圆环/多边形现画,
+ * 因此 16/24/32 下笔画宽度与半径同步缩放。解决旧 hs_icons_data.h 位图在
+ * 顶栏 24px 处缩放后线条塌陷、和 32px 位图混用风格不一致的问题。
+ * 彩色应用图标仍保留位图/品牌色, 这里只负责"单色系统语义图标"层。
+ * ========================================================================== */
+static void hs_icon_seg2(int x0, int y0, int x1, int y1, uint32_t c, int t)
+{
+    int dx = x1 - x0, dy = y1 - y0;
+    int ax = dx < 0 ? -dx : dx, ay = dy < 0 ? -dy : dy;
+    int n = ax > ay ? ax : ay;
+    if (n < 1) n = 1;
+    for (int i = 0; i <= n; i++)
+        hs_fill_rect(x0 + dx * i / n - t / 2, y0 + dy * i / n - t / 2, t, t, c);
+}
+
+/* 16 段圆环: 不依赖浮点与三角函数, 任意半径按 1/1000 归一化坐标缩放。 */
+static void hs_icon_ring(int cx, int cy, int r, int t, uint32_t c)
+{
+    static const int ux[17] = {1000,924,707,383,0,-383,-707,-924,-1000,-924,-707,-383,0,383,707,924,1000};
+    static const int uy[17] = {0,383,707,924,1000,924,707,383,0,-383,-707,-924,-1000,-924,-707,-383,0};
+    for (int i = 0; i < 16; i++)
+        hs_icon_seg2(cx + r * ux[i] / 1000, cy + r * uy[i] / 1000,
+                     cx + r * ux[i + 1] / 1000, cy + r * uy[i + 1] / 1000, c, t);
+}
+
+void hs_draw_icon(int x, int y, int size, uint32_t color, int glyph_id)
+{
+    if (size <= 4) return;
+    int cx = x + size / 2, cy = y + size / 2;
+    int r = size / 2 - 1;
+    int t = size / 12;
+    if (t < 1) t = 1;
+    if (t > 3) t = 3;
+
+    switch (glyph_id) {
+    case HS_GLYPH_POWER: {
+        /* 顶部开口圆环 + 中竖线 */
+        static const int px[11] = {500,866,1000,866,500,0,-500,-866,-1000,-866,-500};
+        static const int py[11] = {-866,-500,0,500,866,1000,866,500,0,-500,-866};
+        for (int i = 0; i < 10; i++)
+            hs_icon_seg2(cx + r * px[i] / 1000, cy + r * py[i] / 1000,
+                         cx + r * px[i + 1] / 1000, cy + r * py[i + 1] / 1000, color, t);
+        hs_icon_seg2(cx, cy - r, cx, cy - r / 4, color, t);
+        break;
+    }
+    case HS_GLYPH_GEAR: {
+        static const int gx[8] = {1000,707,0,-707,-1000,-707,0,707};
+        static const int gy[8] = {0,707,1000,707,0,-707,-1000,-707};
+        hs_icon_ring(cx, cy, r * 3 / 4, t, color);
+        for (int i = 0; i < 8; i++) {
+            int ix = cx + r * gx[i] / 1000, iy = cy + r * gy[i] / 1000;
+            int ox = cx + (r * 11 / 10) * gx[i] / 1000;
+            int oy = cy + (r * 11 / 10) * gy[i] / 1000;
+            hs_icon_seg2(ix, iy, ox, oy, color, t);
+        }
+        hs_icon_ring(cx, cy, r / 3, t, color);
+        break;
+    }
+    case HS_GLYPH_SPEAKER: {
+        int xs[6] = {cx - r * 9 / 10, cx - r * 9 / 20, cx - r / 10,
+                     cx - r / 10, cx - r * 9 / 20, cx - r * 9 / 10};
+        int ys[6] = {cy - r / 4, cy - r / 4, cy - r * 7 / 10,
+                     cy + r * 7 / 10, cy + r / 4, cy + r / 4};
+        hs_fill_polygon(xs, ys, 6, color);
+        hs_icon_seg2(cx + r / 3, cy - r * 3 / 10, cx + r * 3 / 5, cy, color, t);
+        hs_icon_seg2(cx + r * 3 / 5, cy, cx + r / 3, cy + r * 3 / 10, color, t);
+        hs_icon_seg2(cx + r / 2, cy - r * 3 / 5, cx + r * 9 / 10, cy, color, t);
+        hs_icon_seg2(cx + r * 9 / 10, cy, cx + r / 2, cy + r * 3 / 5, color, t);
+        break;
+    }
+    case HS_GLYPH_WIFI: {
+        hs_fill_circle(cx, cy + r * 2 / 3, t + 1, color);
+        hs_icon_seg2(cx - r * 3 / 5, cy + r / 3, cx, cy - r / 10, color, t);
+        hs_icon_seg2(cx, cy - r / 10, cx + r * 3 / 5, cy + r / 3, color, t);
+        hs_icon_seg2(cx - r, cy + r / 3, cx, cy - r * 2 / 5, color, t);
+        hs_icon_seg2(cx, cy - r * 2 / 5, cx + r, cy + r / 3, color, t);
+        break;
+    }
+    case HS_GLYPH_BLUETOOTH: {
+        hs_icon_seg2(cx, cy - r, cx, cy + r, color, t);
+        hs_icon_seg2(cx, cy - r, cx + r / 2, cy - r / 2, color, t);
+        hs_icon_seg2(cx + r / 2, cy - r / 2, cx, cy, color, t);
+        hs_icon_seg2(cx, cy, cx + r / 2, cy + r / 2, color, t);
+        hs_icon_seg2(cx + r / 2, cy + r / 2, cx, cy + r, color, t);
+        break;
+    }
+    case HS_GLYPH_AIRPLAY: {
+        hs_icon_seg2(cx - r, cy - r * 2 / 3, cx + r, cy - r * 2 / 3, color, t);
+        hs_icon_seg2(cx - r * 3 / 4, cy, cx + r * 3 / 4, cy, color, t);
+        hs_icon_seg2(cx - r / 2, cy + r * 2 / 3, cx + r / 2, cy + r * 2 / 3, color, t);
+        break;
+    }
+    case HS_GLYPH_DND: {
+        hs_icon_ring(cx, cy, r * 4 / 5, t, color);
+        hs_icon_seg2(cx - r * 3 / 5, cy - r * 3 / 5, cx + r * 3 / 5, cy + r * 3 / 5, color, t);
+        break;
+    }
+    case HS_GLYPH_LOCATION: {
+        hs_icon_ring(cx, cy - r / 3, r * 3 / 5, t, color);
+        int xs[3] = {cx - r * 3 / 5, cx + r * 3 / 5, cx};
+        int ys[3] = {cy + r / 10, cy + r / 10, cy + r * 9 / 10};
+        hs_fill_polygon(xs, ys, 3, color);
+        hs_fill_circle(cx, cy - r / 3, t + 1, color);
+        break;
+    }
+    case HS_GLYPH_TORCH: {
+        hs_fill_rect(cx - r / 2, cy - r / 2, r, r, color);
+        int xs[4] = {cx - r * 3 / 4, cx + r * 3 / 4, cx + r / 2, cx - r / 2};
+        int ys[4] = {cy - r, cy - r, cy - r / 3, cy - r / 3};
+        hs_fill_polygon(xs, ys, 4, color);
+        hs_fill_rect(cx - r / 2, cy + r / 2, r, t, color);
+        break;
+    }
+    default:
+        break;
     }
 }
 
@@ -5287,6 +5437,33 @@ static void hs_top_bar_render(void)
         ws_x += dot_w + hs_sx(12);
     }
 
+    /* 列布局在顶栏左侧给出真实状态(当前列/总列), 不额外占桌面空间。 */
+    if (g_shell.workspaces[g_shell.current_workspace].layout == HS_LAYOUT_COLUMNS) {
+        int total = 0, cur = 0;
+        hs_window_t *focused = hs_window_get_focused();
+        for (int i = 0; i < g_wm.window_count; i++) {
+            hs_window_t *w = &g_wm.windows[i];
+            if (w->type != HS_WINDOW_FLOATING || !w->visible ||
+                w->workspace != g_shell.current_workspace ||
+                w->state == HS_WINDOW_STATE_MAXIMIZED) continue;
+            if (w == focused) cur = total;
+            total++;
+        }
+        if (total > 0) {
+            char a[8], b[8], label[24];
+            hs_itoa(cur + 1, a); hs_itoa(total, b);
+            int li = 0;
+            label[li++]='C'; label[li++]='O'; label[li++]='L'; label[li++]=' ';
+            for (int k = 0; a[k] && li < 22; k++) label[li++]=a[k];
+            label[li++]='/';
+            for (int k = 0; b[k] && li < 22; k++) label[li++]=b[k];
+            label[li]=0;
+            font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                               ws_x + hs_sx(4), bar_top + (bar_h - hs_s(10)) / 2,
+                               label, g_shell.colors.accent, hs_s(10));
+        }
+    }
+
     /* 右侧状态栏矢量图标（替换文字"WiFi Bat Vol Set Pwr"） */
     int icon_size = hs_s(16);
     int icon_y = bar_top + (bar_h - icon_size) / 2;
@@ -5299,9 +5476,9 @@ static void hs_top_bar_render(void)
      * 16px 时 2.5px 的线条会塌, 18px 能保住笔画。 */
     icon_size = hs_s(24);   /* 状态栏高 36px, 24px 图标上下各留 6px */
     icon_y = hs_bar_icon_y();
-    icon_x = hs_bar_icon_x(0); hs_icon_bmp64(icon_x, icon_y, icon_size, fg, g_shell.colors.panel_bg, hs_ico64_power64);
-    icon_x = hs_bar_icon_x(1); hs_icon_bmp64(icon_x, icon_y, icon_size, fg, g_shell.colors.panel_bg, hs_ico64_gear64);
-    icon_x = hs_bar_icon_x(2); hs_icon_bmp64(icon_x, icon_y, icon_size, fg, g_shell.colors.panel_bg, hs_ico64_speaker64);
+    icon_x = hs_bar_icon_x(0); hs_draw_icon(icon_x, icon_y, icon_size, fg, HS_GLYPH_POWER);
+    icon_x = hs_bar_icon_x(1); hs_draw_icon(icon_x, icon_y, icon_size, fg, HS_GLYPH_GEAR);
+    icon_x = hs_bar_icon_x(2); hs_draw_icon(icon_x, icon_y, icon_size, fg, HS_GLYPH_SPEAKER);
     /* 电池形状与旁边四个同源（同走 hs_icon_bmp64），是否出现只看 ACPI 探测结果，
      * 不看"台式机/笔记本"。ABSENT 不画也不留位；DECLARED/UNKNOWN 轮廓 + 两道短线；
      * 只有 M2 读到可信电量进入 VALID 后才画填充比例。 */
@@ -5315,7 +5492,7 @@ static void hs_top_bar_render(void)
     /* wifi 与旁边四个同源: 都走 64x64 那套(hs_icon_bmp64)。
      * 旧实现这里单独用 32px 的 hs_ico_wifi_std, 24px 显示时笔画比邻居细一档,
      * 并排放着像两套图标拼的 —— 与 V0.57.1 修掉的"各自一套手绘矢量"是同一类问题。 */
-    icon_x = hs_bar_icon_x(wifi_slot); hs_icon_bmp64(icon_x, icon_y, icon_size, fg, g_shell.colors.panel_bg, hs_ico64_wifi64);
+    icon_x = hs_bar_icon_x(wifi_slot); hs_draw_icon(icon_x, icon_y, icon_size, fg, HS_GLYPH_WIFI);
 
 #ifdef __x86_64__
     /* 参考顶栏的天气温度：只在真实取到温度且屏幕有空间时显示，不用占位符充数。 */
@@ -5357,6 +5534,12 @@ static void hs_top_bar_render(void)
 /* 桌面大时钟 */
 static void hs_desktop_clock_render(void)
 {
+    /* 锁屏快照取帧时临时隐藏桌面大时钟, 避免锁屏上出现第二只钟。 */
+    if (g_snapshot_hide_clock) {
+        static int once = 0;
+        if (!once) { once = 1; vga_puts("[LOCK] desktop clock suppressed\n"); }
+        return;
+    }
     void *fb = hs_get_framebuffer();
     int clock_x = hs_sx(g_shell.ui.clock_x);
     int clock_y = hs_sy(g_shell.ui.clock_y);
@@ -5444,7 +5627,9 @@ static void hs_weather_widget_render(void)
 /* 侧边栏当前标签（定义在文件开头前向声明处初始化） */
 
 /* 锁屏状态 */
-static int g_locked = 0;       /* 0=桌面, 1=锁屏, 2=登录 */
+static int g_locked = 0;       /* 0=桌面, 1=锁屏, 2=登录, 3=解锁淡出 */
+static int g_lock_reveal_t = 0;       /* 0=锁屏时钟, 100=登录 UI */
+static int g_lock_reveal_target = 0;
 
 #ifdef __x86_64__
 /* cmdline hepu.lock=0 关闭开机锁屏(与保护模式共用 bootopts 解析管道) */
@@ -5495,29 +5680,33 @@ static int hs_login_submit(void)
     extern int auth64_verify_password(const char *pass);
 
     if (!auth64_is_configured()) {
-        vga_puts("[LOCK] login -> desktop (no account configured)\n");
+        vga_puts("[LOCK] auth ok (no account configured), starting unlock fade\n");
         return 1;
     }
     if (auth64_verify_password(g_password)) {
-        vga_puts("[LOCK] login -> desktop (auth ok)\n");
+        vga_puts("[LOCK] auth ok, starting unlock fade\n");
         return 1;
     }
     vga_puts("[LOCK] login: auth failed\n");
     return 0;
 #else
-    vga_puts("[LOCK] login -> desktop (32-bit direct unlock)\n");
+    vga_puts("[LOCK] auth ok (32-bit direct), starting unlock fade\n");
     return 1;
 #endif
 }
 
-/* 认证通过: 退出登录页, 清掉密码/虚拟键盘/错误提示 */
+/* 认证通过: 进入解锁淡出(桌面在下面, 登录层按进度退场)。 */
 static void hs_login_unlock(void)
 {
-    g_locked = 0;
+    g_locked = 3;
+    g_lock_reveal_t = 100;
+    g_lock_reveal_target = 0;
     g_password_len = 0;
     g_password[0] = 0;
     g_vkb_visible = 0;
     g_login_err = 0;
+    g_content_dirty = 1;
+    vga_puts("[LOCK] state: login -> unlocking (fade)\n");
 }
 
 /* 认证失败: 留在登录页(g_locked 仍为 2), 清空已输入密码, 置错误提示 */
@@ -5540,15 +5729,182 @@ static int hs_text_width(const char *s, int size)
 #endif
 }
 
-/* 锁屏背景: 当前壁纸 + 深色玻璃层。
- * 没有做真高斯模糊(逐像素模糊在 32 位堆上代价太高), 用 2x2 块取样 + 固定暗色
- * 混合, 先去掉"纯色挡板"的割裂感; 未来有离屏缓冲再换成真模糊。 */
-static void hs_lock_backdrop_render(void)
+/* ============================================================================
+ * 锁屏快照 + 揭示动画
+ *
+ * 参考 Clavis `Modules/Lock`: 进入锁屏时冻结桌面帧, 降采样后做真模糊, 点击
+ * 时钟时时钟/提示溶解, 头像与密码框溶解进入; 认证成功后整层淡出, 露出桌面。
+ * 快照只存 1/4 分辨率(480x270 @1920x1080, 约 0.5MB), 避免再吃一张全屏帧。
+ * 启动直接进锁屏时没有桌面帧可冻结, 回退到壁纸+暗色玻璃, 不伪造快照。
+ * ========================================================================== */
+#define LOCK_SNAP_DIV 4
+
+static uint32_t *g_lock_snap = 0;
+static int g_lock_snap_w = 0, g_lock_snap_h = 0;
+
+static void hs_lock_snapshot_free(void)
+{
+    if (g_lock_snap) { kfree(g_lock_snap); g_lock_snap = 0; }
+    g_lock_snap_w = g_lock_snap_h = 0;
+}
+
+/* 从当前前台帧取 1/4 快照。先做 4x4 盒式降采样, 再做两遍 3x3 模糊:
+ * 低分辨率下两遍盒模糊已足够盖掉文字边缘, 又不会把窗口轮廓糊成一片。 */
+static void hs_lock_snapshot_capture(void)
+{
+    uint32_t *fb = (uint32_t *)hs_get_framebuffer();
+    int w = g_shell.screen_width, h = g_shell.screen_height;
+    if (!fb || w <= 0 || h <= 0) return;
+
+    int sw = w / LOCK_SNAP_DIV;
+    int sh = h / LOCK_SNAP_DIV;
+    if (sw < 8) sw = 8;
+    if (sh < 8) sh = 8;
+
+    hs_lock_snapshot_free();
+    g_lock_snap = (uint32_t *)kmalloc((uint64_t)sw * sh * 4);
+    if (!g_lock_snap) {
+        vga_puts("[LOCK] snapshot alloc failed, fallback wallpaper\n");
+        return;
+    }
+
+    for (int y = 0; y < sh; y++) {
+        int sy0 = y * h / sh;
+        int sy1 = (y + 1) * h / sh;
+        if (sy1 <= sy0) sy1 = sy0 + 1;
+        for (int x = 0; x < sw; x++) {
+            int sx0 = x * w / sw;
+            int sx1 = (x + 1) * w / sw;
+            if (sx1 <= sx0) sx1 = sx0 + 1;
+            uint64_t r = 0, g = 0, b = 0, n = 0;
+            int step_y = (sy1 - sy0) > 4 ? (sy1 - sy0) / 4 : 1;
+            int step_x = (sx1 - sx0) > 4 ? (sx1 - sx0) / 4 : 1;
+            for (int yy = sy0; yy < sy1; yy += step_y) {
+                const uint32_t *row = fb + (uint64_t)yy * w;
+                for (int xx = sx0; xx < sx1; xx += step_x) {
+                    uint32_t q = row[xx];
+                    r += (q >> 16) & 0xFF;
+                    g += (q >> 8) & 0xFF;
+                    b += q & 0xFF;
+                    n++;
+                }
+            }
+            if (!n) n = 1;
+            g_lock_snap[y * sw + x] = (uint32_t)((r / n) << 16) |
+                                      (uint32_t)((g / n) << 8) |
+                                      (uint32_t)(b / n);
+        }
+    }
+
+    uint32_t *tmp = (uint32_t *)kmalloc((uint64_t)sw * sh * 4);
+    if (tmp) {
+        for (int pass = 0; pass < 2; pass++) {
+            for (int y = 0; y < sh; y++) {
+                for (int x = 0; x < sw; x++) {
+                    uint64_t r = 0, g = 0, b = 0, n = 0;
+                    for (int dy = -1; dy <= 1; dy++) {
+                        int yy = y + dy; if (yy < 0) yy = 0; if (yy >= sh) yy = sh - 1;
+                        for (int dx = -1; dx <= 1; dx++) {
+                            int xx = x + dx; if (xx < 0) xx = 0; if (xx >= sw) xx = sw - 1;
+                            uint32_t q = g_lock_snap[yy * sw + xx];
+                            r += (q >> 16) & 0xFF; g += (q >> 8) & 0xFF; b += q & 0xFF; n++;
+                        }
+                    }
+                    tmp[y * sw + x] = (uint32_t)((r / n) << 16) |
+                                      (uint32_t)((g / n) << 8) | (uint32_t)(b / n);
+                }
+            }
+            for (int i = 0; i < sw * sh; i++) g_lock_snap[i] = tmp[i];
+        }
+        kfree(tmp);
+    }
+
+    g_lock_snap_w = sw;
+    g_lock_snap_h = sh;
+    vga_printf("[LOCK] snapshot %dx%d blur=2\n", sw, sh);
+}
+
+/* 所有进入锁屏的路径共用: 先冻结桌面, 再切状态。 */
+static void hs_lock_enter(void)
+{
+    if (g_locked != 0) return;
+    /* 桌面自己的大时钟如果留在快照里, 会和锁屏中央时钟形成两个时钟。
+     * 面板注册表每帧会被重初始化, 所以不能用 enabled 临时关; 用绘制层标志,
+     * 强制重画一帧后再取快照, 随后立即恢复标志并切进锁屏。 */
+    g_snapshot_hide_clock = 1;
+    vga_printf("[LOCK] snapshot prep hide=%d dirty=%d\n", g_snapshot_hide_clock, g_content_dirty);
+    g_content_dirty = 1;   /* 强制全量重画, 否则 hpdesk_render 会走跳帧路径 */
+    hpdesk_render();
+    hs_lock_snapshot_capture();
+    g_snapshot_hide_clock = 0;
+    g_locked = 1;
+    g_lock_reveal_t = 0;
+    g_lock_reveal_target = 0;
+    g_password_len = 0;
+    g_password[0] = 0;
+    g_vkb_visible = 0;
+    g_login_err = 0;
+    g_content_dirty = 1;
+    vga_puts("[LOCK] state: desktop -> lock (snapshot frozen)\n");
+}
+
+/* 每帧推进揭示进度; 解锁淡出到 0 后正式回到桌面。 */
+static void hs_lock_tick(void)
+{
+    if (g_lock_reveal_t == g_lock_reveal_target) return;
+    int step = 4;
+    if (g_lock_reveal_t < g_lock_reveal_target) {
+        g_lock_reveal_t += step;
+        if (g_lock_reveal_t > g_lock_reveal_target) g_lock_reveal_t = g_lock_reveal_target;
+    } else {
+        g_lock_reveal_t -= step;
+        if (g_lock_reveal_t < g_lock_reveal_target) g_lock_reveal_t = g_lock_reveal_target;
+    }
+    g_content_dirty = 1;
+    if (g_locked == 2 && g_lock_reveal_t == 100 && g_lock_reveal_target == 100) {
+        vga_puts("[LOCK] reveal done (login ui)\n");
+    }
+    if (g_locked == 3 && g_lock_reveal_t == 52) {
+        vga_puts("[LOCK] fade mid (desktop 52% visible)\n");
+    }
+    if (g_locked == 3 && g_lock_reveal_t == 0) {
+        g_locked = 0;
+        hs_lock_snapshot_free();
+        g_content_dirty = 1;
+        vga_puts("[LOCK] state: login -> desktop (unlock fade done)\n");
+    }
+}
+
+/* 1/4 快照按最近邻放大 + 固定暗色玻璃。alpha<255 时与当前桌面帧混合,
+ * 用于认证成功后的整层淡出。 */
+static void hs_lock_backdrop_render_alpha(int alpha)
 {
     int w = g_shell.screen_width, h = g_shell.screen_height;
-    uint32_t *fb = (uint32_t *)hs_get_framebuffer();
-    if (!fb) return;
+    if (alpha <= 0) return;
 
+    if (g_lock_snap && g_lock_snap_w > 0 && g_lock_snap_h > 0) {
+        uint32_t *fb = (uint32_t *)hs_get_framebuffer();
+        if (!fb) return;
+        for (int y = 0; y < h; y++) {
+            int sy = y * g_lock_snap_h / h;
+            if (sy >= g_lock_snap_h) sy = g_lock_snap_h - 1;
+            const uint32_t *srow = g_lock_snap + sy * g_lock_snap_w;
+            for (int x = 0; x < w; x++) {
+                int sx = x * g_lock_snap_w / w;
+                if (sx >= g_lock_snap_w) sx = g_lock_snap_w - 1;
+                uint32_t q = srow[sx];
+                int r = ((int)((q >> 16) & 0xFF) * 97 + 10 * 158) / 255;
+                int g = ((int)((q >> 8) & 0xFF) * 97 + 24 * 158) / 255;
+                int b = ((int)(q & 0xFF) * 97 + 32 * 158) / 255;
+                uint32_t out = ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
+                if (alpha >= 250) fb[(uint64_t)y * w + x] = out;
+                else hs_blend_pixel(x, y, out, alpha);
+            }
+        }
+        return;
+    }
+
+    /* 无快照(开机直接进锁屏): 保留旧壁纸+玻璃回退。 */
     uint32_t base = 0xFF0A1820u;
     if (!hs_wallpaper_png()) {
         hs_fill_rect(0, 0, w, h, g_shell.colors.bg);
@@ -5575,13 +5931,12 @@ static void hs_lock_backdrop_render(void)
             uint32_t out = base;
             if (sx >= 0 && sx < sw && sy >= 0 && sy < sh) {
                 const uint8_t *q = src + (uint64_t)sy * sw * 4 + sx * 4;
-                /* 壁纸占 38%, 暗底占 62%: 保留山形和纹理, 但确保锁屏文字有对比度。 */
                 int r = ((int)q[0] * 97 + 10 * 158) / 255;
                 int g = ((int)q[1] * 97 + 24 * 158) / 255;
                 int b = ((int)q[2] * 97 + 32 * 158) / 255;
                 out = 0xFF000000u | ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
             }
-            uint32_t *row = fb + (uint64_t)y * w + x;
+            uint32_t *row = (uint32_t *)hs_get_framebuffer() + (uint64_t)y * w + x;
             for (int yy = 0; yy < bh; yy++)
                 for (int xx = 0; xx < bw; xx++)
                     row[yy * w + xx] = out;
@@ -5589,124 +5944,157 @@ static void hs_lock_backdrop_render(void)
     }
 }
 
-static void hs_lock_screen_render(void)
+/* 圆角矩形/圆的 alpha 版本, 只给锁屏认证层使用; 普通绘制仍走不透明快速路径。 */
+static void hs_fill_round_alpha(int x, int y, int w, int h, int r, uint32_t c, int alpha)
 {
-    /* 壁纸 + 暗色玻璃层（真模糊留给后续离屏缓冲）。 */
-    hs_lock_backdrop_render();
+    if (w <= 0 || h <= 0 || alpha <= 0) return;
+    if (r > w / 2) r = w / 2;
+    if (r > h / 2) r = h / 2;
+    for (int yy = 0; yy < h; yy++) {
+        int dy = 0;
+        if (yy < r) dy = r - yy;
+        else if (yy > h - 1 - r) dy = yy - (h - 1 - r);
+        int inset = dy ? hs_round_inset(dy, r) : 0;
+        for (int xx = inset; xx < w - inset; xx++)
+            hs_blend_pixel(x + xx, y + yy, c, alpha);
+    }
+}
 
+static void hs_fill_circle_alpha(int cx, int cy, int r, uint32_t c, int alpha)
+{
+    if (r <= 0 || alpha <= 0) return;
+    for (int yy = -r; yy <= r; yy++) {
+        for (int xx = -r; xx <= r; xx++) {
+            if (xx * xx + yy * yy <= r * r)
+                hs_blend_pixel(cx + xx, cy + yy, c, alpha);
+        }
+    }
+}
+
+static void hs_lock_text_alpha(void *fb, int x, int y, const char *s,
+                               uint32_t color, int size, int alpha)
+{
+    if (alpha <= 0 || !s) return;
+    font64_set_alpha(alpha);
+    font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                       x, y, s, color, (uint16_t)size);
+    font64_set_alpha(255);
+}
+
+/* 大时钟/日期/底部提示, alpha 由揭示进度驱动。 */
+static void hs_lock_clock_render(int alpha)
+{
+    if (alpha <= 0) return;
     void *fb = hs_get_framebuffer();
 
-    /* 大时钟: 用真实 TTF advance 计算宽度后居中。
-     * gfx64_set_font_size 上限 72(再大被静默拒绝); 150% 下 hs_s(64)=96,
-     * 曾导致锁屏时钟缩成正文大小, 这里封顶到 72。 */
-    uint8_t h = rtc64_get_hours();
-    uint8_t m = rtc64_get_minutes();
+    uint8_t hh = rtc64_get_hours();
+    uint8_t mm = rtc64_get_minutes();
     char time[16];
-    time[0] = '0' + h / 10; time[1] = '0' + h % 10; time[2] = ':';
-    time[3] = '0' + m / 10; time[4] = '0' + m % 10; time[5] = 0;
+    time[0] = '0' + hh / 10; time[1] = '0' + hh % 10; time[2] = ':';
+    time[3] = '0' + mm / 10; time[4] = '0' + mm % 10; time[5] = 0;
     int clock_size = hs_s(64);
     if (clock_size > 72) clock_size = 72;
     int clock_y = hs_sy(200);
     int time_w = hs_text_width(time, clock_size);
     int clock_x = (g_shell.screen_width - time_w) / 2;
-    font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                       clock_x, clock_y, time, 0xFFF6EA, (uint16_t)clock_size);
+    hs_lock_text_alpha(fb, clock_x, clock_y, time, 0xFFF6EA, clock_size, alpha);
 
-    /* 日期 */
     char date[40];
     hs_date_label(date, (int)sizeof(date));
     int date_size = hs_s(20);
     int date_w = hs_text_width(date, date_size);
-    font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                       (g_shell.screen_width - date_w) / 2, clock_y + clock_size + hs_sy(22),
-                       date, 0xFFD8A0, (uint16_t)date_size);
+    hs_lock_text_alpha(fb, (g_shell.screen_width - date_w) / 2,
+                       clock_y + clock_size + hs_sy(22), date, 0xFFD8A0, date_size, alpha);
 
-    /* 底部提示 */
     extern const char *l10n64_tr(int id);
     const char *hint = l10n64_tr(L10N_STR_LOCK_HINT);
     int hint_size = hs_s(14);
     int hint_w = hs_text_width(hint, hint_size);
-    font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                       (g_shell.screen_width - hint_w) / 2, g_shell.screen_height - hs_sy(80),
-                       hint, 0xA8B4BC, (uint16_t)hint_size);
+    hs_lock_text_alpha(fb, (g_shell.screen_width - hint_w) / 2,
+                       g_shell.screen_height - hs_sy(80), hint, 0xA8B4BC, hint_size, alpha);
 }
 
-/* 登录界面：头像+用户名+密码 */
-static void hs_login_screen_render(void)
+static void hs_lock_screen_render(void)
 {
-    /* 深色半透明背景 */
-    hs_fill_rect(0, 0, g_shell.screen_width, g_shell.screen_height, g_shell.colors.bg);
+    int t = g_lock_reveal_t;
+    if (t < 0) t = 0;
+    if (t > 100) t = 100;
+    hs_lock_backdrop_render_alpha(255);
+    hs_lock_clock_render(255 - t * 255 / 100);
+}
 
+/* 登录认证 UI(头像/用户名/输入框/按钮/错误提示/右下角按钮/虚拟键盘)。
+ * alpha 用于锁屏揭示与解锁淡出; hit 区域保持原几何, 不因动画偏移。 */
+static void hs_login_ui_render(int alpha)
+{
+    if (alpha <= 0) return;
     void *fb = hs_get_framebuffer();
     int center_x = g_shell.screen_width / 2;
+    int slide = (100 - alpha * 100 / 255) * hs_sy(14) / 100;
 
-    /* 用户头像（圆形） */
     int avatar_size = hs_s(96);
     int avatar_x = center_x - avatar_size / 2;
-    int avatar_y = hs_sy(180);
-    hs_fill_rounded_rect(avatar_x, avatar_y, avatar_size, avatar_size, hs_s(48), g_shell.colors.accent);
-    /* 头像中的用户图标 */
-    font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                       avatar_x + hs_sx(30), avatar_y + hs_sy(25), "U", hs_on_accent(), hs_s(48));
+    int avatar_y = hs_sy(180) + slide;
+    hs_fill_circle_alpha(avatar_x + avatar_size / 2, avatar_y + avatar_size / 2,
+                         avatar_size / 2, g_shell.colors.accent, alpha);
+    hs_lock_text_alpha(fb, avatar_x + hs_sx(30), avatar_y + hs_sy(25), "U",
+                       hs_on_accent(), hs_s(48), alpha);
 
-    /* 用户名 */
     char username[32] = "hepu";
-    int name_w = hs_sx(4 * 12);
-    font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                       center_x - name_w / 2, avatar_y + avatar_size + hs_sy(20),
-                       username, g_shell.colors.panel_fg, hs_s(20));
+    int name_w = hs_text_width(username, hs_s(20));
+    hs_lock_text_alpha(fb, center_x - name_w / 2, avatar_y + avatar_size + hs_sy(20),
+                       username, g_shell.colors.panel_fg, hs_s(20), alpha);
 
-    /* 密码输入框 */
     int input_w = hs_sx(240);
     int input_h = hs_sy(36);
     int input_x = center_x - input_w / 2;
     int input_y = avatar_y + avatar_size + hs_sy(60);
-    hs_fill_rounded_rect(input_x, input_y, input_w, input_h, hs_s(8), g_shell.colors.titlebar_bg);
-    hs_draw_rounded_rect(input_x, input_y, input_w, input_h, hs_s(8), g_shell.colors.accent);
+    hs_fill_round_alpha(input_x, input_y, input_w, input_h, hs_s(8),
+                        g_shell.colors.titlebar_bg, alpha);
+    hs_stroke_round_blend(input_x, input_y, input_w, input_h, hs_s(8),
+                          g_shell.colors.accent, alpha);
 
-    /* 密码圆点 */
     int dot_y = input_y + (input_h - hs_sy(10)) / 2;
     for (int i = 0; i < g_password_len; i++) {
-        hs_fill_rounded_rect(input_x + hs_sx(20) + i * hs_sx(18), dot_y, hs_s(10), hs_s(10), hs_s(5), g_shell.colors.panel_fg);
+        hs_fill_round_alpha(input_x + hs_sx(20) + i * hs_sx(18), dot_y,
+                            hs_s(10), hs_s(10), hs_s(5), g_shell.colors.panel_fg, alpha);
     }
 
-    /* 登录按钮 */
     int btn_w = hs_sx(100);
     int btn_h = hs_sy(32);
     int btn_x = center_x - btn_w / 2;
     int btn_y = input_y + input_h + hs_sy(20);
-    hs_fill_rounded_rect(btn_x, btn_y, btn_w, btn_h, hs_s(8), g_shell.colors.accent);
-    font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                       btn_x + hs_sx(28), btn_y + hs_sy(8), l10n64_tr(L10N_STR_LOGIN_BTN), hs_on_accent(), hs_s(16));
+    hs_fill_round_alpha(btn_x, btn_y, btn_w, btn_h, hs_s(8), g_shell.colors.accent, alpha);
+    extern const char *l10n64_tr(int id);
+    hs_lock_text_alpha(fb, btn_x + hs_sx(28), btn_y + hs_sy(8),
+                       l10n64_tr(L10N_STR_LOGIN_BTN), hs_on_accent(), hs_s(16), alpha);
 
-    /* 提示 */
-    font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                       center_x - hs_sx(80), btn_y + btn_h + hs_sy(30),
-                       l10n64_tr(L10N_STR_ESC_LOCK), 0x888888, hs_s(12));
+    hs_lock_text_alpha(fb, center_x - hs_sx(80), btn_y + btn_h + hs_sy(30),
+                       l10n64_tr(L10N_STR_ESC_LOCK), 0x888888, hs_s(12), alpha);
 
-    /* 认证失败提示: 仅失败时显示, 红色; 留在登录页不退回锁屏 */
     if (g_login_err) {
-        font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           center_x - hs_sx(130), btn_y + btn_h + hs_sy(58),
-                           l10n64_tr(L10N_STR_LOGIN_ERROR), 0xCC4444, hs_s(13));
+        hs_lock_text_alpha(fb, center_x - hs_sx(130), btn_y + btn_h + hs_sy(58),
+                           l10n64_tr(L10N_STR_LOGIN_ERROR), 0xCC4444, hs_s(13), alpha);
     }
 
-    /* V0.13.39: 右下角 关机键 + 虚拟键盘键 */
+    /* 右下角 关机键 + 虚拟键盘键 */
     {
         int kb_x = g_shell.screen_width - hs_sx(200);
         int kb_y = g_shell.screen_height - hs_sy(120);
-        hs_fill_rounded_rect(kb_x, kb_y, hs_sx(88), hs_sy(34), hs_s(8), g_shell.colors.titlebar_bg);
-        hs_draw_rounded_rect(kb_x, kb_y, hs_sx(88), hs_sy(34), hs_s(8), g_shell.colors.accent);
-        font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           kb_x + hs_sx(14), kb_y + hs_sy(8), l10n64_tr(L10N_STR_VKB_BTN), g_shell.colors.panel_fg, hs_s(16));
+        hs_fill_round_alpha(kb_x, kb_y, hs_sx(88), hs_sy(34), hs_s(8),
+                            g_shell.colors.titlebar_bg, alpha);
+        hs_stroke_round_blend(kb_x, kb_y, hs_sx(88), hs_sy(34), hs_s(8),
+                              g_shell.colors.accent, alpha);
+        hs_lock_text_alpha(fb, kb_x + hs_sx(14), kb_y + hs_sy(8),
+                           l10n64_tr(L10N_STR_VKB_BTN), g_shell.colors.panel_fg, hs_s(16), alpha);
         int po_x = kb_x + hs_sx(104);
-        hs_fill_rounded_rect(po_x, kb_y, hs_sx(88), hs_sy(34), hs_s(8), 0x6E3A3A);
-        hs_draw_rounded_rect(po_x, kb_y, hs_sx(88), hs_sy(34), hs_s(8), g_shell.colors.accent);
-        font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           po_x + hs_sx(20), kb_y + hs_sy(8), "PWR", g_shell.colors.panel_fg, hs_s(16));
+        hs_fill_round_alpha(po_x, kb_y, hs_sx(88), hs_sy(34), hs_s(8), 0x6E3A3A, alpha);
+        hs_stroke_round_blend(po_x, kb_y, hs_sx(88), hs_sy(34), hs_s(8),
+                              g_shell.colors.accent, alpha);
+        hs_lock_text_alpha(fb, po_x + hs_sx(20), kb_y + hs_sy(8), "PWR",
+                           g_shell.colors.panel_fg, hs_s(16), alpha);
     }
 
-    /* V0.13.39: 虚拟键盘渲染 */
     if (g_vkb_visible) {
         static const char *vkb_rows[] = {"1234567890", "qwertyuiop", "asdfghjkl", "zxcvbnm"};
         static const int vkb_row_n[] = {10, 10, 9, 7};
@@ -5714,27 +6102,49 @@ static void hs_login_screen_render(void)
         int kb_h = hs_sy(4 * 38 + 10);
         int kb_x = center_x - kb_w / 2;
         int kb_y = g_shell.screen_height - kb_h - hs_sy(16);
-        hs_fill_rounded_rect(kb_x - hs_sx(6), kb_y - hs_sy(6), kb_w + hs_sx(12), kb_h + hs_sy(12), hs_s(12), 0x22201C);
+        hs_fill_round_alpha(kb_x - hs_sx(6), kb_y - hs_sy(6), kb_w + hs_sx(12),
+                            kb_h + hs_sy(12), hs_s(12), 0x22201C, alpha);
         for (int r = 0; r < 4; r++) {
             int key_w = (kb_w - (vkb_row_n[r] - 1) * hs_sx(4)) / vkb_row_n[r];
             int row_x = kb_x + (kb_w - vkb_row_n[r] * key_w - (vkb_row_n[r] - 1) * hs_sx(4)) / 2;
             for (int c = 0; c < vkb_row_n[r]; c++) {
                 int kx = row_x + c * (key_w + hs_sx(4));
                 int ky = kb_y + r * hs_sy(38);
-                hs_fill_rounded_rect(kx, ky, key_w, hs_sy(32), hs_s(6), g_shell.colors.titlebar_bg);
-                font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                                   kx + (key_w - hs_sx(14)) / 2, ky + hs_sy(7),
-                                   vkb_rows[r] + c, g_shell.colors.panel_fg, hs_s(16));
+                hs_fill_round_alpha(kx, ky, key_w, hs_sy(32), hs_s(6),
+                                    g_shell.colors.titlebar_bg, alpha);
+                hs_lock_text_alpha(fb, kx + (key_w - hs_sx(14)) / 2, ky + hs_sy(7),
+                                   vkb_rows[r] + c, g_shell.colors.panel_fg, hs_s(16), alpha);
             }
         }
-        /* Backspace 键(第4行右侧) */
         int bsw = hs_sx(76);
         int bsx = kb_x + kb_w - bsw;
         int bsy = kb_y + 3 * hs_sy(38);
-        hs_fill_rounded_rect(bsx, bsy, bsw, hs_sy(32), hs_s(6), g_shell.colors.accent_pressed);
-        font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                           bsx + hs_sx(8), bsy + hs_sy(7), "DEL", g_shell.colors.panel_fg, hs_s(16));
+        hs_fill_round_alpha(bsx, bsy, bsw, hs_sy(32), hs_s(6),
+                            g_shell.colors.accent_pressed, alpha);
+        hs_lock_text_alpha(fb, bsx + hs_sx(8), bsy + hs_sy(7), "DEL",
+                           g_shell.colors.panel_fg, hs_s(16), alpha);
     }
+}
+
+/* 登录页: 时钟溶解 + 认证 UI 淡入。 */
+static void hs_login_screen_render(void)
+{
+    int t = g_lock_reveal_t;
+    if (t < 0) t = 0;
+    if (t > 100) t = 100;
+    hs_lock_backdrop_render_alpha(255);
+    hs_lock_clock_render(255 - t * 255 / 100);
+    hs_login_ui_render(t * 255 / 100);
+}
+
+/* 认证成功后的淡出覆盖层: 桌面已经画在下面, 登录层按 alpha 退场。 */
+static void hs_unlock_overlay_render(void)
+{
+    int t = g_lock_reveal_t;
+    if (t <= 0) return;
+    if (t > 100) t = 100;
+    hs_lock_backdrop_render_alpha(t * 255 / 100);
+    hs_login_ui_render(t * 255 / 100);
 }
 
 /* V0.59.2: 通用细滚动条。
@@ -6338,15 +6748,15 @@ static void cc_toggle_card(void *fb, int x, int y, int w, int h,
     int icx = x + w / 2;
     int icy = y + h / 2 - hs_sy(12);
     {
-        /* 图标全部取系统现成位图(32x32 单色图标), 和顶栏同一套线条。 */
-        const uint32_t *bm = hs_ico_wifi;      /* 0 WiFi */
-        if (icon_kind == 1) bm = hs_ico_share;      /* BT */
-        else if (icon_kind == 2) bm = hs_ico_cast;  /* Air */
-        else if (icon_kind == 3) bm = hs_ico_hour_empty; /* DND */
-        else if (icon_kind == 4) bm = hs_ico_aim;   /* Loc */
-        else if (icon_kind == 5) bm = hs_ico_bolt;  /* Torch */
+        /* 与顶栏共享 hs_draw_icon 矢量管线, 不再各自取 32x32 位图缩放。 */
+        int glyph = HS_GLYPH_WIFI;
+        if (icon_kind == 1) glyph = HS_GLYPH_BLUETOOTH;
+        else if (icon_kind == 2) glyph = HS_GLYPH_AIRPLAY;
+        else if (icon_kind == 3) glyph = HS_GLYPH_DND;
+        else if (icon_kind == 4) glyph = HS_GLYPH_LOCATION;
+        else if (icon_kind == 5) glyph = HS_GLYPH_TORCH;
         int isz = hs_s(26);
-        hs_icon_bmp(icx - isz / 2, icy - isz / 2, isz, fg, bm);
+        hs_draw_icon(icx - isz / 2, icy - isz / 2, isz, fg, glyph);
     }
 
     int cw = hs_s(9), fs = hs_s(13);
@@ -6851,13 +7261,19 @@ void hpdesk_handle_click(int x, int y)
 
     hpdesk_mark_dirty();   /* P0: 交互发生, 内容需重绘 */
 
+    /* 解锁淡出期间不再接受点击, 避免穿透到桌面。 */
+    if (g_locked == 3) return;
+
     /* 锁屏: 点击任意位置进入登录页(鼠标解锁路径), 不落到桌面窗口交互。
      * 优先级: 锁屏/登录态优先于 OOBE —— 向导在这两层既不渲染也不抢点击。 */
     if (g_locked == 1) {
         g_locked = 2;
+        g_lock_reveal_t = 0;
+        g_lock_reveal_target = 100;
         g_password_len = 0;
         g_password[0] = 0;
         g_login_err = 0;
+        g_content_dirty = 1;
         vga_puts("[LOCK] state: lock -> login (click)\n");
         return;
     }
@@ -6974,7 +7390,7 @@ void hpdesk_handle_click(int x, int y)
             if (x >= btn_x && x <= btn_x + btn_w && y >= btn_y && y <= btn_y + btn_h) {
                 if (hs_login_submit()) {
                     hs_login_unlock();
-                    vga_puts("[LOCK] state: login -> desktop (button click)\n");
+                    vga_puts("[LOCK] state: login -> unlocking (button click)\n");
                 } else {
                     hs_login_reject();
                 }
@@ -7547,10 +7963,9 @@ void hpdesk_mouse_down(int x, int y)
             int my = bar_top + bar_h + hs_sy(4);
             if (x >= mx && x <= mx + mw && y >= my && y <= my + mh * 3) {
                 int idx = (y - my) / mh;
-                if (idx == 0) {         /* 注销：回登录界面 */
+                if (idx == 0) {         /* 注销：冻结桌面并回锁屏 */
                     g_power_menu_open = 0;
-                    g_locked = 1;
-                    g_content_dirty = 1;
+                    hs_lock_enter();
                 } else if (idx == 1) {  /* 重启 */
                     arch_reboot();
                 } else {                /* 关机 */
@@ -8032,6 +8447,10 @@ static int hs_anim_active(void)
     if (g_island_t != g_island_target) return 1;
     if (g_menu_t != g_menu_target) return 1;
     if (g_color_t != g_color_target) return 1;
+    if (g_lock_reveal_t != g_lock_reveal_target) return 1;
+    if (g_shell.workspaces[g_shell.current_workspace].layout == HS_LAYOUT_COLUMNS &&
+        g_col_scroll[g_shell.current_workspace] != g_col_scroll_target[g_shell.current_workspace])
+        return 1;
     for (int i = 0; i < g_wm.window_count; i++) {
         hs_window_t *w = &g_wm.windows[i];
         if (w->visible && w->anim_dur) return 1;
@@ -8277,6 +8696,11 @@ static void hpdesk_render_inner(void)
     hs_island_tick();
     hs_pop_tick(&g_menu_t, &g_menu_target);
     hs_pop_tick(&g_color_t, &g_color_target);
+    hs_lock_tick();
+    if (g_shell.workspaces[g_shell.current_workspace].layout == HS_LAYOUT_COLUMNS &&
+        hs_columns_tick()) {
+        hs_layout_columns();
+    }
 
     int mx = g_shell.mouse_x, my = g_shell.mouse_y;
     int mouse_moved = (mx != g_last_mx || my != g_last_my);
@@ -8538,6 +8962,10 @@ static void hpdesk_render_inner(void)
      * 否则启动后那张 "System Update" 通知卡会盖住面板标题和入口按钮。 */
     if (g_battery_panel_open) hs_battery_panel_render();
 
+    /* 解锁淡出: 桌面已经完整画在下面, 最后把登录层按 alpha 盖上去。
+     * 覆盖所有桌面浮层, 避免通知/电池面板从登录层下面漏出来。 */
+    if (g_locked == 3) hs_unlock_overlay_render();
+
     } /* end of: 内容层重绘 (dirty/动画时) */
 
     /* 提交: 后台内容→前台, 光标单独叠加在前台, 不污染后台缓冲 */
@@ -8728,14 +9156,20 @@ void hpdesk_handle_key(int key)
     g_last_activity_ts = 0;  /* 有输入即刷新活动时间 */
     hpdesk_mark_dirty();   /* P0: 交互发生, 内容需重绘 */
 
+    /* 解锁淡出期间吞掉键盘, 避免输入落到已露出的桌面。 */
+    if (g_locked == 3) return;
+
     /* 锁屏状态：任意键进入登录界面。
      * 优先级: 锁屏/登录态优先于 OOBE —— 向导在这两层不抢按键, 否则解锁键被
      * 向导吞掉, 锁屏进不去登录页, 向导自己也画不出来, 两层互相抵消。 */
     if (g_locked == 1) {
         g_locked = 2;
+        g_lock_reveal_t = 0;
+        g_lock_reveal_target = 100;
         g_password_len = 0;
         g_password[0] = 0;
         g_login_err = 0;
+        g_content_dirty = 1;
         vga_puts("[LOCK] state: lock -> login (key)\n");
         return;
     }
@@ -8744,13 +9178,14 @@ void hpdesk_handle_key(int key)
     if (g_locked == 2) {
         if (key == 27) {  /* ESC返回锁屏 */
             g_locked = 1;
+            g_lock_reveal_target = 0;
+            g_content_dirty = 1;
             vga_puts("[LOCK] state: login -> lock (ESC)\n");
             return;
         }
         if (key == '\n' || key == '\r' || key == 0x1C) {  /* 回车登录 */
             if (hs_login_submit()) {
                 hs_login_unlock();
-                vga_puts("[LOCK] state: login -> desktop (unlocked)\n");
             } else {
                 hs_login_reject();
             }
@@ -8783,15 +9218,42 @@ void hpdesk_handle_key(int key)
         return;
     }
 
+    /* F9/F11/F12 是桌面级窗口快捷键, 必须在应用按键之前消费。
+     * 之前放在应用后面, 终端/设置窗口会先吃掉 F9, 导致横向列切不过去。 */
+    if (key == 0x43) {
+        hs_layout_mode_t cur = hs_layout_get();
+        hs_layout_mode_t next = (cur == HS_LAYOUT_COLUMNS) ? HS_LAYOUT_TILE : HS_LAYOUT_COLUMNS;
+        hs_layout_set(next);
+        if (next == HS_LAYOUT_COLUMNS)
+            hs_notification_send("Window Layout", "Columns: wheel on Top Bar to scroll", 0, 4000);
+        else
+            hs_notification_send("Window Layout", "Tiled", 0, 3000);
+        vga_printf("[WM] layout=%s\n", next == HS_LAYOUT_COLUMNS ? "Columns" : "Tiled");
+        return;
+    }
+    if (key == 0x44) { /* F10: 列布局内下一列 */
+        hs_columns_cycle_focus(1);
+        return;
+    }
+    if (key == 0x57) {
+        extern hs_window_t *hs_files_create(void);
+        hs_files_create();
+        return;
+    }
+    if (key == 0x94 || key == 0x58) {
+        hs_terminal_create();
+        return;
+    }
+
     /* 系统工具窗口 (设备/磁盘/日志) 优先消费按键 */
     if (hs_systools_handle_key(key)) return;
 
     /* 聚焦的应用窗口优先消费按键(终端/文件管理器等) */
     if (hs_apps_handle_key(key)) return;
 
-    /* L键锁屏 */
+    /* L键锁屏(先冻结桌面快照) */
     if (key == 'l' || key == 'L') {
-        g_locked = 1;
+        hs_lock_enter();
         return;
     }
 
@@ -8857,19 +9319,6 @@ void hpdesk_handle_key(int key)
         return;
     }
 
-    /* F11(0x57): 快速打开文件管理器 (无鼠标环境下也可达) */
-    if (key == 0x57) {
-        extern hs_window_t *hs_files_create(void);
-        hs_files_create();
-        return;
-    }
-
-    /* V0.13.41: F12 快捷键快速打开终端 (无鼠标环境下也可达)
-     * 键盘层把 F12 转成 0x94 送入输入缓冲，避免 0x58 在 ASCII 表里是 0。 */
-    if (key == 0x94 || key == 0x58) {
-        hs_terminal_create();
-        return;
-    }
 }
 
 /* ============================================================================
@@ -9837,6 +10286,8 @@ void hs_layout_set(hs_layout_mode_t mode)
 {
     g_shell.workspaces[g_shell.current_workspace].layout = mode;
     hs_layout_apply();
+    if (mode == HS_LAYOUT_COLUMNS)
+        hs_columns_ensure_visible(hs_window_get_focused());
 }
 
 hs_layout_mode_t hs_layout_get(void)
@@ -9847,7 +10298,7 @@ hs_layout_mode_t hs_layout_get(void)
 void hs_layout_cycle(void)
 {
     hs_layout_mode_t current = hs_layout_get();
-    hs_layout_mode_t next = (current + 1) % (HS_LAYOUT_BSP + 1);
+    hs_layout_mode_t next = (current + 1) % (HS_LAYOUT_COLUMNS + 1);
     hs_layout_set(next);
 }
 
@@ -9856,6 +10307,9 @@ void hs_layout_apply(void)
     hs_layout_mode_t mode = hs_layout_get();
 
     switch (mode) {
+        case HS_LAYOUT_COLUMNS:
+            hs_layout_columns();
+            break;
         case HS_LAYOUT_TILE:
             hs_layout_tile();
             break;
@@ -9873,6 +10327,17 @@ void hs_layout_apply(void)
     }
 }
 
+/* 工作区可用区: 顶栏实际底边 + 8px 间隙, 底部为 Dock 留白。
+ * 旧代码用固定 HS_PANEL_HEIGHT=28, 150% 下窗口会压住顶栏。 */
+static int hs_work_top(void)
+{
+    return hs_sy(8) + hs_sy(g_shell.ui.bar_height) + hs_sy(8);
+}
+static int hs_work_bottom(void)
+{
+    return hs_sy(88);
+}
+
 void hs_layout_tile(void)
 {
     int visible = 0;
@@ -9887,9 +10352,10 @@ void hs_layout_tile(void)
         }
     }
 
-    int panel_h = HS_PANEL_HEIGHT;
-    int avail_h = g_shell.screen_height - panel_h * 2;
-    int avail_y = panel_h;
+    int top = hs_work_top();
+    int bottom = hs_work_bottom();
+    int avail_h = g_shell.screen_height - top - bottom;
+    int avail_y = top;
 
     if (visible == 0) return;
 
@@ -9937,10 +10403,9 @@ void hs_layout_bsp(void)
 
     if (visible == 0) return;
 
-    int panel_h = HS_PANEL_HEIGHT;
-    int x = 0, y = panel_h;
+    int x = 0, y = hs_work_top();
     int w = g_shell.screen_width;
-    int h = g_shell.screen_height - panel_h * 2;
+    int h = g_shell.screen_height - hs_work_top() - hs_work_bottom();
 
     /* 简单二分：偶数水平分，奇数垂直分 */
     for (int i = 0; i < visible; i++) {
@@ -9976,14 +10441,184 @@ void hs_layout_single(void)
 
         if (w == focused || !focused) {
             w->x = 0;
-            w->y = HS_PANEL_HEIGHT;
+            w->y = hs_work_top();
             w->width = g_shell.screen_width;
-            w->height = g_shell.screen_height - HS_PANEL_HEIGHT * 2;
+            w->height = g_shell.screen_height - hs_work_top() - hs_work_bottom();
             w->visible = 1;
         } else {
             w->visible = 0;
         }
     }
+}
+
+/* ============================================================================
+ * niri 式横向滚动列 (HS_LAYOUT_COLUMNS)
+ *
+ * 每个可见浮动窗口一列, 列宽 3/5 屏、列间距 8、列顺序按窗口 id(创建顺序)。
+ * 所有列排成一条长条, 通过每工作区独立的 scroll 偏移横向移动; 焦点窗口
+ * 自动滚进视口。滚轮在顶栏/桌面空白处横向滚, F9 切回平铺。
+ * 这不是"把窗口缩小排一排"的假布局: 列可以滚出屏幕, 焦点会让列吸附回视口。
+ * ========================================================================== */
+static int hs_columns_collect(int *indices)
+{
+    int n = 0;
+    for (int i = 0; i < g_wm.window_count; i++) {
+        hs_window_t *w = &g_wm.windows[i];
+        if (w->type != HS_WINDOW_FLOATING) continue;
+        if (!w->visible || w->workspace != g_shell.current_workspace) continue;
+        if (w->state == HS_WINDOW_STATE_MAXIMIZED) continue;
+        indices[n++] = i;
+    }
+    return n;
+}
+
+static void hs_columns_metrics(int n, int *col_w, int *gap, int *margin,
+                               int *top, int *height)
+{
+    *col_w = g_shell.screen_width * 3 / 5;
+    if (*col_w < hs_sx(320)) *col_w = hs_sx(320);
+    *gap = hs_s(8);
+    *margin = hs_s(8);
+    *top = hs_sy(52);
+    *height = g_shell.screen_height - *top - hs_sy(88);
+    if (*height < hs_sy(240)) *height = hs_sy(240);
+    (void)n;
+}
+
+static int hs_columns_max_scroll(void)
+{
+    int n = hs_columns_collect((int[HS_MAX_WINDOWS]){0});
+    if (n <= 0) return 0;
+    int col_w, gap, margin, top, height;
+    hs_columns_metrics(n, &col_w, &gap, &margin, &top, &height);
+    int total = margin * 2 + n * col_w + (n - 1) * gap;
+    int max = total - g_shell.screen_width;
+    return max > 0 ? max : 0;
+}
+
+/* 焦点窗口所在的列必须完整可见; 必要时只改目标, 由 tick 平滑滚动。 */
+static void hs_columns_ensure_visible(hs_window_t *w)
+{
+    if (!w) return;
+    if (g_shell.workspaces[g_shell.current_workspace].layout != HS_LAYOUT_COLUMNS) return;
+    int indices[HS_MAX_WINDOWS];
+    int n = hs_columns_collect(indices);
+    int idx = -1;
+    for (int i = 0; i < n; i++) {
+        if (&g_wm.windows[indices[i]] == w) { idx = i; break; }
+    }
+    if (idx < 0) return;
+    int col_w, gap, margin, top, height;
+    hs_columns_metrics(n, &col_w, &gap, &margin, &top, &height);
+    int ws = g_shell.current_workspace;
+    int left = margin + idx * (col_w + gap);
+    int right = left + col_w;
+    int maxs = hs_columns_max_scroll();
+    int target = g_col_scroll_target[ws];
+    if (left < target) target = left;
+    if (right > target + g_shell.screen_width) target = right - g_shell.screen_width;
+    if (target < 0) target = 0;
+    if (target > maxs) target = maxs;
+    g_col_scroll_target[ws] = target;
+}
+
+/* 手动横滚后把键盘焦点交给当前视口中心那一列, 避免焦点留在屏幕外。 */
+static void hs_columns_focus_center(void)
+{
+    int indices[HS_MAX_WINDOWS];
+    int n = hs_columns_collect(indices);
+    if (n <= 0) return;
+    int ws = g_shell.current_workspace;
+    int col_w, gap, margin, top, height;
+    hs_columns_metrics(n, &col_w, &gap, &margin, &top, &height);
+    int center = g_col_scroll_target[ws] + g_shell.screen_width / 2;
+    int best = 0, best_d = 0x7fffffff;
+    for (int i = 0; i < n; i++) {
+        int mid = margin + i * (col_w + gap) + col_w / 2;
+        int d = mid > center ? mid - center : center - mid;
+        if (d < best_d) { best_d = d; best = i; }
+    }
+    hs_window_t *w = &g_wm.windows[indices[best]];
+    if (!w->focus) hs_window_focus(w);
+}
+
+/* 列布局内循环焦点: F10 顺序切到下一列, 并让目标列滚动进视口。 */
+static void hs_columns_cycle_focus(int dir)
+{
+    if (g_shell.workspaces[g_shell.current_workspace].layout != HS_LAYOUT_COLUMNS) return;
+    int indices[HS_MAX_WINDOWS];
+    int n = hs_columns_collect(indices);
+    if (n <= 0) return;
+    hs_window_t *focused = hs_window_get_focused();
+    int cur = 0;
+    for (int i = 0; i < n; i++)
+        if (&g_wm.windows[indices[i]] == focused) { cur = i; break; }
+    int next = (cur + (dir > 0 ? 1 : n - 1)) % n;
+    hs_window_focus(&g_wm.windows[indices[next]]);
+    g_content_dirty = 1;
+    vga_printf("[WM] columns focus %d/%d\n", next + 1, n);
+}
+
+void hs_columns_scroll(int dir)
+{
+    int ws = g_shell.current_workspace;
+    int maxs = hs_columns_max_scroll();
+    if (maxs <= 0) return;
+    int step = g_shell.screen_width / 5;
+    int target = g_col_scroll_target[ws] + (dir > 0 ? step : -step);
+    if (target < 0) target = 0;
+    if (target > maxs) target = maxs;
+    g_col_scroll_target[ws] = target;
+    hs_columns_focus_center();
+    g_content_dirty = 1;
+    vga_printf("[WM] columns scroll target=%d/%d\n", target, maxs);
+}
+
+/* 返回 1 表示这一帧还在滚, 调用方需重排并重绘。 */
+static int hs_columns_tick(void)
+{
+    int ws = g_shell.current_workspace;
+    int maxs = hs_columns_max_scroll();
+    if (g_col_scroll_target[ws] > maxs) g_col_scroll_target[ws] = maxs;
+    if (g_col_scroll_target[ws] < 0) g_col_scroll_target[ws] = 0;
+    if (g_col_scroll[ws] == g_col_scroll_target[ws]) return 0;
+    int step = g_shell.screen_width / 20;
+    if (step < 8) step = 8;
+    if (g_col_scroll[ws] < g_col_scroll_target[ws]) {
+        g_col_scroll[ws] += step;
+        if (g_col_scroll[ws] > g_col_scroll_target[ws]) g_col_scroll[ws] = g_col_scroll_target[ws];
+    } else {
+        g_col_scroll[ws] -= step;
+        if (g_col_scroll[ws] < g_col_scroll_target[ws]) g_col_scroll[ws] = g_col_scroll_target[ws];
+    }
+    g_content_dirty = 1;
+    return 1;
+}
+
+void hs_layout_columns(void)
+{
+    int indices[HS_MAX_WINDOWS];
+    int n = hs_columns_collect(indices);
+    if (n <= 0) return;
+
+    int ws = g_shell.current_workspace;
+    int col_w, gap, margin, top, height;
+    hs_columns_metrics(n, &col_w, &gap, &margin, &top, &height);
+
+    int maxs = hs_columns_max_scroll();
+    if (g_col_scroll[ws] > maxs) g_col_scroll[ws] = maxs;
+    if (g_col_scroll[ws] < 0) g_col_scroll[ws] = 0;
+
+    for (int i = 0; i < n; i++) {
+        hs_window_t *w = &g_wm.windows[indices[i]];
+        w->x = margin + i * (col_w + gap) - g_col_scroll[ws];
+        w->y = top;
+        w->width = col_w;
+        w->height = height;
+        w->state = HS_WINDOW_STATE_NORMAL;
+        w->content_dirty = 1;
+    }
+
 }
 
 /* ============================================================================
@@ -10431,7 +11066,7 @@ void hpdesk_toggle_theme(void)
 /* ---- 锁屏 ---- */
 void hpdesk_lock(void)
 {
-    if (g_locked == 0) g_locked = 1;
+    hs_lock_enter();
 }
 
 /* ---- 工作区相对切换 ---- */
@@ -10460,6 +11095,12 @@ void hpdesk_update_wheel(int wheel)
     if (!hs_systools_handle_wheel(wheel)) hs_apps_handle_wheel(wheel);
     /* V0.55: 侧栏滚动 (指针在侧栏内且内容溢出时消费) */
     if (hs_sidebar_handle_wheel(wheel)) return;
+    /* 列布局: 指针在顶栏/桌面空白处时, 滚轮横滚列; 指针压在窗口上仍交给应用。 */
+    if (hs_layout_get() == HS_LAYOUT_COLUMNS &&
+        !hs_window_at(g_shell.mouse_x, g_shell.mouse_y)) {
+        hs_columns_scroll(wheel < 0 ? 1 : -1);
+        return;
+    }
     if (wheel > 0 && g_ui_scale_v < 150) g_ui_scale_v += 5;
     else if (wheel < 0 && g_ui_scale_v > 50) g_ui_scale_v -= 5;
 }

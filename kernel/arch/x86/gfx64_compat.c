@@ -422,29 +422,33 @@ void gfx64_draw_line_aa(int x0, int y0, int x1, int y1, uint32_t color)
     }
 }
 
-void gfx64_fill_polygon(const int *pts, int n, uint32_t color)
+/* 32 位兼容层必须与桌面表面的真实调用签名一致：
+ * kernel/shared/desktop/desk_surface.c 传两个数组 (xs, ys, n, color)，
+ * 但这里曾实现成单交错数组 (pts, n, color)，链接期不查类型，调用时
+ * n 实际拿到 ys 指针、color 拿到 n —— 多边形一画就变成巨量扫描线。
+ * 第 4 批顶栏扬声器首次在 32 位用到多边形，直接卡死首帧；这里按两数组
+ * 实现修正，不再靠“32 位没调用过”兜底。 */
+void gfx64_fill_polygon(const int *xs, const int *ys, int n, uint32_t color)
 {
-    if (!pts || n < 3) return;
-    int miny = pts[1], maxy = pts[1];
-    for (int i = 0; i < n; i++) {
-        int y = pts[i * 2 + 1];
-        if (y < miny) miny = y;
-        if (y > maxy) maxy = y;
+    if (!xs || !ys || n < 3) return;
+    int miny = ys[0], maxy = ys[0];
+    for (int i = 1; i < n; i++) {
+        if (ys[i] < miny) miny = ys[i];
+        if (ys[i] > maxy) maxy = ys[i];
     }
     /* 扫描线填充 */
     for (int y = miny; y <= maxy; y++) {
-        int xs[16], xn = 0;
+        int xi[16], xn = 0;
         for (int i = 0; i < n && xn < 16; i++) {
             int j = (i + 1) % n;
-            int ya = pts[i * 2 + 1], yb = pts[j * 2 + 1];
+            int ya = ys[i], yb = ys[j];
             if ((ya <= y && yb > y) || (yb <= y && ya > y)) {
-                int xa = pts[i * 2], xb = pts[j * 2];
-                xs[xn++] = xa + (int)((long)(y - ya) * (xb - xa) / (yb - ya));
+                int xa = xs[i], xb = xs[j];
+                xi[xn++] = xa + (int)((long)(y - ya) * (xb - xa) / (yb - ya));
             }
         }
-        for (int i = 0; i < xn; i += 2) {
-            if (i + 1 >= xn) break;
-            int a = xs[i], b = xs[i + 1];
+        for (int i = 0; i + 1 < xn; i += 2) {
+            int a = xi[i], b = xi[i + 1];
             if (a > b) { int t = a; a = b; b = t; }
             gfx64_fill_rect(a, y, b - a, 1, color);
         }
@@ -626,3 +630,7 @@ void font64_draw_string(void *fb, int fw, int fh,
     (void)fb; (void)fw; (void)fh;
     f32_draw_string(x, y, str, color, size);
 }
+
+/* 32 位锁屏默认关闭(lock_cfg_disabled 恒真), 只保留 hpdesk 的符号兼容。
+ * 真要做 32 位锁屏溶解时再在 font32.c 实现 alpha。 */
+void font64_set_alpha(int alpha) { (void)alpha; }

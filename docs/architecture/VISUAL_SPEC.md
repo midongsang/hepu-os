@@ -2,7 +2,7 @@
 title: VISUAL_SPEC
 status: active
 sys_version: 0.63.0
-updated: 2026-11-27
+updated: 2026-11-28
 owner: architecture
 source_of_truth: rootfs/etc/hepushell/config.hsqml
 supersedes: null
@@ -135,8 +135,7 @@ hs_s(v)  = v * g_ui_scale_pct / 100     // 圆形/图标/圆角
 
 | 项 | 现状 | 目标 |
 |---|---|---|
-| 控制中心 DND 图标 | 仍用沙漏位图 `hs_ico_hour_empty` | 换成月牙等语义明确的图形 |
-| 图标体系 | `hs_icons_data.h` 位图 + `hs_icon_bmp` 缩放 | 矢量图标字体，见 `DESKTOP_SHELL.md` 1.2 |
+| 图标体系 | 顶栏 4 枚 + 控制中心 6 开关已走 `hs_draw_icon` 矢量描边；Dock 8 图标、应用抽屉 12 图标、电池仍为 `hs_icons_data.h` 位图或专用绘制 | 全量矢量图标字体，见 `DESKTOP_SHELL.md` 1.2 |
 | 全文件令牌替换 | 仅新代码 / 新命中区引用 | 逐模块替换裸数值 |
 
 ---
@@ -155,7 +154,7 @@ hs_s(v)  = v * g_ui_scale_pct / 100     // 圆形/图标/圆角
 | Clavis（`Common/Metrics.qml`） | Hepu 现状 |
 |---|---|
 | 间距 2 / 4 / 8 / 12 / 16 / 24 | 仅用到 8（顶栏上/侧边距）、10（左右边距）；无统一梯度 |
-| 图标 16 / 24 / 32 | 24（顶栏）、26（面板卡图标，位图 32×32 缩放） |
+| 图标 16 / 24 / 32 | 24（顶栏，矢量 glyph）、26（面板卡六开关，矢量 glyph）；Dock/抽屉仍位图缩放 |
 | 控件高 32 / 40 / 48 / 56 | 32（面板 nav 按钮 42@150% ≈ 28 逻辑） |
 | 圆角 4 / 12 / 17 / 23 / 28 | 12（窗口）、15（胶囊）、18（顶栏）——未成梯度 |
 | Material 3 字阶 | 12 / 14 / 18（`font_small/normal/large`）+ 各面板局部字号 |
@@ -166,6 +165,6 @@ hs_s(v)  = v * g_ui_scale_pct / 100     // 圆形/图标/圆角
 
 ## 7. P0 剩余与已接入
 
-- **图标字体引擎**：`DESKTOP_SHELL.md` 1.2 要求矢量图标字体（`hs_draw_icon(x,y,glyph_id,size,color)`），替代 `hs_icons_data.h` 的固定尺寸位图。当前控制中心用的正是位图（`hs_icon_bmp`），与文档方向相反，属已知欠账。
+- **图标字体引擎（部分落地）**：已实现单色语义矢量入口 `hs_draw_icon(x,y,size,color,glyph_id)`，顶栏 power/gear/speaker/Wi‑Fi 与控制中心 Wi‑Fi/BT/Air/DND/Loc/Torch 已迁移；DND 不再使用沙漏位图。Dock 彩色应用图标、应用抽屉图标、电池仍走位图/专用绘制，完整图标字体管线仍是欠账。
 
 **视觉基线已接入**：`tools/regress/desktop_visual.sh` 固定 RTC / 无网络 / 1920×1080 / UI 150%，采集 9 个状态；`tools/regress/compare_visual.py` 屏蔽时钟与天气动态文本后做阈值比较。基线在 `docs/status/desktop-visual-baseline-2026-11-27/`。

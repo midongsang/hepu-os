@@ -2,7 +2,7 @@
 title: DESKTOP_SHELL
 status: active
 sys_version: 0.63.0
-updated: 2026-11-27
+updated: 2026-11-28
 owner: architecture
 source_of_truth: null
 supersedes: null
@@ -66,8 +66,8 @@ Clavis 的 `Components/MaterialSymbol.qml`：用 **Material Symbols 可变字体
 
 **Hepu 落地**（解决"图标画不好/模糊/分辨率低/单色不统一"）：
 1. 将一套单色矢量图标（如 Material Symbols 或自绘 16×16 点阵矢量化）编译为**字体位图数据**（复用现有 `font_data.c` 的字体渲染管线，扩展为"图标字体"段）；
-2. `hepushell` 增加 `hs_draw_icon(x, y, glyph_id, size, color)`：按 size 从图标字体栅格化（矢量插值），颜色取主题色——替代 `icons_*.h` 的固定尺寸位图与"图标背景块"；
-3. 图标语义分级（参考 `Bar/QuickSettings/Network.qml`）：以太网→`settings_ethernet`、断开→`wifi_off`、按信号强度 80/60/40/20 分级→wifi 4/3/2/1/0 格——解决"网络图标反的/意思不明确"。
+2. 已落地单色语义矢量入口 `hs_draw_icon(x, y, size, color, glyph_id)`：按目标尺寸实时描线段、圆环、多边形和圆，颜色取主题色；顶栏 power/gear/speaker/Wi‑Fi 与控制中心 Wi‑Fi/BT/Air/DND/Loc/Torch 已迁移。Dock 彩色应用图标、应用抽屉图标、电池仍走位图或专用绘制，图标字体管线尚未全量完成；
+3. 待做图标语义分级（参考 `Bar/QuickSettings/Network.qml`）：以太网→`settings_ethernet`、断开→`wifi_off`、按信号强度 80/60/40/20 分级→wifi 4/3/2/1/0 格——解决"网络图标反的/意思不明确"。
 
 ### 1.3 状态与 UI 分离（Services 单点状态源）
 Clavis：`Services/`（NetworkService/MediaManager/AutostartService/WallpaperService...）持长期状态，
@@ -123,12 +123,11 @@ Crossfade 过渡仍未做，受双缓冲堆预算约束。
 Clavis `Modules/Lock/`：冻结桌面快照（Screencopy）→ 模糊背景 → 点击时间区显示认证 UI（Escape 恢复）→ PAM 认证 → 解锁淡出。
 与 Hepu 已定锁屏流程（点击时间溶解消失→头像+密码溶解出现→右下关机键/虚拟键盘→密码后溶解进桌面）一致。
 
-**Hepu 落地**：
-1. 锁屏时保留桌面帧缓冲副本（现有图形层已双缓冲，直接引用）；
-2. 点击时钟区：时钟做溶解淡出（alpha 渐变，复用窗口切换器动画框架 `g_sw_anim`）；
-3. 头像/密码框溶解淡入；
-4. 认证：现有锁屏密码校验扩展（对接用户账户密码哈希）；
-5. 右下角关机键/虚拟键盘：虚拟键盘=屏幕上的按键矩阵，点击注入键盘事件（模拟 `hepushell` 键盘输入路径）。
+**Hepu 落地（第 4 批已实现部分）**：
+1. 进入锁屏时取当前前台帧 1/4 分辨率副本（1920×1080 → 480×270），4×4 降采样 + 两遍 3×3 盒模糊再放大；不直接长期引用全屏副本。取帧前跳过桌面时钟面板合成，锁屏只保留中央时钟。开机直接进锁屏时无桌面帧，回退壁纸 + 暗色玻璃；
+2. 点击时钟区：揭示进度 `g_lock_reveal_t` 0→100，每帧 +4，时钟渐隐、头像/密码框渐显；未完成前可 Esc 回锁屏；
+3. 认证成功后进入状态 3：桌面先完整绘制，模糊快照与登录 UI 按 100→0 的 alpha 盖在上面淡出；淡出期间吞掉点击/键盘，避免穿透；
+4. 右下角 VKB/PWR 保持原命中区；虚拟键盘的完整按键矩阵与注入仍是后续项。
 
 ### 2.5 悬浮组件（音乐播放器 / 系统监控面板）
 

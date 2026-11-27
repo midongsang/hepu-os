@@ -669,6 +669,14 @@ extern int ttf64_cjk_is_loaded(void);
 static int gfx_ttf_size = 16;  /* TrueType字体大小 */
 static int gfx_ttf_ascent = 14; /* 缓存的字体ascent，避免每次渲染都调用浮点函数 */
 static int gfx_use_ttf = 0;     /* 是否使用TrueType字体 */
+static int gfx_text_alpha = 255; /* 全局文字 alpha, 仅锁屏溶解等过渡使用; 默认 255 不改变既有画面 */
+
+void gfx64_set_text_alpha(int alpha)
+{
+    if (alpha < 0) alpha = 0;
+    if (alpha > 255) alpha = 255;
+    gfx_text_alpha = alpha;
+}
 
 /* 8x16 ASCII字体（简化版，前128字符） */
 const uint8_t font8x16[128][16] = {
@@ -996,8 +1004,19 @@ int gfx64_put_char(int x, int y, char c, uint32_t color)
             uint8_t bits = glyph[row];
             for (int col = 0; col < 8; col++) {
                 if (bits & (0x80 >> col)) {
-                    if ((uint32_t)(x + col) < gfx_width && (uint32_t)(y + row) < gfx_height)
-                        gfx64_put_pixel(x + col, y + row, color);
+                    if ((uint32_t)(x + col) < gfx_width && (uint32_t)(y + row) < gfx_height) {
+                        if (gfx_text_alpha >= 250) {
+                            gfx64_put_pixel(x + col, y + row, color);
+                        } else {
+                            uint32_t bg = gfx64_get_pixel(x + col, y + row);
+                            uint8_t fr = (color >> 16) & 0xFF, fg = (color >> 8) & 0xFF, fb = color & 0xFF;
+                            uint8_t br = (bg >> 16) & 0xFF, bg_ = (bg >> 8) & 0xFF, bb = bg & 0xFF;
+                            uint8_t r = (uint8_t)((fr * gfx_text_alpha + br * (255 - gfx_text_alpha)) / 255);
+                            uint8_t g = (uint8_t)((fg * gfx_text_alpha + bg_ * (255 - gfx_text_alpha)) / 255);
+                            uint8_t b = (uint8_t)((fb * gfx_text_alpha + bb * (255 - gfx_text_alpha)) / 255);
+                            gfx64_put_pixel(x + col, y + row, (r << 16) | (g << 8) | b);
+                        }
+                    }
                 }
             }
         }
@@ -1064,6 +1083,9 @@ static int gfx64_put_ttf(int x, int y, uint32_t cp, uint32_t color)
                 if (alpha <= 64) alpha = (uint8_t)(alpha * 3 / 4);
                 else if (alpha >= 192) alpha = 255;
                 else alpha = (uint8_t)(128 + (alpha - 64) * 127 / 128);
+                /* 锁屏溶解: 只影响调用方临时设置的全局 alpha; 默认 255 时是空操作。 */
+                if (gfx_text_alpha != 255)
+                    alpha = (uint8_t)((int)alpha * gfx_text_alpha / 255);
                 if (alpha > 0) {
                     int px = x + bx + col;
                     int py = baseline_y - by + row;

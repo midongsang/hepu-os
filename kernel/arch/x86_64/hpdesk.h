@@ -225,6 +225,7 @@ typedef enum {
     HS_LAYOUT_TAB,           /* 标签布局 */
     HS_LAYOUT_SINGLE,        /* 单窗布局 */
     HS_LAYOUT_BSP,           /* BSP二分布局 */
+    HS_LAYOUT_COLUMNS,       /* niri 式横向滚动列 */
 } hs_layout_mode_t;
 
 /* 窗口规则 */
@@ -449,6 +450,21 @@ void hs_panel_init(hs_panel_t *panel, hs_panel_pos_t pos, int height);
 void hs_launcher_render(void);
 void hs_launcher_handle_key(int key);
 
+/* 系统单色矢量图标: 顶栏/控制中心使用; 按 size 实时描边, 不依赖位图缩放。 */
+typedef enum {
+    HS_GLYPH_POWER = 0,
+    HS_GLYPH_GEAR,
+    HS_GLYPH_SPEAKER,
+    HS_GLYPH_WIFI,
+    HS_GLYPH_BLUETOOTH,
+    HS_GLYPH_AIRPLAY,
+    HS_GLYPH_DND,
+    HS_GLYPH_LOCATION,
+    HS_GLYPH_TORCH,
+    HS_GLYPH_COUNT
+} hs_glyph_t;
+void hs_draw_icon(int x, int y, int size, uint32_t color, int glyph_id);
+
 /* 系统托盘 */
 void hs_tray_init(void);
 int hs_tray_add_icon(const char *name, const char *icon);
@@ -510,6 +526,8 @@ void hs_layout_cycle(void);
 void hs_layout_tile(void);
 void hs_layout_bsp(void);
 void hs_layout_single(void);
+void hs_layout_columns(void);
+void hs_columns_scroll(int dir);
 
 /* 窗口拖动 */
 void hs_window_drag_start(int x, int y);

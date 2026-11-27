@@ -1,4 +1,4 @@
-# 桌面固定态视觉基线（2026-11-27 建立，2026-11-28 第 3 批更新）
+# 桌面固定态视觉基线（2026-11-27 建立，2026-11-28 第 3/4 批更新）
 
 本目录是桌面视觉批次的像素基线，不是功能验收的全集。全部截图由
 `tools/regress/desktop_visual.sh` 生成；第二次独立复跑与基线比较为
@@ -7,6 +7,10 @@
 2026-11-28 第 3 批更新：Settings Appearance 增加 Wallpaper Layout 五 chip，
 窗口高度 430→470 逻辑值；因此除锁屏外的 8 张基线同步更新。布局本身在
 4:3 分辨率单独取证，见 `docs/status/wallpaper-layouts-2026-11-28/`。
+
+2026-11-28 第 4 批更新：顶栏 power/gear/speaker/Wi-Fi 与控制中心
+Wi-Fi/BT/Air/DND/Loc/Torch 六开关改为同一套矢量 glyph；9 张基线全部复采。
+第二遍独立复跑比较：`01-lock` 仅时钟胶囊区域 mean=0.028，其余 8 张 mean=0.000。
 
 ## 固定条件
 
@@ -55,4 +59,5 @@ bash tools/regress/desktop_visual.sh /tmp/desktop-visual --update-baseline
 - 本目录固定 16:9，内置壁纸也是 16:9，因此 Fill/Fit/Stretch 三态在几何上等价；
   五布局的差异取证放在 `docs/status/wallpaper-layouts-2026-11-28/`（1024×768）。
 - DND 的点击/关闭已由串口断言覆盖；通知弹窗抑制的视觉前后对比不在本目录。
-- DND 图标仍是沙漏位图，图标体系仍是位图抗锯齿，均记录在 `VISUAL_SPEC.md` 欠账表。
+- DND 已改为矢量 glyph；Dock 8 个彩色应用图标、应用抽屉 12 个图标、电池图标仍是
+  位图或专用绘制，全量图标字体管线尚未完成。
