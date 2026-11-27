@@ -9,6 +9,9 @@
 #include "spinlock.h"
 #include "arch_port.h"
 #include "hs_icons_data.h"   /* V0.57.0: 系统图标位图集(32x32 1bit) */
+#ifdef __x86_64__
+#include "firmware_info.h"
+#endif
 #include "png64.h"
 #include "jpeg64.h"
 
@@ -4651,6 +4654,29 @@ void hs_icon_file(int x, int y, int size, uint32_t color)
 }
 
 /* 顶部Bar：左侧工作区+右侧状态图标 */
+/* 顶栏电池图标：VALID 才画填充比例；DECLARED/UNKNOWN 只画轮廓 + 两道短线，
+ * 不拿静态“满电”位图冒充真实电量。 */
+static void hs_battery_icon_state(int x, int y, int size, uint32_t fg, int state)
+{
+    int bx = x + size / 4;
+    int by = y + size * 3 / 8;
+    int bw = size / 2;
+    int bh = size * 5 / 12;
+
+    hs_draw_rect(bx, by, bw, bh, fg);
+    hs_fill_rect(bx + bw, by + bh / 3, size / 12, bh / 3, fg);
+
+    if (state == HS_BATTERY_VALID) {
+        int fill = ((bw - 2) * g_shell.status.battery_percent) / 100;
+        uint32_t color = g_shell.status.battery_percent > 20 ? 0x4CAF50 : 0xF44336;
+        hs_fill_rect(bx + 1, by + 1, fill, bh - 2, color);
+    } else {
+        int dw = size / 8;
+        hs_fill_rect(bx + bw / 3 - dw / 2, by + bh / 2 - 1, dw, 2, fg);
+        hs_fill_rect(bx + bw * 2 / 3 - dw / 2, by + bh / 2 - 1, dw, 2, fg);
+    }
+}
+
 static void hs_top_bar_render(void)
 {
     /* 对齐 Clavis: 悬浮圆角胶囊顶栏(外边距 10, 高 36, 圆角 18) */
@@ -4691,7 +4717,13 @@ static void hs_top_bar_render(void)
     icon_x -= icon_size; hs_icon_bmp64(icon_x, icon_y, icon_size, fg, g_shell.colors.panel_bg, hs_ico64_power64);
     icon_x -= hs_sx(6) + icon_size; hs_icon_bmp64(icon_x, icon_y, icon_size, fg, g_shell.colors.panel_bg, hs_ico64_gear64);
     icon_x -= hs_sx(6) + icon_size; hs_icon_bmp64(icon_x, icon_y, icon_size, fg, g_shell.colors.panel_bg, hs_ico64_speaker64);
-    icon_x -= hs_sx(6) + icon_size; hs_icon_bmp64(icon_x, icon_y, icon_size, fg, g_shell.colors.panel_bg, hs_ico64_battery64);
+    /* 电池不是“台式机/笔记本”判断出来的，而是 ACPI PNP0C0A 声明探测出来的。
+     * ABSENT 时不画图标，也不留空位；DECLARED/UNKNOWN 只画轮廓 + 两道短线；
+     * 只有 M2 读到可信电量进入 VALID 后才画百分比。 */
+    if (g_shell.status.battery_state != HS_BATTERY_ABSENT) {
+        icon_x -= hs_sx(6) + icon_size;
+        hs_battery_icon_state(icon_x, icon_y, icon_size, fg, g_shell.status.battery_state);
+    }
     /* wifi 与旁边四个同源: 都走 64x64 那套(hs_icon_bmp64)。
      * 旧实现这里单独用 32px 的 hs_ico_wifi_std, 24px 显示时笔画比邻居细一档,
      * 并排放着像两套图标拼的 —— 与 V0.57.1 修掉的"各自一套手绘矢量"是同一类问题。 */
@@ -8575,12 +8607,25 @@ void hs_status_init(void)
 {
     g_shell.status.volume = 75;
     g_shell.status.brightness = 80;
-    g_shell.status.battery_percent = 100;
+    g_shell.status.battery_state = HS_BATTERY_ABSENT;
+    g_shell.status.battery_percent = 0;
     g_shell.status.battery_charging = 0;
     g_shell.status.network_connected = 1;
     str_cpy(g_shell.status.network_type, "ethernet");
     g_shell.status.cpu_usage = 0;
     g_shell.status.mem_usage = 0;
+
+    /* 固件层只回答“有没有电池设备声明”，不伪造电量；QEMU/台式机默认 ABSENT。 */
+#ifdef __x86_64__
+    fi_init();
+    const fi_info_t *fi = fi_get();
+    if (fi->battery == FI_BAT_DECLARED) g_shell.status.battery_state = HS_BATTERY_DECLARED;
+    else if (fi->battery == FI_BAT_ABSENT) g_shell.status.battery_state = HS_BATTERY_ABSENT;
+    else g_shell.status.battery_state = HS_BATTERY_UNKNOWN;
+#else
+    /* 32 位暂无 ACPI 电池声明探测；保持 ABSENT，不再写死“台式机无电池”以外的假数值。 */
+    g_shell.status.battery_state = HS_BATTERY_ABSENT;
+#endif
 }
 
 void hs_status_update(void)
@@ -8593,6 +8638,19 @@ void hs_status_update(void)
     if (tp > 0) g_shell.status.mem_usage = (int)(up * 100 / tp);
     else g_shell.status.mem_usage = 0;
     g_shell.status.cpu_usage = process64_cpu_usage();
+    /* 固件声明探测是启动期一次性的；后续 M2 才接 _BIX/_BST 动态刷新。 */
+#ifdef __x86_64__
+    fi_init();
+    if (fi_get()->battery == FI_BAT_DECLARED) g_shell.status.battery_state = HS_BATTERY_DECLARED;
+    else if (fi_get()->battery == FI_BAT_ABSENT) g_shell.status.battery_state = HS_BATTERY_ABSENT;
+    else g_shell.status.battery_state = HS_BATTERY_UNKNOWN;
+#else
+    g_shell.status.battery_state = HS_BATTERY_ABSENT;
+#endif
+    if (g_shell.status.battery_state != HS_BATTERY_VALID) {
+        g_shell.status.battery_percent = 0;
+        g_shell.status.battery_charging = 0;
+    }
     /* V0.13.39: 托盘网络图标真实链路状态 (e1000 STATUS bit1) */
     extern int e1000_link_status(void);
     extern int dhcp64_is_bound(void);
@@ -8639,6 +8697,8 @@ void hs_brightness_render(int x, int y, int width)
 
 void hs_battery_render(int x, int y)
 {
+    if (g_shell.status.battery_state == HS_BATTERY_ABSENT) return;
+
     void *fb = hs_get_framebuffer();
     char buf[16];
 
@@ -8650,20 +8710,26 @@ void hs_battery_render(int x, int y)
     hs_draw_rect(x, bat_y, bat_w, bat_h, g_shell.colors.panel_fg);
     hs_fill_rect(x + bat_w, bat_y + 3, 2, 6, g_shell.colors.panel_fg);
 
-    /* 电量填充 */
-    int fill_w = ((bat_w - 2) * g_shell.status.battery_percent) / 100;
-    uint32_t color = g_shell.status.battery_percent > 20 ?
-                     0x4CAF50 : 0xF44336;
-    hs_fill_rect(x + 1, bat_y + 1, fill_w, bat_h - 2, color);
+    if (g_shell.status.battery_state != HS_BATTERY_VALID) {
+        /* 有声明但还没读到可信电量：只显示轮廓 + "--"，绝不回退 100%。 */
+        buf[0] = '-'; buf[1] = '-'; buf[2] = 0;
+    } else {
+        /* 电量填充 */
+        int fill_w = ((bat_w - 2) * g_shell.status.battery_percent) / 100;
+        uint32_t color = g_shell.status.battery_percent > 20 ?
+                         0x4CAF50 : 0xF44336;
+        hs_fill_rect(x + 1, bat_y + 1, fill_w, bat_h - 2, color);
 
-    /* 百分比文字 */
-    int n = g_shell.status.battery_percent, i = 0;
-    if (n == 0) buf[i++] = '0';
-    while (n > 0) { buf[i++] = '0' + n % 10; n /= 10; }
-    buf[i++] = '%';
-    buf[i] = 0;
-    for (int j = 0; j < i / 2; j++) {
-        char t = buf[j]; buf[j] = buf[i-1-j]; buf[i-1-j] = t;
+        /* 百分比文字 */
+        int n = g_shell.status.battery_percent, i = 0;
+        if (n == 0) buf[i++] = '0';
+        while (n > 0) { buf[i++] = '0' + n % 10; n /= 10; }
+        buf[i++] = '%';
+        buf[i] = 0;
+        int len = i;
+        for (int j = 0; j < len / 2; j++) {
+            char t = buf[j]; buf[j] = buf[len-1-j]; buf[len-1-j] = t;
+        }
     }
     font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                        x + bat_w + 4, y + 6, buf, g_shell.colors.panel_fg, 10);
@@ -8716,8 +8782,10 @@ void hs_status_render_all(int panel_y)
     hs_network_render(right_x - 50, panel_y);
     right_x -= 56;
 
-    hs_battery_render(right_x - 60, panel_y);
-    right_x -= 66;
+    if (g_shell.status.battery_state != HS_BATTERY_ABSENT) {
+        hs_battery_render(right_x - 60, panel_y);
+        right_x -= 66;
+    }
 
     hs_volume_render(right_x - 80, panel_y, 70);
     right_x -= 86;

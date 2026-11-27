@@ -68,7 +68,7 @@ int device_support_detect(void)
     device_support_set_item_status(HW_ITEM_SMS, HW_NOT_PRESENT, " no SMS 功能 ");
     device_support_set_item_status(HW_ITEM_CAMERA_BACK, HW_NOT_PRESENT, " no camera ");
     device_support_set_item_status(HW_ITEM_FINGERPRINT, HW_NOT_PRESENT, " no fingerprint ");
-    device_support_set_item_status(HW_ITEM_BATTERY, HW_NOT_PRESENT, " no battery(台式机)");
+    device_support_set_item_status(HW_ITEM_BATTERY, HW_UNTESTED, " battery: ACPI 未探测 ");
 
     ds.current_report.ram_size_mb = 1024;
     ds.current_report.storage_size_gb = 16;

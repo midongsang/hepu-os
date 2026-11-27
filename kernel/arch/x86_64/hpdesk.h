@@ -149,11 +149,20 @@ typedef struct {
     char artist[64];
 } hs_media_player_t;
 
+/* 电池状态：ABSENT 不画图标；DECLARED/UNKNOWN 只画轮廓；VALID 才画百分比 */
+typedef enum {
+    HS_BATTERY_ABSENT = 0,
+    HS_BATTERY_DECLARED,
+    HS_BATTERY_VALID,
+    HS_BATTERY_UNKNOWN,
+} hs_battery_state_t;
+
 /* 系统状态 */
 typedef struct {
     int volume;         /* 0-100 */
     int brightness;     /* 0-100 */
-    int battery_percent;
+    int battery_state;  /* hs_battery_state_t */
+    int battery_percent; /* 仅 VALID 时可信 */
     int battery_charging;
     int network_connected;
     char network_type[16];  /* "ethernet"/"wifi"/"none" */
