@@ -130,6 +130,22 @@ def field(region, entries):
     return b"\x5b\x81" + pkg(payload)
 
 
+def mutex(n, sync=0):
+    return b"\x5b\x01" + seg(n) + bytes([sync])
+
+
+def acquire(n, timeout=0xFFFF):
+    return b"\x5b\x23" + seg(n) + int_obj(timeout)
+
+
+def release(n):
+    return b"\x5b\x27" + seg(n)
+
+
+def osi(name):
+    return b"_OSI" + string_obj(name)
+
+
 def build_table(body, oem_table_id=b"BATDECL"):
     header = bytearray(36)
     header[0:4] = b"SSDT"
@@ -155,18 +171,24 @@ def make_declared(dev="BAT0"):
     )
 
 
-def make_valid(percent=57, use_bix=False, dev="BAT0", ac_psr=1, bst_state=2):
+def valid_device(percent=57, use_bix=False, dev="BAT0", bst_state=2,
+                 with_mutex=False):
     design = 10000
     full = 10000
     rem = design * percent // 100
     bst0 = name("BST0", package([int_obj(0), int_obj(0), int_obj(0), int_obj(0)]))
-    bst_body = (
+    bst_body = b""
+    if with_mutex:
+        bst_body += acquire("MUT0") + store(osi("Linux"), b"\x60")
+    bst_body += (
         store(int_obj(bst_state), index("BST0", 0))
         + store(int_obj(0), index("BST0", 1))
         + store(int_obj(rem), index("BST0", 2))
         + store(int_obj(12000), index("BST0", 3))
-        + ret(b"BST0")
     )
+    if with_mutex:
+        bst_body += release("MUT0")
+    bst_body += ret(b"BST0")
     if use_bix:
         caps = method("_BIX", ret(package([int_obj(0), int_obj(0), int_obj(design),
                                            int_obj(full), int_obj(12000)])))
@@ -180,9 +202,31 @@ def make_valid(percent=57, use_bix=False, dev="BAT0", ac_psr=1, bst_state=2):
     )
     body = name("_HID", string_obj("PNP0C0A")) + method("_STA", ret(int_obj(0x0F))) \
         + bst0 + method("_BST", bst_body) + caps + extra
+    return device(dev, body)
+
+
+def make_valid(percent=57, use_bix=False, dev="BAT0", ac_psr=1, bst_state=2):
     ac = device("AC00", name("_HID", string_obj("ACPI0003"))
                 + method("_PSR", ret(int_obj(ac_psr))))
-    return build_table(device(dev, body) + ac, oem_table_id=b"BATVALID")
+    return build_table(valid_device(percent, use_bix, dev, bst_state) + ac,
+                       oem_table_id=b"BATVALID")
+
+
+def make_mutex(percent=57, dev="MTX0"):
+    ac = device("AC00", name("_HID", string_obj("ACPI0003"))
+                + method("_PSR", ret(int_obj(1))))
+    return build_table(mutex("MUT0") + valid_device(percent, dev=dev, with_mutex=True) + ac,
+                       oem_table_id=b"BATMTX")
+
+
+def make_dual(percent=57):
+    # 用独立名字避免与 make_valid 的 BAT0 在同一主机测试命名空间里重名。
+    abs0 = device("DUA0", name("_HID", string_obj("PNP0C0A"))
+                  + method("_STA", ret(int_obj(0))))
+    ac = device("AC00", name("_HID", string_obj("ACPI0003"))
+                + method("_PSR", ret(int_obj(1))))
+    return build_table(abs0 + valid_device(percent, dev="DUA1") + ac,
+                       oem_table_id=b"BATDUAL")
 
 
 def make_absent(dev="ABS0"):
@@ -262,6 +306,8 @@ MODES = {
     "ec": make_ec,
     "ec-read": lambda pct=57: make_ec_read(pct, glk=0),
     "ec-glk": lambda pct=57: make_ec_read(pct, glk=1),
+    "mutex": make_mutex,
+    "dual": make_dual,
 }
 
 
@@ -281,6 +327,8 @@ def write_header(path):
     ec_read = make_ec_read(57, dev="ECR0", glk=0)
     ec_glk = make_ec_read(57, dev="ECR0", glk=1)
     absent = make_absent("ABS0")
+    mutex_tbl = make_mutex(57, dev="MTX0")
+    dual = make_dual(57)
     with open(path, "w", encoding="utf-8") as f:
         f.write("/* 由 tools/regress/make_battery_ssdt.py --header 生成，勿手改。 */\n")
         f.write("#ifndef BATTERY_SSDT_BLOBS_H\n#define BATTERY_SSDT_BLOBS_H\n\n")
@@ -290,10 +338,12 @@ def write_header(path):
         write_array(f, "g_battery_ec_read_ssdt", ec_read)
         write_array(f, "g_battery_ec_glk_ssdt", ec_glk)
         write_array(f, "g_battery_absent_ssdt", absent)
+        write_array(f, "g_battery_mutex_ssdt", mutex_tbl)
+        write_array(f, "g_battery_dual_ssdt", dual)
         f.write("\n#endif\n")
-    print("wrote %s (valid=%d bix=%d ec=%d ec_read=%d ec_glk=%d absent=%d)" %
+    print("wrote %s (valid=%d bix=%d ec=%d ec_read=%d ec_glk=%d absent=%d mutex=%d dual=%d)" %
           (path, len(valid), len(bix), len(ec), len(ec_read), len(ec_glk),
-           len(absent)))
+           len(absent), len(mutex_tbl), len(dual)))
 
 
 def main(argv):

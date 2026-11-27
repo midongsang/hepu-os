@@ -246,10 +246,16 @@ SMBIOS 只能回答“厂商说这是什么形状”，不能回答“现在有�
   真实执行 `_REG` 后因无 EC 硬件仍 fail-closed；`m2-ec-glk`（`_GLK=1`）记录
   `glk=1 lockout=1 reg=skip-glk`，证明锁死分支。新增 `ec_battery` 16 项虚拟
   EC 端到端和 `ec_glk` 12 项锁死断言；这是主机模拟，不是真机。
-  **边界（M2-full 剩余）**：EC 写、IndexField/BankField、多电池、剩余时间、
-  健康度、FACS Global Lock（当前用锁死替代）；真机 EC 端口、`_REG` 重放副作用、真实 DSDT 里的
-  Mutex/`_OSI` 未验证。
-- **未做**：M2-full 剩余（EC 写/BankField/多电池/健康度/Global Lock）、M3（完整 32 位 UI/电源策略）、M4（真机）。
+  **多槽位与 Mutex/_OSI（2026-11-27 追加）**：`aml_find_device_next` 枚举所有
+  `PNP0C0A`，init 按 `_STA` 选第一个 present 槽位，`DUA0` 空槽不再遮住 `DUA1`；
+  AML 增加 `Mutex` 占位、`Acquire/Release`，`_OSI` 统一返回 0（不冒充 Windows）。
+  QEMU 双槽位夹具 `candidates=2 / selected DUA1 / pct=57`；Mutex 夹具
+  `selected MTX0 / pct=57`。主机新增 `multi_battery` 9 checks，总计 13/0。
+  **边界（M2-full 剩余）**：EC 写、IndexField/BankField、多电池容量合并/运行中切换、
+  剩余时间、健康度、FACS Global Lock（当前用锁死替代）；`Mutex` 是单线程占位，
+  不是跨 CPU/SMI 真同步；`_OSI` 全 0 不等于 Windows 兼容层；真机 EC 端口、
+  `_REG` 重放副作用仍未验证。
+- **未做**：M2-full 剩余（EC 写/IndexField/BankField/健康度/Global Lock）、M3（完整 32 位 UI/电源策略）、M4（真机）。
   本次 QEMU/OVMF 未提供 legacy SMBIOS entry，`form_factor=unknown` 只说明
   “本夹具没读到”，不等于真机型号判断已验证。
 

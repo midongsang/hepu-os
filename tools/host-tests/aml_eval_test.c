@@ -110,13 +110,25 @@ int main(void)
     g_lens[3] = (uint32_t)sizeof(g_battery_absent_ssdt);
     g_tables[4] = g_battery_ec_read_ssdt;
     g_lens[4] = (uint32_t)sizeof(g_battery_ec_read_ssdt);
-    g_ntab = 5;
+    g_tables[5] = g_battery_mutex_ssdt;
+    g_lens[5] = (uint32_t)sizeof(g_battery_mutex_ssdt);
+    g_tables[6] = g_battery_dual_ssdt;
+    g_lens[6] = (uint32_t)sizeof(g_battery_dual_ssdt);
+    g_ntab = 7;
 
     /* 1) 命名空间 */
     check(aml_ns_build(g_tables, g_lens, g_ntab) == 0, "命名空间建表成功");
     check(aml_ns_nodes() > 0, "命名空间节点非空");
     check(aml_find_device(0x41D00C0Au, "PNP0C0A", dev, sizeof(dev)) == 0, "按 _HID 找到电池设备");
     check(strcmp(dev, "BAT0") == 0, "设备路径为 BAT0");
+    {
+        int cur = 0, n = 0;
+        while (n < 8 &&
+               aml_find_device_next(0x41D00C0Au, "PNP0C0A", dev, sizeof(dev), &cur) == 0) {
+            n++;
+        }
+        check(n >= 3, "多实例枚举至少看到 BAT0/MTX0/BAT1");
+    }
 
     /* 2) _STA 与基础方法 */
     check(eval_int("BAT0._STA", &x) == 0 && x == 0x0F, "_STA 返回 0x0F");
@@ -156,6 +168,14 @@ int main(void)
         check(x == 5700, "_BST 剩余容量 5700");
         aml_value_int(aml_value_at(pkg, 3), &x);
         check(x == 12000, "_BST 电压 12000mV");
+    }
+
+    /* 6b) Mutex/Acquire/Release 与 _OSI：真实 DSDT 常见前缀，不再让 _BST 整体失败 */
+    pkg = eval_pkg("MTX0._BST", &rc);
+    check(pkg && aml_value_count(pkg) == 4, "Mutex 夹具 _BST 执行成功");
+    if (pkg) {
+        aml_value_int(aml_value_at(pkg, 2), &x);
+        check(x == 5700, "Mutex 夹具 _BST 剩余容量 5700");
     }
 
     /* 7) 失败关闭：EC 字段、缺对象、_STA=0 */

@@ -78,6 +78,8 @@ run_one aml_eval "-DAML_HOST_TEST" tools/host-tests/aml_eval_test.c $ARCH/aml64.
 run_one ec_battery "-DAML_HOST_TEST" tools/host-tests/ec_battery_test.c $ARCH/aml64.c $ARCH/acpi_battery.c $ARCH/ec64.c
 # M2-full: _GLK=1 锁死策略（不实现 FACS 锁时不碰共享 EC）
 run_one ec_glk "-DAML_HOST_TEST" tools/host-tests/ec_glk_test.c $ARCH/aml64.c $ARCH/acpi_battery.c $ARCH/ec64.c
+# M2-full: 双电池槽位选择（BAT0 absent 时不遮住 BAT1）
+run_one multi_battery "-DAML_HOST_TEST" tools/host-tests/multi_battery_test.c $ARCH/aml64.c $ARCH/acpi_battery.c $ARCH/ec64.c
 
 # 5b) PNG 解码器（inflate/反滤波/颜色类型/位深，V0.54.13 P0）
 #     夹具：tools/host-tests/data/png_case{1..5}.png + .expect，逐像素比对

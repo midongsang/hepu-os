@@ -6,7 +6,8 @@
  *
  * 支持子集（有明确边界，越界一律失败，不猜）：
  *   - 命名空间：Scope/Device/Processor/PowerRes/ThermalZone/Name/Method/Field/
- *     OperationRegion/Mutex（占位）/Alias（忽略）/External（忽略）
+ *     OperationRegion/Mutex（单线程占位）/Alias（忽略）/External（忽略）
+ *   - 常见方法前缀：Acquire/Release（单线程占位）、_OSI（统一返回 0）
  *   - 值：整数、字符串、Buffer、Package/VarPackage
  *   - 语句：Store/CopyObject/If/Else/While/Return/Noop，Local0-7、Arg0-6
  *   - 运算：Add/Subtract/Multiply/Divide/Mod/And/Or/Xor/Not/ShiftLeft/ShiftRight/
@@ -14,8 +15,8 @@
  *   - 引用：Index/DerefOf/RefOf（缓冲与包的只读元素）
  *   - 寄存器：SystemIO、SystemMemory、EmbeddedControl（经 ec64，只读、带超时）的 Field 读取
  *
- * 不支持：EC 写事务、IndexField/BankField、Mutex 真同步、方法内动态命名、
- *         条件引用 CondRefOf 之外的扩展对象、_OSI 等控制方法。
+ * 不支持：EC 写事务、IndexField/BankField、Mutex 跨 CPU/SMI 真同步、方法内动态命名、
+ *         条件引用 CondRefOf 之外的扩展对象、Windows 兼容层（_OSI 恒 0）。
  * 这些路径失败时返回明确错误码，调用方保持“未读到”状态，绝不填假数。
  * ========================================================================== */
 
@@ -57,8 +58,12 @@ int aml_ns_ready(void);
 int aml_ns_nodes(void);
 
 /* 找 _HID 等于 eisa_id（压缩 EISA ID）或字符串 hid_str 的设备。
- * 成功返回 0 并写入设备路径（不带前导反斜杠）。 */
+ * 成功返回 0 并写入设备路径（不带前导反斜杠）。
+ * aml_find_device_next 从 *cursor 开始继续枚举（cursor 由调用方初始化为 0），
+ * 用于多电池/多适配器等同一 HID 的多个实例；未找到时把 cursor 推到末尾。 */
 int aml_find_device(uint32_t eisa_id, const char *hid_str, char *out, int cap);
+int aml_find_device_next(uint32_t eisa_id, const char *hid_str, char *out, int cap,
+                         int *cursor);
 
 /* 求值一个完整路径（可带前导 '\\'）。*out 指向值（生命周期到 sample_end）。 */
 int aml_eval_path(const char *path, aml_value_t **out);

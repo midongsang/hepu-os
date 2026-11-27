@@ -2,7 +2,7 @@
  * 赫普OS - ACPI 电池读数（M2）
  *
  * 判定顺序（全部失败则维持“已声明但没读到”，绝不填假数）：
- *   1. 命名空间里找 _HID = PNP0C0A 的设备；
+ *   1. 命名空间里枚举 _HID = PNP0C0A 的设备，选第一个 _STA 明确的 present 槽位；
  *   2. 求值 _STA：bit0=present；明确 0 才算“没有电池”；
  *   3. 求值 _BST：Package{状态, 速率, 剩余容量, 电压}；
  *   4. 优先 _BIX，其次 _BIF：拿设计容量与满充容量；
@@ -90,13 +90,64 @@ int acpi_battery_init(void)
         vga_puts("\n");
         return -1;
     }
-    if (aml_find_device(BAT_HID_EISA, "PNP0C0A", g_bat_path, sizeof(g_bat_path)) != 0) {
-        vga_puts("[BAT] aml: PNP0C0A device not found in namespace\n");
-        return -1;
+    /* 同一 HID 可能有多个实例（双电池、可拆电池槽）。逐个看 _STA，选第一个
+     * 明确 present 的槽位；全都 absent 时保留第一个，交给 poll 报 ABSENT。
+     * 不能只取命名空间里的第一个，否则 BAT0 空槽会把 BAT1 的真电池遮掉。 */
+    {
+        char cand[4][96];
+        int ncand = 0, cursor = 0;
+        int chosen = -1, fallback = -1, any = -1;
+        while (ncand < 4 &&
+               aml_find_device_next(BAT_HID_EISA, "PNP0C0A", cand[ncand],
+                                    sizeof(cand[0]), &cursor) == 0) {
+            ncand++;
+        }
+        if (ncand == 0) {
+            vga_puts("[BAT] aml: PNP0C0A device not found in namespace\n");
+            return -1;
+        }
+        vga_puts("[BAT] aml candidates=");
+        bat_num(ncand);
+        vga_puts("\n");
+        for (int ci = 0; ci < ncand; ci++) {
+            char stpath[128];
+            aml_value_t *stv = 0;
+            int64_t st = 0;
+            int rc;
+            vga_puts("[BAT] aml dev=");
+            vga_puts(cand[ci]);
+            vga_puts("\n");
+            if (any < 0) any = ci;
+            if (path_child(cand[ci], "_STA", stpath, sizeof(stpath)) != 0) {
+                if (chosen < 0) chosen = ci;
+                continue;
+            }
+            aml_sample_begin();
+            rc = aml_eval_path(stpath, &stv);
+            aml_sample_end();
+            if (rc == AML_E_NOTFOUND) {
+                if (chosen < 0) chosen = ci;   /* 没有 _STA 视为已声明 */
+            } else if (rc == 0 && aml_value_int(stv, &st) == 0) {
+                if ((st & 1) && chosen < 0) chosen = ci;
+                else if (!(st & 1) && fallback < 0) fallback = ci;
+            } else if (chosen < 0 && fallback < 0) {
+                fallback = ci;   /* _STA 求值失败：保留候选，让 poll 给出 UNKNOWN */
+            }
+        }
+        if (chosen < 0) chosen = (fallback >= 0) ? fallback : any;
+        if (chosen < 0) chosen = 0;
+        {
+            int k = 0;
+            while (cand[chosen][k] && k < (int)sizeof(g_bat_path) - 1) {
+                g_bat_path[k] = cand[chosen][k];
+                k++;
+            }
+            g_bat_path[k] = 0;
+        }
+        vga_puts("[BAT] aml dev=selected ");
+        vga_puts(g_bat_path);
+        vga_puts("\n");
     }
-    vga_puts("[BAT] aml dev=");
-    vga_puts(g_bat_path);
-    vga_puts("\n");
     /* EC 型电池：命名空间里有 PNP0C09 才允许碰 0x62/0x66，避免无 EC 机器盲写 */
     {
         char ecpath[96];

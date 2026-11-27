@@ -82,6 +82,12 @@ static int astr_cmp(const char *a, const char *b)
     return (int)(unsigned char)*a - (int)(unsigned char)*b;
 }
 
+static int namestr_last_is(const namestr_t *ns, const char *name)
+{
+    if (!ns || ns->nseg <= 0) return 0;
+    return astr_cmp(ns->seg[ns->nseg - 1], name) == 0;
+}
+
 static void *pool_alloc(pool_t *p, uint32_t n)
 {
     void *r;
@@ -1409,6 +1415,33 @@ static int ev_expr(exec_t *e, const uint8_t **pp, const uint8_t *end, aml_value_
                 *pp = p + 2;
                 return *out ? 0 : AML_E_LIMIT;
             }
+            if (p[1] == 0x23) {   /* Acquire (Mutex, Timeout) */
+                namestr_t ns;
+                uint64_t timeout = 0;
+                int idx;
+                p += 2;
+                if (parse_namestr(&p, end, &ns) != 0) return AML_E_BADCODE;
+                idx = resolve_node(e, &ns);
+                /* Timeout 是 WordData；这里只要求语法完整，不把它当墙钟等待。 */
+                if (parse_const_int(&p, end, &timeout) != 0) return AML_E_BADCODE;
+                (void)timeout;
+                /* 单线程采样路径没有并发竞争者；Acquire 作为本地互斥占位，
+                 * 返回 1（成功）而不是假装真的等到了超时。 */
+                *out = v_int(&g_eval, idx >= 0 ? 1 : 0);
+                *pp = p;
+                return *out ? 0 : AML_E_LIMIT;
+            }
+            if (p[1] == 0x27) {   /* Release (Mutex) */
+                namestr_t ns;
+                int idx;
+                p += 2;
+                if (parse_namestr(&p, end, &ns) != 0) return AML_E_BADCODE;
+                idx = resolve_node(e, &ns);
+                (void)idx;
+                *out = v_int(&g_eval, 1);
+                *pp = p;
+                return *out ? 0 : AML_E_LIMIT;
+            }
             return AML_E_UNSUP;
         default:
             if ((p[0] >= 'A' && p[0] <= 'Z') || p[0] == '_' ||
@@ -1419,6 +1452,17 @@ static int ev_expr(exec_t *e, const uint8_t **pp, const uint8_t *end, aml_value_
                 int nargs = 0;
                 aml_node_t *n;
                 if (parse_namestr(&p, end, &ns) != 0) return AML_E_BADCODE;
+                /* _OSI 是 ACPI 预定义方法，不一定要在 DSDT 里显式定义。
+                 * 本机不冒充 Windows：对所有查询返回 0，让固件走通用/非 Windows
+                 * 分支；至少不会因为命名空间缺 _OSI 让整个 _BST 失败。 */
+                if (namestr_last_is(&ns, "_OSI")) {
+                    aml_value_t *osi_arg = 0;
+                    if (ev_expr(e, &p, end, &osi_arg) != 0) return AML_E_BADCODE;
+                    (void)osi_arg;
+                    *out = v_int(&g_eval, 0);
+                    *pp = p;
+                    return *out ? 0 : AML_E_LIMIT;
+                }
                 idx = resolve_node(e, &ns);
                 if (idx < 0) return AML_E_NOTFOUND;
                 n = &g_nodes[idx];
@@ -1576,11 +1620,13 @@ int aml_ns_build(const uint8_t *const *tables, const uint32_t *lens, int count)
 int aml_ns_ready(void) { return g_ready; }
 int aml_ns_nodes(void) { return g_nnodes; }
 
-int aml_find_device(uint32_t eisa_id, const char *hid_str, char *out, int cap)
+int aml_find_device_next(uint32_t eisa_id, const char *hid_str, char *out, int cap,
+                         int *cursor)
 {
     int i;
     if (!g_ready) return AML_E_NOTFOUND;
-    for (i = 0; i < g_nnodes; i++) {
+    if (!cursor || *cursor < 0) return AML_E_NOTFOUND;
+    for (i = *cursor; i < g_nnodes; i++) {
         char hid_path[AML_PATH_MAX];
         int used, j;
         aml_value_t *v;
@@ -1600,14 +1646,23 @@ int aml_find_device(uint32_t eisa_id, const char *hid_str, char *out, int cap)
         if (!v) continue;
         if (v->type == AML_V_INT && (uint32_t)v->ival == eisa_id) {
             astr_cpy(out, g_nodes[i].path, cap);
+            *cursor = i + 1;
             return 0;
         }
         if (v->type == AML_V_STR && hid_str && v->buf && astr_cmp((const char *)v->buf, hid_str) == 0) {
             astr_cpy(out, g_nodes[i].path, cap);
+            *cursor = i + 1;
             return 0;
         }
     }
+    *cursor = g_nnodes;
     return AML_E_NOTFOUND;
+}
+
+int aml_find_device(uint32_t eisa_id, const char *hid_str, char *out, int cap)
+{
+    int cursor = 0;
+    return aml_find_device_next(eisa_id, hid_str, out, cap, &cursor);
 }
 
 int aml_eval_path(const char *path, aml_value_t **out)

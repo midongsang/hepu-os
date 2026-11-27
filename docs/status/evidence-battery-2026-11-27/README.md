@@ -1,4 +1,4 @@
-# 电池状态取证（2026-11-27，M0 + M1 + M1.5 图标 + M1.6 面板 + M2 最小版 + EC 只读 + _REG/_PSR）
+# 电池状态取证（2026-11-27，M0 + M1 + M1.5 图标 + M1.6 面板 + M2 最小版 + EC 只读 + _REG/_PSR + 多槽位/Mutex）
 
 ## 结论
 
@@ -26,11 +26,15 @@
 5. **`_PSR` 交流状态**：新增 `acpi_ac_poll`，读 `ACPI0003._PSR`；Settings
    电池页的交流适配器行从“未声明”升级为 `Online (_PSR=1)` / `Offline (_PSR=0)`，
    读不到 `_PSR` 时才退回“已声明 / 未声明”。AC 离线夹具同时验证 `Charging: No`。
+6. **多槽位与真实 DSDT 兼容**：`aml_find_device_next` 枚举所有 `PNP0C0A`，init
+   逐个看 `_STA`，跳过明确 absent 的槽位；`BAT0` 空槽不再遮住 `BAT1`。
+   AML 增加 `Mutex` 占位与 `Acquire/Release`，`_OSI` 预定义调用统一返回 0
+   （不冒充 Windows，让固件走通用分支），避免真实 `_BST` 因这些常见前缀整体失败。
 
-**边界**：EC 只读，不写 EC；`IndexField/BankField`、多电池、剩余时间/健康度
-都还没做。`_GLK=1` 会直接锁死 EC（不碰端口、不调 `_REG`），**FACS Global Lock
-仍未实现**；`_REG` 只覆盖
-能执行的最小方法体。本目录的 `VALID` 仍全部来自合成 SSDT，真机未验证。
+**边界**：EC 只读，不写 EC；`IndexField/BankField`、剩余时间/健康度仍未做；
+`_GLK=1` 会直接锁死 EC（不碰端口、不调 `_REG`），**FACS Global Lock 仍未实现**。
+`Mutex` 是单线程采样路径的占位，不是跨 CPU/SMI 的真同步；`_OSI` 全部返回 0，
+不代表 Windows 兼容层。本目录的 `VALID` 仍全部来自合成 SSDT，真机未验证。
 
 ## 判据
 
@@ -260,9 +264,12 @@ QEMU 夹具（`tools/regress/make_battery_ssdt.py` 生成，均在 `fixture/`）
 | `battery-valid-acoff.ssdt` | 同 valid，但 `_PSR=0`、`_BST` 报未充电 | `[BAT] ac psr=0`；Settings 显示 `Offline (_PSR=0)` / `Charging: No` |
 | `battery-ec-read.ssdt` | `PNP0C09` + `ECR0` + `_GLK=0` + `_REG` 门控 `_BST` | QEMU：`ec=0x1 reg=0 glk=0`，无 EC 硬件 → `bst failed code=-3`；主机虚拟 EC：init→poll 读出 `57%` |
 | `battery-ec-glk.ssdt` | 同上但 `_GLK=1` | QEMU：`ec glk=1 lockout=1 reg=skip-glk`；主机：`ec64_read` 返回 `-4`，0 次端口写 |
+| `battery-dual.ssdt` | `DUA0._STA=0` 空槽 + `DUA1` 有效 | QEMU：`candidates=2`、`selected DUA1`、`pct=57` |
+| `battery-mutex.ssdt` | `Mutex` + `Acquire/Release` + `_OSI("Linux")` | QEMU：`selected MTX0`、`pct=57`，方法未被前缀打断 |
 
-最后三条是重点：没有 EC 控制器时不能盲读端口；EC 超时/缺 `_BST` 必须显式报错并
-停在 `--`，不能猜 0%、也不能沿用上次读数。
+EC、GLK、多槽位与 Mutex 这几条是重点：没有 EC 控制器时不能盲读端口；EC 超时/
+缺 `_BST` 必须显式报错并停在 `--`；空槽不能遮住真电池；真实 DSDT 的常见前缀
+不能把整个 `_BST` 打断。任何一条失败都不能猜 0%、也不能沿用上次读数。
 
 命令：
 
@@ -275,6 +282,8 @@ bash tools/regress/battery_state_probe.sh .../m2-ec     .../fixture/battery-ec.s
 bash tools/regress/battery_state_probe.sh .../m2-ec-read .../fixture/battery-ec-read.ssdt
 bash tools/regress/battery_state_probe.sh .../m2-ec-glk  .../fixture/battery-ec-glk.ssdt
 bash tools/regress/battery_panel_probe.sh .../m2-acoff  .../fixture/battery-valid-acoff.ssdt
+bash tools/regress/battery_panel_probe.sh .../m2-dual   .../fixture/battery-dual.ssdt
+bash tools/regress/battery_state_probe.sh .../m2-mutex  .../fixture/battery-mutex.ssdt
 bash tools/host-tests/run_host_tests.sh   # ec_battery 虚拟 EC 走 init→poll 正路径
 ```
 
@@ -321,34 +330,91 @@ RESULT: PASS (27 checks, 0 failed)
 `m2-acoff/ac_check.py`（6 项）单独断言 `Offline (_PSR=0)` 与 `Charging: No`，
 并对比在线夹具的 AC 行像素差异；`RESULT: PASS (6 checks, 0 failed)`。
 
+### 6.1 多电池槽位（2026-11-27 追加）
+
+夹具 `fixture/battery-dual.ssdt`：`DUA0._STA=0`（空槽），`DUA1` 有
+`_STA=0x0F` / `_BIF` / `_BST`（57%）。旧实现只取命名空间第一个 `PNP0C0A`，
+会把 `DUA1` 的真读数遮成 `ABSENT`；现在 init 枚举后选中 `DUA1`。
+
+命令：
+
+```bash
+bash tools/regress/battery_panel_probe.sh .../m2-dual .../fixture/battery-dual.ssdt
+```
+
+串口关键行：
+
+```text
+[BAT] aml candidates=2
+[BAT] aml dev=DUA0
+[BAT] aml dev=DUA1
+[BAT] aml dev=selected DUA1
+[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=1 rem=5700 full=10000 unit=0
+```
+
+面板与 Settings 仍显示 57% / Charging Yes：
+
+![dual panel](m2-dual/02-panel.png)
+
+![dual settings](m2-dual/05-battery-nav.png)
+
+`python3 m2-dual/dual_check.py`：`RESULT: PASS (7 checks, 0 failed)`。
+
+### 6.2 真实 DSDT 常见前缀：Mutex / Acquire / Release / _OSI（2026-11-27 追加）
+
+夹具 `fixture/battery-mutex.ssdt`：根作用域 `Mutex(MUT0)`，`_BST` 先
+`Acquire(MUT0,0xFFFF)`、调用 `_OSI("Linux")`，读容量后再 `Release(MUT0)`。
+这两类对象以前会让 `_BST` 直接失败；现在 `Acquire/Release` 作为单线程占位，
+`_OSI` 对任何查询返回 0，方法体能继续执行并给出 57%。
+
+命令：
+
+```bash
+bash tools/regress/battery_state_probe.sh .../m2-mutex .../fixture/battery-mutex.ssdt
+```
+
+串口关键行：
+
+```text
+[BAT] aml dev=selected MTX0
+[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=1 rem=5700 full=10000 unit=0
+```
+
+![mutex desktop](m2-mutex/desktop_2.png)
+
+`python3 m2-mutex/mutex_check.py`：`RESULT: PASS (5 checks, 0 failed)`。
+
 `hs_battery_apply_firmware()` 每 4 个状态 tick（约 2s）刷新一次；只有
 `battery_state/percent/charging` 三项真变化才置脏重绘。M1 的
 `[BAT] state=declared ... reason=acpi-declared` 仍会先打印一次——那是“声明层”
 日志，最终 UI 以随后 `[BAT] aml ...` 的结果为准。
 
-主机端 `aml_eval` 48 项断言覆盖：`PNP0C09` 查找（`EC00`）、`_REG(3,1)` 写
+主机端 `aml_eval` 51 项断言覆盖：`PNP0C09` 查找（`EC00`）、`_REG(3,1)` 写
 `ECRG`、EC 16 位字段拼装（`B0ST == 5700`）、`_BST` 返回
 `state=2/rem=5700/volt=12000`，以及 EC 超时和 EC 未启用都返回 `UNSUP`。
 新增 `ec_battery` 16 项端到端断言：只加载 `battery-ec-read.ssdt`，走真实
 `acpi_battery_init()` → `acpi_battery_poll()`，用 0x62/0x66 虚拟 EC 读出 57%，
 并覆盖 `_GLK=0`、EC 缺失、遗留 OBF 三种情况。新增 `ec_glk` 12 项断言覆盖
 `_GLK=1` 锁死：`ec64_read` 返回 -4、poll 保持 `--`、零次 0x62/0x66 访问。
-两者都**不是 QEMU 或真机**。
+新增 `multi_battery` 9 项：`DUA0._STA=0` 时 init 选 `DUA1`，poll 读 57%。
+以上都是**主机模拟，不是真机**。
 
-**这轮没做的**：EC 写、`IndexField/BankField`、多电池选择、剩余时间、健康度。
-`_GLK=1` 直接锁死 EC，FACS Global Lock 仍未实现；`_REG` 只支持本解释器能执行的
-最小方法体，真实 DSDT 里的 `Mutex`、`IndexField/BankField`、`_OSI` 仍可能让
-`_BST` 失败。EC 只读路径在真机上尚未验证；本轮不宣称“真机电池已闭环”。
+**这轮没做的**：EC 写、`IndexField/BankField`、剩余时间、健康度。
+多电池已能选第一个 present 槽位，但不会把两块电池的容量合并，也不会在运行中
+切换槽位；`Mutex` 只是单线程占位，`_OSI` 全部返回 0，不等于 Windows 兼容层。
+`_GLK=1` 直接锁死 EC，FACS Global Lock 仍未实现。EC 只读路径在真机上尚未验证；
+本轮不宣称“真机电池已闭环”。
 
 ## 构建
 
 `bash tools/regress/build_all.sh` 通过：gnu-efi、UEFI 引导器、64 位内核、
-32 位内核、双内核镜像全部成功；产物 `kernel64.bin` 1,054,096 B、
+32 位内核、双内核镜像全部成功；产物 `kernel64.bin` 1,054,992 B、
 `kernel32.bin` 3,873,165 B（M2 增加 `aml64.c` + `acpi_battery.c` + `ec64.c`，
 并补 `_REG`/`_PSR`，64 位约 +20 KB）。
 
-- `tools/host-tests/run_host_tests.sh`：`通过 12 / 失败 0`；`aml_eval` 48 checks，
-  `ec_battery` 16 checks（虚拟 EC 正路径）、`ec_glk` 12 checks（GLK 锁死）。
+- `tools/host-tests/run_host_tests.sh`：`通过 13 / 失败 0`；`aml_eval` 51 checks，
+  `ec_battery` 16 checks（虚拟 EC 正路径）、`ec_glk` 12 checks（GLK 锁死）、
+  `multi_battery` 9 checks（双槽位选择）。
 - `tools/regress/smoke32.sh`：`serial=1 initrd=1 net=1 desk=1 fault=0`、
   `ktest_result=PASS`、`p3-security: passed=2 failed=0 skipped=0`。
 - 32 位只验证到“构建 + 冒烟不回归”，没有单独截 32 位桌面截图。
@@ -405,5 +471,7 @@ RESULT: PASS (27 checks, 0 failed)
 | `m2-ec-read/` | `_GLK=0` EC 夹具：`_REG` 执行、无 EC 硬件时 `bst=-3` |
 | `m2-ec-glk/` | `_GLK=1` 锁死夹具：`lockout=1`、`reg=skip-glk`、`untrusted rc=-4` |
 | `ec-host-test.txt` | 上一轮 `run_host_tests.sh` 输出；`aml_eval` 44 checks，作为历史记录 |
-| `ec-sim-test.txt` | 本轮 `run_host_tests.sh` 输出；`aml_eval` 48 + `ec_battery` 16 + `ec_glk` 12，12/0 |
+| `ec-sim-test.txt` | 本轮 `run_host_tests.sh` 输出；`aml_eval` 51 + `ec_battery` 16 + `ec_glk` 12 + `multi_battery` 9，13/0 |
+| `m2-dual/` | 双槽位：`DUA0` absent 时选中 `DUA1`，面板 57%、`dual_check.py` |
+| `m2-mutex/` | `Mutex`/`Acquire/Release`/`_OSI` 夹具仍读出 57%，`mutex_check.py` |
 | `qemu-ec-absence.txt` | `qemu-system-x86_64 -device help` 无 EC 设备，说明为何没有 QEMU EC 正路径 |
