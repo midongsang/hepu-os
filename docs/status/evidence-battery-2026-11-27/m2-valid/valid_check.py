@@ -137,6 +137,13 @@ def main():
     check("I1 EC 设备存在时 _REG(3,1) 执行成功", "[BAT] ec=0x1" in ecr and "[BAT] ec reg=0" in ecr)
     check("I2 QEMU 无 EC 硬件时仍不产生假读数", "bst failed code=-3" in ecr and "pct=" not in ecr)
 
+    # --- J. _GLK=1 锁死：不碰 EC 端口，停在 -- ---
+    glk = text_ev("m2-ec-glk")
+    check("J1 _GLK=1 进入锁死分支",
+          "[BAT] ec glk=1" in glk and "[BAT] ec lockout=1" in glk
+          and "[BAT] ec reg=skip-glk" in glk)
+    check("J2 锁死后不产生假读数", "untrusted rc=-4" in glk and "pct=" not in glk)
+
     print()
     print("RESULT: %s (%d checks, %d failed)" %
           ("PASS" if not FAILS else "FAIL", len(CHECKS), len(FAILS)))

@@ -28,7 +28,8 @@
    读不到 `_PSR` 时才退回“已声明 / 未声明”。AC 离线夹具同时验证 `Charging: No`。
 
 **边界**：EC 只读，不写 EC；`IndexField/BankField`、多电池、剩余时间/健康度
-都还没做。`_GLK` 只检测并上报，**没有实现 FACS Global Lock**；`_REG` 只覆盖
+都还没做。`_GLK=1` 会直接锁死 EC（不碰端口、不调 `_REG`），**FACS Global Lock
+仍未实现**；`_REG` 只覆盖
 能执行的最小方法体。本目录的 `VALID` 仍全部来自合成 SSDT，真机未验证。
 
 ## 判据
@@ -239,9 +240,10 @@ ACPI `PNP0C0A`，不看机箱类型。
   `none`）；每次电池采样在 `aml_sample_begin()` 之后重放一次。原因是本解释器的
   `Store` 写 Name 走每采样 overlay，不能只在 init 生效。夹具 `_BST` 先检查
   `ECRG==1` 再读 EC，正是这条真实 DSDT 常见门控。
-- `_GLK`：读 EC 设备的 `_GLK` 并打印 `[BAT] ec glk=0/1/none`。本轮**只检测，
-  未实现 FACS Global Lock**；`_GLK=1` 的机器仍按只读+超时访问，不能宣称已满足
-  共享 EC 的锁协议。
+- `_GLK`：读 EC 设备的 `_GLK` 并打印 `[BAT] ec glk=0/1`；`=1` 时打印
+  `[BAT] ec lockout=1`，`ec64_set_glk(1)` 让所有 `ec64_read` 直接返回 `-4`，
+  `_REG` 也跳过（`reg=skip-glk`）。**本轮没有实现 FACS Global Lock**，策略是
+  宁可停在 `DECLARED/--`，也不冒险和 SMI 抢共享 EC。
 - `ACPI0003._PSR`：`acpi_ac_poll()` 读交流适配器状态；`acpi_battery_poll()`
   也把 `ac_present/ac_known/ac_online` 带进采样。Settings 电池页优先显示
   `Online (_PSR=1)` / `Offline (_PSR=0)`，只有 `_PSR` 缺失才退回声明/充电推断。
@@ -256,7 +258,8 @@ QEMU 夹具（`tools/regress/make_battery_ssdt.py` 生成，均在 `fixture/`）
 | `battery-nobst.ssdt` | 有设备但缺 `_BST` | `[BAT] aml bst failed code=-1` |
 | `battery-ec.ssdt` | 有 EC 字段但无 `PNP0C09`，EC 未启用 | `[BAT] ec=0x0` + `bst failed code=-3`（UNSUP） |
 | `battery-valid-acoff.ssdt` | 同 valid，但 `_PSR=0`、`_BST` 报未充电 | `[BAT] ac psr=0`；Settings 显示 `Offline (_PSR=0)` / `Charging: No` |
-| `battery-ec-read.ssdt` | `PNP0C09` + `ECR0` + `_GLK=1` + `_REG` 门控 `_BST` | QEMU：`ec=0x1 reg=0 glk=1`，无 EC 硬件 → `bst failed code=-3`；主机虚拟 EC：init→poll 读出 `57%` |
+| `battery-ec-read.ssdt` | `PNP0C09` + `ECR0` + `_GLK=0` + `_REG` 门控 `_BST` | QEMU：`ec=0x1 reg=0 glk=0`，无 EC 硬件 → `bst failed code=-3`；主机虚拟 EC：init→poll 读出 `57%` |
+| `battery-ec-glk.ssdt` | 同上但 `_GLK=1` | QEMU：`ec glk=1 lockout=1 reg=skip-glk`；主机：`ec64_read` 返回 `-4`，0 次端口写 |
 
 最后三条是重点：没有 EC 控制器时不能盲读端口；EC 超时/缺 `_BST` 必须显式报错并
 停在 `--`，不能猜 0%、也不能沿用上次读数。
@@ -270,6 +273,7 @@ bash tools/regress/battery_state_probe.sh .../m2-absent .../fixture/battery-abse
 bash tools/regress/battery_state_probe.sh .../m2-nobst  .../fixture/battery-nobst.ssdt
 bash tools/regress/battery_state_probe.sh .../m2-ec     .../fixture/battery-ec.ssdt
 bash tools/regress/battery_state_probe.sh .../m2-ec-read .../fixture/battery-ec-read.ssdt
+bash tools/regress/battery_state_probe.sh .../m2-ec-glk  .../fixture/battery-ec-glk.ssdt
 bash tools/regress/battery_panel_probe.sh .../m2-acoff  .../fixture/battery-valid-acoff.ssdt
 bash tools/host-tests/run_host_tests.sh   # ec_battery 虚拟 EC 走 init→poll 正路径
 ```
@@ -290,7 +294,7 @@ AC 离线夹具（`_PSR=0`）下，Settings 电池页显示 `AC adapter: Offline
 
 ![ac offline settings battery](m2-acoff/03-settings.png)
 
-`python3 m2-valid/valid_check.py`（25 项）：
+`python3 m2-valid/valid_check.py`（27 项）：
 
 ```text
 A1 串口找到 PNP0C0A 设备 BAT0       PASS
@@ -308,8 +312,10 @@ G1 缺 _BST fail-closed              PASS  code=-1
 H1/H2 EC 未启用/超时为 UNSUP 且不产生假读数 PASS  code=-3
 I1 EC 设备存在时 _REG(3,1) 执行成功 PASS  reg=0
 I2 QEMU 无 EC 硬件时仍不产生假读数  PASS  bst=-3
+J1 _GLK=1 进入锁死分支             PASS  lockout/reg=skip
+J2 锁死后不产生假读数              PASS  untrusted rc=-4
 
-RESULT: PASS (25 checks, 0 failed)
+RESULT: PASS (27 checks, 0 failed)
 ```
 
 `m2-acoff/ac_check.py`（6 项）单独断言 `Offline (_PSR=0)` 与 `Charging: No`，
@@ -323,24 +329,26 @@ RESULT: PASS (25 checks, 0 failed)
 主机端 `aml_eval` 48 项断言覆盖：`PNP0C09` 查找（`EC00`）、`_REG(3,1)` 写
 `ECRG`、EC 16 位字段拼装（`B0ST == 5700`）、`_BST` 返回
 `state=2/rem=5700/volt=12000`，以及 EC 超时和 EC 未启用都返回 `UNSUP`。
-新增 `ec_battery` 15 项端到端断言：只加载 `battery-ec-read.ssdt`，走真实
+新增 `ec_battery` 16 项端到端断言：只加载 `battery-ec-read.ssdt`，走真实
 `acpi_battery_init()` → `acpi_battery_poll()`，用 0x62/0x66 虚拟 EC 读出 57%，
-并覆盖 `_GLK=1`、EC 缺失、遗留 OBF 三种情况。两者都**不是 QEMU 或真机**。
+并覆盖 `_GLK=0`、EC 缺失、遗留 OBF 三种情况。新增 `ec_glk` 12 项断言覆盖
+`_GLK=1` 锁死：`ec64_read` 返回 -4、poll 保持 `--`、零次 0x62/0x66 访问。
+两者都**不是 QEMU 或真机**。
 
 **这轮没做的**：EC 写、`IndexField/BankField`、多电池选择、剩余时间、健康度。
-`_GLK` 只检测不上锁，FACS Global Lock 未实现；`_REG` 只支持本解释器能执行的
+`_GLK=1` 直接锁死 EC，FACS Global Lock 仍未实现；`_REG` 只支持本解释器能执行的
 最小方法体，真实 DSDT 里的 `Mutex`、`IndexField/BankField`、`_OSI` 仍可能让
 `_BST` 失败。EC 只读路径在真机上尚未验证；本轮不宣称“真机电池已闭环”。
 
 ## 构建
 
 `bash tools/regress/build_all.sh` 通过：gnu-efi、UEFI 引导器、64 位内核、
-32 位内核、双内核镜像全部成功；产物 `kernel64.bin` 1,053,840 B、
+32 位内核、双内核镜像全部成功；产物 `kernel64.bin` 1,054,096 B、
 `kernel32.bin` 3,873,165 B（M2 增加 `aml64.c` + `acpi_battery.c` + `ec64.c`，
 并补 `_REG`/`_PSR`，64 位约 +20 KB）。
 
-- `tools/host-tests/run_host_tests.sh`：`通过 11 / 失败 0`；`aml_eval` 48 checks，
-  `ec_battery` 15 checks（虚拟 EC 正路径）。
+- `tools/host-tests/run_host_tests.sh`：`通过 12 / 失败 0`；`aml_eval` 48 checks，
+  `ec_battery` 16 checks（虚拟 EC 正路径）、`ec_glk` 12 checks（GLK 锁死）。
 - `tools/regress/smoke32.sh`：`serial=1 initrd=1 net=1 desk=1 fault=0`、
   `ktest_result=PASS`、`p3-security: passed=2 failed=0 skipped=0`。
 - 32 位只验证到“构建 + 冒烟不回归”，没有单独截 32 位桌面截图。
@@ -391,9 +399,11 @@ RESULT: PASS (25 checks, 0 failed)
 | `kernel/arch/x86_64/acpi_battery.c/.h` | M2 读数层：`_STA/_BIF/_BIX/_BST` + 百分比可信门槛；EC 启用判定 |
 | `kernel/arch/x86_64/ec64.c/.h` | EC 0x62/0x66 只读事务层（RD_EC、超时、host 注入） |
 | `tools/host-tests/aml_eval_test.c` | 解释器/读数层主机端单测（`battery_ssdt_blobs.h` 为生成物） |
-| `fixture/battery-{valid,valid-bix,absent,nobst,ec,ec-read}.ssdt` | M2 六种夹具；`ec-read` 在 QEMU 走 fail-closed，在 `ec_battery` 走虚拟 EC 正路径 |
+| `fixture/battery-{valid,valid-bix,absent,nobst,ec,ec-read,ec-glk}.ssdt` | M2 七种夹具；`ec-read` 在 QEMU 走 fail-closed，在 `ec_battery` 走虚拟 EC 正路径；`ec-glk` 验锁死 |
 | `m2-valid/` | VALID 取证：桌面/面板/设置页截图、串口摘录、`valid_check.py` |
 | `m2-bix/` `m2-absent/` `m2-nobst/` `m2-ec/` | 四种边界夹具的串口摘录与桌面截图 |
+| `m2-ec-read/` | `_GLK=0` EC 夹具：`_REG` 执行、无 EC 硬件时 `bst=-3` |
+| `m2-ec-glk/` | `_GLK=1` 锁死夹具：`lockout=1`、`reg=skip-glk`、`untrusted rc=-4` |
 | `ec-host-test.txt` | 上一轮 `run_host_tests.sh` 输出；`aml_eval` 44 checks，作为历史记录 |
-| `ec-sim-test.txt` | 本轮 `run_host_tests.sh` 输出；`aml_eval` 48 + `ec_battery` 15，11/0 |
+| `ec-sim-test.txt` | 本轮 `run_host_tests.sh` 输出；`aml_eval` 48 + `ec_battery` 16 + `ec_glk` 12，12/0 |
 | `qemu-ec-absence.txt` | `qemu-system-x86_64 -device help` 无 EC 设备，说明为何没有 QEMU EC 正路径 |

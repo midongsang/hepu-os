@@ -85,7 +85,8 @@ int main(void)
     check(has_log("[BAT] aml dev=ECR0"), "找到 PNP0C0A 设备 ECR0");
     check(has_log("[BAT] ec=0x1 dev=EC00"), "找到 PNP0C09 EC00");
     check(has_log("[BAT] ec reg=0"), "_REG(3,1) 执行成功");
-    check(has_log("[BAT] ec glk=1"), "_GLK=1 被诊断并上报");
+    check(has_log("[BAT] ec glk=0"), "_GLK=0：不锁死 EC");
+    check(!has_log("[BAT] ec lockout=1"), "未进入 GLK 锁死分支");
     check(has_log("[BAT] ac=none"), "无 ACPI0003 时明确 ac=none");
 
     memset(&s, 0, sizeof(s));

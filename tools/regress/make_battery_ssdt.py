@@ -12,7 +12,8 @@
   absent     Method(_STA) 返回 0                 -> ABSENT
   nobst      只有声明，没有 _BST                  -> DECLARED（不可信）
   ec         _BST 读 EmbeddedControl 字段         -> DECLARED（明确不支持 EC）
-  ec-read    EC 控制器 + EC 16 位字段 + _REG      -> 主机模拟 EC 正路径
+  ec-read    EC 控制器 + EC 16 位字段 + _REG，_GLK=0 -> 主机模拟 EC 正路径
+  ec-glk     同上但 _GLK=1                          -> 锁死 EC，仅诊断
   valid-acoff  同 valid，但 ACPI0003._PSR=0       -> 交流离线
 """
 import struct
@@ -217,7 +218,7 @@ def make_ec(percent=57, dev="ECB0"):
     return build_table(device(dev, body), oem_table_id=b"BATEC")
 
 
-def make_ec_read(percent=57, dev="ECR0"):
+def make_ec_read(percent=57, dev="ECR0", glk=0):
     """EC 型电池：Field 16 位来自 EmbeddedControl，值由主机模拟 EC 提供。"""
     design = 10000
     rem = design * percent // 100
@@ -243,7 +244,7 @@ def make_ec_read(percent=57, dev="ECR0"):
     )
     ecdev = device("EC00", name("_HID", string_obj("PNP0C09"))
                    + method("_STA", ret(int_obj(0x0F)))
-                   + method("_GLK", ret(int_obj(1)))
+                   + method("_GLK", ret(int_obj(glk)))
                    + method("_REG", if_then(l_equal(b"\x68", int_obj(3)),
                                             store(b"\x69", b"ECRG")), args=2))
     # ECRG 放在根作用域，EC00._REG 与 ECR0._BST 都能按相对名解析到它。
@@ -259,7 +260,8 @@ MODES = {
     "absent": lambda pct=57: make_absent(),
     "nobst": lambda pct=57: make_nobst(),
     "ec": make_ec,
-    "ec-read": make_ec_read,
+    "ec-read": lambda pct=57: make_ec_read(pct, glk=0),
+    "ec-glk": lambda pct=57: make_ec_read(pct, glk=1),
 }
 
 
@@ -276,7 +278,8 @@ def write_header(path):
     valid = make_valid(57, dev="BAT0")
     bix = make_valid(57, use_bix=True, dev="BIX0")
     ec = make_ec(57, dev="ECB0")
-    ec_read = make_ec_read(57, dev="ECR0")
+    ec_read = make_ec_read(57, dev="ECR0", glk=0)
+    ec_glk = make_ec_read(57, dev="ECR0", glk=1)
     absent = make_absent("ABS0")
     with open(path, "w", encoding="utf-8") as f:
         f.write("/* 由 tools/regress/make_battery_ssdt.py --header 生成，勿手改。 */\n")
@@ -285,10 +288,12 @@ def write_header(path):
         write_array(f, "g_battery_bix_ssdt", bix)
         write_array(f, "g_battery_ec_ssdt", ec)
         write_array(f, "g_battery_ec_read_ssdt", ec_read)
+        write_array(f, "g_battery_ec_glk_ssdt", ec_glk)
         write_array(f, "g_battery_absent_ssdt", absent)
         f.write("\n#endif\n")
-    print("wrote %s (valid=%d bix=%d ec=%d ec_read=%d absent=%d)" %
-          (path, len(valid), len(bix), len(ec), len(ec_read), len(absent)))
+    print("wrote %s (valid=%d bix=%d ec=%d ec_read=%d ec_glk=%d absent=%d)" %
+          (path, len(valid), len(bix), len(ec), len(ec_read), len(ec_glk),
+           len(absent)))
 
 
 def main(argv):

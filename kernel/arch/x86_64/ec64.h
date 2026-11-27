@@ -20,7 +20,13 @@
 void ec64_set_present(int present);
 int ec64_present(void);
 
-/* 读 EC 地址空间的一个字节。成功 0；未启用 -2；超时/状态异常 -3。 */
+/* _GLK=1：EC 与 SMI 共享，必须先拿 ACPI Global Lock。当前未实现 FACS
+ * 全局锁，调用方应在 glk=1 时锁死 EC 读，不能冒险访问。 */
+void ec64_set_glk(int glk);
+int ec64_glk(void);
+
+/* 读 EC 地址空间的一个字节。成功 0；未启用 -2；超时/状态异常 -3；
+ * _GLK=1 且未实现全局锁时 -4（不碰端口）。 */
 int ec64_read(uint8_t offset, uint8_t *out);
 
 #endif

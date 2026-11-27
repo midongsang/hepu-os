@@ -3,8 +3,8 @@
 [BAT] state=declared form_factor=unknown acpi_battery=declared reason=acpi-declared
 [BAT] aml dev=ECR0
 [BAT] ec=0x1 dev=EC00
+[BAT] ec glk=0
 [BAT] ec reg=0
-[BAT] ec glk=1
 [BAT] ac=none
 [BAT] aml bst failed code=-3
 [BAT] aml bst failed code=-3

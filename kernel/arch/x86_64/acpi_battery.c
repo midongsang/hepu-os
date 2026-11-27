@@ -105,16 +105,42 @@ int acpi_battery_init(void)
             aml_value_t *v = 0;
             int64_t x = 0;
             int rrc;
+            int glk = 0;
 
             ec64_set_present(1);
+            ec64_set_glk(0);
             vga_puts("[BAT] ec=0x1 dev=");
             vga_puts(ecpath);
             vga_puts("\n");
 
-            /* 向 EC 设备声明 EmbeddedControl(3) 的 OS 处理器已安装。
-             * 不少 DSDT 的 _BST 会先看 ECON 之类的标志；不调用 _REG 时该标志
-             * 保持 0，_BST 可能直接返回 0。 */
-            if (path_child(ecpath, "_REG", g_ec_reg_path, sizeof(g_ec_reg_path)) == 0) {
+            /* _GLK=1 表示 EC 与 SMI 共享，规范要求先拿 ACPI Global Lock。
+             * 当前内核没有实现 FACS 全局锁，因此 glk=1 直接锁死 EC 读；
+             * _GLK 存在但求值失败也按 glk=1 处理，避免 fail-open。 */
+            if (path_child(ecpath, "_GLK", path, sizeof(path)) == 0) {
+                aml_sample_begin();
+                rrc = aml_eval_path(path, &v);
+                if (rrc == 0 && aml_value_int(v, &x) == 0) {
+                    glk = (int)(x & 1);
+                    vga_puts("[BAT] ec glk=");
+                    bat_num(glk);
+                    vga_puts("\n");
+                } else {
+                    glk = 1;
+                    vga_puts("[BAT] ec glk=unknown\n");
+                }
+                aml_sample_end();
+            } else {
+                vga_puts("[BAT] ec glk=0\n");
+            }
+            ec64_set_glk(glk);
+            if (glk) vga_puts("[BAT] ec lockout=1\n");
+
+            if (glk) {
+                vga_puts("[BAT] ec reg=skip-glk\n");
+            } else if (path_child(ecpath, "_REG", g_ec_reg_path, sizeof(g_ec_reg_path)) == 0) {
+                /* 向 EC 设备声明 EmbeddedControl(3) 的 OS 处理器已安装。
+                 * 不少 DSDT 的 _BST 会先看 ECON 之类的标志；不调用 _REG 时该标志
+                 * 保持 0，_BST 可能直接返回 0。 */
                 g_ec_reg_ready = 1;
                 aml_sample_begin();
                 rrc = ec_call_reg();
@@ -124,23 +150,6 @@ int acpi_battery_init(void)
                 else { bat_num(rrc); vga_puts("\n"); }
             } else {
                 vga_puts("[BAT] ec reg=none\n");
-            }
-
-            /* _GLK=1 表示 EC 与 SMI 共享，规范要求先拿 ACPI Global Lock。
-             * 当前内核没有实现 FACS 全局锁，只如实上报，事务仍带超时。 */
-            if (path_child(ecpath, "_GLK", path, sizeof(path)) == 0) {
-                aml_sample_begin();
-                rrc = aml_eval_path(path, &v);
-                if (rrc == 0 && aml_value_int(v, &x) == 0) {
-                    vga_puts("[BAT] ec glk=");
-                    bat_num(x & 1);
-                    vga_puts("\n");
-                } else {
-                    vga_puts("[BAT] ec glk=none\n");
-                }
-                aml_sample_end();
-            } else {
-                vga_puts("[BAT] ec glk=none\n");
             }
         } else {
             ec64_set_present(0);
@@ -203,6 +212,7 @@ static int ec_call_reg(void)
 {
     int64_t reg_args[2] = { 3, 1 };
     aml_value_t *v = 0;
+    if (ec64_glk()) return AML_E_UNSUP;   /* 未拿全局锁，连 _REG 也不碰 EC */
     if (!g_ec_reg_ready) return AML_E_NOTFOUND;
     return aml_eval_path_ints(g_ec_reg_path, reg_args, 2, &v);
 }

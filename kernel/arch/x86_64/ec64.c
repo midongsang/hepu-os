@@ -30,9 +30,17 @@ static void ec_outb(uint16_t port, uint8_t val)
 #define EC_SPIN 20000
 
 static int g_ec_present;
+static int g_ec_glk;
 
-void ec64_set_present(int present) { g_ec_present = present ? 1 : 0; }
+void ec64_set_present(int present)
+{
+    g_ec_present = present ? 1 : 0;
+    if (!g_ec_present) g_ec_glk = 0;
+}
 int ec64_present(void) { return g_ec_present; }
+
+void ec64_set_glk(int glk) { g_ec_glk = glk ? 1 : 0; }
+int ec64_glk(void) { return g_ec_glk; }
 
 static int ec_wait_ibf_clear(void)
 {
@@ -55,6 +63,7 @@ static int ec_wait_obf_set(void)
 int ec64_read(uint8_t offset, uint8_t *out)
 {
     if (!g_ec_present || !out) return -2;
+    if (g_ec_glk) return -4;   /* 没有 FACS 全局锁，绝不冒险读共享 EC */
 
     /* 丢掉上一次遗留的输出字节，避免把旧数据当成本次读数。 */
     if (ec_inb(EC_SC) & EC_OBF) (void)ec_inb(EC_DATA);

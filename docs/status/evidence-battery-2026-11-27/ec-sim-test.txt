@@ -8,9 +8,10 @@
   [ok]   winslot  (ALL PASS: 窗口槽位分配/回收不变量全部成立 (T1)
   [ok]   battery_ui  (PASS 全部断言)
   [ok]   aml_eval  (PASS aml_eval (48 checks))
-  [ok]   ec_battery  (RESULT: PASS (15 checks, 0 failed))
+  [ok]   ec_battery  (RESULT: PASS (16 checks, 0 failed))
+  [ok]   ec_glk  (RESULT: PASS (12 checks, 0 failed))
   [ok]   png64 (5 个用例全通过: RGBA/RGB/调色板/灰度8/灰度1bit)
   [ok]   ext2  (ALL EXT2 TESTS PASSED)
 
   [ok]   fsck  (fsck inode checks: ok (5 groups))
-=== 结果: 通过 11 / 失败 0 ===
+=== 结果: 通过 12 / 失败 0 ===

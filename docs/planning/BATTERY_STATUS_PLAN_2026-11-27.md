@@ -239,14 +239,15 @@ SMBIOS 只能回答“厂商说这是什么形状”，不能回答“现在有�
 - **M2-full 第二步：`_REG`/`_PSR`/`_GLK` 诊断已落地（2026-11-27，未推送）**：
   AML 增加 `aml_eval_path_ints`，EC 存在时执行 `_REG(3,1)`，并在每个电池采样
   重放，保证 `_BST` 能看见 EC 标志；夹具用 `ECRG` 门控证明 `_REG` 是必要条件。
-  `ACPI0003._PSR` 接入 Settings 交流行（`Online/Offline`）；`_GLK` 只检测并
-  串口上报，**FACS Global Lock 未实现**。主机 `aml_eval` 48 项、QEMU
-  `valid_check` 25 项、`m2-acoff` 6 项通过；`m2-ec-read` 在 QEMU 真实执行
-  `_REG`、诊断 `_GLK=1` 后因无 EC 硬件仍 fail-closed。新增 `ec_battery`
-  15 项虚拟 EC 端到端：只加载 `battery-ec-read.ssdt`，走真实 init→poll
-  读出 57%，覆盖 `_GLK=1`、EC 缺失、遗留 OBF；这是主机模拟，不是真机。
+  `ACPI0003._PSR` 接入 Settings 交流行（`Online/Offline`）；`_GLK=1` 时
+  `ec64_set_glk(1)` 直接锁死 EC：不调 `_REG`、`ec64_read` 返回 `-4`，
+  **FACS Global Lock 仍未实现**。主机 `aml_eval` 48 项、QEMU
+  `valid_check` 27 项、`m2-acoff` 6 项通过；`m2-ec-read`（`_GLK=0`）在 QEMU
+  真实执行 `_REG` 后因无 EC 硬件仍 fail-closed；`m2-ec-glk`（`_GLK=1`）记录
+  `glk=1 lockout=1 reg=skip-glk`，证明锁死分支。新增 `ec_battery` 16 项虚拟
+  EC 端到端和 `ec_glk` 12 项锁死断言；这是主机模拟，不是真机。
   **边界（M2-full 剩余）**：EC 写、IndexField/BankField、多电池、剩余时间、
-  健康度、FACS Global Lock；真机 EC 端口、`_REG` 重放副作用、真实 DSDT 里的
+  健康度、FACS Global Lock（当前用锁死替代）；真机 EC 端口、`_REG` 重放副作用、真实 DSDT 里的
   Mutex/`_OSI` 未验证。
 - **未做**：M2-full 剩余（EC 写/BankField/多电池/健康度/Global Lock）、M3（完整 32 位 UI/电源策略）、M4（真机）。
   本次 QEMU/OVMF 未提供 legacy SMBIOS entry，`form_factor=unknown` 只说明
