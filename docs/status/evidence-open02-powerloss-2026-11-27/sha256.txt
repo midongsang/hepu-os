@@ -1,0 +1,5 @@
+5a7c63a3bfa969890e655dd6a3e15abd79ce53e5d6fd2c55a4d8444bc8c6cb34  /tmp/open02-powerloss/usb.img
+ad5b76f5f7c3e2dc907513b7e5b9f1c4abf1d9967e54fedf5aa18edcf634b244  docs/status/evidence-open02-powerloss-2026-11-27/last-sector-after-kill.bin
+76da34e0fe56e637a5eab27ed50d39b98704868ed9629149dd880d0ad9269f1d  docs/status/evidence-open02-powerloss-2026-11-27/serial-powerloss.log
+84b92712687f0c194d5d744bee3954f337eea42555148cdfa3da3ae6faee67cd  docs/status/evidence-open02-powerloss-2026-11-27/host_check.py
+7943e5e031c8abd3ec72cb1b9bcd92e07e32d974c7bb36830cf923114a91fc42  docs/status/evidence-open02-powerloss-2026-11-27/host_gen_usb_image.py

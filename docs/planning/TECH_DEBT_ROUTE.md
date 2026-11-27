@@ -753,7 +753,7 @@ desk_select("mine");       /* 切过去 */
 | 32 位 IP/UDP/DHCP 字节序 + IP 校验和修正，打通 DHCP 收包 | `b34a5bc` | `kernel/net/ip.c`、`kernel/net/udp.c`、`kernel/net/dhcp.c` | 直载 e1000 取证：`evidence-rxnet-2026-11-17/serial/rxnet-rebase-61c53fa.log` RDH=2、rx_cur=2、两帧上送 UDP、MAC `52:54:00:12:34:56`、link up；`evidence-rxnet-2026-11-17/build32-rebase-61c53fa.log`/`evidence-rxnet-2026-11-17/build64-rebase-61c53fa.log` 0 error；Offer op=2/xid/msg_type=2 字段解析见旧档 `evidence-rxnet-2026-11-17/serial/rxnet-dbg2.log`。根因是发送侧小端直写 + 校验和小端取字，非硬件未收到、非 BSIZE 常量问题。**ICMP/TCP 未复测** | 已闭环（32 位 DHCP 收包） |
 | BUG-58：RAL/RAH 对齐 32 位写 + 只读诊断 dump | `ff5d603` | `kernel/drivers/e1000.c`、`kernel/net/net_selftest.c` | `evidence-rxnet-2026-11-17/build32-rebase-61c53fa.log`、`evidence-rxnet-2026-11-17/build64-rebase-61c53fa.log` 0 error；`evidence-rxnet-2026-11-17/serial/rxnet-rebase-61c53fa.log` 串口 MAC `52:54:00:12:34:56`、link up | 已闭环 |
 | OPEN-04 子项（误授权）：匹配条件收紧为规范绝对路径整串匹配 | `0e30c70` | `kernel/arch/x86_64/user_process.c:2544`（`INSTALLER_CANON_PATH "/bin/install64.elf"`）、`:2547-2557`（先判 `path[0]=='/'`，再整串逐字节比、长度相等） | 只收紧匹配条件，非加白名单配置、非编译期排除；无配置项/默认清单，唯一可信路径是编译期单值宏。64 位编译 0 error + 静态核对两个镜像脚本写 `/bin/install64.elf`、autostart 绝对路径 exec；**没跑过真实安装**，未在双盘 QEMU 验证目标盘文件齐全。主体（真实安装流程）仍开放 | **子项（误授权匹配）已修；主体真实安装流程仍开放，运行时未验证** |
-| OPEN-02：UHCI 控制/批量传输与 usb-storage 整扇区读写 | `5083958` / merge `82d46e3` | `kernel/drivers/usb/uhci.h`（TD 状态位高字 `0x00800000`）；`uhci.c`（控制 MaxLength/ActualLength、QH+depth-first、动态 TD、DataToggle、FRNUM 轮询）；`usb_core.c`（配置/接口/端点解析与 interface class 匹配）；`usb_msc.c`（8 扇区分块） | QEMU `piix3-usb-uhci` + `usb-storage`：控制枚举、BOT INQUIRY/READ CAPACITY、LBA0 读、4KB 写回读 `mismatch=-1`（无差异）；证据 `docs/status/evidence-open02-2026-11-26/` | **已关闭（QEMU 运行时验证）**；未做满盘/掉电/错误恢复/真机 |
+| OPEN-02：UHCI 控制/批量传输与 usb-storage 整扇区读写 | `5083958` / merge `82d46e3`；边界④待提交（2026-11-27） | `kernel/drivers/usb/uhci.h`（TD 状态位高字 `0x00800000`）；`uhci.c`（控制 MaxLength/ActualLength、QH+depth-first、动态 TD、DataToggle、FRNUM 轮询）；`usb_core.c`（配置/接口/端点解析与 interface class 匹配）；`usb_msc.c`（8 扇区分块）；`usb64.c`（全盘读探针） | QEMU `piix3-usb-uhci` + `usb-storage`：控制枚举、BOT INQUIRY/READ CAPACITY、LBA0 读、4KB 写回读 `mismatch=-1`（无差异）；边界④ 16 扇区/条全盘 131072 扇区 `read_err=0 mismatch=0`，宿主逐字节 PASS；写完成后 kill -9 掉电宿主 PASS。证据 `docs/status/evidence-open02-2026-11-26/`、`evidence-open02-fullread-2026-11-27/`、`evidence-open02-powerloss-2026-11-27/` | **主路径已关闭（QEMU）；全盘读已闭环；写完成后掉电已验证**；写中途/多扇区原子性、STALL/NAK 注入、真机未做 |
 
 ### 第三批残留债与现状限制（勿误关）
 
@@ -761,9 +761,12 @@ desk_select("mine");       /* 切过去 */
   扇区克隆在用户态 `user/apps/install64/install64.c`（`clone_region:165-187`、引导链 `:280-294`、
   rootfs 到 P1 `:299-308`、P2/P3 mkfs `:312-321`）。该流程未在双盘 QEMU 跑过，目标盘 P1
   `/bin` 齐全性未核对，运行时未验证（见 OPEN-04）。
-- **OPEN-02 已闭环（2026-11-26）**：QEMU `piix3-usb-uhci` + usb-storage 控制枚举、
-  BOT INQUIRY/READ CAPACITY、4KB 写回读通过；剩余边界是满盘遍历、掉电持久化、
-  STALL/NAK 错误恢复和真实硬件兼容性；证据见 `docs/status/evidence-open02-2026-11-26/`。
+- **OPEN-02 主路径已闭环（2026-11-26）**：QEMU `piix3-usb-uhci` + usb-storage 控制枚举、
+  BOT INQUIRY/READ CAPACITY、4KB 写回读通过；边界④全盘逐扇区读已闭环（2026-11-27，
+  16 扇区/条，131072/131072，宿主 PASS）；写完成后 kill -9 的 QEMU 掉电取证 PASS。
+  剩余边界是**写中途/多扇区原子性、STALL/NAK 错误恢复和真实硬件兼容性**；证据见
+  `docs/status/evidence-open02-2026-11-26/`、`evidence-open02-fullread-2026-11-27/`、
+  `evidence-open02-powerloss-2026-11-27/`。
 - **OBS-05 已撤销（取帧时机问题）**：旧值 786,399/2,073,600（≈38%）系首帧稀疏帧，
   `61c53fa` 直启两帧实测 2,073,598/2,073,600（≈100.00%），现象不复现；不再按渲染缺陷跟踪。
   过渡画面本身的问题见 OBS-06。

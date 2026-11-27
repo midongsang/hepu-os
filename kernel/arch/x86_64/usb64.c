@@ -646,6 +646,137 @@ int usb_storage_write_sectors(uint32_t lba, uint8_t count, const uint8_t *buf)
     return 0;
 }
 
+
+#ifdef HEPU_MSC_FULLREAD_TEST
+/* OPEN-02 边界④取证：usb-storage 全盘逐扇区读校验。
+ *
+ * 现有 usb_storage_read_sectors() 按单扇区发一条 BOT 命令，在 TCG 下
+ * 131072 扇区要数小时。这里用 16 扇区/条（8KB 数据阶段）把全盘读完。
+ * 参数选择有实测依据：64 扇区/条（32KB）首条即 data stage STALL；
+ * 32 扇区/条在 LBA 0x6F00 处出现一次 STALL；16 扇区/条连续读完
+ * 131072 扇区且 read_err=0。数据缓冲必须放在 usb_dma_pool 内，
+ * 否则 usb_bulk_transfer() 的 512B scratch 限制会直接拒绝。
+ * 图案与 host_gen_usb_image.py 保持一致。
+ */
+#define MSC_FULLREAD_CHUNK 16u
+
+static int usb_storage_read_sectors_bulk(uint32_t lba, uint16_t count, uint8_t *dma_buf)
+{
+    if (count == 0 || count > MSC_FULLREAD_CHUNK) return -1;
+    if ((uint32_t)count * 512u > 0xFFFFu) return -1;
+
+    uint32_t cmd_mark = usb_pool_offset;
+    uint32_t bytes = (uint32_t)count * 512u;
+    int rc = -1;
+    for (int tried = 0; tried < 3; tried++) {
+        uint8_t cb[16] = {0x28, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+        uint32_t sec = lba;
+        cb[2] = (sec >> 24) & 0xFF; cb[3] = (sec >> 16) & 0xFF;
+        cb[4] = (sec >> 8) & 0xFF;  cb[5] = sec & 0xFF;
+        /* READ(10) 传输长度是 BE16：高字节 cb[7]，低字节 cb[8]。 */
+        cb[7] = (uint8_t)((count >> 8) & 0xFF);
+        cb[8] = (uint8_t)(count & 0xFF);
+        rc = usb_bot_cmd(0, cb, 10, dma_buf, (uint16_t)bytes, 1);
+        if (rc == 0) break;
+        usb_pool_offset = cmd_mark;
+    }
+    usb_pool_offset = cmd_mark;
+    return rc;
+}
+
+static void fullread_print_dec(uint32_t v)
+{
+    char nb[16]; int p = 0;
+    if (v == 0) { vga_puts("0"); return; }
+    while (v && p < 14) { nb[p++] = (char)('0' + v % 10); v /= 10; }
+    for (int k = 0; k < p / 2; k++) { char c = nb[k]; nb[k] = nb[p-1-k]; nb[p-1-k] = c; }
+    nb[p] = 0; vga_puts(nb);
+}
+
+static void usb64_msc_fullread_test(void)
+{
+    if (!g_usb_storage.found || g_storage_blocks == 0) return;
+    if (g_storage_block_size != 512) {
+        vga_puts("[MSC-FULLREAD] SKIP block_size=");
+        fullread_print_dec(g_storage_block_size); vga_puts("\n");
+        return;
+    }
+
+    uint32_t blocks = g_storage_blocks;
+    uint32_t chunk = MSC_FULLREAD_CHUNK;
+    uint32_t sampled = 0, read_err = 0, mism = 0;
+    uint32_t bad_lba = 0xFFFFFFFFu, bad_off = 0xFFFFFFFFu;
+    uint8_t bad_want = 0, bad_got = 0;
+    uint32_t sum = 0, xors = 0;
+    uint32_t rounds = 0;
+
+    uint32_t pool_mark = usb_pool_offset;
+    uint8_t *buf = (uint8_t *)usb_dma_alloc(chunk * 512u);
+    if (!buf) {
+        vga_puts("[MSC-FULLREAD] FAIL dma_pool\n");
+        usb_pool_offset = pool_mark;
+        return;
+    }
+    uint64_t t0 = pit64_get_ticks();
+
+    for (uint32_t lba = 0; lba < blocks; lba += chunk) {
+        uint32_t n = blocks - lba;
+        if (n > chunk) n = chunk;
+        rounds++;
+        int rc = usb_storage_read_sectors_bulk(lba, (uint16_t)n, buf);
+        if (rc != 0) {
+            read_err++;
+            if (bad_lba == 0xFFFFFFFFu) { bad_lba = lba; bad_off = 0xFFFFFFFEu; }
+            /* 一次读失败即中止，避免长遍历在同一个坏点反复刷屏；
+             * 失败点已由 first_bad 记录，是否重试由上层按需决定。 */
+            break;
+        } else {
+            for (uint32_t s = 0; s < n; s++) {
+                uint32_t L = lba + s;
+                for (uint32_t i = 0; i < 512; i++) {
+                    uint8_t want;
+                    if (L == 0 && i < 8) want = (uint8_t)"OPEN02-A"[i];
+                    else want = (uint8_t)((L & 0xFF) ^ ((L >> 8) & 0xFF) ^ (i & 0xFF));
+                    uint8_t got = buf[s * 512u + i];
+                    if (got != want) {
+                        mism++;
+                        if (bad_lba == 0xFFFFFFFFu) {
+                            bad_lba = L; bad_off = i; bad_want = want; bad_got = got;
+                        }
+                    }
+                    sum += got; xors ^= got;
+                }
+            }
+            sampled += n;
+        }
+        if ((rounds & 0x3F) == 0) {
+            vga_puts("[MSC-FULLREAD] progress lba="); vga_put_hex((uint64_t)lba);
+            vga_puts(" sampled="); fullread_print_dec(sampled);
+            vga_puts("\n");
+        }
+    }
+
+    uint64_t t1 = pit64_get_ticks();
+    vga_puts("[MSC-FULLREAD] blocks="); fullread_print_dec(blocks);
+    vga_puts(" chunk="); fullread_print_dec(chunk);
+    vga_puts(" rounds="); fullread_print_dec(rounds);
+    vga_puts(" sampled="); fullread_print_dec(sampled);
+    vga_puts(" read_err="); fullread_print_dec(read_err);
+    vga_puts(" mismatch="); fullread_print_dec(mism);
+    vga_puts(" checksum_sum="); vga_put_hex((uint64_t)sum);
+    vga_puts(" checksum_xor="); vga_put_hex((uint64_t)xors);
+    vga_puts(" elapsed_ms="); fullread_print_dec((uint32_t)(t1 - t0));
+    if (bad_lba != 0xFFFFFFFFu) {
+        vga_puts(" first_bad lba="); vga_put_hex(bad_lba);
+        vga_puts(" off="); vga_put_hex(bad_off);
+        vga_puts(" want="); vga_put_hex((uint64_t)bad_want);
+        vga_puts(" got="); vga_put_hex((uint64_t)bad_got);
+    }
+    vga_puts("\n");
+    usb_pool_offset = pool_mark;
+}
+#endif
+
 #ifdef HEPU_MSC_SWEEP_TEST
 /* OPEN-02 边界①取证：usb-storage 分段遍历读校验 + 单扇区写读回环。
  * 校验图案与宿主机 tools 侧镜像生成器一致：扇区 L 字节 i
@@ -1293,6 +1424,10 @@ static uint8_t usb64_enumerate_one(uint8_t dev_addr, uint8_t port)
 #ifdef HEPU_MSC_SWEEP_TEST
         /* OPEN-02 边界①取证：探测到容量后跑分段遍历读校验 + 单扇区写读回环。 */
         usb64_msc_sweep_test();
+#endif
+#ifdef HEPU_MSC_FULLREAD_TEST
+        /* OPEN-02 边界④取证：多扇区命令全盘逐扇区读校验。 */
+        usb64_msc_fullread_test();
 #endif
         return 0;
     }

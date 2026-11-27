@@ -1,0 +1,3 @@
+5082ce8a8189ea943a60f21e7e4d714916a0fcc8e8cee0e240b78a38d57e7925  docs/status/evidence-open02-fullread-2026-11-27/serial-fullread.log
+b52149b9b356ba75797b5e6f55ae83ba018bbd4d60a040bdf8a57b02bf76b0c0  /tmp/open02-fullread-chunk16/usb.img
+179eebec882270b966bc6a9ce3fc2bc975412a96c7253917ad3b849d7b9be634  docs/status/evidence-open02-fullread-2026-11-27/chunk-size-selection.txt

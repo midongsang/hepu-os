@@ -1,0 +1,16 @@
+[HOST] image_bytes=67108864 blocks=131072 bsize=512
+[HOST] full-byte mismatch=0
+[HOST] checksum_sum=0xFE0001E6 checksum_xor=0x7A
+[SER ] [MSC-FULLREAD] blocks=131072 chunk=16 rounds=8192 sampled=131072 read_err=0 mismatch=0 checksum_sum=0xFE0001E6 checksum_xor=0x7A elapsed_ms=681714
+
+[OK ] blocks: serial=131072 host=131072
+[OK ] chunk: serial=16 host=16
+[OK ] rounds: serial=8192 host=8192
+[OK ] sampled: serial=131072 host=131072
+[OK ] read_err: serial=0 host=0
+[OK ] mismatch: serial=0 host=0
+[OK ] checksum_sum: serial=4261413350 host=4261413350
+[OK ] checksum_xor: serial=122 host=122
+[HOST] elapsed_ms(serial)=681714
+
+RESULT: PASS

@@ -275,6 +275,12 @@ ifeq ($(MSC_SWEEP_TEST),1)
 CFLAGS += -DHEPU_MSC_SWEEP_TEST
 endif
 
+# OPEN-02 边界④：usb-storage 全盘逐扇区读校验（多扇区 BOT 命令，16 扇区/条）。
+# 发布构建默认关闭；取证时 make MSC_FULLREAD_TEST=1。
+ifeq ($(MSC_FULLREAD_TEST),1)
+CFLAGS += -DHEPU_MSC_FULLREAD_TEST
+endif
+
 # OPEN-06 验收探针：默认关闭；仅取证构建用 make SVC_PROBE=1 打开，
 # 注册 svc-probe 夹具（前 3 次启动失败、第 4 次成功）。发布构建不编入。
 ifeq ($(SVC_PROBE),1)

@@ -1,0 +1,27 @@
+== 64 扇区/条：首条 READ10 数据阶段失败 ==
+[USB64] Capacity: 64 MB (131072 blocks)
+[USB64] data stage failed
+[USB64] bulk TD err=0x400000
+[USB64] bulk TD err=0x400000
+[USB64] bulk TD err=0x400000
+[USB64] bulk TD err=0x400000
+[USB64] bulk TD err=0x400000
+[USB64] bulk TD err=0x400000
+
+== 32 扇区/条：第 889 条在 LBA 0x6F00 失败 ==
+[MSC-FULLREAD] progress lba=0x2FE0 sampled=12288
+[MSC-FULLREAD] progress lba=0x37E0 sampled=14336
+[MSC-FULLREAD] progress lba=0x3FE0 sampled=16384
+[MSC-FULLREAD] progress lba=0x47E0 sampled=18432
+[MSC-FULLREAD] progress lba=0x4FE0 sampled=20480
+[MSC-FULLREAD] progress lba=0x57E0 sampled=22528
+[MSC-FULLREAD] progress lba=0x5FE0 sampled=24576
+[MSC-FULLREAD] progress lba=0x67E0 sampled=26624
+[USB64] data stage failed
+[USB64] bulk TD err=0x400000
+[USB64] bulk TD err=0x400000
+[MSC-FULLREAD] blocks=131072 chunk=32 rounds=889 sampled=28416 read_err=1 mismatch=0 checksum_sum=0x6E9101E6 checksum_xor=0x7A elapsed_ms=74976 first_bad lba=0x6F00 off=0xFFFFFFFE want=0x0 got=0x0
+
+== 16 扇区/条：完整通过（同目录 serial-fullread.log） ==
+[USB64] Capacity: 64 MB (131072 blocks)
+[MSC-FULLREAD] blocks=131072 chunk=16 rounds=8192 sampled=131072 read_err=0 mismatch=0 checksum_sum=0xFE0001E6 checksum_xor=0x7A elapsed_ms=681714

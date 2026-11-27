@@ -1,0 +1,23 @@
+[HOST] sampled_lbas=523 first=0 last=131071
+[HOST] pattern mismatch count (truncated at 8)=0
+[HOST] checksum_sum=0x0208F6E6 checksum_xor=0x0000007A
+[HOST] writeback lba=0x1FFFF wmism=0
+[HOST] extra random samples=32 mismatch=0
+[SER ] [MSC-SWEEP] blocks=131072 bsize=512 stride=256 sampled=523 read_err=0 mismatch=0 wlba=0x1FFFF wrc=0x0 rdrc=0x0 wmism=0 checksum_sum=0x208F6E6 checksum_xor=0x7A elapsed_ms=46174
+
+[OK ] blocks: serial=131072 host=131072
+[OK ] bsize: serial=512 host=512
+[OK ] stride: serial=256 host=256
+[OK ] sampled: serial=523 host=523
+[OK ] read_err: serial=0 host=0
+[OK ] mismatch: serial=0 host=0
+[OK ] wlba: serial=131071 host=131071
+[OK ] wrc: serial=0 host=0
+[OK ] rdrc: serial=0 host=0
+[OK ] wmism: serial=0 host=0
+[OK ] checksum_sum: serial=34141926 host=34141926
+[OK ] checksum_xor: serial=122 host=122
+[HOST] extra-sample mismatch=0 (all_ok 计入)
+[HOST] elapsed_ms(serial)=46174
+
+RESULT: PASS
