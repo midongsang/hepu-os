@@ -151,7 +151,12 @@ static int vbe_detect_from_boot_params(void)
         vbe_bpp = (uint32_t)gfx_bpp;
         vbe_pitch = vbe_width * (vbe_bpp / 8);
         vbe_framebuffer = gfx_fb_addr;
-        vbe_fb_phys = 0xFD000000; /* 默认VBE帧缓冲物理地址 */
+        /* OBS-06: 这里原来硬编码 0xFD000000。32 位 bochs dispi 的真实
+         * BAR0 是 0x80000000；0xFD000000 只是旧 VGA LFB 窗口，只有
+         * 3MB 可见，整帧提交会被截成顶部 410 行。以 gfx_fb_addr 为准。 */
+        vbe_fb_phys = (uint32_t)(uintptr_t)gfx_fb_addr;
+        if (vbe_fb_phys < 0x10000000u)
+            vbe_fb_phys = 0xFD000000u; /* 老 VBE 兜底 */
 
         serial_puts(0x3F8, "[GFX-VBE] detected from boot params: ");
         serial_puthex(0x3F8, vbe_width);
@@ -320,8 +325,9 @@ static void vbe_present(void)
 
     /* 尺寸必须取全局 gfx_pitch/gfx_height, 不能用 vbe_pitch/vbe_height:
      * 后者是后端自己字段, 实测残留在 1024x768@pitch4096, 而真实模式是
-     * 1920x1080@pitch7680 —— 用后者只提交前 3MB(约 402 行), 桌面下半截
-     * 永远是黑的。 */
+     * 1920x1080@pitch7680。长度正确之后, 目标基址还必须是 dispi 的真实
+     * BAR0; 0xFD000000 是旧 VGA LFB 窗口, 只有 3MB 可见, 会把整帧截在
+     * 顶部约 410 行。OBS-06 的最终根因是 vbe_fb_phys 被硬编码成前者。 */
     uint32_t pitch  = (uint32_t)gfx_pitch;
     uint32_t height = (uint32_t)gfx_height;
     if (!pitch || !height) return;
