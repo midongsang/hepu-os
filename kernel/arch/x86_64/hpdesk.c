@@ -529,6 +529,56 @@ static void hs_wp_save_cfg(int sel)
     }
 }
 
+/* 壁纸布局持久化：wallpaper_layout: 0..4。模板已含该键；旧配置缺键时
+ * 不做插入，保持 hsqml 结构完整，运行时退回默认 Fill。 */
+static int hs_wp_layout_read_cfg(void)
+{
+    extern int ext2_64_read_file(const char *path, uint8_t *buffer, uint32_t max_size);
+    static char lbuf[4096];
+    int n = ext2_64_read_file("/etc/hepushell/config.hsqml", (uint8_t *)lbuf, 4095);
+    if (n <= 0) return 0;
+    lbuf[n] = 0;
+    for (int i = 0; i + 18 < n; i++) {
+        if (lbuf[i]=='w'&&lbuf[i+1]=='a'&&lbuf[i+2]=='l'&&lbuf[i+3]=='l'&&
+            lbuf[i+4]=='p'&&lbuf[i+5]=='a'&&lbuf[i+6]=='p'&&lbuf[i+7]=='e'&&
+            lbuf[i+8]=='r'&&lbuf[i+9]=='_'&&lbuf[i+10]=='l'&&lbuf[i+11]=='a'&&
+            lbuf[i+12]=='y'&&lbuf[i+13]=='o'&&lbuf[i+14]=='u'&&lbuf[i+15]=='t'&&
+            lbuf[i+16]==':' ) {
+            int j = i + 17;
+            while (j < n && (lbuf[j] == ' ' || lbuf[j] == '\t')) j++;
+            if (j < n && lbuf[j] >= '0' && lbuf[j] <= '9')
+                return (lbuf[j] - '0' <= 4) ? (lbuf[j] - '0') : 0;
+            return 0;
+        }
+    }
+    return 0;
+}
+
+static void hs_wp_layout_save_cfg(int v)
+{
+    extern int ext2_64_read_file(const char *path, uint8_t *buffer, uint32_t max_size);
+    extern int ext2_64_write_file(const char *path, const uint8_t *data, uint32_t size);
+    static char lbuf[4096];
+    int n = ext2_64_read_file("/etc/hepushell/config.hsqml", (uint8_t *)lbuf, 4095);
+    if (n <= 0) return;
+    lbuf[n] = 0;
+    for (int i = 0; i + 18 < n; i++) {
+        if (lbuf[i]=='w'&&lbuf[i+1]=='a'&&lbuf[i+2]=='l'&&lbuf[i+3]=='l'&&
+            lbuf[i+4]=='p'&&lbuf[i+5]=='a'&&lbuf[i+6]=='p'&&lbuf[i+7]=='e'&&
+            lbuf[i+8]=='r'&&lbuf[i+9]=='_'&&lbuf[i+10]=='l'&&lbuf[i+11]=='a'&&
+            lbuf[i+12]=='y'&&lbuf[i+13]=='o'&&lbuf[i+14]=='u'&&lbuf[i+15]=='t'&&
+            lbuf[i+16]==':') {
+            int j = i + 17;
+            while (j < n && (lbuf[j] == ' ' || lbuf[j] == '\t')) j++;
+            if (j < n && (lbuf[j] >= '0' && lbuf[j] <= '9')) {
+                lbuf[j] = (char)('0' + (v < 0 ? 0 : (v > 4 ? 4 : v)));
+                ext2_64_write_file("/etc/hepushell/config.hsqml", (uint8_t *)lbuf, (uint32_t)n);
+            }
+            break;
+        }
+    }
+}
+
 /* 侧栏收起状态持久化：把 config.hsqml 里 sidebar_collapsed: 后的单个数字改掉。
  * 键缺失时不做追加（模板里已含），避免在语句中间插入破坏 hsqml。 */
 static void hs_save_sidebar_collapsed(int v)
@@ -1311,6 +1361,20 @@ static const char *g_wp_files[3] = {
     "/usr/share/wallpapers/wallpaper-1.png",
     "/usr/share/wallpapers/wallpaper-2.png",
 };
+/* 五种布局: Fill=居中裁剪填满, Fit=完整入屏留边, Stretch=拉伸变形,
+ * Tile=原始尺寸平铺, Center=原始尺寸居中。Panorama 留接口, 不进本轮 UI。 */
+enum {
+    HS_WP_FILL = 0,
+    HS_WP_FIT = 1,
+    HS_WP_STRETCH = 2,
+    HS_WP_TILE = 3,
+    HS_WP_CENTER = 4,
+    HS_WP_LAYOUT_COUNT = 5
+};
+static const char *g_wp_layout_names[HS_WP_LAYOUT_COUNT] = {
+    "Fill", "Fit", "Stretch", "Tile", "Center"
+};
+static int g_wp_layout = HS_WP_FILL;
 static int g_wp_sel = 0;
 static int g_wp_loaded = -1;      /* 当前已解码成功的图片索引, -1 表示没有 */
 
@@ -1402,19 +1466,44 @@ static int hs_wallpaper_build_cache(int w, int h)
 
     /* 缓存宽封顶 WP_CACHE_MAX_W; 高度保持屏幕全高, 纵向 1:1 不降精度。 */
     int cw = w < WP_CACHE_MAX_W ? w : WP_CACHE_MAX_W;
+    if (cw <= 0 || cw > 4096) return 0;
 
-    /* cover-fit 的裁剪/居中几何仍按屏幕宽高 (w,h) 计算, 与整屏缓存保持一致,
-     * 只是横向采样分辨率降到 cw; 渲染时再把 cw 横向均匀放大回 w, 不会错位或
-     * 改变宽高比。 */
-    int dw = w, dh = (int)((long)sh * w / (long)sw);
-    if (dh < h) { dh = h; dw = (int)((long)sw * h / (long)sh); }
-    int dx = (w - dw) / 2, dy = (h - dh) / 2;
+    /* 布局 -> 目标矩形。Fill 是居中裁剪, Fit 是完整入屏留边,
+     * Stretch 是直接拉伸, Tile/Center 用源图原始尺寸。 */
+    int dw = w, dh = h, dx = 0, dy = 0;
+    int stretch = 0, tile = 0;
+    if (g_wp_layout == HS_WP_STRETCH) {
+        stretch = 1;
+    } else if (g_wp_layout == HS_WP_TILE) {
+        tile = 1; dw = sw; dh = sh;
+    } else if (g_wp_layout == HS_WP_CENTER) {
+        dw = sw; dh = sh;
+    } else {
+        /* Fill/Fit: 比较 w/sw 与 h/sh，避免浮点。 */
+        long aw = (long)w * sh;
+        long ah = (long)h * sw;
+        if (g_wp_layout == HS_WP_FIT) {
+            if (aw <= ah) { dw = w; dh = (int)((long)sh * w / sw); }
+            else          { dh = h; dw = (int)((long)sw * h / sh); }
+        } else {
+            if (aw >= ah) { dw = w; dh = (int)((long)sh * w / sw); }
+            else          { dh = h; dw = (int)((long)sw * h / sh); }
+        }
+    }
+    if (dw < 1) dw = 1;
+    if (dh < 1) dh = 1;
+    if (!stretch && !tile) {
+        dx = (w - dw) / 2;
+        dy = (h - dh) / 2;
+    }
 
     static int xmap_buf[4096];
-    if (cw > 4096) return 0;
     for (int cx = 0; cx < cw; cx++) {
-        int sx_screen = cx * w / cw;                 /* 缓存列 -> 屏幕 x */
-        int sx = (sx_screen - dx) * sw / dw;
+        int screen_x = cx * w / cw;                 /* 缓存列 -> 屏幕 x */
+        int sx;
+        if (stretch) sx = (int)((long)screen_x * sw / w);
+        else if (tile) sx = screen_x % sw;
+        else sx = (int)((long)(screen_x - dx) * sw / dw);
         xmap_buf[cx] = (sx < 0 || sx >= sw) ? -1 : sx;
     }
 
@@ -1422,17 +1511,23 @@ static int hs_wallpaper_build_cache(int w, int h)
     uint32_t *c = (uint32_t *)kmalloc((uint64_t)cw * h * 4);
     if (!c) return 0;
 
+    /* Fit/Center 的留边、Tile 之外的未覆盖区域统一用近黑底色，
+     * 不跟随浅色主题的 colors.bg，避免出现奶油色信箱边。 */
+    uint32_t bg = 0x0b0f12u;
     for (int y = 0; y < h; y++) {
-        int sy = (y - dy) * sh / dh;
+        int sy;
+        if (stretch) sy = (int)((long)y * sh / h);
+        else if (tile) sy = y % sh;
+        else sy = (int)((long)(y - dy) * sh / dh);
         uint32_t *out = c + (uint64_t)y * cw;
         if (sy < 0 || sy >= sh) {
-            for (int cx = 0; cx < cw; cx++) out[cx] = 0;
+            for (int cx = 0; cx < cw; cx++) out[cx] = bg;
             continue;
         }
         const uint8_t *row = src_px + (uint64_t)sy * sw * 4;
         for (int cx = 0; cx < cw; cx++) {
             int sx = xmap_buf[cx];
-            if (sx < 0) { out[cx] = 0; continue; }
+            if (sx < 0) { out[cx] = bg; continue; }
             const uint8_t *p = row + sx * 4;
             out[cx] = ((uint32_t)p[0] << 16) | ((uint32_t)p[1] << 8) | p[2];
         }
@@ -1555,6 +1650,17 @@ static void hs_wallpaper_cycle(void)
     g_content_dirty = 1;
     hs_wp_save_cfg(g_wp_sel);
     vga_printf("[WALLPAPER] sel=%d\n", g_wp_sel);
+}
+
+static void hs_wp_set_layout(int layout)
+{
+    if (layout < 0 || layout >= HS_WP_LAYOUT_COUNT || layout == g_wp_layout) return;
+    g_wp_layout = layout;
+    /* 布局改变后整屏缓存作废，下一帧按新布局重建。 */
+    if (g_wp_cache) { kfree(g_wp_cache); g_wp_cache = 0; g_wp_cache_w = g_wp_cache_h = 0; }
+    g_content_dirty = 1;
+    hs_wp_layout_save_cfg(g_wp_layout);
+    vga_printf("[WALLPAPER] layout=%s\n", g_wp_layout_names[g_wp_layout]);
 }
 
 /* ============================================================================
@@ -3625,7 +3731,7 @@ static void hs_settings_window_render(hs_window_t *w)
         hs_settings_card(card_x, cy + SETK(18), card_w, SETK(28));
         hs_settings_card(card_x, cy + SETK(50), card_w, SETK(58));
         hs_settings_card(card_x, cy + SETK(110), card_w, SETK(50));
-        hs_settings_card(card_x, cy + SETK(160), card_w, SETK(110));
+        hs_settings_card(card_x, cy + SETK(160), card_w, SETK(190));
 
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            rx, ry, "Appearance", g_shell.colors.panel_fg, SETK(16));
@@ -3693,8 +3799,30 @@ static void hs_settings_window_render(hs_window_t *w)
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            rx + SETK(84), ry, hs_wp_sel_name(),
                            g_shell.colors.accent, SETK(12));
+
+        /* 五种布局：选中项用强调色，未选项保持可点但低调。 */
+        ry += SETK(26);
+        font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                           rx, ry, "Layout:", g_shell.colors.panel_fg, SETK(11));
+        font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                           rx + SETK(58), ry, g_wp_layout_names[g_wp_layout],
+                           g_shell.colors.accent, SETK(11));
+        ry += SETK(22);
+        for (int i = 0; i < HS_WP_LAYOUT_COUNT; i++) {
+            int bx = rx + i * (SETK(50) + SETK(4));
+            int by = ry;
+            int on = (i == g_wp_layout);
+            hs_fill_rounded_rect(bx, by, SETK(50), SETK(20), SETK(5),
+                                 on ? g_shell.colors.accent : g_shell.colors.titlebar_bg);
+            hs_draw_rounded_rect(bx, by, SETK(50), SETK(20), SETK(5),
+                                 on ? g_shell.colors.accent : g_shell.colors.border);
+            font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                               bx + SETK(7), by + SETK(5), g_wp_layout_names[i],
+                               on ? hs_on_accent() : g_shell.colors.panel_fg, SETK(9));
+        }
+
         /* V0.55.0: 桌面背景色 3x3 色板 (点击应用并写回 config.hsqml) */
-        ry += SETK(24);
+        ry += SETK(34);
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            rx, ry, "Desktop:", g_shell.colors.panel_fg, SETK(12));
         for (int i = 0; i < 9; i++) {
@@ -3724,7 +3852,7 @@ static void hs_settings_window_render(hs_window_t *w)
             for (int i = 0; hbuf[i]; i++) foot[n++] = hbuf[i];
             foot[n] = 0;
             font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                               rx, cy + SETK(292), foot,
+                               rx, cy + SETK(368), foot,
                                g_shell.colors.text_secondary, SETK(11));
         }
     } else if (g_settings_page == 1) {
@@ -4259,7 +4387,7 @@ static void hs_settings_show_page(int page)
     }
 
     hs_window_t *nw = hs_window_create(HS_WINDOW_FLOATING, "Settings", -1, -1,
-                                       hs_sx(460), hs_sy(430));
+                                       hs_sx(460), hs_sy(470));
     if (nw) {
         nw->render = hs_settings_window_render;
         hs_window_focus(nw);
@@ -6544,6 +6672,9 @@ static void cc_slider_set(int x, int tx, int tw, int *dst)
  * 所有矩形都从 cc_layout_get() 取，和 render 共用一套几何。 */
 static int hs_control_center_handle_click(int x, int y)
 {
+    /* 关闭状态不得按“面板矩形”吞点击：150% 下 Settings 右侧够不到面板，
+     * 100% 下 Center 布局 chip 正好落进这块矩形，表现为点不动。 */
+    if (!g_cc_open) return 0;
     hs_cc_layout_t L;
     cc_layout_get(&L);
     if (x < L.cx || x > L.cx + L.cw || y < L.cy || y > L.cy + L.ch) return 0;
@@ -7111,10 +7242,22 @@ void hpdesk_handle_click(int x, int y)
                         return;
                     }
                 }
+                /* 五种布局选择：与 render 的 chip 矩形同源。 */
+                {
+                    int ly = w->y + hs_set_k(w, 260);
+                    for (int i = 0; i < HS_WP_LAYOUT_COUNT; i++) {
+                        int bx = sw_x + i * (hs_set_k(w, 50) + hs_set_k(w, 4));
+                        if (x >= bx && x <= bx + hs_set_k(w, 50) &&
+                            y >= ly && y <= ly + hs_set_k(w, 20)) {
+                            hs_wp_set_layout(i);
+                            return;
+                        }
+                    }
+                }
                 /* V0.55.0: 桌面背景色 3x3 色板点击 */
                 for (int i = 0; i < 9; i++) {
                     int bx = sw_x + hs_set_k(w, 76) + (i % 3) * hs_set_k(w, 22);
-                    int by = w->y + hs_set_k(w, 242) + (i / 3) * hs_set_k(w, 22);
+                    int by = w->y + hs_set_k(w, 300) + (i / 3) * hs_set_k(w, 22);
                     if (x >= bx && x <= bx + hs_set_k(w, 16) && y >= by && y <= by + hs_set_k(w, 16)) {
                         g_shell.colors.bg = g_color_presets[i];
                         g_wp_sel = 5;
@@ -8736,6 +8879,8 @@ void hpdesk_handle_key(int key)
 int hpdesk_init(int width, int height)
 {
     g_wp_sel = hs_wp_read_cfg();
+    g_wp_layout = hs_wp_layout_read_cfg();
+    vga_printf("[WALLPAPER] layout loaded=%s\n", g_wp_layout_names[g_wp_layout]);
     spinlock_init(&g_wm_lock);
     g_shell.canary_start = 0xDEADBEEF;
     g_shell.canary_end = 0xCAFEBABE;
@@ -8983,7 +9128,7 @@ void hs_tray_init(void)
     /* 创建设置浮动窗口 */
     hs_window_manager_init();
     hs_window_t *settings_win = hs_window_create(HS_WINDOW_FLOATING, "Settings",
-                                                  -1, -1, hs_sx(460), hs_sy(430));
+                                                  -1, -1, hs_sx(460), hs_sy(470));
     if (settings_win) {
         settings_win->render = hs_settings_window_render;
     }

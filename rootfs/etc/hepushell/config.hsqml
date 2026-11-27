@@ -11,6 +11,8 @@ Theme {
     titlebar_bg: #E8DFD0
 }
 UI {
+    wallpaper: 0
+    wallpaper_layout: 0
     skip_oobe: 1            // 关闭启动欢迎引导(OOBE)，直接进桌面
     clock_x: 380
     clock_y: 200

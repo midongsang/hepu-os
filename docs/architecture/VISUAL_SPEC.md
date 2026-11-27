@@ -129,6 +129,7 @@ hs_s(v)  = v * g_ui_scale_pct / 100     // 圆形/图标/圆角
 | `island_y` | 已从 `hpdesk.h`、内置配置与 `config.hsqml` 删除；灵动岛绘制、阴影包围盒与点击命中共用 `hs_island_rect()` |
 | 天气卡 bounds | `hs_panel_bounds` 已与 render / shadow 对齐为“卡片矩形 + `HS_WEATHER_PAD`”；无网络时改为紧凑空状态，不再画巨号 `-- / N/A` |
 | 控制中心几何 | 导航 / 卡片 / 滑块 / 设备行 / Audio 页共用 `hs_cc_layout_t`，render 与 click 不再各算一套坐标 |
+| 壁纸五布局 | Settings 壁纸卡五 chip 与 `g_wp_layout` 同源；Fit/Center 留边用近黑，Tile/Center 用原尺寸；4:3 五态与二次启动读回均有证据 |
 
 仍存欠账（不影响本基线判定，但不应被当作已完成）：
 

@@ -166,6 +166,17 @@ python3 "$REGRESS_DIR/qmp_click.py" "$QMP" 20 200 1920 1080 move
 sleep 2
 q_dump "$OUT/05-settings.ppm" "$OUT/05-settings.png" || exit 3
 
+# ---- 150% 布局 chip 命中探针（截图完成后执行，不改 05 基线）----
+# Settings 690x705 @ (617,187); sw_x=851; chip 75 宽 / 间距 6; y=577..607。
+# Center 中心 (1212,590), Fill 中心 (888,590)。控制中心关闭时不得吞掉这块点击。
+python3 "$REGRESS_DIR/qmp_click.py" "$QMP" 1212 590 1920 1080 click
+sleep 2
+grep -aq "\[WALLPAPER\] layout=Center" "$SER" || { log "FAIL: 150% Center chip 未命中"; exit 3; }
+python3 "$REGRESS_DIR/qmp_click.py" "$QMP" 888 590 1920 1080 click
+sleep 1
+grep -aq "\[WALLPAPER\] layout=Fill" "$SER" || { log "FAIL: 150% Fill chip 未命中"; exit 3; }
+log "150% layout chips: Center -> Fill hit"
+
 log "screenshots done: 01-lock 02-desktop 03-drawer 04-control-center 05-settings 06-devices 07-audio 08-dock 09-weather"
 
 # ---- 可选: 生成/比较基线 ----

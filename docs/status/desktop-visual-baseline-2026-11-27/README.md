@@ -1,8 +1,12 @@
-# 桌面固定态视觉基线（2026-11-27）
+# 桌面固定态视觉基线（2026-11-27 建立，2026-11-28 第 3 批更新）
 
 本目录是桌面视觉批次的像素基线，不是功能验收的全集。全部截图由
 `tools/regress/desktop_visual.sh` 生成；第二次独立复跑与基线比较为
 `mean=0.000`、`changed>16=0.0000%`，9 张全部 `OK`。
+
+2026-11-28 第 3 批更新：Settings Appearance 增加 Wallpaper Layout 五 chip，
+窗口高度 430→470 逻辑值；因此除锁屏外的 8 张基线同步更新。布局本身在
+4:3 分辨率单独取证，见 `docs/status/wallpaper-layouts-2026-11-28/`。
 
 ## 固定条件
 
@@ -21,7 +25,7 @@
 | `02-desktop.png` | 顶栏 32 逻辑值 / 48 px、Settings Appearance、天气空状态为 `Weather / No network` |
 | `03-drawer.png` | 应用抽屉 12 个真实注册应用，两行应用名，图标不是字母占位 |
 | `04-control-center.png` | Quick 页：Wi‑Fi/BT/Air/Loc/Torch 为 `N/A`，DND 高亮，Volume/Brightness 无滑轨且给出 `No AC'97 device / No backlight driver` |
-| `05-settings.png` | 关闭控制中心后 Settings Appearance 保持可见 |
+| `05-settings.png` | 关闭控制中心后 Settings Appearance 保持可见；Wallpaper 卡内 Layout 五 chip（Fill/Fit/Stretch/Tile/Center），默认 Fill |
 | `06-devices.png` | Devices 页六行真实状态：Ethernet/Audio/DND/Wi‑Fi/Bluetooth/Backlight |
 | `07-audio.png` | Audio 页：两个禁用滑块、DND、Torch；无越界长文案 |
 | `08-dock.png` | Dock 悬停：8 个真实应用图标，指针悬停项放大 |
@@ -48,5 +52,7 @@ bash tools/regress/desktop_visual.sh /tmp/desktop-visual --update-baseline
 
 - 这是 QEMU 合成环境：`Volume` 为 `N/A` 是因为启动参数没有 AC'97，`Ethernet`
   显示 `No driver` 是因为 `-nic none`；不能把这两条写成真机已验证。
+- 本目录固定 16:9，内置壁纸也是 16:9，因此 Fill/Fit/Stretch 三态在几何上等价；
+  五布局的差异取证放在 `docs/status/wallpaper-layouts-2026-11-28/`（1024×768）。
 - DND 的点击/关闭已由串口断言覆盖；通知弹窗抑制的视觉前后对比不在本目录。
 - DND 图标仍是沙漏位图，图标体系仍是位图抗锯齿，均记录在 `VISUAL_SPEC.md` 欠账表。

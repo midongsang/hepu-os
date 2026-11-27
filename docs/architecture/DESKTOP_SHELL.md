@@ -99,10 +99,15 @@ Clavis `Modules/Bar/`：ActiveWindow / Media / QuickSettings / SysMonitor / Tray
 
 | 视频效果 | Clavis 参考 | Hepu 落地 |
 |---------|-----------|----------|
-| 布局模式：Stretch/Fit/Fill/Tile/Cover/Panorama | `Services/WallpaperService` + `Modules/ControlCenter` 壁纸页 | hepushell 壁纸渲染增加 `hs_wallpaper_layout`（拉伸/适应/填充/平铺），绘制时按布局计算源矩形 |
+| 布局模式：Fill/Fit/Stretch/Tile/Center（Clavis 原列 Stretch/Fit/Fill/Tile/Cover/Panorama；Cover 的居中裁剪并入 Fill，Panorama 本轮未实现） | `Services/WallpaperService` + `Modules/ControlCenter` 壁纸页 | `g_wp_layout` + `hs_wallpaper_build_cache()` 按布局生成整屏缓存：Fill=等比居中裁剪、Fit=等比完整入屏、Stretch=直接拉满、Tile=原尺寸平铺、Center=原尺寸居中；Settings 壁纸卡五 chip；`wallpaper_layout: 0..4` 写回 config.hsqml |
 | 每显示器壁纸 | Per-monitor wallpapers | 单屏阶段留接口，状态字段预置 |
 | 过渡动画：Crossfade/Pixelate/Portal | 壁纸切换过渡枚举 | 先做 Crossfade（双缓冲 alpha 混合），其余留接口 |
 | 壁纸浏览：Previous/Random/Next | `cyclePrevious/cycleNext/cycleRandom` | hepushell 壁纸目录扫描 + 切换命令 |
+
+本轮实现状态：五种布局已在 Settings→Appearance→Wallpaper 落地，点击即重建缓存并写回
+`wallpaper_layout`；已用 1024×768（4:3）+ 16:9 内置壁纸取证五态差异（`docs/status/wallpaper-layouts-2026-11-28/`），
+并做二次启动读回验证。1920×1080 下内置壁纸同为 16:9，Fill/Fit/Stretch 几何等价，不能只靠该分辨率证明五态。
+Crossfade 过渡仍未做，受双缓冲堆预算约束。
 
 ### 2.3 主题系统（Settings→theme）
 
@@ -161,7 +166,7 @@ Clavis `Modules/Lock/`：冻结桌面快照（Screencopy）→ 模糊背景 → 
 | P0 | 设计令牌 + 图标字体引擎 | 一切 UI 的地基；直接解决圆角/间距/图标三大痛点 | 中 |
 | P0 | 顶栏分区模块化 + 网络分级图标 | 视频核心视觉；修复托盘/网络图标问题 | 小 |
 | P1 | 锁屏流程完善（溶解动画 + 虚拟键盘） | 用户已定流程，Clavis 有成熟参照 | 中 |
-| P1 | 壁纸布局 + Crossfade 过渡 | Settings→Wallpaper 落地 | 中 |
+| P1 | 壁纸五布局（已完成）+ Crossfade 过渡（待做） | Settings→Wallpaper 落地 | 中 |
 | P2 | 主题系统（壁纸取色 + 光标主题 + 锁屏样式） | 个性化核心 | 中大 |
 | P2 | 悬浮音乐/监控面板 | 提升桌面完成度 | 中 |
 | P3 | 每显示器壁纸 / Portal 等高级过渡 / matugen 完整取色 | 留接口，条件成熟再实现 | 大 |
