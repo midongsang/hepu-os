@@ -81,6 +81,8 @@ def main():
     ok = [l for l in lines if "pct=57" in l and "chg=1" in l
           and "bst=1" in l and "bif=1" in l and "rem=5700" in l and "full=10000" in l]
     check("A3 读数百分比=57 且充电中 (rem=5700/full=10000)", len(ok) >= 3, "matched=%d" % len(ok))
+    check("A4 AC 设备 ACPI0003 路径 AC00", "[BAT] ac dev=AC00" in ser)
+    check("A5 _PSR=1 交流在线", "[BAT] ac psr=1" in ser)
 
     # --- B. 没有退化/假数据路径 ---
     check("B1 无 no acpi tables 噪声", "no acpi tables" not in ser)
@@ -129,6 +131,11 @@ def main():
     ec = text_ev("m2-ec")
     check("H1 EC 未启用且字段读为 UNSUP(-3)", "bst failed code=-3" in ec and "ec=0x0" in ec)
     check("H2 EC 不产生假读数", "pct=" not in ec)
+
+    # --- I. EC 设备存在：_REG 真正执行，但 QEMU 无 EC 硬件仍 fail-closed ---
+    ecr = text_ev("m2-ec-read")
+    check("I1 EC 设备存在时 _REG(3,1) 执行成功", "[BAT] ec=0x1" in ecr and "[BAT] ec reg=0" in ecr)
+    check("I2 QEMU 无 EC 硬件时仍不产生假读数", "bst failed code=-3" in ecr and "pct=" not in ecr)
 
     print()
     print("RESULT: %s (%d checks, %d failed)" %

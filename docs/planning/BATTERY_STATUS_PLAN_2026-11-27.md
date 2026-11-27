@@ -111,7 +111,7 @@ SMBIOS 只能回答“厂商说这是什么形状”，不能回答“现在有�
   - 表加载：FADT→DSDT + RSDT/XSDT→SSDT；
   - 命名空间：`Scope`、`Device`、`Name`、`Method`、`Package`、`Buffer`、`Return`、`If/Else`、`Store`、`Add/Subtract/Multiply/Divide` 等电池方法常用 opcode；
   - 对象解析：Integer/String/Buffer/Package/Reference；
-  - 方法调用：只支持无参/少量参数，超时/异常返回 `UNKNOWN`；
+  - 方法调用：无参，或显式整数参数最多 7 个（`_REG(3,1)` 走这条）；异常返回 `UNKNOWN`；
 - 电池对象发现：按 `_HID=PNP0C0A` 找到设备，读 `_STA`；
 - 电量：
   - 优先 `_BIX`，回退 `_BIF`：设计容量、最后一次满容量、单位（mAh/mWh）；
@@ -227,7 +227,7 @@ SMBIOS 只能回答“厂商说这是什么形状”，不能回答“现在有�
   `acpi_battery.c/.h`，QEMU 注入含 `PNP0C0A` + `_STA/_BIF/_BST` 的合成 SSDT 后，
   顶栏/面板/Settings 三处都显示真实 `57%` 与 `Charging: Yes`；`_BIX` 夹具同值。
   读不出时仍 `--`（缺 `_BST` → `bst failed code=-1`，无 `PNP0C09` 时 EC 字段 → `-3` UNSUP），
-  没有回退 100%。`m2-valid/valid_check.py` 21 项 PASS。
+  没有回退 100%。`m2-valid/valid_check.py` 随后补 AC/`_REG` 断言，增至 25 项 PASS。
   **边界**：M2 最小版本身没做 EC 事务、IndexField/BankField、写字段、多电池、
   剩余时间、健康度、`_PSR`；EC 只读由下一步补上，当时 EC 型电池只能停在 `DECLARED`。
 - **M2-full 第一步：EC 只读已落地（2026-11-27）**：新增 `ec64.c/.h`（0x62/0x66、
@@ -236,9 +236,17 @@ SMBIOS 只能回答“厂商说这是什么形状”，不能回答“现在有�
   不盲写端口。主机 `aml_eval` 44 项断言覆盖 EC 设备查找、16 位字段拼装、
   `_BST` 元素、EC 超时/未启用 → `UNSUP`。**QEMU 无 ACPI EC 设备，正路径只有
   主机模拟，不能写成 QEMU/真机已通过**。
+- **M2-full 第二步：`_REG`/`_PSR`/`_GLK` 诊断已落地（2026-11-27，未推送）**：
+  AML 增加 `aml_eval_path_ints`，EC 存在时执行 `_REG(3,1)`，并在每个电池采样
+  重放，保证 `_BST` 能看见 EC 标志；夹具用 `ECRG` 门控证明 `_REG` 是必要条件。
+  `ACPI0003._PSR` 接入 Settings 交流行（`Online/Offline`）；`_GLK` 只检测并
+  串口上报，**FACS Global Lock 未实现**。主机 `aml_eval` 48 项、QEMU
+  `valid_check` 25 项、`m2-acoff` 6 项通过；`m2-ec-read` 在 QEMU 真实执行
+  `_REG` 后因无 EC 硬件仍 fail-closed。
   **边界（M2-full 剩余）**：EC 写、IndexField/BankField、多电池、剩余时间、
-  健康度、`_PSR`、`_REG`/Global Lock；真机 EC 端口与是否需要 Global Lock 未验证。
-- **未做**：M2-full 剩余（EC 写/BankField/多电池/健康度等）、M3（完整 32 位 UI/电源策略）、M4（真机）。
+  健康度、FACS Global Lock；真机 EC 端口、`_REG` 重放副作用、真实 DSDT 里的
+  Mutex/`_OSI` 未验证。
+- **未做**：M2-full 剩余（EC 写/BankField/多电池/健康度/Global Lock）、M3（完整 32 位 UI/电源策略）、M4（真机）。
   本次 QEMU/OVMF 未提供 legacy SMBIOS entry，`form_factor=unknown` 只说明
   “本夹具没读到”，不等于真机型号判断已验证。
 

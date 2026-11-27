@@ -1633,6 +1633,33 @@ int aml_eval_path(const char *path, aml_value_t **out)
     return AML_E_OK;
 }
 
+int aml_eval_path_ints(const char *path, const int64_t *args, int nargs,
+                       aml_value_t **out)
+{
+    char clean[AML_PATH_MAX];
+    aml_value_t *argv[7];
+    int idx, i;
+    exec_t e;
+
+    if (!g_ready || !path || !out) return AML_E_NOTFOUND;
+    if (nargs < 0 || nargs > 7 || (nargs && !args)) return AML_E_ARG;
+    if (path[0] == '\\') path++;
+    astr_cpy(clean, path, AML_PATH_MAX);
+    idx = ns_find(clean);
+    if (idx < 0) return AML_E_NOTFOUND;
+    if (g_nodes[idx].kind != NS_METHOD) return AML_E_BADCODE;
+
+    for (i = 0; i < nargs; i++) {
+        argv[i] = v_int(&g_eval, args[i]);
+        if (!argv[i]) return AML_E_LIMIT;
+    }
+    memset(&e, 0, sizeof(e));
+    astr_cpy(e.scope, clean, AML_PATH_MAX);
+    path_strip_last(e.scope);
+    g_steps = 0;
+    return call_method(&e, idx, argv, nargs, out);
+}
+
 uint8_t aml_value_type(const aml_value_t *v) { return v ? v->type : 0xFF; }
 
 int aml_value_int(const aml_value_t *v, int64_t *out)

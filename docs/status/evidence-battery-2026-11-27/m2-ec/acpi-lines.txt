@@ -21,7 +21,7 @@
 [BAT] state=declared form_factor=unknown acpi_battery=declared reason=acpi-declared
 [BAT] aml dev=ECB0
 [BAT] ec=0x0
-[BAT] aml bst failed code=-3
+[BAT] ac=none
 [BAT] aml bst failed code=-3
 [BAT] aml bst failed code=-3
 [BAT] aml bst failed code=-3

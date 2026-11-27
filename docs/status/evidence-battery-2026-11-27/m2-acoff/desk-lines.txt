@@ -1,0 +1,31 @@
+[SETTINGS] System settings initialized (30 items)
+[BAT] smbios=0x0 chassis=0x0 form=unknown
+[BAT] acpi=0x1 fadt=0x1 dsdt=0x1 ssdt=0x2 battery=declared
+[BAT] state=declared form_factor=unknown acpi_battery=declared reason=acpi-declared
+[AML] tables=0x3 nodes=0xB degraded=0x0
+[BAT] aml dev=BAT0
+[BAT] ec=0x0
+[BAT] ac dev=AC00
+[BAT] ac psr=0
+[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=0 rem=5700 full=10000 unit=0
+[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=0 rem=5700 full=10000 unit=0
+[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=0 rem=5700 full=10000 unit=0
+[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=0 rem=5700 full=10000 unit=0
+[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=0 rem=5700 full=10000 unit=0
+[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=0 rem=5700 full=10000 unit=0
+[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=0 rem=5700 full=10000 unit=0
+[DESK] battery panel open
+[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=0 rem=5700 full=10000 unit=0
+[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=0 rem=5700 full=10000 unit=0
+[DESK] battery panel -> settings page=battery
+[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=0 rem=5700 full=10000 unit=0
+[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=0 rem=5700 full=10000 unit=0
+[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=0 rem=5700 full=10000 unit=0
+[SETTINGS] nav page=0x3
+[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=0 rem=5700 full=10000 unit=0
+[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=0 rem=5700 full=10000 unit=0
+[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=0 rem=5700 full=10000 unit=0
+[SETTINGS] nav page=0x6
+[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=0 rem=5700 full=10000 unit=0
+[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=0 rem=5700 full=10000 unit=0
+[BAT] aml sta=0xF bst=1 bif=1 pct=57 chg=0 rem=5700 full=10000 unit=0

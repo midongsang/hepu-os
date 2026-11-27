@@ -2,7 +2,7 @@
 """生成用于 QEMU 取证 / 主机单测的合成 SSDT（不是产品固件的一部分）。
 
 用法:
-  make_battery_ssdt.py <输出文件> [declared|valid|valid-bix|absent|nobst|ec] [百分比]
+  make_battery_ssdt.py <输出文件> [declared|valid|valid-bix|valid-acoff|absent|nobst|ec|ec-read] [百分比]
   make_battery_ssdt.py --header <输出头文件>
 
 模式与预期:
@@ -12,6 +12,8 @@
   absent     Method(_STA) 返回 0                 -> ABSENT
   nobst      只有声明，没有 _BST                  -> DECLARED（不可信）
   ec         _BST 读 EmbeddedControl 字段         -> DECLARED（明确不支持 EC）
+  ec-read    EC 控制器 + EC 16 位字段 + _REG      -> 主机模拟 EC 正路径
+  valid-acoff  同 valid，但 ACPI0003._PSR=0       -> 交流离线
 """
 import struct
 import sys
@@ -152,13 +154,13 @@ def make_declared(dev="BAT0"):
     )
 
 
-def make_valid(percent=57, use_bix=False, dev="BAT0"):
+def make_valid(percent=57, use_bix=False, dev="BAT0", ac_psr=1, bst_state=2):
     design = 10000
     full = 10000
     rem = design * percent // 100
     bst0 = name("BST0", package([int_obj(0), int_obj(0), int_obj(0), int_obj(0)]))
     bst_body = (
-        store(int_obj(2), index("BST0", 0))
+        store(int_obj(bst_state), index("BST0", 0))
         + store(int_obj(0), index("BST0", 1))
         + store(int_obj(rem), index("BST0", 2))
         + store(int_obj(12000), index("BST0", 3))
@@ -177,7 +179,9 @@ def make_valid(percent=57, use_bix=False, dev="BAT0"):
     )
     body = name("_HID", string_obj("PNP0C0A")) + method("_STA", ret(int_obj(0x0F))) \
         + bst0 + method("_BST", bst_body) + caps + extra
-    return build_table(device(dev, body), oem_table_id=b"BATVALID")
+    ac = device("AC00", name("_HID", string_obj("ACPI0003"))
+                + method("_PSR", ret(int_obj(ac_psr))))
+    return build_table(device(dev, body) + ac, oem_table_id=b"BATVALID")
 
 
 def make_absent(dev="ABS0"):
@@ -218,12 +222,14 @@ def make_ec_read(percent=57, dev="ECR0"):
     design = 10000
     rem = design * percent // 100
     bst0 = name("BST0", package([int_obj(0), int_obj(0), int_obj(0), int_obj(0)]))
-    bst_body = (
+    real_bst = (
         store(int_obj(2), index("BST0", 0))
         + store(b"B0ST", index("BST0", 2))     # 16 位 EC 字段，应拼成 0x1644=5700
         + store(int_obj(12000), index("BST0", 3))
         + ret(b"BST0")
     )
+    # 真实 DSDT 常见写法：ECON/ECRG 未置位时 _BST 返回全 0；_REG 置位后才读 EC。
+    bst_body = if_then(l_equal(b"ECRG", int_obj(1)), real_bst) + else_body(ret(b"BST0"))
     caps = method("_BIF", ret(package([int_obj(0), int_obj(design), int_obj(design),
                                        int_obj(1), int_obj(12000)])))
     body = (
@@ -236,14 +242,19 @@ def make_ec_read(percent=57, dev="ECR0"):
         + field("ECOR", [("B0ST", 16)])
     )
     ecdev = device("EC00", name("_HID", string_obj("PNP0C09"))
-                   + method("_STA", ret(int_obj(0x0F))))
-    return build_table(ecdev + device(dev, body), oem_table_id=b"BATECR")
+                   + method("_STA", ret(int_obj(0x0F)))
+                   + method("_REG", if_then(l_equal(b"\x68", int_obj(3)),
+                                            store(b"\x69", b"ECRG")), args=2))
+    # ECRG 放在根作用域，EC00._REG 与 ECR0._BST 都能按相对名解析到它。
+    return build_table(name("ECRG", int_obj(0)) + ecdev + device(dev, body),
+                       oem_table_id=b"BATECR")
 
 
 MODES = {
     "declared": lambda pct=57: make_declared(),
     "valid": make_valid,
     "valid-bix": lambda pct=57: make_valid(pct, use_bix=True),
+    "valid-acoff": lambda pct=57: make_valid(pct, ac_psr=0, bst_state=0),
     "absent": lambda pct=57: make_absent(),
     "nobst": lambda pct=57: make_nobst(),
     "ec": make_ec,

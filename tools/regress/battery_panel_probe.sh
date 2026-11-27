@@ -47,49 +47,54 @@ qemu-system-x86_64 -L "$CHAT/.toolchain/pkg/datadir" \
 sleep 1
 log "QEMU started, inst=$INST acpitable=${ACPITABLE:-none}"
 
-sleep 5
-q_sendkey 1
-q_wait_for "step1 done" 30 "$SER" || log "WARN: step1 未出现"
-q_wait_for "booting to lock" 60 "$SER" || log "WARN: lock 未出现"
-sleep 5
-q_sendkey ret
-q_wait_for "lock -> login" 20 "$SER" || log "WARN: login 未出现"
-sleep 2
-q_sendkey ret
-if q_wait_for "login: auth failed" 10 "$SER"; then
-  log "empty Enter rejected; typing fixture password"
-  sleep 2
-  q_send_text "$FIXTURE_PASSWORD"
+if [ "${HEPU_NO_LOCK:-0}" = "1" ]; then
+  log "lock disabled image; skip unlock"
+  q_wait_for "Desktop running" 60 "$SER" || log "WARN: Desktop running 未出现"
+else
+  sleep 5
+  q_sendkey 1
+  q_wait_for "step1 done" 30 "$SER" || log "WARN: step1 未出现"
+  q_wait_for "booting to lock" 60 "$SER" || log "WARN: lock 未出现"
+  sleep 5
+  q_sendkey ret
+  q_wait_for "lock -> login" 20 "$SER" || log "WARN: login 未出现"
   sleep 2
   q_sendkey ret
-  if ! q_wait_for "login -> desktop" 30 "$SER"; then
-    log "WARN: first password attempt failed; retry"
+  if q_wait_for "login: auth failed" 10 "$SER"; then
+    log "empty Enter rejected; typing fixture password"
+    sleep 2
     q_send_text "$FIXTURE_PASSWORD"
     sleep 2
     q_sendkey ret
+    if ! q_wait_for "login -> desktop" 30 "$SER"; then
+      log "WARN: first password attempt failed; retry"
+      q_send_text "$FIXTURE_PASSWORD"
+      sleep 2
+      q_sendkey ret
+    fi
   fi
-fi
-q_wait_for "login -> desktop" 30 "$SER" || log "WARN: desktop 迁移未出现"
-q_wait_for "Desktop running" 60 "$SER" || log "WARN: Desktop running 未出现"
+  q_wait_for "login -> desktop" 30 "$SER" || log "WARN: desktop 迁移未出现"
+  q_wait_for "Desktop running" 60 "$SER" || log "WARN: Desktop running 未出现"
 
-# 启动流程偶发停在锁屏(键盘 Enter 未落到锁屏窗口): 显式点一下再输密码
-if ! grep -aq "login -> desktop" "$SER"; then
-  log "still locked after boot; clicking center to wake"
-  python3 "$REGRESS_DIR/qmp_click.py" "$QMP" 960 540 1920 1080 click
-  sleep 3
-  q_wait_for "lock -> login" 10 "$SER" || log "WARN: 锁屏没有进入 login"
-  sleep 3
-  q_send_text "$FIXTURE_PASSWORD"
-  sleep 3
-  q_sendkey ret
-  if ! q_wait_for "login -> desktop" 30 "$SER"; then
-    log "WARN: 补解锁第一次失败，重试"
+  # 启动流程偶发停在锁屏(键盘 Enter 未落到锁屏窗口): 显式点一下再输密码
+  if ! grep -aq "login -> desktop" "$SER"; then
+    log "still locked after boot; clicking center to wake"
+    python3 "$REGRESS_DIR/qmp_click.py" "$QMP" 960 540 1920 1080 click
+    sleep 3
+    q_wait_for "lock -> login" 10 "$SER" || log "WARN: 锁屏没有进入 login"
+    sleep 3
     q_send_text "$FIXTURE_PASSWORD"
     sleep 3
     q_sendkey ret
-    q_wait_for "login -> desktop" 30 "$SER" || log "WARN: 补解锁仍失败"
+    if ! q_wait_for "login -> desktop" 30 "$SER"; then
+      log "WARN: 补解锁第一次失败，重试"
+      q_send_text "$FIXTURE_PASSWORD"
+      sleep 3
+      q_sendkey ret
+      q_wait_for "login -> desktop" 30 "$SER" || log "WARN: 补解锁仍失败"
+    fi
+    sleep 3
   fi
-  sleep 3
 fi
 
 # 通知卡会盖住顶栏右侧(面板也在这一带), 等它自己超时消失再动鼠标

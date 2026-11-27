@@ -1,9 +1,9 @@
-# 电池状态取证（2026-11-27，M0 + M1 + M1.5 图标 + M1.6 面板 + M2 最小版 + EC 只读）
+# 电池状态取证（2026-11-27，M0 + M1 + M1.5 图标 + M1.6 面板 + M2 最小版 + EC 只读 + _REG/_PSR）
 
 ## 结论
 
 赫普之前的“电池 100%”不是检测结果，是 `hs_status_init` 里写死的
-`battery_percent = 100`。本轮先做两件事，**不涉及真实电量读取**：
+`battery_percent = 100`。本轮分五步推进：前两步只搭状态骨架，后三步才读真实电量：
 
 1. **M0**：移除假 100%；新增 `HS_BATTERY_ABSENT / DECLARED / VALID / UNKNOWN`
    状态；顶栏只在非 `ABSENT` 时绘制电池；`DECLARED / UNKNOWN` 只画轮廓和两道短线，
@@ -17,14 +17,19 @@
    在 QEMU 合成表上真实执行 `_STA` / `_BIF` / `_BIX` / `_BST`；读到可信读数才进
    `VALID`，顶栏、面板、Settings 电池页同步显示 `57%` / `Charging: Yes`。
    读不出或不可信仍保持 `DECLARED` 的 `--`，绝不回退 100%。
-4. **M2-full 第一步（EC 只读）**：新增 `ec64.c/.h` 与 AML `EmbeddedControl`
-   （space 3）字段读；只有命名空间里存在 `PNP0C09` 才启用 EC。事务只支持
-   `RD_EC 0x80`，超时/状态异常一律 fail-closed，不猜电量。QEMU 没有 ACPI EC
-   设备，EC 正路径由主机端模拟状态机覆盖；真实 EC 机器尚未验证。
+4. **M2-full 第一步（EC 只读 + `_REG`）**：新增 `ec64.c/.h` 与 AML
+   `EmbeddedControl`（space 3）字段读；只有命名空间里存在 `PNP0C09` 才启用 EC。
+   AML 新增带整数参数的方法求值，EC 初始化时执行 `_REG(EmbeddedControl,1)`，
+   每个电池采样重放一次，保证 `_BST` 能看到 `_REG` 置的 EC 标志。EC 事务只支持
+   `RD_EC 0x80`，超时/状态异常一律 fail-closed。QEMU 没有 ACPI EC 设备，
+   正路径由主机端模拟状态机覆盖；真实 EC 机器尚未验证。
+5. **`_PSR` 交流状态**：新增 `acpi_ac_poll`，读 `ACPI0003._PSR`；Settings
+   电池页的交流适配器行从“未声明”升级为 `Online (_PSR=1)` / `Offline (_PSR=0)`，
+   读不到 `_PSR` 时才退回“已声明 / 未声明”。AC 离线夹具同时验证 `Charging: No`。
 
-**边界**：EC 只读，不写 EC；`IndexField/BankField`、多电池、剩余时间/健康度、
-`_PSR`、`_REG`/Global Lock 都还没做。EC 型电池现在有只读路径，但 QEMU 无法
-注入 EC 设备，本目录的 `VALID` 仍全部来自合成 SSDT；真机未验证。
+**边界**：EC 只读，不写 EC；`IndexField/BankField`、多电池、剩余时间/健康度
+都还没做。`_GLK` 只检测并上报，**没有实现 FACS Global Lock**；`_REG` 只覆盖
+能执行的最小方法体。本目录的 `VALID` 仍全部来自合成 SSDT，真机未验证。
 
 ## 判据
 
@@ -205,18 +210,20 @@ RESULT: PASS (19 checks, 0 failed)
 且只是记账，没有真正的频率控制），所以这里不做一个点了没反应的假开关——
 宁可写清楚“固定”，也不给一个假控件。
 
-### 6. M2 最小版 + EC 只读（2026-11-27）
+### 6. M2 最小版 + EC 只读 + `_REG`/`_PSR`（2026-11-27）
 
 目标只有一个：能读出真实百分比就显示 `VALID`，读不出仍维持 `--`。判据仍是
 ACPI `PNP0C0A`，不看机箱类型。
 
-实现分两层：
+关键实现：
 
 - `kernel/arch/x86_64/aml64.c/.h`：极简 AML 解释器。建命名空间
   （`Scope/Device/Processor/PowerRes/ThermalZone/Method/Name/OperationRegion/Field`），
   支持整数/字符串/Buffer/Package、`Store/CopyObject/If/Else/While/Return`、
   算术/逻辑/比较、`Index/DerefOf/RefOf/SizeOf/ToInteger/CondRefOf`；只读
   `SystemIO`（`inb`）与 `SystemMemory`（`vmm64_phys_to_ptr`）字段。
+  新增 `aml_eval_path_ints(path, args, nargs, out)`，用于调用 `_REG(3,1)`
+  这类带参控制方法。
 - `kernel/arch/x86_64/acpi_battery.c/.h`：按 `_STA` → `_BST` → `_BIX`/`_BIF`
   取值；满充容量 ≤0、剩余明显超容、剩余 0 但既不在充电也无 critical 标记，
   都判不可信，返回 `DECLARED` 而不是编一个数字。
@@ -228,17 +235,28 @@ ACPI `PNP0C0A`，不看机箱类型。
   不拿部分字节拼一个假值。`acpi_battery_init` 只在命名空间命中 `PNP0C09` 时
   `ec64_set_present(1)` 并打印 `[BAT] ec=0x1 dev=<path>`，否则打印
   `[BAT] ec=0x0`，避免在没有 EC 的机器上盲写 `0x66`。
+- `_REG(3,1)`：EC 设备存在时在 init 调一次并打印 `[BAT] ec reg=0`（失败为负码/
+  `none`）；每次电池采样在 `aml_sample_begin()` 之后重放一次。原因是本解释器的
+  `Store` 写 Name 走每采样 overlay，不能只在 init 生效。夹具 `_BST` 先检查
+  `ECRG==1` 再读 EC，正是这条真实 DSDT 常见门控。
+- `_GLK`：读 EC 设备的 `_GLK` 并打印 `[BAT] ec glk=0/1/none`。本轮**只检测，
+  未实现 FACS Global Lock**；`_GLK=1` 的机器仍按只读+超时访问，不能宣称已满足
+  共享 EC 的锁协议。
+- `ACPI0003._PSR`：`acpi_ac_poll()` 读交流适配器状态；`acpi_battery_poll()`
+  也把 `ac_present/ac_known/ac_online` 带进采样。Settings 电池页优先显示
+  `Online (_PSR=1)` / `Offline (_PSR=0)`，只有 `_PSR` 缺失才退回声明/充电推断。
 
 QEMU 夹具（`tools/regress/make_battery_ssdt.py` 生成，均在 `fixture/`）：
 
 | 夹具 | 覆盖点 | 实际串口 |
 |---|---|---|
-| `battery-valid.ssdt` | `_STA=0x0F` + `_BIF` + `_BST` | `sta=0xF bst=1 bif=1 pct=57 chg=1 rem=5700 full=10000 unit=0` |
-| `battery-valid-bix.ssdt` | `_BIX` 优先路径 | `sta=0xF bst=1 bix=1 pct=57 ...` |
+| `battery-valid.ssdt` | `_STA=0x0F` + `_BIF` + `_BST` + `ACPI0003._PSR=1` | `sta=0xF bst=1 bif=1 pct=57 chg=1 ...`；`[BAT] ac dev=AC00` / `ac psr=1` |
+| `battery-valid-bix.ssdt` | `_BIX` 优先路径（同样带 AC 在线） | `sta=0xF bst=1 bix=1 pct=57 ...` |
 | `battery-absent.ssdt` | `_STA` 明确 present=0 | `[BAT] aml sta=absent`，无 `pct=` |
 | `battery-nobst.ssdt` | 有设备但缺 `_BST` | `[BAT] aml bst failed code=-1` |
 | `battery-ec.ssdt` | 有 EC 字段但无 `PNP0C09`，EC 未启用 | `[BAT] ec=0x0` + `bst failed code=-3`（UNSUP） |
-| `battery-ec-read.ssdt` | `PNP0C09` + `ECR0`，`_BST` 读 16 位 EC 字段 | 主机模拟：`ECR0.B0ST == 5700`，`_BST` 四元素成立（QEMU 无 EC 设备，不跑正路径） |
+| `battery-valid-acoff.ssdt` | 同 valid，但 `_PSR=0`、`_BST` 报未充电 | `[BAT] ac psr=0`；Settings 显示 `Offline (_PSR=0)` / `Charging: No` |
+| `battery-ec-read.ssdt` | `PNP0C09` + `ECR0` + `_REG` 门控 `_BST` | QEMU：`ec=0x1 reg=0 glk=none`，无 EC 硬件 → `bst failed code=-3`；主机模拟：`_REG` 后 `B0ST=5700`、`_BST` 四元素成立 |
 
 最后三条是重点：没有 EC 控制器时不能盲读端口；EC 超时/缺 `_BST` 必须显式报错并
 停在 `--`，不能猜 0%、也不能沿用上次读数。
@@ -251,8 +269,15 @@ bash tools/regress/battery_state_probe.sh .../m2-bix    .../fixture/battery-vali
 bash tools/regress/battery_state_probe.sh .../m2-absent .../fixture/battery-absent.ssdt
 bash tools/regress/battery_state_probe.sh .../m2-nobst  .../fixture/battery-nobst.ssdt
 bash tools/regress/battery_state_probe.sh .../m2-ec     .../fixture/battery-ec.ssdt
+bash tools/regress/battery_state_probe.sh .../m2-ec-read .../fixture/battery-ec-read.ssdt
+bash tools/regress/battery_panel_probe.sh .../m2-acoff  .../fixture/battery-valid-acoff.ssdt
 bash tools/host-tests/run_host_tests.sh   # aml_eval 内模拟 EC，覆盖 ec-read 正路径
 ```
+
+本轮 QEMU 取证统一用**仅取证镜像**跑：复制正式镜像后在 `/system.conf` 追加
+`lock=0`，并以 `HEPU_NO_LOCK=1` 跳过登录自动化；原因是面板探针多次卡在锁屏
+密码页。该镜像只用于截图/串口取证，不是产品默认，不改电池/AC 代码路径。
+默认镜像仍走锁屏。
 
 VALID 面板与设置页：
 
@@ -260,12 +285,19 @@ VALID 面板与设置页：
 
 ![valid settings battery](m2-valid/03-settings.png)
 
-`python3 m2-valid/valid_check.py`（21 项）：
+AC 离线夹具（`_PSR=0`）下，Settings 电池页显示 `AC adapter: Offline (_PSR=0)`，
+同时 `Charging: No`，但电池本身仍读 57%：
+
+![ac offline settings battery](m2-acoff/03-settings.png)
+
+`python3 m2-valid/valid_check.py`（25 项）：
 
 ```text
 A1 串口找到 PNP0C0A 设备 BAT0       PASS
-A2 至少 3 次周期采样                PASS  samples=23
-A3 读数百分比=57 且充电中           PASS  matched=22
+A2 至少 3 次周期采样                PASS  samples=19
+A3 读数百分比=57 且充电中           PASS  matched=18
+A4 找到 ACPI0003 设备 AC00          PASS
+A5 _PSR=1 交流在线                  PASS
 B1..B4 无 no acpi tables/bst failed/untrusted、建表 degraded=0  PASS
 C1 面板大号数字为 accent 色         PASS  accent_px=639
 D1 Battery 导航项高亮               PASS  accent=0.84
@@ -274,29 +306,36 @@ E1 _BIX 夹具读出 57%                PASS
 F1/F2 _STA=0 判 absent 且不出读数   PASS
 G1 缺 _BST fail-closed              PASS  code=-1
 H1/H2 EC 未启用/超时为 UNSUP 且不产生假读数 PASS  code=-3
+I1 EC 设备存在时 _REG(3,1) 执行成功 PASS  reg=0
+I2 QEMU 无 EC 硬件时仍不产生假读数  PASS  bst=-3
 
-RESULT: PASS (21 checks, 0 failed)
+RESULT: PASS (25 checks, 0 failed)
 ```
+
+`m2-acoff/ac_check.py`（6 项）单独断言 `Offline (_PSR=0)` 与 `Charging: No`，
+并对比在线夹具的 AC 行像素差异；`RESULT: PASS (6 checks, 0 failed)`。
 
 `hs_battery_apply_firmware()` 每 4 个状态 tick（约 2s）刷新一次；只有
 `battery_state/percent/charging` 三项真变化才置脏重绘。M1 的
 `[BAT] state=declared ... reason=acpi-declared` 仍会先打印一次——那是“声明层”
 日志，最终 UI 以随后 `[BAT] aml ...` 的结果为准。
 
-主机端 `aml_eval` 44 项断言覆盖：`PNP0C09` 查找（`EC00`）、EC 16 位字段拼装
-（`B0ST == 5700`）、`_BST` 返回 `state=2/rem=5700/volt=12000`，以及 EC 超时和
-EC 未启用都返回 `UNSUP`。这套断言用 `ec_host_inb/ec_host_outb` 模拟 EC 状态机，
+主机端 `aml_eval` 48 项断言覆盖：`PNP0C09` 查找（`EC00`）、`_REG(3,1)` 写
+`ECRG`、EC 16 位字段拼装（`B0ST == 5700`）、`_BST` 返回
+`state=2/rem=5700/volt=12000`，以及 EC 超时和 EC 未启用都返回 `UNSUP`。这套断言用 `ec_host_inb/ec_host_outb` 模拟 EC 状态机，
 不是 QEMU 或真机。
 
-**M2-full 第一步没做的**：EC 写、`IndexField/BankField`、多电池选择、剩余时间、
-健康度、`_PSR` 交流状态、`_REG`/Global Lock。EC 只读路径在真机上尚未验证；
-本轮不宣称“真机电池已闭环”。
+**这轮没做的**：EC 写、`IndexField/BankField`、多电池选择、剩余时间、健康度。
+`_GLK` 只检测不上锁，FACS Global Lock 未实现；`_REG` 只支持本解释器能执行的
+最小方法体，真实 DSDT 里的 `Mutex`、`IndexField/BankField`、`_OSI` 仍可能让
+`_BST` 失败。EC 只读路径在真机上尚未验证；本轮不宣称“真机电池已闭环”。
 
 ## 构建
 
 `bash tools/regress/build_all.sh` 通过：gnu-efi、UEFI 引导器、64 位内核、
-32 位内核、双内核镜像全部成功；产物 `kernel64.bin` 1,051,600 B、
-`kernel32.bin` 3,873,165 B（M2 增加 `aml64.c` + `acpi_battery.c`，64 位约 +18 KB）。
+32 位内核、双内核镜像全部成功；产物 `kernel64.bin` 1,053,840 B、
+`kernel32.bin` 3,873,165 B（M2 增加 `aml64.c` + `acpi_battery.c` + `ec64.c`，
+并补 `_REG`/`_PSR`，64 位约 +20 KB）。
 
 - `tools/host-tests/run_host_tests.sh`：`通过 10 / 失败 0`（新增 `aml_eval`，含 `battery_ui`）。
 - `tools/regress/smoke32.sh`：`serial=1 initrd=1 net=1 desk=1 fault=0`、
@@ -322,8 +361,8 @@ EC 未启用都返回 `UNSUP`。这套断言用 `ec_host_inb/ec_host_outb` 模�
    没有真笔记本的 `_BST` 原始值，不能写成“真机已验证”。
 7. **面板里的数字仍受读数层限制**：`DECLARED/UNKNOWN` 一律 `--`，面板没有把
    声明当 0% 或 100%。EC 型电池现在有只读路径，但 QEMU 无 ACPI EC 设备，
-   正路径只有主机模拟；真机 EC 是否在 `0x62/0x66`、是否需要 `_REG`/Global Lock
-   都未验证，不能宣称真机 EC 已闭环。
+   正路径只有主机模拟；真机 EC 是否在 `0x62/0x66`、`_REG` 是否必须、`_GLK=1`
+   是否强制要求 Global Lock 都未验证，不能宣称真机 EC 已闭环。
 8. **点击链路是 QEMU 夹具**：取证用 `usb-tablet` + QMP 绝对坐标（相对指针在
    QEMU 里推不准）。真机鼠标走的是同一条 `hpdesk_mouse_down()`，但没有真机
    点击取证；`usb-tablet` 之外的绝对指针设备也没测。

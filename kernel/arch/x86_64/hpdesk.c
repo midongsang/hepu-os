@@ -4055,11 +4055,16 @@ static void hs_settings_window_render(hs_window_t *w)
                 cv = g_shell.status.battery_charging ? hs_txt("是", "Yes") : hs_txt("否", "No");
             HS_BAT_ROW(hs_txt("充电中", "Charging"), cv);
         }
-        /* 交流适配器: 只报 ACPI 有没有 ACPI0003 声明, 不猜插没插 */
+        /* 交流适配器: ACPI0003._PSR 优先; 没有 _PSR 才退回声明/充电推断 */
         {
             const char *av;
 #ifdef __x86_64__
-            if (fi && fi->ac_declared) av = hs_txt("已声明（ACPI0003）", "Declared (ACPI0003)");
+            if (g_shell.status.ac_known)
+                av = g_shell.status.ac_online ? hs_txt("在线（_PSR=1）", "Online (_PSR=1)")
+                                              : hs_txt("离线（_PSR=0）", "Offline (_PSR=0)");
+            else if (g_shell.status.ac_present)
+                av = hs_txt("已声明（ACPI0003，_PSR 未读到）", "Declared (ACPI0003, _PSR unread)");
+            else if (fi && fi->ac_declared) av = hs_txt("已声明（ACPI0003）", "Declared (ACPI0003)");
             else if (fi && fi->acpi_ok && state == HS_BATTERY_VALID && g_shell.status.battery_charging)
                 av = hs_txt("未声明（_BST 报充电中）", "Not declared (_BST charging)");
             else if (fi && fi->acpi_ok) av = hs_txt("未声明", "Not declared");
@@ -8961,8 +8966,10 @@ static void hs_battery_apply_firmware(void)
     int old_state = g_shell.status.battery_state;
     int old_pct = g_shell.status.battery_percent;
     int old_chg = g_shell.status.battery_charging;
+    int old_ac = g_shell.status.ac_present * 4 + g_shell.status.ac_known * 2 + g_shell.status.ac_online;
     int rc;
 
+    memset(&sample, 0, sizeof(sample));
     fi_init();
     fi = fi_get();
 
@@ -8970,12 +8977,21 @@ static void hs_battery_apply_firmware(void)
         g_shell.status.battery_state = HS_BATTERY_UNKNOWN;
         g_shell.status.battery_percent = 0;
         g_shell.status.battery_charging = 0;
+        g_shell.status.ac_present = 0;
+        g_shell.status.ac_known = 0;
+        g_shell.status.ac_online = 0;
     } else if (fi->battery == FI_BAT_ABSENT) {
         g_shell.status.battery_state = HS_BATTERY_ABSENT;
         g_shell.status.battery_percent = 0;
         g_shell.status.battery_charging = 0;
+        g_shell.status.ac_present = 0;
+        g_shell.status.ac_known = 0;
+        g_shell.status.ac_online = 0;
     } else {
         rc = acpi_battery_poll(&sample);
+        g_shell.status.ac_present = sample.ac_present;
+        g_shell.status.ac_known = sample.ac_known;
+        g_shell.status.ac_online = sample.ac_online;
         if (rc == 0 && sample.present) {
             g_shell.status.battery_state = HS_BATTERY_VALID;
             g_shell.status.battery_percent = sample.percent;
@@ -8993,7 +9009,8 @@ static void hs_battery_apply_firmware(void)
 
     if (old_state != g_shell.status.battery_state ||
         old_pct != g_shell.status.battery_percent ||
-        old_chg != g_shell.status.battery_charging) {
+        old_chg != g_shell.status.battery_charging ||
+        old_ac != g_shell.status.ac_present * 4 + g_shell.status.ac_known * 2 + g_shell.status.ac_online) {
         /* 顶栏填充与电池面板都靠整屏重绘收敛；变化频率约 2s，可接受。 */
         g_content_dirty = 1;
     }
@@ -9007,6 +9024,9 @@ void hs_status_init(void)
     g_shell.status.battery_state = HS_BATTERY_ABSENT;
     g_shell.status.battery_percent = 0;
     g_shell.status.battery_charging = 0;
+    g_shell.status.ac_present = 0;
+    g_shell.status.ac_known = 0;
+    g_shell.status.ac_online = 0;
     g_shell.status.network_connected = 1;
     str_cpy(g_shell.status.network_type, "ethernet");
     g_shell.status.cpu_usage = 0;

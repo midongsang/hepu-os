@@ -191,6 +191,9 @@ typedef struct {
     int battery_state;  /* hs_battery_state_t */
     int battery_percent; /* 仅 VALID 时可信 */
     int battery_charging;
+    int ac_present;      /* ACPI0003 声明 */
+    int ac_known;        /* _PSR 读到 */
+    int ac_online;       /* 仅 ac_known=1 时有效 */
     int network_connected;
     char network_type[16];  /* "ethernet"/"wifi"/"none" */
     int cpu_usage;

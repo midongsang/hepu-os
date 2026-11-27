@@ -5,8 +5,7 @@
 [AML] tables=0x3 nodes=0x3 degraded=0x0
 [BAT] aml dev=ABS0
 [BAT] ec=0x0
-[BAT] aml sta=absent
-[BAT] aml sta=absent
+[BAT] ac=none
 [BAT] aml sta=absent
 [BAT] aml sta=absent
 [BAT] aml sta=absent

@@ -21,9 +21,15 @@ extern void vga_puts(const char *s);
 extern void vga_put_hex(uint64_t v);
 
 #define BAT_HID_EISA 0x41D00C0Au   /* PNP0C0A 的压缩 EISA ID */
+#define EC_HID_EISA  0x41D00C09u   /* PNP0C09 */
+#define AC_HID_EISA  0x04700003u   /* ACPI0003 */
 
 static int g_bat_ready;
 static char g_bat_path[96];
+static char g_ac_path[96];
+static int g_ac_found;
+static char g_ec_reg_path[128];
+static int g_ec_reg_ready;
 static int g_bat_last_rc = 2;
 
 static void bat_num(int64_t v)
@@ -55,6 +61,9 @@ static int path_child(const char *parent, const char *child, char *out, int cap)
     out[used + 1 + j] = 0;
     return 0;
 }
+
+static int eval_named_child(const char *base, const char *obj, aml_value_t **out);
+static int ec_call_reg(void);
 
 int acpi_battery_init(void)
 {
@@ -91,14 +100,81 @@ int acpi_battery_init(void)
     /* EC 型电池：命名空间里有 PNP0C09 才允许碰 0x62/0x66，避免无 EC 机器盲写 */
     {
         char ecpath[96];
-        if (aml_find_device(0x41D00C09u, "PNP0C09", ecpath, sizeof(ecpath)) == 0) {
+        if (aml_find_device(EC_HID_EISA, "PNP0C09", ecpath, sizeof(ecpath)) == 0) {
+            char path[128];
+            aml_value_t *v = 0;
+            int64_t x = 0;
+            int rrc;
+
             ec64_set_present(1);
             vga_puts("[BAT] ec=0x1 dev=");
             vga_puts(ecpath);
             vga_puts("\n");
+
+            /* 向 EC 设备声明 EmbeddedControl(3) 的 OS 处理器已安装。
+             * 不少 DSDT 的 _BST 会先看 ECON 之类的标志；不调用 _REG 时该标志
+             * 保持 0，_BST 可能直接返回 0。 */
+            if (path_child(ecpath, "_REG", g_ec_reg_path, sizeof(g_ec_reg_path)) == 0) {
+                g_ec_reg_ready = 1;
+                aml_sample_begin();
+                rrc = ec_call_reg();
+                aml_sample_end();
+                vga_puts("[BAT] ec reg=");
+                if (rrc == AML_E_NOTFOUND) vga_puts("none\n");
+                else { bat_num(rrc); vga_puts("\n"); }
+            } else {
+                vga_puts("[BAT] ec reg=none\n");
+            }
+
+            /* _GLK=1 表示 EC 与 SMI 共享，规范要求先拿 ACPI Global Lock。
+             * 当前内核没有实现 FACS 全局锁，只如实上报，事务仍带超时。 */
+            if (path_child(ecpath, "_GLK", path, sizeof(path)) == 0) {
+                aml_sample_begin();
+                rrc = aml_eval_path(path, &v);
+                if (rrc == 0 && aml_value_int(v, &x) == 0) {
+                    vga_puts("[BAT] ec glk=");
+                    bat_num(x & 1);
+                    vga_puts("\n");
+                } else {
+                    vga_puts("[BAT] ec glk=none\n");
+                }
+                aml_sample_end();
+            } else {
+                vga_puts("[BAT] ec glk=none\n");
+            }
         } else {
             ec64_set_present(0);
             vga_puts("[BAT] ec=0x0\n");
+        }
+    }
+
+    /* 交流适配器：ACPI0003 存在时读 _PSR；没有就明确 none，不猜插没插。 */
+    g_ac_path[0] = 0;
+    g_ac_found = 0;
+    {
+        char acpath[96];
+        if (aml_find_device(AC_HID_EISA, "ACPI0003", acpath, sizeof(acpath)) == 0) {
+            int k = 0;
+            while (acpath[k] && k < 95) { g_ac_path[k] = acpath[k]; k++; }
+            g_ac_path[k] = 0;
+            g_ac_found = 1;
+            vga_puts("[BAT] ac dev=");
+            vga_puts(g_ac_path);
+            vga_puts("\n");
+            {
+                aml_value_t *v = 0;
+                int64_t x = 0;
+                int rrc;
+                aml_sample_begin();
+                rrc = eval_named_child(g_ac_path, "_PSR", &v);
+                aml_sample_end();
+                vga_puts("[BAT] ac psr=");
+                if (rrc == 0 && aml_value_int(v, &x) == 0) bat_num(x & 1);
+                else vga_puts("none");
+                vga_puts("\n");
+            }
+        } else {
+            vga_puts("[BAT] ac=none\n");
         }
     }
     g_bat_ready = 1;
@@ -109,11 +185,26 @@ int acpi_battery_ready(void) { return g_bat_ready; }
 
 const char *acpi_battery_path(void) { return g_bat_path; }
 
+static int eval_named_child(const char *base, const char *obj, aml_value_t **out)
+{
+    char path[128];
+    if (path_child(base, obj, path, sizeof(path)) != 0) return AML_E_NOTFOUND;
+    return aml_eval_path(path, out);
+}
+
 static int eval_child(const char *obj, aml_value_t **out)
 {
-    char path[96];
-    if (path_child(g_bat_path, obj, path, sizeof(path)) != 0) return AML_E_NOTFOUND;
-    return aml_eval_path(path, out);
+    return eval_named_child(g_bat_path, obj, out);
+}
+
+/* _REG(3,1)：声明 EmbeddedControl 的 OS 处理器已安装。
+ * 必须在当前 sample 的 overlay 内执行，_BST 才能看到 _REG 写入的标志。 */
+static int ec_call_reg(void)
+{
+    int64_t reg_args[2] = { 3, 1 };
+    aml_value_t *v = 0;
+    if (!g_ec_reg_ready) return AML_E_NOTFOUND;
+    return aml_eval_path_ints(g_ec_reg_path, reg_args, 2, &v);
 }
 
 /* 百分比与可信门槛抽成纯函数，主机单测直接覆盖阈值，不依赖命名空间。 */
@@ -134,6 +225,31 @@ int acpi_battery_make_percent(int64_t rem, int64_t full, int state, int *pct)
     return 0;
 }
 
+int acpi_ac_poll(acpi_ac_sample_t *out)
+{
+    aml_value_t *v = 0;
+    int64_t x = 0;
+    int rc;
+
+    if (!out) return -1;
+    out->present = 0;
+    out->known = 0;
+    out->online = 0;
+    if (!g_bat_ready && acpi_battery_init() != 0) return 1;
+    out->present = g_ac_found;
+    if (!g_ac_found) return 1;
+
+    aml_sample_begin();
+    (void)ec_call_reg();
+    rc = eval_named_child(g_ac_path, "_PSR", &v);
+    if (rc == 0 && aml_value_int(v, &x) == 0) {
+        out->known = 1;
+        out->online = (int)(x & 1);
+    }
+    aml_sample_end();
+    return out->known ? 0 : 2;
+}
+
 int acpi_battery_poll(acpi_batt_sample_t *out)
 {
     aml_value_t *sta = 0, *bst = 0, *bif = 0, *bix = 0;
@@ -152,6 +268,9 @@ int acpi_battery_poll(acpi_batt_sample_t *out)
     out->design = 0;
     out->voltage_mv = 0;
     out->used_bix = 0;
+    out->ac_present = 0;
+    out->ac_known = 0;
+    out->ac_online = 0;
 
     if (!g_bat_ready && acpi_battery_init() != 0) {
         g_bat_last_rc = 2;
@@ -159,6 +278,20 @@ int acpi_battery_poll(acpi_batt_sample_t *out)
     }
 
     aml_sample_begin();
+
+    /* 每个采样都重放 _REG：overlay 生命周期只到 sample_end，不能只在 init 调一次。 */
+    (void)ec_call_reg();
+
+    out->ac_present = g_ac_found;
+    if (g_ac_found) {
+        aml_value_t *psr = 0;
+        int64_t psr_i = 0;
+        int rc_psr = eval_named_child(g_ac_path, "_PSR", &psr);
+        if (rc_psr == 0 && aml_value_int(psr, &psr_i) == 0) {
+            out->ac_known = 1;
+            out->ac_online = (int)(psr_i & 1);
+        }
+    }
 
     rc_sta = eval_child("_STA", &sta);
     if (rc_sta == 0) {

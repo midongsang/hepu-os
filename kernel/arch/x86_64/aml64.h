@@ -63,6 +63,11 @@ int aml_find_device(uint32_t eisa_id, const char *hid_str, char *out, int cap);
 /* 求值一个完整路径（可带前导 '\\'）。*out 指向值（生命周期到 sample_end）。 */
 int aml_eval_path(const char *path, aml_value_t **out);
 
+/* 以显式整数参数调用方法（用于 _REG 等带参控制方法）。
+ * args 可为空仅当 nargs=0；nargs 超过 7 返回 AML_E_ARG。 */
+int aml_eval_path_ints(const char *path, const int64_t *args, int nargs,
+                       aml_value_t **out);
+
 /* 值访问 */
 uint8_t aml_value_type(const aml_value_t *v);
 int aml_value_int(const aml_value_t *v, int64_t *out);

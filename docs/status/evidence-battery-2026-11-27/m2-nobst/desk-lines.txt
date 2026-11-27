@@ -5,7 +5,7 @@
 [AML] tables=0x3 nodes=0x3 degraded=0x0
 [BAT] aml dev=NOB0
 [BAT] ec=0x0
-[BAT] aml bst failed code=-1
+[BAT] ac=none
 [BAT] aml bst failed code=-1
 [BAT] aml bst failed code=-1
 [BAT] aml bst failed code=-1

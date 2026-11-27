@@ -173,6 +173,13 @@ int main(void)
         check(s.charging == 1, "poll 充电中");
         check(s.full == 10000 && s.remaining == 5700, "poll 容量字段正确");
         check(s.used_bix == 0, "poll 走 _BIF");
+        check(s.ac_present == 1 && s.ac_known == 1 && s.ac_online == 1,
+              "poll ACPI0003._PSR=1");
+        {
+            acpi_ac_sample_t ac;
+            check(acpi_ac_poll(&ac) == 0 && ac.present && ac.known && ac.online,
+                  "独立 AC 查询 _PSR=1");
+        }
     }
 
     /* 9) EC 字段读取：主机模拟 EC 状态机（16 位跨字节拼装） */
@@ -184,6 +191,16 @@ int main(void)
         ec64_set_present(1);
         check(aml_find_device(0x41D00C09u, "PNP0C09", dev, sizeof(dev)) == 0, "找到 PNP0C09 EC 设备");
         check(strcmp(dev, "EC00") == 0, "EC 设备路径 EC00");
+
+        /* _REG(3,1) 带参方法：把 Arg1 写入 ECRG；_BST 会先检查该标志 */
+        {
+            int64_t reg_args[2] = { 3, 1 };
+            aml_value_t *rv = 0;
+            check(aml_eval_path_ints("EC00._REG", reg_args, 2, &rv) == 0,
+                  "_REG(3,1) 调用成功");
+            check(eval_int("ECRG", &x) == 0 && x == 1, "_REG 写入 ECRG=1");
+        }
+
         check(eval_int("ECR0.B0ST", &x) == 0 && x == 5700, "EC 16 位字段拼装=5700");
         p = eval_pkg("ECR0._BST", &rc);
         check(p && aml_value_count(p) == 4, "EC _BST 包有 4 个元素");

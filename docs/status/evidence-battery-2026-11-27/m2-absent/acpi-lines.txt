@@ -21,8 +21,7 @@
 [BAT] state=declared form_factor=unknown acpi_battery=declared reason=acpi-declared
 [BAT] aml dev=ABS0
 [BAT] ec=0x0
-[BAT] aml sta=absent
-[BAT] aml sta=absent
+[BAT] ac=none
 [BAT] aml sta=absent
 [BAT] aml sta=absent
 [BAT] aml sta=absent
