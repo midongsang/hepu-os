@@ -54,6 +54,7 @@ hs_s(v)  = v * g_ui_scale_pct / 100     // 圆形/图标/圆角
 | 侧边栏默认状态 | `UI.sidebar_collapsed` | **1（收起）** | — | 同上 |
 | 天气卡尺寸 | `UI.weather_width/height` | 120 × 120 | 180 × 180 px | `hs_weather_widget_render` |
 | 天气卡边距 | `weather_margin_right/bottom` | 140 / 160 | — | 同上 |
+| 天气卡文案 | 状态驱动 | 空状态 `Weather / No network / Changde`；数据态 `温度° + 英文天气 + Changde` | — | 现象转英文，避开 CJK 子集缺字 |
 | Dock | `dock_width/height/icon` | 400 / 64 / 44 | — | `hs_dock_render` |
 | Dock 底边距 | `dock_margin_bottom` | 12 | 18 px | 同上 |
 | 窗口圆角 | `UI.corner_radius` | 12 | 18 px | `window64.c` / `hs_window_shadow` |

@@ -229,6 +229,7 @@ extern void vga_puts(const char *s);
 
 /* 字符串函数兼容 */
 extern int strcmp(const char *s1, const char *s2);
+extern char *strstr(const char *h, const char *n);
 extern char *strcpy(char *dst, const char *src);
 #define str_cmp strcmp
 #define str_cpy strcpy
@@ -5547,6 +5548,36 @@ static void hs_desktop_clock_render(void)
     }
 }
 
+/* 天气现象转英文标签。
+ * 桌面 TTF 的 NotoSansCJK 子集只有 675 字，缺 "晴" / "云" 等常用天气字，
+ * 直接画中文会出现"温度有、天气描述整行空白"的假截断。UI 其余文案是英文，
+ * 这里按真实 API 字段做有限映射，未知现象退回 Current conditions。 */
+static const char *hs_weather_condition_text(void)
+{
+    if (!g_weather_desc[0]) return "Current conditions";
+    if (strstr(g_weather_desc, "晴间多云") || strstr(g_weather_desc, "多云转晴")) return "Partly cloudy";
+    if (strstr(g_weather_desc, "晴")) return "Clear";
+    if (strstr(g_weather_desc, "多云")) return "Cloudy";
+    if (strstr(g_weather_desc, "阴")) return "Overcast";
+    if (strstr(g_weather_desc, "雷")) return "Thunderstorm";
+    if (strstr(g_weather_desc, "雨夹雪")) return "Sleet";
+    if (strstr(g_weather_desc, "暴雨") || strstr(g_weather_desc, "大雨")) return "Heavy rain";
+    if (strstr(g_weather_desc, "中雨")) return "Rain";
+    if (strstr(g_weather_desc, "小雨")) return "Light rain";
+    if (strstr(g_weather_desc, "阵雨")) return "Showers";
+    if (strstr(g_weather_desc, "雨")) return "Rain";
+    if (strstr(g_weather_desc, "冰雹")) return "Hail";
+    if (strstr(g_weather_desc, "大雪")) return "Heavy snow";
+    if (strstr(g_weather_desc, "中雪")) return "Snow";
+    if (strstr(g_weather_desc, "小雪")) return "Light snow";
+    if (strstr(g_weather_desc, "雪")) return "Snow";
+    if (strstr(g_weather_desc, "雾")) return "Fog";
+    if (strstr(g_weather_desc, "霾")) return "Haze";
+    if (strstr(g_weather_desc, "沙")) return "Dust";
+    if (strstr(g_weather_desc, "风")) return "Windy";
+    return "Current conditions";
+}
+
 /* 天气小部件 */
 static void hs_weather_widget_render(void)
 {
@@ -5558,6 +5589,7 @@ static void hs_weather_widget_render(void)
     hs_fill_rounded_rect(wx, wy, ww, wh, hs_s(g_shell.ui.corner_radius), g_shell.colors.accent);
 
     void *fb = hs_get_framebuffer();
+    uint32_t fg = hs_on_accent();
 
     /* V0.56.1: 取数失败/尚未返回时给明确占位。旧实现直接画空字符串,
      * 卡片只剩一块纯色方块, 看不出是"没数据"还是"渲染坏了"。 */
@@ -5566,21 +5598,35 @@ static void hs_weather_widget_render(void)
     if (!g_weather_ok || !g_weather_temp[0]) {
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            wx + hs_sx(18), wy + hs_sy(16), "Weather",
-                           hs_on_accent(), hs_s(16));
+                           fg, hs_s(16));
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            wx + hs_sx(18), wy + hs_sy(46), "No network",
-                           hs_on_accent(), hs_s(14));
+                           fg, hs_s(14));
+        font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                           wx + hs_sx(18), wy + hs_sy(96), "Changde",
+                           fg, hs_s(11));
         return;
     }
 
     const char *tstr = g_weather_temp;
-    const char *dstr = g_weather_desc[0] ? g_weather_desc : "Current";
+    int tf = hs_s(g_shell.ui.weather_temp_font);
+    int tx = wx + hs_sx(18);
+    int ty = wy + hs_sy(14);
+    font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                       tx, ty, (char *)tstr, fg, tf);
+
+    /* TTF 子集缺 "°"：和顶栏一样用同色小圆点补出度数。
+     * 旧版只画裸 "18"，右下角看起来像没渲染完。 */
+    int tw = hs_text_width(tstr, tf);
+    hs_fill_circle(tx + tw + hs_sx(3), ty + hs_sy(9), hs_s(2), fg);
 
     font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                       wx + hs_sx(20), wy + hs_sy(15), (char *)tstr, hs_on_accent(), hs_s(g_shell.ui.weather_temp_font));
+                       wx + hs_sx(18), wy + hs_sy(66),
+                       (char *)hs_weather_condition_text(), fg,
+                       hs_s(g_shell.ui.weather_desc_font));
 
     font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                       wx + hs_sx(15), wy + hs_sy(70), (char *)dstr, hs_on_accent(), hs_s(g_shell.ui.weather_desc_font));
+                       wx + hs_sx(18), wy + hs_sy(94), "Changde", fg, hs_s(11));
 }
 
 /* 左侧三标签侧边栏 */
@@ -6419,16 +6465,15 @@ static void hs_sidebar_render(void)
             font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                                sx + hs_sx(20), content_y, g_weather_temp,
                                g_shell.colors.accent, hs_s(64));
-            int tw = 0;
-            while (g_weather_temp[tw]) tw++;
+            int tw = hs_text_width(g_weather_temp, hs_s(64));
             font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
-                               sx + hs_sx(20) + hs_sx(30) + tw * hs_sx(34),
+                               sx + hs_sx(20) + tw + hs_sx(4),
                                content_y + hs_sy(10), "C",
                                g_shell.colors.panel_fg, hs_s(24));
             content_y += hs_sy(78);
             font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                                sx + hs_sx(20), content_y,
-                               g_weather_desc[0] ? g_weather_desc : "Current conditions",
+                               (char *)hs_weather_condition_text(),
                                g_shell.colors.panel_fg, hs_s(16));
             content_y += hs_sy(30);
             font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
