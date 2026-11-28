@@ -37,7 +37,7 @@ HASH=$(printf '%s' "$FIXTURE_PASSWORD" | sha256sum | awk '{print $1}')
 # 注意：默认保持开机锁屏（不写 lock=0），链路取证需要先到锁屏页。
 printf 'oobe_done=1\nlang=0\n' > "$EV/build/_sys.conf"
 printf 'user=dev\nrole=2\nhash=%s\nadminhash=%s\n' "$HASH" "$HASH" > "$EV/build/_acc.conf"
-printf 'scale=150\nresolution=1920x1080\nshadow=1\ncursor=0\n' > "$EV/build/_disp.conf"
+printf 'scale=100\nresolution=1920x1080\nshadow=1\ncursor=0\n' > "$EV/build/_disp.conf"
 
 dd if="$IMG" of="$EXT" bs=512 skip=264192 count=204800 status=none
 for f in _sys.conf:/system.conf _acc.conf:/account.conf _disp.conf:/display.conf; do

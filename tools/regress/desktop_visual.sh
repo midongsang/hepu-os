@@ -7,7 +7,7 @@
 #   bash tools/regress/desktop_visual.sh <输出目录> --update-baseline
 #
 # 固定条件:
-#   - 1920x1080, UI scale=150（build_all.sh 注入的 display.conf）
+#   - 1920x1080, UI scale=100（build_all.sh 注入的 display.conf）
 #   - QEMU 固定 RTC, 无网络（天气显示空状态, 截图可重复）
 #   - 依次采集: 锁屏 / 桌面 / Dock 悬停 / 应用抽屉 / 天气标签 / 控制中心 / Settings / Devices / Audio
 #
@@ -105,36 +105,36 @@ python3 "$REGRESS_DIR/qmp_click.py" "$QMP" 20 200 1920 1080 move
 sleep 1
 
 # ---- 03 应用抽屉: 点左侧把手 ----
-# 150%: sidebar_x=15, sidebar_y=75, height=750, handle 高 144。
-python3 "$REGRESS_DIR/qmp_click.py" "$QMP" 25 450 1920 1080 click
+# 100%: 把手在 x=10..30, y≈224..389。
+python3 "$REGRESS_DIR/qmp_click.py" "$QMP" 20 300 1920 1080 click
 python3 "$REGRESS_DIR/qmp_click.py" "$QMP" 20 200 1920 1080 move
 sleep 2
 q_dump "$OUT/03-drawer.ppm" "$OUT/03-drawer.png" || exit 3
 
 # ---- 09 天气标签: 无网络时必须显示空状态, 不得出现硬编码温度/湿度/预报 ----
-python3 "$REGRESS_DIR/qmp_click.py" "$QMP" 286 112 1920 1080 click
+python3 "$REGRESS_DIR/qmp_click.py" "$QMP" 200 70 1920 1080 click
 python3 "$REGRESS_DIR/qmp_click.py" "$QMP" 20 200 1920 1080 move
 sleep 2
 q_dump "$OUT/09-weather.ppm" "$OUT/09-weather.png" || exit 3
 
-# 收起抽屉: 150% 下关闭按钮在 (396..426, 99..129)
-python3 "$REGRESS_DIR/qmp_click.py" "$QMP" 410 114 1920 1080 click
+# 收起抽屉: 100% 下关闭按钮在 (258..285, 60..83)
+python3 "$REGRESS_DIR/qmp_click.py" "$QMP" 270 71 1920 1080 click
 sleep 2
 
 # ---- 04 控制中心: 顶栏齿轮 ----
-# 150%: icon_size=36, margin=15, inset=21, slot1=1803..1839, y=18..54
-python3 "$REGRESS_DIR/qmp_click.py" "$QMP" 1821 36 1920 1080 click
+# 100%: icon_size=24, 从右往左 power/gear/speaker/wifi; gear 中心约 (1843,24)。
+python3 "$REGRESS_DIR/qmp_click.py" "$QMP" 1843 24 1920 1080 click
 python3 "$REGRESS_DIR/qmp_click.py" "$QMP" 20 200 1920 1080 move
 sleep 2
 q_dump "$OUT/04-control-center.ppm" "$OUT/04-control-center.png" || exit 3
 
 # ---- 控制中心真实性探针（不依赖截图判读）----
-# 150% 几何: panel 1365..1905, rail 156, pad 24, rx=1545, card 104x104。
-# 第一行 WiFi 中心 (1597,184), 第二行 DND (1597,300), Volume 轨道 y=406。
-python3 "$REGRESS_DIR/qmp_click.py" "$QMP" 1597 184 1920 1080 click
-python3 "$REGRESS_DIR/qmp_click.py" "$QMP" 1597 300 1920 1080 click
-python3 "$REGRESS_DIR/qmp_click.py" "$QMP" 1597 300 1920 1080 click
-python3 "$REGRESS_DIR/qmp_click.py" "$QMP" 1800 406 1920 1080 click
+# 100% 几何: panel 1550..1910; 第一行 WiFi 中心 (1706,110), 第二行 DND (1706,179),
+# Volume 轨道 y=277。抽屉必须先收起, 否则左侧把手会挡住面板边缘。
+python3 "$REGRESS_DIR/qmp_click.py" "$QMP" 1706 110 1920 1080 click
+python3 "$REGRESS_DIR/qmp_click.py" "$QMP" 1706 179 1920 1080 click
+python3 "$REGRESS_DIR/qmp_click.py" "$QMP" 1706 179 1920 1080 click
+python3 "$REGRESS_DIR/qmp_click.py" "$QMP" 1800 277 1920 1080 click
 sleep 2
 for needle in "toggle unavailable: No WiFi adapter" "dnd=off" "dnd=on" "volume unavailable: No AC"; do
   grep -aq "$needle" "$SER" || { log "FAIL: CC probe missing: $needle"; exit 3; }
@@ -142,46 +142,45 @@ done
 log "CC probe: disabled WiFi / DND off-on / disabled volume all logged"
 
 # ---- 06 Devices ----
-python3 "$REGRESS_DIR/qmp_click.py" "$QMP" 1400 180 1920 1080 click
+python3 "$REGRESS_DIR/qmp_click.py" "$QMP" 1600 109 1920 1080 click
 python3 "$REGRESS_DIR/qmp_click.py" "$QMP" 20 200 1920 1080 move
 sleep 2
 q_dump "$OUT/06-devices.ppm" "$OUT/06-devices.png" || exit 3
 
 # ---- 07 Audio ----
-python3 "$REGRESS_DIR/qmp_click.py" "$QMP" 1400 243 1920 1080 click
+python3 "$REGRESS_DIR/qmp_click.py" "$QMP" 1600 145 1920 1080 click
 python3 "$REGRESS_DIR/qmp_click.py" "$QMP" 20 200 1920 1080 move
 sleep 2
 q_dump "$OUT/07-audio.ppm" "$OUT/07-audio.png" || exit 3
-# Audio 页再验 DND / Torch 命中区: DND 卡片 1545..1665, y=525..645
-python3 "$REGRESS_DIR/qmp_click.py" "$QMP" 1600 580 1920 1080 click
-python3 "$REGRESS_DIR/qmp_click.py" "$QMP" 1600 580 1920 1080 click
-python3 "$REGRESS_DIR/qmp_click.py" "$QMP" 1750 580 1920 1080 click
+# Audio 页再验 DND / Torch 命中区: DND 中心 (1706,378), Torch 中心 (1766,378)。
+python3 "$REGRESS_DIR/qmp_click.py" "$QMP" 1706 378 1920 1080 click
+python3 "$REGRESS_DIR/qmp_click.py" "$QMP" 1706 378 1920 1080 click
+python3 "$REGRESS_DIR/qmp_click.py" "$QMP" 1766 378 1920 1080 click
 sleep 1
 grep -aq "torch unavailable: No torch device" "$SER" || { log "FAIL: Torch 未记录不可用"; exit 3; }
 log "CC audio page: DND hit + Torch disabled logged"
 
 # ---- 05 Settings: 关掉控制中心, 保留启动时的 Settings 浮窗 ----
-python3 "$REGRESS_DIR/qmp_click.py" "$QMP" 1821 36 1920 1080 click
+python3 "$REGRESS_DIR/qmp_click.py" "$QMP" 1843 24 1920 1080 click
 python3 "$REGRESS_DIR/qmp_click.py" "$QMP" 20 200 1920 1080 move
 sleep 2
 q_dump "$OUT/05-settings.ppm" "$OUT/05-settings.png" || exit 3
 
-# ---- 150% 布局 chip 命中探针（截图完成后执行，不改 05 基线）----
-# Settings 690x705 @ (617,187); sw_x=851; chip 75 宽 / 间距 6; y=577..607。
-# Center 中心 (1212,590), Fill 中心 (888,590)。控制中心关闭时不得吞掉这块点击。
-python3 "$REGRESS_DIR/qmp_click.py" "$QMP" 1212 590 1920 1080 click
+# ---- 100% 布局 chip 命中探针（截图完成后执行，不改 05 基线）----
+# Settings 460x470 居中; Fill 中心 (905,448), Center 中心 (1121,448)。
+python3 "$REGRESS_DIR/qmp_click.py" "$QMP" 1121 448 1920 1080 click
 sleep 2
-grep -aq "\[WALLPAPER\] layout=Center" "$SER" || { log "FAIL: 150% Center chip 未命中"; exit 3; }
-python3 "$REGRESS_DIR/qmp_click.py" "$QMP" 888 590 1920 1080 click
+grep -aq "\[WALLPAPER\] layout=Center" "$SER" || { log "FAIL: 100% Center chip 未命中"; exit 3; }
+python3 "$REGRESS_DIR/qmp_click.py" "$QMP" 905 448 1920 1080 click
 sleep 1
-grep -aq "\[WALLPAPER\] layout=Fill" "$SER" || { log "FAIL: 150% Fill chip 未命中"; exit 3; }
-log "150% layout chips: Center -> Fill hit"
+grep -aq "\[WALLPAPER\] layout=Fill" "$SER" || { log "FAIL: 100% Fill chip 未命中"; exit 3; }
+log "100% layout chips: Center -> Fill hit"
 
 log "screenshots done: 01-lock 02-desktop 03-drawer 04-control-center 05-settings 06-devices 07-audio 08-dock 09-weather"
 
 # ---- 可选: 生成/比较基线 ----
 if [ "$UPDATE" = "1" ]; then
-  BASE="$WT/docs/status/desktop-visual-baseline-2026-11-27"
+  BASE="$WT/docs/status/desktop-visual-baseline-2026-11-28-100pct"
   mkdir -p "$BASE"
   cp "$OUT"/0*.png "$BASE"/
   log "baseline updated: $BASE"

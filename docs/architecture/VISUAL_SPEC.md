@@ -42,7 +42,7 @@ hs_s(v)  = v * g_ui_scale_pct / 100     // 圆形/图标/圆角
 | 顶栏左右边距 | 固定 | 10 | 15 px | `hs_sx(10)`，`margin` |
 | 顶栏圆角 | 固定 | 18 | 27 px | `hs_s(18)` |
 | 顶栏内图标 | 固定 | 24 | 36 px | `hs_s(24)` |
-| 顶栏图标间距 | 固定 | 6 | 9 px | `hs_sx(6)` |
+| 顶栏图标间距 | 固定 | 10 | 15 px | `hs_bar_icon_x` |
 | 时钟胶囊宽 | `UI.island_width` | 120 | 180 px | `hs_dynamic_island_render` |
 | 时钟胶囊高 | `UI.island_height` | **28** | 42 px | 同上 |
 | 时钟胶囊圆角 | 固定 | 15 | 22 px | `hs_s(15)` |
@@ -63,6 +63,8 @@ hs_s(v)  = v * g_ui_scale_pct / 100     // 圆形/图标/圆角
 1. 胶囊的居中基准是**顶栏自身的整屏宽度**，不是"扣掉侧栏后的净宽"。左边距与右边距必须相等，与侧栏、Dock、控制中心宽度无关。
 2. 胶囊高度小于顶栏高度时，纵向按上式居中；算出的 y 小于 `bar_top` 时钳到 `bar_top`。
 3. 面板（控制中心 / 侧栏 / 天气卡）的纵向起点一律跟着顶栏底边走（`bar_top + bar_h + 间距`），不写死绝对值。
+
+4. 顶栏右侧状态区不是应用托盘注册表：从右到左固定为 power / gear / speaker / battery（仅 ACPI 探到电池才占位）/ Wi-Fi，24 px 图标、10 px 间距；天气温度右对齐在 Wi-Fi 左侧 10 px。
 
 ### 1.1 设计令牌（2026-11-27 新增）
 
@@ -167,4 +169,4 @@ hs_s(v)  = v * g_ui_scale_pct / 100     // 圆形/图标/圆角
 
 - **图标字体引擎（部分落地）**：已实现单色语义矢量入口 `hs_draw_icon(x,y,size,color,glyph_id)`，顶栏 power/gear/speaker/Wi‑Fi 与控制中心 Wi‑Fi/BT/Air/DND/Loc/Torch 已迁移；DND 不再使用沙漏位图。Dock 彩色应用图标、应用抽屉图标、电池仍走位图/专用绘制，完整图标字体管线仍是欠账。
 
-**视觉基线已接入**：`tools/regress/desktop_visual.sh` 固定 RTC / 无网络 / 1920×1080 / UI 150%，采集 9 个状态；`tools/regress/compare_visual.py` 屏蔽时钟与天气动态文本后做阈值比较。基线在 `docs/status/desktop-visual-baseline-2026-11-27/`。
+**视觉基线已接入**：`tools/regress/desktop_visual.sh` 固定 RTC / 无网络 / 1920×1080 / UI 100%，采集 9 个状态；`tools/regress/compare_visual.py` 屏蔽时钟与天气动态文本后做阈值比较。当前基线在 `docs/status/desktop-visual-baseline-2026-11-28-100pct/`；`desktop-visual-baseline-2026-11-27/` 保留为 150% 历史对照。

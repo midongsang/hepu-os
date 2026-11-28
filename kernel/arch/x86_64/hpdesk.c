@@ -4456,6 +4456,7 @@ void hpdesk_add_app(const char *name, const char *command, const char *icon)
 static int g_power_menu_open = 0;  /* V0.62: 顶栏电源按钮弹出的菜单（注销/重启/关机） */
 static int g_battery_panel_open = 0; /* 顶栏电池图标展开的电量面板 */
 static void hs_top_bar_render(void);
+static int hs_text_width(const char *s, int size);
 static void hs_dock_render(void);
 static void hs_sidebar_render(void);
 static void hs_control_center_render(void);
@@ -5029,36 +5030,66 @@ void hs_draw_icon(int x, int y, int size, uint32_t color, int glyph_id)
         break;
     }
     case HS_GLYPH_GEAR: {
-        static const int gx[8] = {1000,707,0,-707,-1000,-707,0,707};
-        static const int gy[8] = {0,707,1000,707,0,-707,-1000,-707};
-        hs_icon_ring(cx, cy, r * 3 / 4, t, color);
-        for (int i = 0; i < 8; i++) {
-            int ix = cx + r * gx[i] / 1000, iy = cy + r * gy[i] / 1000;
-            int ox = cx + (r * 11 / 10) * gx[i] / 1000;
-            int oy = cy + (r * 11 / 10) * gy[i] / 1000;
-            hs_icon_seg2(ix, iy, ox, oy, color, t);
+        /* 6 个梯形齿 + 外圈。旧版 8 根细辐条加内外双环, 24px 下糊成一朵太阳花;
+         * 这里去掉辐条和内环, 只留下能读成齿轮的齿廓和中心孔。 */
+        static const int gx[6] = {1000, 500, -500, -1000, -500, 500};
+        static const int gy[6] = {0, 866, 866, 0, -866, -866};
+        hs_icon_ring(cx, cy, r * 64 / 100, t, color);
+        for (int i = 0; i < 6; i++) {
+            int vx = gx[i], vy = gy[i];
+            int tx = -vy, ty = vx;
+            int px[4], py[4];
+            px[0] = cx + r * (vx * 48 + tx * 16) / 100000;
+            py[0] = cy + r * (vy * 48 + ty * 16) / 100000;
+            px[1] = cx + r * (vx * 92 + tx * 13) / 100000;
+            py[1] = cy + r * (vy * 92 + ty * 13) / 100000;
+            px[2] = cx + r * (vx * 92 - tx * 13) / 100000;
+            py[2] = cy + r * (vy * 92 - ty * 13) / 100000;
+            px[3] = cx + r * (vx * 48 - tx * 16) / 100000;
+            py[3] = cy + r * (vy * 48 - ty * 16) / 100000;
+            hs_fill_polygon(px, py, 4, color);
         }
-        hs_icon_ring(cx, cy, r / 3, t, color);
         break;
     }
     case HS_GLYPH_SPEAKER: {
-        int xs[6] = {cx - r * 9 / 10, cx - r * 9 / 20, cx - r / 10,
-                     cx - r / 10, cx - r * 9 / 20, cx - r * 9 / 10};
-        int ys[6] = {cy - r / 4, cy - r / 4, cy - r * 7 / 10,
-                     cy + r * 7 / 10, cy + r / 4, cy + r / 4};
-        hs_fill_polygon(xs, ys, 6, color);
-        hs_icon_seg2(cx + r / 3, cy - r * 3 / 10, cx + r * 3 / 5, cy, color, t);
-        hs_icon_seg2(cx + r * 3 / 5, cy, cx + r / 3, cy + r * 3 / 10, color, t);
-        hs_icon_seg2(cx + r / 2, cy - r * 3 / 5, cx + r * 9 / 10, cy, color, t);
-        hs_icon_seg2(cx + r * 9 / 10, cy, cx + r / 2, cy + r * 3 / 5, color, t);
+        /* 左箱体 + 向右张开的喇叭口 + 两道弧形声波。旧版箱体与锥体比例失衡,
+         * 24px 下只剩一个像箭头的黑块。 */
+        int box_x = cx - r * 17 / 20;
+        int box_w = r * 9 / 20;
+        int box_h = r * 5 / 10;
+        hs_fill_rect(box_x, cy - box_h / 2, box_w, box_h, color);
+        int xs[4] = {cx - r * 8 / 20, cx - r * 1 / 20,
+                     cx - r * 1 / 20, cx - r * 8 / 20};
+        int ys[4] = {cy - r * 9 / 20, cy - r * 14 / 20,
+                     cy + r * 14 / 20, cy + r * 9 / 20};
+        hs_fill_polygon(xs, ys, 4, color);
+        hs_icon_seg2(cx + r * 3 / 10, cy - r * 35 / 100,
+                     cx + r * 55 / 100, cy, color, t);
+        hs_icon_seg2(cx + r * 55 / 100, cy,
+                     cx + r * 3 / 10, cy + r * 35 / 100, color, t);
+        hs_icon_seg2(cx + r * 45 / 100, cy - r * 65 / 100,
+                     cx + r * 9 / 10, cy, color, t);
+        hs_icon_seg2(cx + r * 9 / 10, cy,
+                     cx + r * 45 / 100, cy + r * 65 / 100, color, t);
         break;
     }
     case HS_GLYPH_WIFI: {
-        hs_fill_circle(cx, cy + r * 2 / 3, t + 1, color);
-        hs_icon_seg2(cx - r * 3 / 5, cy + r / 3, cx, cy - r / 10, color, t);
-        hs_icon_seg2(cx, cy - r / 10, cx + r * 3 / 5, cy + r / 3, color, t);
-        hs_icon_seg2(cx - r, cy + r / 3, cx, cy - r * 2 / 5, color, t);
-        hs_icon_seg2(cx, cy - r * 2 / 5, cx + r, cy + r / 3, color, t);
+        /* 三段向上张开的同心弧 + 底部圆点。旧版用四条直线拼两个 V,
+         * 在 24px 下看起来像一只鸟/涂鸦, 而不是 WiFi。 */
+        static const int ax[5] = {743, 391, 0, -391, -743};
+        static const int ay[5] = {669, 921, 1000, 921, 669};
+        int oy = cy + r * 7 / 10;
+        int radii[3] = {r / 2, r * 3 / 4, r};
+        hs_fill_circle(cx, oy, t, color);
+        for (int a = 0; a < 3; a++) {
+            int px[5], py[5];
+            for (int i = 0; i < 5; i++) {
+                px[i] = cx + radii[a] * ax[i] / 1000;
+                py[i] = oy - radii[a] * ay[i] / 1000;
+            }
+            for (int i = 0; i < 4; i++)
+                hs_icon_seg2(px[i], py[i], px[i + 1], py[i + 1], color, t);
+        }
         break;
     }
     case HS_GLYPH_BLUETOOTH: {
@@ -5239,8 +5270,9 @@ void hs_icon_file(int x, int y, int size, uint32_t color)
 static int hs_bar_icon_x(int slot)
 {
     int size = hs_s(24);
+    /* 24px 图标之间留 10px 呼吸位; 原来 6px 在 100% 下几乎并排粘住。 */
     return g_shell.screen_width - hs_sx(10) - hs_sx(14) - size
-           - slot * (hs_sx(6) + size);
+           - slot * (hs_sx(10) + size);
 }
 
 static int hs_bar_icon_y(void)
@@ -5464,23 +5496,17 @@ static void hs_top_bar_render(void)
         }
     }
 
-    /* 右侧状态栏矢量图标（替换文字"WiFi Bat Vol Set Pwr"） */
-    int icon_size = hs_s(16);
-    int icon_y = bar_top + (bar_h - icon_size) / 2;
-    int icon_x = g_shell.screen_width - margin - hs_sx(14);
+    /* 右侧状态区: 从右到左 power / gear / speaker / battery / Wi-Fi。
+     * 全部由 hs_draw_icon 按目标尺寸实时描矢量, 不再混用位图。 */
+    int icon_size = hs_s(24);
+    int icon_y = hs_bar_icon_y();
+    int icon_x;
     uint32_t fg = g_shell.colors.panel_fg;
-
-    /* 从右到左排列：电源、设置、音量、电池、WiFi
-     * V0.57.1: 改用与 App 图标同一套线性风格位图, 不再用各自一套分别手绘的矢量 —— 那排
-     * 图标原来线宽/圆角/重心各不相同, 并排放着像拼的。尺寸提到 18px: 32px 源图减半到
-     * 16px 时 2.5px 的线条会塌, 18px 能保住笔画。 */
-    icon_size = hs_s(24);   /* 状态栏高 36px, 24px 图标上下各留 6px */
-    icon_y = hs_bar_icon_y();
     icon_x = hs_bar_icon_x(0); hs_draw_icon(icon_x, icon_y, icon_size, fg, HS_GLYPH_POWER);
     icon_x = hs_bar_icon_x(1); hs_draw_icon(icon_x, icon_y, icon_size, fg, HS_GLYPH_GEAR);
     icon_x = hs_bar_icon_x(2); hs_draw_icon(icon_x, icon_y, icon_size, fg, HS_GLYPH_SPEAKER);
-    /* 电池形状与旁边四个同源（同走 hs_icon_bmp64），是否出现只看 ACPI 探测结果，
-     * 不看"台式机/笔记本"。ABSENT 不画也不留位；DECLARED/UNKNOWN 轮廓 + 两道短线；
+    /* 电池是独立矢量绘制，是否出现只看 ACPI 探测结果，不看"台式机/笔记本"。
+     * ABSENT 不画也不留位；DECLARED/UNKNOWN 轮廓 + 两道短线；
      * 只有 M2 读到可信电量进入 VALID 后才画填充比例。 */
     int wifi_slot = 3;
     if (g_shell.status.battery_state != HS_BATTERY_ABSENT) {
@@ -5489,9 +5515,8 @@ static void hs_top_bar_render(void)
                               g_shell.status.battery_state);
         wifi_slot = 4;
     }
-    /* wifi 与旁边四个同源: 都走 64x64 那套(hs_icon_bmp64)。
-     * 旧实现这里单独用 32px 的 hs_ico_wifi_std, 24px 显示时笔画比邻居细一档,
-     * 并排放着像两套图标拼的 —— 与 V0.57.1 修掉的"各自一套手绘矢量"是同一类问题。 */
+    /* Wi-Fi 与旁边三个同源: 都由 hs_draw_icon 按目标尺寸实时描矢量。
+     * 旧版用两段直线拼 V, 24px 下像涂鸦; 现改为三段同心弧 + 圆点。 */
     icon_x = hs_bar_icon_x(wifi_slot); hs_draw_icon(icon_x, icon_y, icon_size, fg, HS_GLYPH_WIFI);
 
 #ifdef __x86_64__
@@ -5501,13 +5526,14 @@ static void hs_top_bar_render(void)
         int n = 0;
         for (int i = 0; g_weather_temp[i] && n < 10; i++) wt[n++] = g_weather_temp[i];
         wt[n] = 0;
-        int wx = hs_bar_icon_x(wifi_slot) - hs_sx(48);
+        int tw = hs_text_width(wt, hs_s(14));
+        int wx = hs_bar_icon_x(wifi_slot) - hs_sx(10) - tw;
         {
             int wy = bar_top + (bar_h - hs_s(14)) / 2;
             font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                                wx, wy, wt, fg, hs_s(14));
             /* DejaVu 的 ° 在部分 TTF 子集里缺字形；用同样色的小圆点补，避免只剩数字。 */
-            int dot_x = wx + (int)strlen(wt) * hs_sx(8) + hs_sx(2);
+            int dot_x = wx + tw + hs_sx(2);
             hs_fill_circle(dot_x, wy + hs_s(4), hs_s(2), fg);
         }
     }
@@ -9557,10 +9583,8 @@ void hs_tray_init(void)
         g_shell.tray_icons[i].visible = 0;
     }
 
-    /* 添加默认托盘图标 */
-    hs_tray_add_icon("Network", "[N]");
-    hs_tray_add_icon("Audio", "[A]");
-    hs_tray_add_icon("Battery", "[B]");
+    /* 应用托盘注册表当前没有上屏消费方；不再塞 [N]/[A]/[B] 文字占位。
+     * 顶栏右上角可见的是 hs_top_bar_render() 的系统状态图标, 与本表无关。 */
 
     /* 欢迎通知 */
     hs_notification_send("Welcome to Hepu OS", "Hepu Desktop loaded", 0, 5000);
@@ -9612,6 +9636,8 @@ void hs_tray_remove_icon(const char *name)
     }
 }
 
+/* 预留的应用托盘绘制入口: 当前顶栏/底栏均未调用。
+ * 真正的右上角状态区在 hs_top_bar_render() 里, 不经过这里。 */
 void hs_tray_render(int x, int y, int max_width)
 {
     void *fb = hs_get_framebuffer();
