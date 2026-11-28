@@ -12,6 +12,8 @@
 - 无 `-device AC97`（无音频硬件）
 - 锁屏使用 fixture 账号解锁，欢迎通知消失后再截桌面
 - 截图前把指针移出 Dock 触发区；`08-dock` 单独把指针压到底部，验证悬停态
+- 顶栏 power/gear/speaker/Wi‑Fi 使用用户提供的 `assets/icons-status64` 同源 64×64 位图；
+  控制中心 Wi‑Fi 同源，不再是手绘矢量。QEMU 无 ACPI 电池，电池槽不占位
 
 ## 状态清单
 
@@ -35,6 +37,8 @@ bash tools/regress/desktop_visual.sh /tmp/hepu-visual-100-rerun \
   --baseline docs/status/desktop-visual-baseline-2026-11-28-100pct
 ```
 
-`compare_visual.py` 只屏蔽时钟/天气动态文本。2026-11-28 第二次独立复跑：
-9 张全部 `OK`；`02/04/05/06/07/08/09` 与 `01-lock` 的 `mean=0.000`，
-`03-drawer` 为 `mean=0.007`（117 个像素，来自抽屉边缘/指针悬停差异）。
+`compare_visual.py` 只屏蔽时钟/天气动态文本。2026-11-28 顶栏图标改用用户
+`assets/icons-status64` 位图后，按本目录重新采集并独立复跑：9 张全部 `OK`；
+`03/04/05/07/08/09` 的 `mean=0.000`，`01-lock` 为 `mean=0.015`（174 px）、
+`02-desktop` 为 `mean=0.028`（520 px）、`06-devices` 为 `mean=0.014`（207 px），
+均为指针位置/动态文本差异，顶栏与控制中心图标区无差异。

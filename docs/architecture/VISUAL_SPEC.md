@@ -167,6 +167,6 @@ hs_s(v)  = v * g_ui_scale_pct / 100     // 圆形/图标/圆角
 
 ## 7. P0 剩余与已接入
 
-- **图标字体引擎（部分落地）**：已实现单色语义矢量入口 `hs_draw_icon(x,y,size,color,glyph_id)`，顶栏 power/gear/speaker/Wi‑Fi 与控制中心 Wi‑Fi/BT/Air/DND/Loc/Torch 已迁移；DND 不再使用沙漏位图。Dock 彩色应用图标、应用抽屉图标、电池仍走位图/专用绘制，完整图标字体管线仍是欠账。
+- **图标字体引擎（部分落地）**：顶栏 power/gear/speaker/Wi‑Fi 使用用户 2026-11-11 提供的 `assets/icons-status64` 同源 64×64 位图，经 `hs_icon_bmp64` 做覆盖采样；控制中心 Wi‑Fi 同源。BT/Air/DND/Loc/Torch 走 `hs_draw_icon` 单色矢量入口。Dock 彩色应用图标、应用抽屉图标、电池轮廓仍走位图/专用绘制，完整图标字体管线仍是欠账。
 
 **视觉基线已接入**：`tools/regress/desktop_visual.sh` 固定 RTC / 无网络 / 1920×1080 / UI 100%，采集 9 个状态；`tools/regress/compare_visual.py` 屏蔽时钟与天气动态文本后做阈值比较。当前基线在 `docs/status/desktop-visual-baseline-2026-11-28-100pct/`；`desktop-visual-baseline-2026-11-27/` 保留为 150% 历史对照。

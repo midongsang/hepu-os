@@ -5019,79 +5019,6 @@ void hs_draw_icon(int x, int y, int size, uint32_t color, int glyph_id)
     if (t > 3) t = 3;
 
     switch (glyph_id) {
-    case HS_GLYPH_POWER: {
-        /* 顶部开口圆环 + 中竖线 */
-        static const int px[11] = {500,866,1000,866,500,0,-500,-866,-1000,-866,-500};
-        static const int py[11] = {-866,-500,0,500,866,1000,866,500,0,-500,-866};
-        for (int i = 0; i < 10; i++)
-            hs_icon_seg2(cx + r * px[i] / 1000, cy + r * py[i] / 1000,
-                         cx + r * px[i + 1] / 1000, cy + r * py[i + 1] / 1000, color, t);
-        hs_icon_seg2(cx, cy - r, cx, cy - r / 4, color, t);
-        break;
-    }
-    case HS_GLYPH_GEAR: {
-        /* 6 个梯形齿 + 外圈。旧版 8 根细辐条加内外双环, 24px 下糊成一朵太阳花;
-         * 这里去掉辐条和内环, 只留下能读成齿轮的齿廓和中心孔。 */
-        static const int gx[6] = {1000, 500, -500, -1000, -500, 500};
-        static const int gy[6] = {0, 866, 866, 0, -866, -866};
-        hs_icon_ring(cx, cy, r * 64 / 100, t, color);
-        for (int i = 0; i < 6; i++) {
-            int vx = gx[i], vy = gy[i];
-            int tx = -vy, ty = vx;
-            int px[4], py[4];
-            px[0] = cx + r * (vx * 48 + tx * 16) / 100000;
-            py[0] = cy + r * (vy * 48 + ty * 16) / 100000;
-            px[1] = cx + r * (vx * 92 + tx * 13) / 100000;
-            py[1] = cy + r * (vy * 92 + ty * 13) / 100000;
-            px[2] = cx + r * (vx * 92 - tx * 13) / 100000;
-            py[2] = cy + r * (vy * 92 - ty * 13) / 100000;
-            px[3] = cx + r * (vx * 48 - tx * 16) / 100000;
-            py[3] = cy + r * (vy * 48 - ty * 16) / 100000;
-            hs_fill_polygon(px, py, 4, color);
-        }
-        break;
-    }
-    case HS_GLYPH_SPEAKER: {
-        /* 左箱体 + 向右张开的喇叭口 + 两道弧形声波。旧版箱体与锥体比例失衡,
-         * 24px 下只剩一个像箭头的黑块。 */
-        int box_x = cx - r * 17 / 20;
-        int box_w = r * 9 / 20;
-        int box_h = r * 5 / 10;
-        hs_fill_rect(box_x, cy - box_h / 2, box_w, box_h, color);
-        int xs[4] = {cx - r * 8 / 20, cx - r * 1 / 20,
-                     cx - r * 1 / 20, cx - r * 8 / 20};
-        int ys[4] = {cy - r * 9 / 20, cy - r * 14 / 20,
-                     cy + r * 14 / 20, cy + r * 9 / 20};
-        hs_fill_polygon(xs, ys, 4, color);
-        hs_icon_seg2(cx + r * 3 / 10, cy - r * 35 / 100,
-                     cx + r * 55 / 100, cy, color, t);
-        hs_icon_seg2(cx + r * 55 / 100, cy,
-                     cx + r * 3 / 10, cy + r * 35 / 100, color, t);
-        hs_icon_seg2(cx + r * 45 / 100, cy - r * 65 / 100,
-                     cx + r * 9 / 10, cy, color, t);
-        hs_icon_seg2(cx + r * 9 / 10, cy,
-                     cx + r * 45 / 100, cy + r * 65 / 100, color, t);
-        break;
-    }
-    case HS_GLYPH_WIFI: {
-        /* 三段向上张开的同心弧 + 底部圆点。旧版用四条直线拼两个 V,
-         * 在 24px 下看起来像一只鸟/涂鸦, 而不是 WiFi。 */
-        static const int ax[5] = {743, 391, 0, -391, -743};
-        static const int ay[5] = {669, 921, 1000, 921, 669};
-        int oy = cy + r * 7 / 10;
-        int radii[3] = {r / 2, r * 3 / 4, r};
-        hs_fill_circle(cx, oy, t, color);
-        for (int a = 0; a < 3; a++) {
-            int px[5], py[5];
-            for (int i = 0; i < 5; i++) {
-                px[i] = cx + radii[a] * ax[i] / 1000;
-                py[i] = oy - radii[a] * ay[i] / 1000;
-            }
-            for (int i = 0; i < 4; i++)
-                hs_icon_seg2(px[i], py[i], px[i + 1], py[i + 1], color, t);
-        }
-        break;
-    }
     case HS_GLYPH_BLUETOOTH: {
         hs_icon_seg2(cx, cy - r, cx, cy + r, color, t);
         hs_icon_seg2(cx, cy - r, cx + r / 2, cy - r / 2, color, t);
@@ -5502,12 +5429,18 @@ static void hs_top_bar_render(void)
     int icon_y = hs_bar_icon_y();
     int icon_x;
     uint32_t fg = g_shell.colors.panel_fg;
-    icon_x = hs_bar_icon_x(0); hs_draw_icon(icon_x, icon_y, icon_size, fg, HS_GLYPH_POWER);
-    icon_x = hs_bar_icon_x(1); hs_draw_icon(icon_x, icon_y, icon_size, fg, HS_GLYPH_GEAR);
-    icon_x = hs_bar_icon_x(2); hs_draw_icon(icon_x, icon_y, icon_size, fg, HS_GLYPH_SPEAKER);
-    /* 电池是独立矢量绘制，是否出现只看 ACPI 探测结果，不看"台式机/笔记本"。
-     * ABSENT 不画也不留位；DECLARED/UNKNOWN 轮廓 + 两道短线；
-     * 只有 M2 读到可信电量进入 VALID 后才画填充比例。 */
+    /* 用用户 2026-11-11 提供的 assets/icons-status64 同源 64x64 位图，
+     * hs_icon_bmp64 做 4 级覆盖采样，不另画一套手绘图。 */
+    icon_x = hs_bar_icon_x(0);
+    hs_icon_bmp64(icon_x, icon_y, icon_size, fg, g_shell.colors.panel_bg, hs_ico64_power64);
+    icon_x = hs_bar_icon_x(1);
+    hs_icon_bmp64(icon_x, icon_y, icon_size, fg, g_shell.colors.panel_bg, hs_ico64_gear64);
+    icon_x = hs_bar_icon_x(2);
+    hs_icon_bmp64(icon_x, icon_y, icon_size, fg, g_shell.colors.panel_bg, hs_ico64_speaker64);
+    /* 电池使用 icons-status64 同源的 64x64 电池轮廓位图；是否出现只看
+     * ACPI 探测结果，不看"台式机/笔记本"。ABSENT 不画也不留位；
+     * DECLARED/UNKNOWN 轮廓 + 两道短线；只有 M2 读到可信电量进入 VALID
+     * 后才画填充比例。 */
     int wifi_slot = 3;
     if (g_shell.status.battery_state != HS_BATTERY_ABSENT) {
         icon_x = hs_bar_icon_x(3);
@@ -5515,9 +5448,10 @@ static void hs_top_bar_render(void)
                               g_shell.status.battery_state);
         wifi_slot = 4;
     }
-    /* Wi-Fi 与旁边三个同源: 都由 hs_draw_icon 按目标尺寸实时描矢量。
-     * 旧版用两段直线拼 V, 24px 下像涂鸦; 现改为三段同心弧 + 圆点。 */
-    icon_x = hs_bar_icon_x(wifi_slot); hs_draw_icon(icon_x, icon_y, icon_size, fg, HS_GLYPH_WIFI);
+    /* Wi-Fi 与旁边三个同源: 均为用户提供的 64x64 状态图标位图，
+     * 由 hs_icon_bmp64 按目标尺寸覆盖采样，不另画矢量。 */
+    icon_x = hs_bar_icon_x(wifi_slot);
+    hs_icon_bmp64(icon_x, icon_y, icon_size, fg, g_shell.colors.panel_bg, hs_ico64_wifi64);
 
 #ifdef __x86_64__
     /* 参考顶栏的天气温度：只在真实取到温度且屏幕有空间时显示，不用占位符充数。 */
@@ -6774,15 +6708,18 @@ static void cc_toggle_card(void *fb, int x, int y, int w, int h,
     int icx = x + w / 2;
     int icy = y + h / 2 - hs_sy(12);
     {
-        /* 与顶栏共享 hs_draw_icon 矢量管线, 不再各自取 32x32 位图缩放。 */
-        int glyph = HS_GLYPH_WIFI;
-        if (icon_kind == 1) glyph = HS_GLYPH_BLUETOOTH;
-        else if (icon_kind == 2) glyph = HS_GLYPH_AIRPLAY;
-        else if (icon_kind == 3) glyph = HS_GLYPH_DND;
-        else if (icon_kind == 4) glyph = HS_GLYPH_LOCATION;
-        else if (icon_kind == 5) glyph = HS_GLYPH_TORCH;
         int isz = hs_s(26);
-        hs_draw_icon(icx - isz / 2, icy - isz / 2, isz, fg, glyph);
+        if (icon_kind == 0) {
+            /* Wi-Fi 与顶栏同用用户提供的 64x64 状态图标位图, 不另画一套。 */
+            hs_icon_bmp64(icx - isz / 2, icy - isz / 2, isz, fg, bg, hs_ico64_wifi64);
+        } else {
+            int glyph = HS_GLYPH_BLUETOOTH;
+            if (icon_kind == 2) glyph = HS_GLYPH_AIRPLAY;
+            else if (icon_kind == 3) glyph = HS_GLYPH_DND;
+            else if (icon_kind == 4) glyph = HS_GLYPH_LOCATION;
+            else if (icon_kind == 5) glyph = HS_GLYPH_TORCH;
+            hs_draw_icon(icx - isz / 2, icy - isz / 2, isz, fg, glyph);
+        }
     }
 
     int cw = hs_s(9), fs = hs_s(13);

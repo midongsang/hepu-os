@@ -450,7 +450,9 @@ void hs_panel_init(hs_panel_t *panel, hs_panel_pos_t pos, int height);
 void hs_launcher_render(void);
 void hs_launcher_handle_key(int key);
 
-/* 系统单色矢量图标: 顶栏/控制中心使用; 按 size 实时描边, 不依赖位图缩放。 */
+/* 系统单色矢量图标: 控制中心 BT/Air/DND/Loc/Torch 使用。
+ * 0-3 是顶栏 power/gear/speaker/WiFi 的保留号段; 它们已改用用户提供的
+ * assets/icons-status64 64x64 位图(hs_icon_bmp64), 不再走 hs_draw_icon。 */
 typedef enum {
     HS_GLYPH_POWER = 0,
     HS_GLYPH_GEAR,
