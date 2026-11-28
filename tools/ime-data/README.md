@@ -17,3 +17,10 @@
 python3 tools/gen_ime_data.py
 python3 tools/check_ime_glyphs.py --ttf kernel/arch/x86_64/cjk_font_data.c
 ```
+
+## 首屏命中率样本
+
+- `common-500.tsv`：`378fac9`（扩表前）常用单字表按拼音组顺序去重后的前 500 字，每行 `拼音<TAB>汉字`；每字取旧表首次出现的读音。
+- `common-100-phrases.tsv`：当前 `ime_phrase_table` 的前 100 个词组，每行 `拼音<TAB>词组`。
+
+这两个文件只用于 `tools/host-tests/ime_firstpage_test.c` 的回归测量，不参与内核词表生成。

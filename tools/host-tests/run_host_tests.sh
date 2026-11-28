@@ -154,6 +154,10 @@ run_one utf8 "" tools/host-tests/utf8_text_test.c $ARCH/hs_text_utf8.c
 run_one ime_core "" tools/host-tests/ime_core_test.c \
     kernel/shared/ime/ime.c kernel/shared/ime/ime_data.c kernel/shared/ime/ime_data_table.c
 
+# 9) IME 常用样本首屏命中率（M3：500 字 / 100 词组）
+run_one ime_firstpage "" tools/host-tests/ime_firstpage_test.c \
+    kernel/shared/ime/ime.c kernel/shared/ime/ime_data.c kernel/shared/ime/ime_data_table.c
+
 echo "=== 结果: 通过 $PASS / 失败 $FAIL ==="
 [ "$FAIL" -eq 0 ] || exit 1
 exit 0

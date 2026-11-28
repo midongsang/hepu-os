@@ -31,14 +31,16 @@
 | 项 | 结果 |
 |---|---|
 | 构建 | `kernel64.bin=1,263,312B`、`kernel32.bin=3,899,021B`、`kernel32.elf=4,083,832B`、`image=268,435,456B` |
-| 主机测试 | 21/21 PASS（`/tmp/m3-host6.log`） |
+| 主机测试 | 22/22 PASS（`/tmp/m3-host7.log`） |
 | 字库 | 3,769/3,769 覆盖，`font_cjk_big` 3,789 码点 |
+| 常用样本首屏 | 500 字 472/500=94.4%；100 词组 100/100；详见 `FIRSTPAGE.md` |
 | 100% 九态视觉 | 9/9 PASS；02 mean=0.085，03–09 mean=0.042，01 mean=0.000（`/tmp/m3-visual-final2-compare.log`） |
 | 32 位 smoke | 最终复跑 `ext2_mounted=1`、整体 PASS（`/tmp/m3-smoke32-final3.log`） |
 | 终端 | `echo ` + `nihao` + `1` + 回车输出 `你好`（`/tmp/hepu-ime-term-m3b/05-echo-output.png`） |
 | 编辑器 | `nihao → ni hao → 你好`；`yi` 1/11↔2/11；`zhongguo → zhong guo → 你好中国`（`/tmp/hepu-ime-m3e3/`） |
 | Settings 点击 | Mode → Chinese (ZH)，Candidates/page → 7，Remember frequency → Off（`/tmp/hepu-ime-settings-final3/`） |
 | Settings 跨重启 | 磁盘 `sys.ime_candidates=7`、`sys.ime_freq=off`；第二次启动 Input 页显示 7/Off（`/tmp/hepu-ime-settings-persist/`） |
+| 词频关闭端到端 | Off 后输入 `zhongguo` 选 1（中国），`freq.txt` 与基线逐字节一致，仍为 `鞥 1`；第三次启动仍 Off（`/tmp/hepu-ime-freq-off/`） |
 | 模式/词频跨重启 | 磁盘 `sys.ime_mode=zh`、`freq.txt` 为 `你好 1`/`鞥 1`；第二次启动 `eng` 直接弹 ZH 候选（`/tmp/hepu-ime-persist-m3c/`） |
 
 ## 4. 证据截图
@@ -65,9 +67,16 @@
 ![重启后 Settings 读回](12-settings-persist-boot2.png)
 ![终端 echo 中文](13-terminal-echo.png)
 
+### Remember frequency Off 端到端
+
+![关闭 Remember frequency](14-freq-off-settings.png)
+![关闭后输入中国](15-freq-off-committed.png)
+![重启后仍为 Off](16-freq-off-restart.png)
+
 ## 5. 边界
 
-- 常用 500 字/100 词组首屏命中率没有单独做全量抽测；本轮以全表覆盖、`nihao`/`zhongguo` 词组优先、`nh` 简拼主机断言和具体 QEMU 截图取证。
+- 常用 500 字首屏 472/500（94.4%），未进首屏的 28 字全部仍在词表/字库中；原因是 `di`、`dian`、`gu` 等读音组候选超过 9 个，首屏只放前 9 个。100 词组首屏 100/100。明细见 `FIRSTPAGE.md`。
+- 若要把 500 字首屏命中率继续拉高，应做“常用字优先”排序，不应再扩字表。
 - 启动时间没有独立量化，只记录内核/镜像体积；不能声称“启动时间已验证”。
 - 真实 P3 `/data` 分区、只读盘/无 `/data` 降级、候选条在窗口右侧/底部边界的鼠标命中仍未验证。
 - M3 持久化首轮曾落到 OOBE 首启页，未计入证据；清理夹具后复跑通过。32 位 smoke 早期一次出现 `ext2_mounted=0`，同一构建复跑 `ext2_mounted=1`/PASS；这是启动夹具 flakiness，不写成稳定通过。
