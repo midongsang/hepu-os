@@ -23,6 +23,9 @@ extern void vga_printf(const char *fmt, ...);
 #include "hs_apps.h"
 #include "hs_systools.h"
 #include "hsinput.h"
+#ifdef __x86_64__
+#include "hs_ime.h"
+#endif
 #include "../../shared/desktop/desk_api.h"
 
 /* 内核堆释放: 文件内壁纸回滚路径先于局部 extern 声明调用, 顶部前置原型消除隐式声明 */
@@ -8978,6 +8981,9 @@ static void hpdesk_render_inner(void)
 
     /* 提交: 后台内容→前台, 光标单独叠加在前台, 不污染后台缓冲 */
     g_seg_mid += hs_rdtsc() - __rs0;
+#ifdef __x86_64__
+    hs_ime_render();
+#endif
     hs_present_with_cursor(mx, my);
     g_content_dirty = 0;
     g_last_mx = mx;

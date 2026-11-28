@@ -112,6 +112,9 @@ C_SOURCES = \
     $(KERNEL_DIR)/shared/desktop/desk_hpdesk.c \
     $(KERNEL_DIR)/shared/desktop/desk_runtime.c \
     $(KERNEL_DIR)/shared/desktop/desk_demo.c \
+    $(KERNEL_DIR)/shared/ime/ime.c \
+    $(KERNEL_DIR)/shared/ime/ime_data.c \
+    $(KERNEL_DIR)/shared/ime/ime_data_table.c \
     $(KERNEL_DIR)/crypto/crypto.c \
     $(KERNEL_DIR)/crypto/aes.c \
     $(KERNEL_DIR)/crypto/aes_gcm.c \
@@ -136,11 +139,15 @@ C_SOURCES = \
     $(ARCH_DIR)/xhci64.c \
     $(ARCH_DIR)/hsinput.c \
     $(ARCH_DIR)/hstouch.c \
+    $(ARCH_DIR)/hs_text_utf8.c \
+    $(ARCH_DIR)/hs_ime_storage.c \
+    $(ARCH_DIR)/hs_ime.c \
     $(ARCH_DIR)/ahci64.c \
     $(ARCH_DIR)/font64.c \
     $(ARCH_DIR)/ttf64.c \
     $(ARCH_DIR)/font_data.c \
     $(ARCH_DIR)/cjk_font_data.c \
+    $(ARCH_DIR)/cjk16_data.c \
     $(ARCH_DIR)/window64.c \
     $(ARCH_DIR)/taskmgr64.c \
     $(ARCH_DIR)/filemgr64.c \
@@ -205,7 +212,7 @@ C_OBJECTS = $(addprefix $(BUILD_DIR)/, $(notdir $(C_SOURCES:.c=.o)))
 ASM_OBJECTS = $(addprefix $(BUILD_DIR)/, $(notdir $(ASM_SOURCES:.S=.o)))
 
 # VPATH用于查找源文件
-vpath %.c $(KERNEL_DIR) $(ARCH_DIR) $(KERNEL_DIR)/lib $(KERNEL_DIR)/shared/gfx $(KERNEL_DIR)/shared/drivers $(KERNEL_DIR)/shared/fs $(KERNEL_DIR)/shared/lib $(KERNEL_DIR)/shared/debug $(KERNEL_DIR)/shared/desktop $(KERNEL_DIR)/shared/log $(KERNEL_DIR)/sched $(KERNEL_DIR)/crypto $(KERNEL_DIR)/net
+vpath %.c $(KERNEL_DIR) $(ARCH_DIR) $(KERNEL_DIR)/lib $(KERNEL_DIR)/shared/gfx $(KERNEL_DIR)/shared/drivers $(KERNEL_DIR)/shared/fs $(KERNEL_DIR)/shared/lib $(KERNEL_DIR)/shared/debug $(KERNEL_DIR)/shared/desktop $(KERNEL_DIR)/shared/ime $(KERNEL_DIR)/shared/log $(KERNEL_DIR)/sched $(KERNEL_DIR)/crypto $(KERNEL_DIR)/net
 vpath %.S $(ARCH_DIR)
 
 
@@ -382,6 +389,10 @@ $(BUILD_DIR):
 $(BUILD_DIR)/%.o: %.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 	@echo "  [CC] $<"
+
+# 点阵字库是生成头文件；普通规则不跟踪头依赖，改字库后必须重编这个对象，
+# 否则镜像会继续使用旧点阵（候选生僻字仍空白）。
+$(BUILD_DIR)/cjk16_data.o: $(KERNEL_DIR)/include/font_cjk_big.h
 
 # 编译shared目录的C文件
 $(BUILD_DIR)/driver_framework.o: $(KERNEL_DIR)/shared/drivers/driver_framework.c | $(BUILD_DIR)

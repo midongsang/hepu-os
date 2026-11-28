@@ -5,6 +5,7 @@
 #include "hsinput.h"
 #include "hstouch.h"
 #include "hpdesk.h"
+#include "hs_ime.h"
 
 /* 屏幕尺寸 */
 static int g_sw = 1024;
@@ -215,6 +216,9 @@ static int hs_normalize_ext(int key)
 /* 主轮询: 一次收集全部输入并分发 */
 void hs_input_poll(void)
 {
+    static int ime_inited = 0;
+    if (!ime_inited) { hs_ime_init(); ime_inited = 1; }
+
     usb64_poll();
     mouse64_update(g_sw, g_sh);
 
@@ -225,6 +229,7 @@ void hs_input_poll(void)
         key = hs_normalize_ext(key);
         key = hs_normalize_fn(key);
         if (key != 0) {  /* V0.13.8 P5: 0=扩展键前缀已消费 */
+            if (hs_ime_handle_key(key, mod)) return;
             if (hs_handle_shortcut(key, mod)) return;
             if (key == 27) {
                 shell64_run();
@@ -237,6 +242,7 @@ void hs_input_poll(void)
         int mod = keyboard64_get_mod();
         key = hs_normalize_ext(key);
         if (key != 0) {
+            if (hs_ime_handle_key(key, mod)) return;
             if (hs_handle_shortcut(key, mod)) return;
             if (key == 27) {
                 shell64_run();

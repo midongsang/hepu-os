@@ -468,6 +468,15 @@ int ttf64_render_char_cjk(uint32_t ch, int pixel_size, uint8_t *bitmap,
 }
 
 int ttf64_cjk_is_loaded(void) { return g_cjk_font.loaded; }
+
+/* 是否真的有该码点的字形（glyph 0 = .notdef，视为缺字）。
+ * gfx64 的 TTF 缺字回退需要这个判断，否则 get_cjk_advance 会把 .notdef
+ * 的宽度当成真实 advance，测量与绘制不一致。 */
+int ttf64_cjk_has(uint32_t ch)
+{
+    if (!g_cjk_font.loaded) return 0;
+    return ttf_char_to_glyph(&g_cjk_font, ch) != 0;
+}
 int ttf64_render_char(uint32_t ch, int pixel_size, uint8_t *bitmap,
                        int *w, int *h, int *x, int *y)
 {

@@ -13,6 +13,7 @@
 #include "../../shared/gfx/gfx_shared.h"
 #include "math64.h"
 #include "vg64.h"   /* P19.2: 图元统一到矢量管线 */
+#include "cjk16.h"  /* M0: TTF 缺字时的 16x16 点阵兜底 */
 
 /* V0.55.1: 以下两个函数在文件内先被调用、后定义, 在此提前原型以消除隐式声明 */
 void gfx64_blit_background(uint8_t *bg, int x, int y, int w, int h);
@@ -1057,7 +1058,16 @@ static int gfx64_put_ttf(int x, int y, uint32_t cp, uint32_t color)
             vga_puts("\n");
             ttf_canary = 0xDEADBEEF;
         }
+        /* 有些字形在 TTF 里有轮廓/宽度，但软栅格化后位图全零（例如复杂
+         * 笔画在小字号下漏栅格）。这类“成功但空白”不能进缓存，必须走
+         * 点阵兜底，否则候选项会显示成只有数字的空白。 */
+        int has_ink = 0;
         if (render_ok == 0 && w > 0 && w <= TTF_CACHE_W && h > 0 && h <= TTF_CACHE_H) {
+            for (int i = 0; i < w * h; i++) {
+                if (ttf_bitmap[i]) { has_ink = 1; break; }
+            }
+        }
+        if (has_ink) {
             int slot = ttf_cache_find_slot(cp, gfx_ttf_size);
             if (slot >= 0) {
                 ttf_cache_entry_t *e = &ttf_cache[slot];
@@ -1120,6 +1130,13 @@ static int gfx64_put_ttf(int x, int y, uint32_t cp, uint32_t color)
         if (adv < right_edge) adv = right_edge;
         return adv;
     }
+    /* M0: TTF 子集缺字时，用 16x16 点阵兜底。
+     * 输入法词库 1,985 字里 1,426 字不在 724 字 TTF 子集；没有这层回退，
+     * 候选和正文会直接空白。TTF 仍是首选，点阵只负责“有字可显示”。 */
+    if (cp >= 128 && cjk16_has(cp)) {
+        int adv = cjk16_draw(cp, x, y, color, gfx_ttf_size);
+        if (adv > 0) return adv;
+    }
     /* CJK/ASCII 失败时的宽度兜底 */
     return (cp < 128) ? 8 : (gfx_ttf_size + 1);
 }
@@ -1163,13 +1180,24 @@ int gfx64_measure_text(const char *str, int size)
     if (!str || size <= 0) return 0;
     extern int ttf64_get_char_advance(uint32_t ch, int pixel_size);
     extern int ttf64_get_cjk_advance(uint32_t ch, int pixel_size);
+    extern int ttf64_cjk_has(uint32_t ch);
     int w = 0;
     while (*str) {
         if (*str == '\n') { str++; continue; }
         if (*str == ' ') { w += size / 2; str++; continue; }
         uint32_t cp = gfx64_utf8_next(&str);
-        w += (cp < 128) ? ttf64_get_char_advance(cp, size)
-                        : ttf64_get_cjk_advance(cp, size);
+        if (cp >= 128) {
+            if (ttf64_cjk_has(cp)) {
+                w += ttf64_get_cjk_advance(cp, size);
+            } else if (cjk16_has(cp)) {
+                /* 与 cjk16_draw 使用同一方形 advance，避免测量和绘制错位。 */
+                w += size;
+            } else {
+                w += ttf64_get_cjk_advance(cp, size);
+            }
+        } else {
+            w += ttf64_get_char_advance(cp, size);
+        }
     }
     return w;
 }
@@ -1217,8 +1245,12 @@ void gfx64_put_string(int x, int y, const char *str, uint32_t color)
                 w = gfx64_put_char(cx, y, (char)cp, color);
             } else if (gfx_use_ttf && ttf64_is_loaded()) {
                 w = gfx64_put_ttf(cx, y, cp, color);
+            } else if (cjk16_has(cp)) {
+                /* 没有 TTF 时也尽量让 CJK 可读，而不是画占位框。 */
+                w = cjk16_draw(cp, cx, y, color, gfx_use_ttf ? gfx_ttf_size : 16);
+                if (w <= 0) w = 8;
             } else {
-                /* 无TTF时 CJK 显示为占位框 */
+                /* 无TTF且点阵也无此字时 CJK 显示为占位宽度 */
                 w = 8;
             }
             cx += w;

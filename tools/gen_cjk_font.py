@@ -39,6 +39,14 @@ def gb2312_level1():
 for c in gb2312_level1():
     if c not in CHARS:
         CHARS.append(c)
+
+# V4.30-M0: 补 IME 词库中不在 GB2312 一级的 14 个常用字.
+# 这些字不是 UI 文案, 但输入法必须能显示候选, 不能回退成空白框.
+IME_EXTRA = "呃尬岑愣昵楠欻涮瞟耨踹辍迥鞥"
+for c in IME_EXTRA:
+    if c not in CHARS:
+        CHARS.append(c)
+
 CHARS.sort(key=ord)   # 按 unicode 排序 -> 内核可二分查找
 
 def render_char(ch):

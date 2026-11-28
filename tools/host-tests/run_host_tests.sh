@@ -147,6 +147,13 @@ else
     sed -n '1,12p' "$OUT/fsck.build.log" | sed 's/^/         /'
 fi
 
+# 7) 桌面 UTF-8 文本工具（M0：码点前进/后退、列宽、有界追加）
+run_one utf8 "" tools/host-tests/utf8_text_test.c $ARCH/hs_text_utf8.c
+
+# 8) IME 核心（M1：无存储依赖的拼音组词/候选/上屏）
+run_one ime_core "" tools/host-tests/ime_core_test.c \
+    kernel/shared/ime/ime.c kernel/shared/ime/ime_data.c kernel/shared/ime/ime_data_table.c
+
 echo "=== 结果: 通过 $PASS / 失败 $FAIL ==="
 [ "$FAIL" -eq 0 ] || exit 1
 exit 0

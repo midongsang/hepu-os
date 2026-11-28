@@ -11,6 +11,7 @@
 #include "uproc.h"
 #include "hsservices.h"
 #include "hsinput.h"   /* KEY_EXT_* 扩展键统一码 */
+#include "hs_text_utf8.h"
 #include "../../shared/drivers/driver_framework.h"
 
 /* 外部图形/系统接口 */
@@ -26,6 +27,7 @@ extern void gfx64_draw_rounded_rect(int x, int y, int w, int h, int radius, uint
 extern void font64_draw_string(void *fb, int fw, int fh,
                                int x, int y, const char *str,
                                uint32_t color, uint16_t size);
+extern int gfx64_measure_text(const char *str, int size);
 extern void *gfx64_get_framebuffer(void);
 extern void vga_puts(const char *s);
 extern int strcmp(const char *a, const char *b);
@@ -117,7 +119,7 @@ static int t_hist_edit = 0;
 
 static void t_put(const char *s)
 {
-    /* 按 TERM_MAX_LEN 折行 */
+    /* 按 TERM_MAX_LEN 折行；按完整 UTF-8 码点切，避免一个汉字被劈成两行。 */
     while (*s) {
         if (t_line_count >= TERM_MAX_LINES) {
             for (int i = 1; i < TERM_MAX_LINES; i++)
@@ -125,7 +127,12 @@ static void t_put(const char *s)
             t_line_count = TERM_MAX_LINES - 1;
         }
         int len = 0;
-        while (s[len] && len < TERM_MAX_LEN) len++;
+        while (s[len]) {
+            int n = hs_utf8_len_at(s + len, TERM_MAX_LEN - len);
+            if (n <= 0 || len + n > TERM_MAX_LEN) break;
+            len += n;
+        }
+        if (len <= 0) break;
         for (int j = 0; j < len; j++) t_lines[t_line_count][j] = s[j];
         t_lines[t_line_count][len] = 0;
         t_line_count++;
@@ -157,8 +164,13 @@ static void t_out_multi(const char *s)
             s++;
             continue;
         }
-        if (g_olen < TERM_MAX_LEN) g_oline[g_olen++] = *s;
-        s++;
+        int n = hs_utf8_len_at(s, 4);
+        if (n <= 0) n = 1;
+        if (g_olen + n > TERM_MAX_LEN) t_out_flush();
+        for (int i = 0; i < n; i++) {
+            if (g_olen < TERM_MAX_LEN) g_oline[g_olen++] = s[i];
+        }
+        s += n;
     }
 }
 
@@ -705,12 +717,13 @@ static void t_render(hs_window_t *w)
     char prompt[72];
     strcpy(prompt, "> ");
     hs_strcpyn(prompt + 2, t_input, TERM_INPUT_MAX);
+    int prompt_w = gfx64_measure_text(prompt, TY(12));
     font64_draw_string(fb, W, H, cx, iy, prompt, TERM_HI, TY(12));
 
-    /* 光标 (闪烁块, 2 帧周期) */
+    /* 光标 (闪烁块, 2 帧周期)：按实际文本宽度推进，不能按字节数乘 6px */
     t_frame++;
     if ((t_frame & 1) == 0) {
-        int tx = cx + (2 + t_in_len) * TX(6);
+        int tx = cx + prompt_w;
         gfx64_fill_rect(tx, iy + TY(1), TX(7), TY(13), TERM_FG);
     }
 #undef TX
@@ -804,12 +817,28 @@ static void t_complete(void)
     }
 }
 
+static void t_insert_utf8(const char *s)
+{
+    if (!s || !*s) return;
+    t_in_len = hs_utf8_append(t_input, TERM_INPUT_MAX + 1, t_in_len, s);
+    t_hist_edit = 1;
+    extern void hpdesk_mark_dirty(void);
+    hpdesk_mark_dirty();
+}
+
+static void t_backspace_utf8(void)
+{
+    t_in_len = hs_utf8_backspace(t_input, t_in_len);
+    t_hist_edit = 1;
+    extern void hpdesk_mark_dirty(void);
+    hpdesk_mark_dirty();
+}
+
 static void t_handle_key(int key)
 {
     if (key == '\t') { t_complete(); return; }
-    if (key == '\b' || key == 0x0E) {          /* 退格 */
-        if (t_in_len > 0) { t_in_len--; t_input[t_in_len] = 0; }
-        t_hist_edit = 1;
+    if (key == '\b' || key == 0x0E) {          /* 退格：按完整 UTF-8 码点删 */
+        t_backspace_utf8();
         return;
     }
     if (key == '\n' || key == '\r' || key == 0x1C) {  /* 回车 */
@@ -4333,44 +4362,92 @@ static int ed_line_of(int pos)
     return line;
 }
 
+/* 编辑器内部仍以字节偏移存光标，但列宽按显示列计算；中文占 2 列。 */
+static int ed_cols_between(int start, int end)
+{
+    if (start < 0) start = 0;
+    if (end > e_len) end = e_len;
+    if (end <= start) return 0;
+    return hs_utf8_cols(e_buf + start, end - start);
+}
+
+static int ed_pos_at_col(int start, int end, int col)
+{
+    int pos = start;
+    int c = 0;
+    while (pos < end) {
+        int n = hs_utf8_len_at(e_buf + pos, end - pos);
+        if (n <= 0) n = 1;
+        int w = hs_utf8_cols(e_buf + pos, n);
+        if (c + w > col) break;
+        c += w;
+        pos += n;
+    }
+    return pos;
+}
+
+static void ed_insert_bytes(const char *s, int n)
+{
+    if (!s || n <= 0) return;
+    if (e_len + n > ED_CAP) { hs_strcpyn(e_msg, "Buffer full", 64); return; }
+    for (int i = e_len; i > e_cur; i--) e_buf[i + n - 1] = e_buf[i - 1];
+    for (int i = 0; i < n; i++) e_buf[e_cur + i] = s[i];
+    e_len += n;
+    e_cur += n;
+    e_buf[e_len] = 0;
+    e_modified = 1;
+}
+
 static void ed_insert(char c)
 {
-    if (e_len >= ED_CAP) { hs_strcpyn(e_msg, "Buffer full", 64); return; }
-    for (int i = e_len; i > e_cur; i--) e_buf[i] = e_buf[i - 1];
-    e_buf[e_cur] = c;
-    e_len++;
-    e_cur++;
+    ed_insert_bytes(&c, 1);
+}
+
+static void ed_insert_utf8(const char *s)
+{
+    if (!s || !*s) return;
+    int n = 0;
+    while (s[n]) {
+        int cl = hs_utf8_len_at(s + n, 4);
+        if (cl <= 0) break;
+        n += cl;
+    }
+    ed_insert_bytes(s, n);
+}
+
+static void ed_delete_before_utf8(void)
+{
+    if (e_cur <= 0) return;
+    int n = hs_utf8_prev_len(e_buf, e_cur);
+    if (n <= 0) n = 1;
+    if (n > e_cur) n = e_cur;
+    for (int i = e_cur - n; i < e_len - n; i++) e_buf[i] = e_buf[i + n];
+    e_len -= n;
+    e_cur -= n;
     e_buf[e_len] = 0;
     e_modified = 1;
 }
 
 static void ed_delete_before(void)
 {
-    if (e_cur <= 0) return;
-    for (int i = e_cur - 1; i < e_len - 1; i++) e_buf[i] = e_buf[i + 1];
-    e_len--;
-    e_cur--;
-    e_buf[e_len] = 0;
-    e_modified = 1;
+    ed_delete_before_utf8();
 }
 
 static void ed_move_vert(int dir)
 {
     int ls = ed_line_start(e_cur);
-    int col = e_cur - ls;
+    int col = ed_cols_between(ls, e_cur);
     if (dir < 0) {
         if (ls == 0) { e_cur = 0; return; }
         int prev_end = ls - 1;
         int prev_start = ed_line_start(prev_end);
-        int prev_len = prev_end - prev_start;
-        e_cur = prev_start + (col > prev_len ? prev_len : col);
+        e_cur = ed_pos_at_col(prev_start, prev_end, col);
     } else {
         int le = ed_line_end(e_cur);
         if (le >= e_len) { e_cur = e_len; return; }
         int next_start = le + 1;
         int next_end = ed_line_end(next_start);
-        int next_len = next_end - next_start;
-        e_cur = next_start + (col > next_len ? next_len : col);
+        e_cur = ed_pos_at_col(next_start, next_end, col);
     }
 }
 
@@ -4467,13 +4544,22 @@ static void e_render(hs_window_t *w)
         char lb[168];
         int lc = 0;
         int i = lstart;
-        while (i < lend && lc < maxc && lc < 167) lb[lc++] = e_buf[i++];
+        int cols = 0;
+        while (i < lend) {
+            int n = hs_utf8_len_at(e_buf + i, lend - i);
+            if (n <= 0) n = 1;
+            int w = hs_utf8_cols(e_buf + i, n);
+            if (cols + w > maxc || lc + n >= (int)sizeof(lb)) break;
+            for (int k = 0; k < n; k++) lb[lc++] = e_buf[i + k];
+            cols += w;
+            i += n;
+        }
         lb[lc] = 0;
         if (lc > 0)
             font64_draw_string(fb, W, H, cx + EC(ED_GUTTER), cy + row * ed_line_h(), lb, fg, EC(12));
 
         if (!cursor_drawn && e_cur >= lstart && e_cur <= lend) {
-            int col = e_cur - lstart;
+            int col = ed_cols_between(lstart, e_cur);
             if (col > maxc) col = maxc;
             gfx64_fill_rect(cx + EC(ED_GUTTER) + col * EC(7), cy + row * ed_line_h() + EC(2),
                             EC(2), EC(13), accent);
@@ -4540,6 +4626,54 @@ int hs_apps_editor_close(void)
     if (hs_window_get_focused() != e_win) return 0;
     hs_window_hide(e_win);
     return 1;
+}
+
+/* ============================================================================
+ * 文本输入目标契约 (M1)
+ * IME 只认“当前焦点是否文本控件”，不直接摸终端/编辑器内部。
+ * 密码框在 hpdesk 登录/账户层处理，根本不会进入这里，因此天然不走 IME。
+ * ========================================================================== */
+int hs_apps_text_focus(void)
+{
+    hs_window_t *foc = hs_window_get_focused();
+    if (!foc || !foc->visible) return 0;
+    if (t_win && foc == t_win) return 1;
+    if (e_win && foc == e_win) return 1;
+    return 0;
+}
+
+int hs_apps_text_ime_allowed(void)
+{
+    /* 终端和编辑器都允许；未来密码输入控件必须在这里返回 0。 */
+    return hs_apps_text_focus();
+}
+
+int hs_apps_text_insert_utf8(const char *s)
+{
+    hs_window_t *foc = hs_window_get_focused();
+    if (!foc || !foc->visible || !s) return 0;
+    if (t_win && foc == t_win) { t_insert_utf8(s); return 1; }
+    if (e_win && foc == e_win) {
+        ed_insert_utf8(s);
+        extern void hpdesk_mark_dirty(void);
+        hpdesk_mark_dirty();
+        return 1;
+    }
+    return 0;
+}
+
+int hs_apps_text_backspace_utf8(void)
+{
+    hs_window_t *foc = hs_window_get_focused();
+    if (!foc || !foc->visible) return 0;
+    if (t_win && foc == t_win) { t_backspace_utf8(); return 1; }
+    if (e_win && foc == e_win) {
+        ed_delete_before_utf8();
+        extern void hpdesk_mark_dirty(void);
+        hpdesk_mark_dirty();
+        return 1;
+    }
+    return 0;
 }
 
 /* 键盘转发: 聚焦窗口为应用时消费按键 */

@@ -19,4 +19,10 @@ int hs_apps_editor_close(void);
 int hs_apps_handle_key(int key);
 void hs_apps_handle_wheel(int delta);
 
+/* 文本输入目标契约 (M1 IME) */
+int hs_apps_text_focus(void);
+int hs_apps_text_ime_allowed(void);
+int hs_apps_text_insert_utf8(const char *s);
+int hs_apps_text_backspace_utf8(void);
+
 #endif
