@@ -13,6 +13,10 @@ void hs_ime_set_mode(int mode);
 void hs_ime_toggle(void);
 void hs_ime_cancel(void);
 int  hs_ime_composing(void);
+int  hs_ime_page_size(void);
+int  hs_ime_set_page_size(int n);
+int  hs_ime_freq_enabled(void);
+int  hs_ime_set_freq_enabled(int on);
 
 /* 在 hsinput 的快捷键/Esc 分支之前调用；返回 1=已消费。 */
 int  hs_ime_handle_key(int key, int mod);

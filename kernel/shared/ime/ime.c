@@ -33,11 +33,15 @@ static int  ime_freq_n = 0;
 
 /* V3.42: 频率持久化标志 */
 static int ime_freq_loaded = 0;
+/* M3: Settings 可调候选数（5/7/9）；默认 9，遵循 IME_PAGE_SIZE 上限。 */
+static int ime_page_size_val = IME_PAGE_SIZE;
+/* M3: 是否记住词频；关闭后清空本次会话词频，不加载、不记录、不落盘。 */
+static int ime_freq_enabled_flag = 1;
 
 /* V3.42: 从 /data/ime/freq.txt 加载频率表 (每行 "词 频率") */
 static void ime_freq_load(void)
 {
-    if (ime_freq_loaded) return;
+    if (ime_freq_loaded || !ime_freq_enabled_flag) return;
     ime_freq_loaded = 1;
     char buf[1024];
     int n = ide_ext2_read_file("/data/ime", "freq.txt", buf, 1023);
@@ -69,6 +73,7 @@ static void ime_freq_load(void)
 /* V3.42: 频率表落盘到 /data/ime/freq.txt */
 static void ime_freq_save(void)
 {
+    if (!ime_freq_enabled_flag) return;
     char out[1024];
     int op = 0;
     for (int i = 0; i < ime_freq_n && op < 900; i++) {
@@ -104,6 +109,7 @@ static int ime_freq_of(const char *w)
 /* V3.39: 记录候选词使用 (已存在 +1; 新词替换频率最低项) */
 void ime_bump(const char *w)
 {
+    if (!ime_freq_enabled_flag) return;
     if (!w || !*w) return;
     ime_freq_load();
     for (int i = 0; i < ime_freq_n; i++) {
@@ -281,8 +287,8 @@ int ime_candidate_count(void)
 int ime_candidate_get(int idx, char *out, int cap)
 {
     if (!out || cap <= 0) return -1;
-    int gi = ime_page * IME_PAGE_SIZE + idx;
-    if (idx < 0 || idx >= IME_PAGE_SIZE || gi >= ime_cand_cnt) return -1;
+    int gi = ime_page * ime_page_size_val + idx;
+    if (idx < 0 || idx >= ime_page_size_val || gi >= ime_cand_cnt) return -1;
     int len = (int)strlen(ime_cands[gi]);
     if (len >= cap) len = cap - 1;
     memcpy(out, ime_cands[gi], (size_t)len);
@@ -298,7 +304,29 @@ int ime_page_index(void)
 
 int ime_page_count(void)
 {
-    return (ime_cand_cnt + IME_PAGE_SIZE - 1) / IME_PAGE_SIZE;
+    return (ime_cand_cnt + ime_page_size_val - 1) / ime_page_size_val;
+}
+
+int ime_page_size(void) { return ime_page_size_val; }
+
+int ime_page_size_set(int n)
+{
+    if (n < 5) n = 5;
+    if (n > IME_PAGE_SIZE) n = IME_PAGE_SIZE;
+    ime_page_size_val = n;
+    ime_page = 0;
+    return ime_page_size_val;
+}
+
+int ime_freq_enabled(void) { return ime_freq_enabled_flag; }
+
+void ime_freq_set_enabled(int on)
+{
+    ime_freq_enabled_flag = on ? 1 : 0;
+    if (!ime_freq_enabled_flag) {
+        ime_freq_n = 0;
+        ime_freq_loaded = 0;   /* 重新打开时允许从 /data 重新加载 */
+    }
 }
 
 int ime_page_next(void)
@@ -307,6 +335,43 @@ int ime_page_next(void)
     if (pc <= 1) return ime_page;
     ime_page = (ime_page + 1) % pc;
     return ime_page;
+}
+
+/* M3: 左右键翻页；与 page_next 对称，空候选时保持第 0 页。 */
+int ime_page_prev(void)
+{
+    int pc = ime_page_count();
+    if (pc <= 1) return ime_page;
+    ime_page = (ime_page + pc - 1) % pc;
+    return ime_page;
+}
+
+/* M3: 候选条拼音分段。用主表的合法拼音键做最长前缀切分：
+ * nihao -> ni hao, zhongguo -> zhong guo；输入到一半的字母原样保留。 */
+int ime_pinyin_display(char *out, int cap)
+{
+    if (!out || cap <= 0) return 0;
+    int o = 0, pos = 0;
+    while (pos < ime_py_len) {
+        int best = 0;
+        for (int i = 0; i < ime_table_entries; i++) {
+            const char *py = ime_table[i].py;
+            int pl = (int)strlen(py);
+            if (pl <= 0 || pl > ime_py_len - pos) continue;
+            if (strncmp(py, ime_py + pos, (size_t)pl) == 0 && pl > best)
+                best = pl;
+        }
+        if (best == 0) {
+            /* 没有合法音节前缀：把剩余缓冲原样显示，避免吞字母。 */
+            while (pos < ime_py_len && o < cap - 1) out[o++] = ime_py[pos++];
+            break;
+        }
+        if (o > 0 && o < cap - 1) out[o++] = ' ';
+        for (int i = 0; i < best && o < cap - 1; i++) out[o++] = ime_py[pos + i];
+        pos += best;
+    }
+    out[o] = 0;
+    return o;
 }
 
 /* V4.28-E73: 按拼音串直接查询候选(供 shell readline TAB 内嵌 IME 集成)

@@ -6,11 +6,12 @@ static int fails;
 #include "ime.h"
 
 /* ime_core 的频率持久化桩：主机测试不碰真实磁盘。 */
+static int ime_write_calls;
 int ide_ext2_read_file(const char *dirpath, const char *name, char *buf, int max) {
     (void)dirpath; (void)name; (void)buf; (void)max; return -1;
 }
 int ide_ext2_writefile(const char *name, const char *data) {
-    (void)name; (void)data; return 0;
+    (void)name; (void)data; ime_write_calls++; return 0;
 }
 int ide_ext2_mkdir(const char *path) { (void)path; return 0; }
 int ide_ext2_sync(void) { return 0; }
@@ -48,6 +49,16 @@ static void test_zhongguo(void) {
     printf("  zhongguo -> %s\n", c);
 }
 
+static void test_abbrev(void) {
+    ime_reset();
+    type("nh");
+    CHECK(ime_candidate_count() > 0);
+    char c[IME_CHAR_MAX];
+    CHECK(ime_candidate_get(0, c, sizeof(c)) == 0);
+    CHECK(strcmp(c, "你好") == 0);
+    printf("  nh -> %s (简拼保留)\n", c);
+}
+
 static void test_backspace(void) {
     ime_reset();
     type("ni");
@@ -57,10 +68,49 @@ static void test_backspace(void) {
     printf("  backspace keeps one pinyin letter\n");
 }
 
+static void test_display_and_pages(void) {
+    char buf[24];
+    ime_reset();
+    type("nihao");
+    CHECK(ime_pinyin_display(buf, sizeof(buf)) == 6);
+    CHECK(strcmp(buf, "ni hao") == 0);
+    ime_reset();
+    type("zhongguo");
+    ime_pinyin_display(buf, sizeof(buf));
+    CHECK(strcmp(buf, "zhong guo") == 0);
+
+    /* GB2312 一级扩展后，yi 组超过一页；翻页必须可前可后。 */
+    ime_reset();
+    type("yi");
+    CHECK(ime_candidate_count() >= 9);
+    CHECK(ime_page_count() >= 2);
+    CHECK(ime_page_index() == 0);
+    int p1 = ime_page_next();
+    CHECK(p1 == 1 && ime_page_index() == 1);
+    CHECK(ime_page_prev() == 0 && ime_page_index() == 0);
+    CHECK(ime_candidate_count() == 99);
+    CHECK(ime_page_count() == 11);
+    CHECK(ime_page_size_set(5) == 5);
+    CHECK(ime_page_count() == 20);
+    CHECK(ime_page_size_set(9) == 9);
+    CHECK(ime_page_count() == 11);
+    ime_freq_set_enabled(0);
+    CHECK(ime_freq_enabled() == 0);
+    int writes_before = ime_write_calls;
+    ime_bump("你好");
+    CHECK(ime_write_calls == writes_before);   /* 关闭后不记录、不落盘 */
+    ime_freq_set_enabled(1);
+    CHECK(ime_freq_enabled() == 1);
+    printf("  pinyin display + pages: %s, %d candidates/%d pages\n",
+           buf, ime_candidate_count(), ime_page_count());
+}
+
 int main(void) {
     test_nihao();
     test_zhongguo();
+    test_abbrev();
     test_backspace();
+    test_display_and_pages();
     puts("ime core: ok");
     return fails;
 }

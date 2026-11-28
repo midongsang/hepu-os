@@ -52,7 +52,40 @@ void hs_ime_init(void)
     extern const char *reg64_get(const char *key, const char *def);
     const char *v = reg64_get("sys.ime_mode", "en");
     g_ime_mode = (v && v[0] == 'z') ? HS_IME_MODE_ZH : HS_IME_MODE_EN;
+    const char *c = reg64_get("sys.ime_candidates", "9");
+    int n = (c && c[0] >= '5' && c[0] <= '9') ? (c[0] - '0') : 9;
+    ime_page_size_set(n);
+    const char *f = reg64_get("sys.ime_freq", "on");
+    ime_freq_set_enabled(f && f[0] == 'o' && f[1] == 'n');
     ime_reset();
+}
+
+int hs_ime_page_size(void) { return ime_page_size(); }
+
+int hs_ime_set_page_size(int n)
+{
+    extern int reg64_set(const char *key, const char *value);
+    extern int reg64_save(void);
+    n = ime_page_size_set(n);
+    char buf[8];
+    buf[0] = (char)('0' + n); buf[1] = 0;
+    reg64_set("sys.ime_candidates", buf);
+    reg64_save();
+    hpdesk_mark_dirty();
+    return n;
+}
+
+int hs_ime_freq_enabled(void) { return ime_freq_enabled(); }
+
+int hs_ime_set_freq_enabled(int on)
+{
+    extern int reg64_set(const char *key, const char *value);
+    extern int reg64_save(void);
+    ime_freq_set_enabled(on ? 1 : 0);
+    reg64_set("sys.ime_freq", on ? "on" : "off");
+    reg64_save();
+    hpdesk_mark_dirty();
+    return ime_freq_enabled();
 }
 
 int hs_ime_mode(void) { return g_ime_mode; }
@@ -72,11 +105,11 @@ void hs_ime_set_mode(int mode)
     if (next == g_ime_mode) return;
     ime_reset();
     g_ime_mode = next;
-    extern const char *reg64_set(const char *key, const char *value);
+    extern int reg64_set(const char *key, const char *value);
     extern int reg64_save(void);
     reg64_set("sys.ime_mode", next == HS_IME_MODE_ZH ? "zh" : "en");
     reg64_save();
-    hs_notification_send("Input", next == HS_IME_MODE_ZH ? "中文输入 (ZH)" : "English (EN)",
+    hs_notification_send("Input", next == HS_IME_MODE_ZH ? "Chinese input (ZH)" : "English (EN)",
                          0, 2000);
     hpdesk_mark_dirty();
 }
@@ -178,6 +211,13 @@ int hs_ime_handle_key(int key, int mod)
             hpdesk_mark_dirty();
             return 1;
         }
+        /* M3: 组合中左右键翻页；提交后左右键才用于编辑器光标。 */
+        if (key == 0x92 || key == 0x93) {
+            if (key == 0x92) ime_page_prev();
+            else ime_page_next();
+            hpdesk_mark_dirty();
+            return 1;
+        }
         if (key == 32 || key == 13 || key == '\n') {
             if (!ime_ui_commit_first()) {
                 /* 没有候选时不要把空格/回车漏进正文，也不静默丢拼音。 */
@@ -259,12 +299,9 @@ void hs_ime_render(void)
     font64_draw_string(fb, sw, sh, bx + hs_ui_sx(5), by + hs_ui_sy(3),
                        mode, 0xFFFFFF, fs);
 
-    /* 拼音：最多 8 个字母 */
-    const char *py = ime_pinyin();
+    /* M3: 候选条显示分段拼音（ni hao / zhong guo），而不是一串字母。 */
     char pybuf[24];
-    int pn = 0;
-    while (py[pn] && pn < 20) { pybuf[pn] = py[pn]; pn++; }
-    pybuf[pn] = 0;
+    ime_pinyin_display(pybuf, sizeof(pybuf));
     font64_draw_string(fb, sw, sh, bx + bw + hs_ui_sx(10), by + hs_ui_sy(3),
                        pybuf, fg, fs);
 
@@ -274,7 +311,8 @@ void hs_ime_render(void)
     int total = ime_candidate_count();
     int page = ime_page_index();
     int pages = ime_page_count();
-    for (int i = 0; i < IME_PAGE_SIZE && i < 9; i++) {
+    int psz = ime_page_size();
+    for (int i = 0; i < psz; i++) {
         char cand[IME_CHAR_MAX];
         if (ime_candidate_get(i, cand, sizeof(cand)) != 0) break;
         char item[24];

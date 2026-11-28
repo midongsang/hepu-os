@@ -688,6 +688,12 @@ static uint64_t g_last_activity_ts = 0; /* V0.62: 最近一次用户输入时间
 static int g_screensaver_active = 0;  /* V0.62: 屏保是否已进入 */
 static int g_settings_page = 0;  /* 0=Appearance, 1=Panels, 2=System, 3=About, 4=Display, 5=Accounts, 6=Battery */
 #define HS_SETTINGS_PAGE_BATTERY 6
+#define HS_SETTINGS_PAGE_INPUT 7
+#ifdef __x86_64__
+#define HS_SETTINGS_NAV_COUNT 8
+#else
+#define HS_SETTINGS_NAV_COUNT 7
+#endif
 /* Display 页缩放按钮的渲染位置: 命中测试直接复用, 不另算一套坐标 */
 static int g_disp_scale_btn_x = 0, g_disp_scale_btn_y = 0;
 /* 分辨率档位(点选后写 ESP 的 HEPBOOT.CFG, 重启生效) */
@@ -707,6 +713,10 @@ static int g_disp_cursor_y = 0;     /* Display 页光标主题行 */
 static int g_settings_storage_ry = 0; /* V0.13.39: 存储管理行点击区域 */
 static int g_settings_reg_ry = 0;    /* V0.13.39: 注册表查看行 */
 static int g_settings_assoc_ry = 0;  /* V0.13.39: 文件关联查看行 */
+/* M3: Settings/Input 页可点击行（绝对屏幕坐标，渲染时更新）。 */
+static int g_settings_ime_mode_ry = 0;
+static int g_settings_ime_cand_ry = 0;
+static int g_settings_ime_freq_ry = 0;
 
 /* 内置默认配置（hsqml格式） — 对齐 quickshell/Clavis: M3 tonal-spot dark */
 static const char *default_config =
@@ -3645,9 +3655,13 @@ static void hs_settings_nav_paint(hs_ui_box_t *b)
 {
     hs_window_t *w = g_nav_win;    /* SETK 宏需要名为 w 的局部变量 */
     void *fb = hs_get_framebuffer();
+#ifdef __x86_64__
+    static const char *menu[8] = {"Appearance", "Panels", "System", "About", "Display", "Accounts", "Battery", "Input"};
+#else
     static const char *menu[7] = {"Appearance", "Panels", "System", "About", "Display", "Accounts", "Battery"};
+#endif
     int page = b->tag;
-    if (page < 0 || page > HS_SETTINGS_PAGE_BATTERY) return;
+    if (page < 0 || page >= HS_SETTINGS_NAV_COUNT) return;
     uint32_t bg = (page == g_settings_page) ? g_shell.colors.accent : g_shell.colors.panel_bg;
     uint32_t fg = (page == g_settings_page) ? hs_on_accent() : g_shell.colors.panel_fg;
     hs_fill_rounded_rect(b->x, b->y, b->w, b->h, SETK(6), bg);
@@ -3746,7 +3760,7 @@ static void hs_settings_window_render(hs_window_t *w)
 
     /* 左侧菜单 —— 由布局容器排列(hs_ui), 这里只给根矩形与尺寸参数 */
     g_nav_win = w;
-    hs_settings_nav_ensure(7);
+    hs_settings_nav_ensure(HS_SETTINGS_NAV_COUNT);
     hs_settings_nav_layout(cx, cy, SETK(120), SETK(28), SETK(4));
     { static int hit_tested = 0; if (!hit_tested) { hit_tested = 1; hs_settings_nav_hit_selftest(); } }
 
@@ -4008,7 +4022,52 @@ static void hs_settings_window_render(hs_window_t *w)
         font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
                            rx, ry, ab, g_shell.colors.panel_fg, SETK(12));
         g_settings_assoc_ry = ry;
-    } else if (g_settings_page == 5) {
+    }
+#ifdef __x86_64__
+    else if (g_settings_page == HS_SETTINGS_PAGE_INPUT) {
+        /* M3: 真正的输入法设置页。所有行都读写现有注册表/IME 状态。 */
+        font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                           rx, ry, "Input Method", g_shell.colors.panel_fg, SETK(16));
+        ry += SETK(32);
+        {
+            char line[64];
+            strcpy(line, "Mode: ");
+            strcpy(line + strlen(line), hs_ime_mode() == HS_IME_MODE_ZH ? "Chinese (ZH)" : "English (EN)");
+            strcpy(line + strlen(line), "  [Click]");
+            font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                               rx, ry, line, g_shell.colors.panel_fg, SETK(12));
+            g_settings_ime_mode_ry = ry;
+            ry += SETK(28);
+        }
+        {
+            char line[64];
+            strcpy(line, "Candidates/page: ");
+            hs_itoa(hs_ime_page_size(), line + strlen(line));
+            strcpy(line + strlen(line), "  [Click 5/7/9]");
+            font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                               rx, ry, line, g_shell.colors.panel_fg, SETK(12));
+            g_settings_ime_cand_ry = ry;
+            ry += SETK(28);
+        }
+        {
+            char line[64];
+            strcpy(line, "Remember frequency: ");
+            strcpy(line + strlen(line), hs_ime_freq_enabled() ? "On" : "Off");
+            strcpy(line + strlen(line), "  [Click]");
+            font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                               rx, ry, line, g_shell.colors.panel_fg, SETK(12));
+            g_settings_ime_freq_ry = ry;
+            ry += SETK(28);
+        }
+        font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                           rx, ry, "Switch key: Ctrl+Space", g_shell.colors.text_secondary, SETK(11));
+        ry += SETK(24);
+        font64_draw_string(fb, g_shell.screen_width, g_shell.screen_height,
+                           rx, ry, "Words rank before single chars.",
+                           g_shell.colors.text_secondary, SETK(10));
+    }
+#endif
+    else if (g_settings_page == 5) {
         /* V0.62: Accounts —— 用户账号与密码管理 */
         extern const char *auth64_user_name(void);
         extern int auth64_current_role(void);
@@ -4404,7 +4463,7 @@ static void hs_settings_window_render(hs_window_t *w)
  * 这里自己扫窗口表, 已存在就恢复/前置, 不存在才新建。 */
 static void hs_settings_show_page(int page)
 {
-    if (page < 0 || page > HS_SETTINGS_PAGE_BATTERY) page = HS_SETTINGS_PAGE_BATTERY;
+    if (page < 0 || page >= HS_SETTINGS_NAV_COUNT) page = HS_SETTINGS_NAV_COUNT - 1;
     g_settings_page = page;
 
     for (int i = 0; i < g_wm.window_count; i++) {
@@ -7562,6 +7621,28 @@ void hpdesk_handle_click(int x, int y)
                     return;
                 }
             }
+            /* M3: Input 页行点击 */
+#ifdef __x86_64__
+            if (g_settings_page == HS_SETTINGS_PAGE_INPUT) {
+                if (y >= g_settings_ime_mode_ry && y <= g_settings_ime_mode_ry + hs_set_k(w, 20)) {
+                    hs_ime_set_mode(hs_ime_mode() == HS_IME_MODE_ZH ? HS_IME_MODE_EN : HS_IME_MODE_ZH);
+                    vga_puts("[SETTINGS] ime mode toggled\n");
+                    return;
+                }
+                if (y >= g_settings_ime_cand_ry && y <= g_settings_ime_cand_ry + hs_set_k(w, 20)) {
+                    int n = hs_ime_page_size();
+                    n = (n == 9) ? 7 : ((n == 7) ? 5 : 9);
+                    hs_ime_set_page_size(n);
+                    vga_puts("[SETTINGS] ime candidates changed\n");
+                    return;
+                }
+                if (y >= g_settings_ime_freq_ry && y <= g_settings_ime_freq_ry + hs_set_k(w, 20)) {
+                    hs_ime_set_freq_enabled(!hs_ime_freq_enabled());
+                    vga_puts("[SETTINGS] ime frequency toggled\n");
+                    return;
+                }
+            }
+#endif
             /* V0.62: Accounts 页 Change password 点击 → 进入输入模式 */
             if (g_settings_page == 5 && g_acct_pw_btn_x > 0 &&
                 x >= g_acct_pw_btn_x && x <= g_acct_pw_btn_x + hs_set_k(w, 150) &&

@@ -3,10 +3,10 @@
 # M2 持久化取证：sys.ime_mode + /data/ime/freq.txt 跨 QEMU 重启
 #
 # 与其它 probe 不同：这里复制一份镜像并关闭 snapshot，使用 writethrough，
-# 第一次启动切到 ZH、输入 e 并选第 7 候选“鞥”，然后杀进程；第二次启动
-# 不再按 Ctrl+Space，直接输入 e，验证：
-#   1) 模式仍是 ZH（否则 e 只会进正文、不弹候选）；
-#   2) 词频已从 /data/ime/freq.txt 加载（“鞥”被前移）。
+# 第一次启动切到 ZH、输入 eng 并选第 1 候选“鞥”，然后杀进程；第二次启动
+# 不再按 Ctrl+Space，直接输入 eng，验证：
+#   1) 模式仍是 ZH（否则字母只会进正文、不弹候选）；
+#   2) 词频已从 /data/ime/freq.txt 加载（“鞥”前移）。
 # 停止后从镜像分区直接读 freq.txt / registry.dat 作为磁盘层证据。
 # 固定 1920x1080 / scale=100；QEMU 合成环境，不是真机。
 # 用法: bash tools/regress/ime_persist_probe.sh <输出目录>
@@ -116,7 +116,7 @@ q_sendkey f5
 sleep 2
 q_dump "$OUT/03-boot1-editor-saved.ppm" "$OUT/03-boot1-editor-saved.png" || exit 3
 
-# 关闭 Editor（标题栏关闭键），再开 Terminal 输入 e 产生独立词频。
+# 关闭 Editor（标题栏关闭键），再开 Terminal 输入 eng 产生独立词频。
 python3 "$REGRESS_DIR/qmp_click.py" "$QMP" 1290 207 1920 1080 click
 sleep 2
 python3 "$REGRESS_DIR/qmp_click.py" "$QMP" 20 300 1920 1080 click
@@ -125,10 +125,10 @@ python3 "$REGRESS_DIR/qmp_click.py" "$QMP" 60 172 1920 1080 click
 sleep 3
 python3 "$REGRESS_DIR/qmp_click.py" "$QMP" 20 200 1920 1080 move
 sleep 1
-q_send_text "e"
+q_send_text "eng"
 sleep 2
 q_dump "$OUT/04-boot1-terminal-candidates.ppm" "$OUT/04-boot1-terminal-candidates.png" || exit 3
-q_sendkey 7
+q_sendkey 1
 sleep 2
 q_dump "$OUT/05-boot1-terminal-committed.ppm" "$OUT/05-boot1-terminal-committed.png" || exit 3
 stop_vm
@@ -147,7 +147,7 @@ start_vm second 5907
 unlock_desktop || exit 3
 open_terminal
 q_dump "$OUT/06-boot2-en-or-zh.ppm" "$OUT/06-boot2-en-or-zh.png" || exit 3
-q_send_text "e"
+q_send_text "eng"
 sleep 2
 q_dump "$OUT/07-boot2-candidates.ppm" "$OUT/07-boot2-candidates.png" || exit 3
 q_sendkey esc
