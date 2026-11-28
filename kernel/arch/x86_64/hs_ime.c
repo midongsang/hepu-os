@@ -1,12 +1,13 @@
 /* ============================================================================
- * 赫普OS 桌面输入法适配层 (M1)
+ * 赫普OS 桌面输入法适配层 (M1/M2)
  *
  * 分工：
  * - kernel/shared/ime/ime.c：拼音前缀、候选、翻页、词频（纯逻辑）
  * - 本文件：EN/ZH 状态、按键路由、提交到当前文本控件、候选条绘制、持久化
- * - hs_apps.c：终端/编辑器接收 UTF-8 的文本目标
+ * - hs_apps.c：终端/编辑器接收 UTF-8 的文本目标与光标屏幕坐标
  *
- * 第一版不跟随光标，候选条固定在 Dock 上方；M3 再通过 text_caret 接口升级。
+ * 候选条在 M2 跟随文本光标：优先光标上方，顶部空间不足时翻到下方，
+ * 并在屏幕左右/上下边界内钳制；鼠标命中区与绘制使用同一套几何。
  * ========================================================================== */
 #include "hpdesk.h"
 #include "hs_apps.h"
@@ -25,6 +26,15 @@ extern int hs_ui_sy(int v);
 extern void hpdesk_mark_dirty(void);
 
 static int g_ime_mode = HS_IME_MODE_EN;
+
+/* 上一帧候选条几何。鼠标按下时直接复用绘制结果，避免两套命中公式漂移。 */
+#define IME_HIT_MAX 9
+static int g_ime_bar_x, g_ime_bar_y, g_ime_bar_w, g_ime_bar_h;
+static int g_ime_hit_n;
+static int g_ime_hit_x[IME_HIT_MAX], g_ime_hit_y[IME_HIT_MAX];
+static int g_ime_hit_w[IME_HIT_MAX], g_ime_hit_h[IME_HIT_MAX];
+static int g_ime_hit_idx[IME_HIT_MAX];
+static int g_ime_mouse_consumed;
 
 static void ime_num(char *out, int v)
 {
@@ -104,6 +114,32 @@ static int ime_select(int idx)
     return 1;
 }
 
+int hs_ime_click(int x, int y)
+{
+    if (ime_pinyin_len() <= 0 || g_ime_hit_n <= 0) return 0;
+    if (x < g_ime_bar_x || x >= g_ime_bar_x + g_ime_bar_w ||
+        y < g_ime_bar_y || y >= g_ime_bar_y + g_ime_bar_h)
+        return 0;
+    for (int i = 0; i < g_ime_hit_n; i++) {
+        if (x >= g_ime_hit_x[i] && x < g_ime_hit_x[i] + g_ime_hit_w[i] &&
+            y >= g_ime_hit_y[i] && y < g_ime_hit_y[i] + g_ime_hit_h[i]) {
+            ime_select(g_ime_hit_idx[i]);
+            hpdesk_mark_dirty();
+            break;
+        }
+    }
+    /* 条内非候选区域也吞掉，避免点页码/空白时穿透到下层窗口。 */
+    g_ime_mouse_consumed = 1;
+    return 1;
+}
+
+int hs_ime_mouse_release(void)
+{
+    int c = g_ime_mouse_consumed;
+    g_ime_mouse_consumed = 0;
+    return c;
+}
+
 int hs_ime_handle_key(int key, int mod)
 {
     /* Esc 只在组合中拦截；无组合时继续走原来的 Esc→shell。 */
@@ -167,6 +203,7 @@ int hs_ime_handle_key(int key, int mod)
 
 void hs_ime_render(void)
 {
+    g_ime_hit_n = 0;
     if (ime_pinyin_len() <= 0) return;
     if (!hs_apps_text_focus()) {
         ime_reset();
@@ -179,9 +216,28 @@ void hs_ime_render(void)
     if (fs < 10) fs = 10;
     int w = hs_ui_sx(560);
     int h = hs_ui_sy(62);
-    int x = (sw - w) / 2;
-    int y = sh - hs_ui_sy(112) - h;
-    if (y < 0) y = 0;
+
+    int caret_x = 0, caret_y = 0, caret_h = 0;
+    int x, y;
+    int has_caret = hs_apps_text_caret(&caret_x, &caret_y, &caret_h);
+    int margin = hs_ui_sx(8);
+    hs_window_t *foc = hs_window_get_focused();
+    int win_top = foc ? (foc->y + hs_ui_sy(26)) : margin;
+    if (has_caret) {
+        x = caret_x - w / 2;
+        y = caret_y - h - hs_ui_sy(8);
+        /* 靠近窗口首行时光标上方只剩标题栏；宁可翻到光标下方，也不要糊住标题。 */
+        if (y < win_top)
+            y = caret_y + caret_h + hs_ui_sy(8);
+    } else {
+        x = (sw - w) / 2;
+        y = sh - hs_ui_sy(112) - h;
+    }
+    if (x < margin) x = margin;
+    if (x + w > sw - margin) x = sw - w - margin;
+    if (y < margin) y = margin;
+    if (y + h > sh - margin) y = sh - h - margin;
+    g_ime_bar_x = x; g_ime_bar_y = y; g_ime_bar_w = w; g_ime_bar_h = h;
 
     uint32_t bg = 0x12161D;
     uint32_t border = g_shell.colors.accent;
@@ -231,6 +287,14 @@ void hs_ime_render(void)
         int tw = gfx64_measure_text(item, fs);
         if (cx + tw >= x + w - hs_ui_sx(50)) break;
         font64_draw_string(fb, sw, sh, cx, cy, item, fg, fs);
+        if (g_ime_hit_n < IME_HIT_MAX) {
+            int hi = g_ime_hit_n++;
+            g_ime_hit_x[hi] = cx - hs_ui_sx(2);
+            g_ime_hit_y[hi] = cy - hs_ui_sy(4);
+            g_ime_hit_w[hi] = tw + hs_ui_sx(4);
+            g_ime_hit_h[hi] = hs_ui_sy(24);
+            g_ime_hit_idx[hi] = i;
+        }
         cx += tw + hs_ui_sx(12);
     }
 

@@ -7267,6 +7267,9 @@ static int g_files_drag_consumed;   /* Files 拖拽已消费本次按下-抬起 
 
 void hpdesk_handle_click(int x, int y)
 {
+    /* 候选浮层已经消费了这次按下；抬起也必须吞掉，否则会点到它盖住的
+     * 抽屉图标/下层窗口。 */
+    if (hs_ime_mouse_release()) return;
     /* 拖拽已消费这次按下-抬起: 不能再走点击/双击路径(否则会��接打开源文件) */
     if (g_files_drag_consumed) { g_files_drag_consumed = 0; return; }
 
@@ -7949,6 +7952,8 @@ void hpdesk_mouse_down(int x, int y)
         extern int hs_oobe_active(void);
         if (g_locked == 0 && hs_oobe_active()) return;
     }
+    /* 候选浮层浮在窗口之上，必须先于顶栏/窗口命中消费，否则会穿透。 */
+    if (hs_ime_click(x, y)) return;
     /* 顶栏右上角齿轮 = 控制中心开关。齿轮是从右数第二个图标(power 最右)。
      * 命中区必须跟 hs_top_bar_render 里同一套几何算, 否则缩放后点不中。 */
     {

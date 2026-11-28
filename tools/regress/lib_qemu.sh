@@ -56,11 +56,24 @@ PY
 }
 
 q_send_text() {
-  # $1 = 文本；逐字符 sendkey，空格用 spc
-  local TXT="$1" CH
+  # $1 = 文本；逐字符 sendkey。QEMU monitor 用键名而不是字符，
+  # 空格/斜杠/点等必须显式映射，否则命令里的 /etc 会被静默吞掉。
+  local TXT="$1" CH K
   for (( i=0; i<${#TXT}; i++ )); do
     CH=${TXT:i:1}
-    if [ "$CH" = " " ]; then q_sendkey spc; else q_sendkey "$CH"; fi
+    case "$CH" in
+      " ") K=spc ;;
+      "/") K=slash ;;
+      ".") K=dot ;;
+      "-") K=minus ;;
+      "=") K=equal ;;
+      ",") K=comma ;;
+      ";") K=semicolon ;;
+      "'") K=apostrophe ;;
+      "\\") K=backslash ;;
+      *) K="$CH" ;;
+    esac
+    q_sendkey "$K"
   done
 }
 

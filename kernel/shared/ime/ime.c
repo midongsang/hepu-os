@@ -83,6 +83,9 @@ static void ime_freq_save(void)
     }
     if (op > 0) {
         out[op] = 0;
+        /* 某些镜像没有独立 /data 分区，根下也没有 data 目录；
+         * 先建父目录，再建 ime，避免 mkdir("data/ime") 因父目录缺失直接失败。 */
+        ide_ext2_mkdir("data");
         ide_ext2_mkdir("data/ime");
         ide_ext2_writefile("data/ime/freq.txt", out);
         ide_ext2_sync();

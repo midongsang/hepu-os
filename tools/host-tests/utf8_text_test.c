@@ -41,6 +41,21 @@ static void test_append_backspace(void) {
     printf("  append/backspace bounded and codepoint-safe\n");
 }
 
+static void test_caret_steps(void) {
+    const char *s = "a中b";
+    int len = (int)strlen(s);
+    int pos = len;
+    pos -= hs_utf8_prev_len(s, pos);
+    CHECK(pos == 4);                       /* 跨过 ASCII b */
+    pos -= hs_utf8_prev_len(s, pos);
+    CHECK(pos == 1);                       /* 一次跨过整个“中” */
+    pos += hs_utf8_len_at(s + pos, len - pos);
+    CHECK(pos == 4);
+    pos += hs_utf8_len_at(s + pos, len - pos);
+    CHECK(pos == len);
+    printf("  caret steps: byte offsets stay on codepoint boundaries\n");
+}
+
 static void test_controls(void) {
     CHECK(hs_utf8_cols("\x01", 1) == 0);
     CHECK(hs_utf8_cols("\xcc\x81", 2) == 0); /* U+0301 组合重音 */
@@ -53,6 +68,7 @@ int main(void) {
     test_len_and_cols();
     test_prev();
     test_append_backspace();
+    test_caret_steps();
     test_controls();
     puts("utf8 text: ok");
     return fails;

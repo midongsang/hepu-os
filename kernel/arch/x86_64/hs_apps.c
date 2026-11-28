@@ -4386,6 +4386,19 @@ static int ed_pos_at_col(int start, int end, int col)
     return pos;
 }
 
+/* 光标 x 必须按实际字形宽度算：CJK/生僻字点阵的 advance 不一定等于
+ * “列数 × 7px”，沿用旧公式会让光标和候选条偏离文字。 */
+static int ed_prefix_width(int start, int end)
+{
+    char prefix[256];
+    int n = end - start;
+    if (n < 0) n = 0;
+    if (n > (int)sizeof(prefix) - 1) n = (int)sizeof(prefix) - 1;
+    for (int i = 0; i < n; i++) prefix[i] = e_buf[start + i];
+    prefix[n] = 0;
+    return gfx64_measure_text(prefix, EC(12));
+}
+
 static void ed_insert_bytes(const char *s, int n)
 {
     if (!s || n <= 0) return;
@@ -4490,8 +4503,23 @@ static void ed_handle_key(int key)
     if (key == '\b' || key == 0x0E || key == 127) { ed_delete_before(); return; }
     if (key == 0x90) { ed_move_vert(-1); return; }          /* Up    */
     if (key == 0x91) { ed_move_vert(1);  return; }          /* Down  */
-    if (key == 0x92) { e_cur = ed_line_start(e_cur); return; } /* Left  */
-    if (key == 0x93) { e_cur = ed_line_end(e_cur);   return; } /* Right */
+    if (key == 0x92) {                                      /* Left: 整码点 */
+        if (e_cur > 0) {
+            int n = hs_utf8_prev_len(e_buf, e_cur);
+            if (n <= 0) n = 1;
+            if (n > e_cur) n = e_cur;
+            e_cur -= n;
+        }
+        return;
+    }
+    if (key == 0x93) {                                      /* Right: 整码点 */
+        if (e_cur < e_len) {
+            int n = hs_utf8_len_at(e_buf + e_cur, e_len - e_cur);
+            if (n <= 0) n = 1;
+            e_cur += n;
+        }
+        return;
+    }
     if (key == 0x96) { e_cur = ed_line_start(e_cur); return; } /* Home  */
     if (key == 0x97) { e_cur = ed_line_end(e_cur);   return; } /* End   */
 }
@@ -4559,9 +4587,9 @@ static void e_render(hs_window_t *w)
             font64_draw_string(fb, W, H, cx + EC(ED_GUTTER), cy + row * ed_line_h(), lb, fg, EC(12));
 
         if (!cursor_drawn && e_cur >= lstart && e_cur <= lend) {
-            int col = ed_cols_between(lstart, e_cur);
-            if (col > maxc) col = maxc;
-            gfx64_fill_rect(cx + EC(ED_GUTTER) + col * EC(7), cy + row * ed_line_h() + EC(2),
+            int cw = ed_prefix_width(lstart, e_cur);
+            if (cw > maxc * EC(7)) cw = maxc * EC(7);
+            gfx64_fill_rect(cx + EC(ED_GUTTER) + cw, cy + row * ed_line_h() + EC(2),
                             EC(2), EC(13), accent);
             cursor_drawn = 1;
         }
@@ -4646,6 +4674,51 @@ int hs_apps_text_ime_allowed(void)
 {
     /* 终端和编辑器都允许；未来密码输入控件必须在这里返回 0。 */
     return hs_apps_text_focus();
+}
+
+/* 当前文本目标的光标屏幕位置（M2 候选浮层跟随）。
+ * 终端光标固定在输入行末尾；编辑器按 UTF-8 解码后的字节前缀测宽。 */
+int hs_apps_text_caret(int *x, int *y, int *h)
+{
+    hs_window_t *foc = hs_window_get_focused();
+    if (!foc || !foc->visible) return 0;
+
+    if (t_win && foc == t_win) {
+        int cx = foc->x + hs_win_k(foc, 520, 6);
+        int cy = foc->y + (26 * foc->height) / 340;
+        int ch = foc->height - (26 * foc->height) / 340 - (24 * foc->height) / 340;
+        int iy = cy + ch - (20 * foc->height) / 340;
+        char prompt[72];
+        strcpy(prompt, "> ");
+        hs_strcpyn(prompt + 2, t_input, TERM_INPUT_MAX);
+        int fs = (12 * foc->height) / 340;
+        int pw = gfx64_measure_text(prompt, fs);
+        if (x) *x = cx + pw;
+        if (y) *y = iy;
+        if (h) *h = (13 * foc->height) / 340;
+        return 1;
+    }
+
+    if (e_win && foc == e_win) {
+        int cx = foc->x + EC(8);
+        int cy = foc->y + EC(26) + EC(18) + EC(16);
+        int vis = (foc->height - EC(82)) / ed_line_h();
+        if (vis < 1) vis = 1;
+        int cline = ed_line_of(e_cur);
+        if (cline < e_scroll) e_scroll = cline;
+        if (cline >= e_scroll + vis) e_scroll = cline - vis + 1;
+        if (e_scroll < 0) e_scroll = 0;
+        int maxc = (foc->width - EC(ED_GUTTER) - EC(16)) / EC(7);
+        if (maxc < 8) maxc = 8;
+        int lstart = ed_line_start(e_cur);
+        int cw = ed_prefix_width(lstart, e_cur);
+        if (cw > maxc * EC(7)) cw = maxc * EC(7);
+        if (x) *x = cx + EC(ED_GUTTER) + cw;
+        if (y) *y = cy + (cline - e_scroll) * ed_line_h() + EC(2);
+        if (h) *h = EC(13);
+        return 1;
+    }
+    return 0;
 }
 
 int hs_apps_text_insert_utf8(const char *s)

@@ -60,8 +60,9 @@ q_send_text "nihao"
 sleep 2
 q_dump "$OUT/02-editor-candidates.ppm" "$OUT/02-editor-candidates.png" || exit 3
 
-q_sendkey 1
-sleep 1
+# M2: 鼠标点选第 1 候选“你好”（命中区与绘制同一套几何）
+python3 "$REGRESS_DIR/qmp_click.py" "$QMP" 465 315 1920 1080 click
+sleep 2
 q_dump "$OUT/03-editor-committed.ppm" "$OUT/03-editor-committed.png" || exit 3
 
 # ---- 生僻字兜底：e 的第 5 候选「呃」/ 第 7 候选「鞥」都不在 TTF 子集 ---- 
@@ -79,5 +80,19 @@ q_dump "$OUT/06-editor-rare2-candidates.ppm" "$OUT/06-editor-rare2-candidates.pn
 q_sendkey 6
 sleep 1
 q_dump "$OUT/07-editor-rare2-committed.ppm" "$OUT/07-editor-rare2-committed.png" || exit 3
+
+# M2: 光标逐码点移动 —— Home 到行首，Right 两次跨过“你”“好”，
+# 再输入拼音；候选条应重新锚到“好”之后，选字也插在该处。
+q_sendkey home
+sleep 1
+q_sendkey right
+q_sendkey right
+sleep 1
+q_send_text "e"
+sleep 2
+q_dump "$OUT/08-editor-caret-candidates.ppm" "$OUT/08-editor-caret-candidates.png" || exit 3
+q_sendkey 1
+sleep 1
+q_dump "$OUT/09-editor-caret-committed.ppm" "$OUT/09-editor-caret-committed.png" || exit 3
 
 echo "IME EDITOR PROBE DONE: $OUT"

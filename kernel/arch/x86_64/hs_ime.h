@@ -20,4 +20,9 @@ int  hs_ime_handle_key(int key, int mod);
 /* 在桌面帧末尾、present 之前绘制候选条。 */
 void hs_ime_render(void);
 
+/* 鼠标点击候选条；返回 1=已消费（点中候选/条内空白）。
+ * 必须在窗口和顶栏命中之前调用，否则候选浮层会穿透到下层窗口。 */
+int  hs_ime_click(int x, int y);
+int  hs_ime_mouse_release(void);
+
 #endif
